@@ -75,16 +75,26 @@ final class SpotifyManager: @unchecked Sendable {
     // MARK: - Search Query Extraction
 
     private func extractSearchQuery(text: String) -> String {
-        var clean = text
-        let stripPhrases = [
-            "spotify'da", "spotify'dan", "spotify da", "spotify dan", "spotify",
-            "bana", "çal", "aç", "oynat", "başlat", "dinlet", "play"
+        var lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let junk = [
+            "spotify'da", "spotify'dan", "spotify'a", "spotifyda", "spotifydan",
+            "spotify", "bana", "lütfen", "şarkısını", "parçasını", "müziğini",
+            "çal", "aç", "oynat", "başlat", "dinlet", "play"
         ]
-        for phrase in stripPhrases {
-            let regex = try? NSRegularExpression(pattern: "(?i)\\b\(NSRegularExpression.escapedPattern(for: phrase))\\b", options: [])
-            clean = regex?.stringByReplacingMatches(in: clean, options: [], range: NSRange(location: 0, length: clean.utf16.count), withTemplate: "") ?? clean
+
+        for word in junk {
+            lower = lower.replacingOccurrences(of: word, with: " ")
         }
-        return clean.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Clean out stray apostrophes or special punctuation left behind
+        let cleaned = lower
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return cleaned
     }
 
     private func playSearchQuery(_ query: String) -> Bool {
