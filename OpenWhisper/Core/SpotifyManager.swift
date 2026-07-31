@@ -41,22 +41,30 @@ final class SpotifyManager: @unchecked Sendable {
             .joined()
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // 1. Controls: Play / Pause / Resume
-        let playPauseKeywords = [
-            "müzik çal", "müziği çal", "müziği başlat", "müzik başlat",
-            "müziği durdur", "müzik durdur", "müziği kapat", "müzik kapat",
-            "müziği aç", "müzik aç", "spotify pause", "spotify play",
-            "müzik oynat", "müziği oynat"
-        ]
-
-        if playPauseKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
-            let script = "tell application \"Spotify\" to playpause"
+        // 1. Pause commands
+        let pauseKeywords = ["müziği durdur", "müzik durdur", "müziği kapat", "müzik kapat", "spotify pause", "durdur", "kapat"]
+        if pauseKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
+            let script = "tell application \"Spotify\" to pause"
             _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Müzik oynatılıyor / durduruldu")
+            sendNotification(title: "🎵 Spotify", body: "Müzik durduruldu")
             return true
         }
 
-        // 2. Next track
+        // 2. Play / Resume commands
+        let playKeywords = ["müzik çal", "müziği çal", "müziği başlat", "müzik başlat", "müziği aç", "müzik aç", "spotify play", "müzik oynat", "müziği oynat", "başlat"]
+        if playKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
+            let script = """
+                tell application "Spotify"
+                    activate
+                    play
+                end tell
+                """
+            _ = runAppleScript(script)
+            sendNotification(title: "🎵 Spotify", body: "Müzik oynatılıyor")
+            return true
+        }
+
+        // 3. Next track
         if cleanText.contains("sonraki") || cleanText.contains("next song") || cleanText.contains("next track") {
             let script = "tell application \"Spotify\" to next track"
             _ = runAppleScript(script)
@@ -64,7 +72,7 @@ final class SpotifyManager: @unchecked Sendable {
             return true
         }
 
-        // 3. Previous track
+        // 4. Previous track
         if cleanText.contains("önceki") || cleanText.contains("previous song") || cleanText.contains("prev track") {
             let script = "tell application \"Spotify\" to previous track"
             _ = runAppleScript(script)
