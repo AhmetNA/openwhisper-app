@@ -88,25 +88,42 @@ final class SpotifyManager: @unchecked Sendable {
     }
 
     private func playSearchQuery(_ query: String) -> Bool {
-        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return false }
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "spotify:search:\(encoded)") else { return false }
 
-        // Open Spotify URI search & play via AppleScript
-        let script = """
-            tell application "Spotify"
-                activate
-                open location "spotify:search:\(encoded)"
-            end tell
-            """
-        _ = runAppleScript(script)
+        // Open Spotify search view
+        NSWorkspace.shared.open(url)
 
-        // Give Spotify a brief moment to open search, then issue play
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-            let playScript = "tell application \"Spotify\" to play"
-            _ = self.runAppleScript(playScript)
+        // Give Spotify 0.6s to focus search results, then send Return key via CGEvent to play top result
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            self.sendReturnKeyToSpotify()
         }
 
-        sendNotification(title: "🎵 Spotify", body: "\"\(query)\" aranıyor ve çalınıyor...")
+        // Additional fallback tap 0.5s later if needed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            self.sendReturnKeyToSpotify()
+        }
+
+        sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor...")
         return true
+    }
+
+    private func sendReturnKeyToSpotify() {
+        guard let spotifyApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.spotify.client" }) else {
+            return
+        }
+        spotifyApp.activate()
+
+        let returnKeyCode: CGKeyCode = 36
+        if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
+           let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) {
+            keyDown.flags = []
+            keyUp.flags = []
+            keyDown.post(tap: .cghidEventTap)
+            usleep(30_000)
+            keyUp.post(tap: .cghidEventTap)
+            owLog("[Spotify] Posted Return key CGEvent to Spotify")
+        }
     }
 
     // MARK: - AppleScript Execution
