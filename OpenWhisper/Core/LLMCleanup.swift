@@ -5,28 +5,17 @@ final class LLMCleanup: Sendable {
     private let model = "qwen2.5:7b"
 
     private static let basePrompt = """
-        You are an expert AI prompt engineer and transcript polisher for a Turkish software developer. Your task is to polish spoken transcripts into clear, professional, AI-prompt-ready text.
+        You are a transcript cleaner. The transcript is spoken by a Turkish software developer who mixes Turkish and English (code-switching). Your ONLY job: remove filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan) and fix punctuation/casing.
 
         STRICT RULES:
-        1. NO TRANSLATION: Keep Turkish in Turkish, English in English. Preserve code-switching exactly.
-        2. FILLER REMOVAL: Remove all filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan, vs.).
-        3. AI PROMPT TONE: Format the text with clear, direct, well-punctuated, and precise phrasing as if it is written as a prompt/instruction for an AI model.
-        4. AUTOMATIC BULLET POINTS: 
-           - If the speaker dictates multiple items, sequential steps, or enumerated points (e.g., "birincisi...", "ikincisi...", "ilk olarak...", "sonrasında...", "1...", "2..."), automatically format them into a clean Markdown bullet list (`- Item 1\n- Item 2`).
-           - IMPORTANT: If the content is a normal paragraph, continuous text, or single thought, keep it as a clean paragraph. Do NOT force bullet points on normal prose.
-        5. TECHNICAL ACCURACY: Keep technical terms and variable names intact.
-        6. OUTPUT ONLY: Return only the polished final text with no introductory or meta comments.
+        - NEVER translate any word. Turkish stays Turkish, English stays English.
+        - NEVER rephrase, reorder, or substitute words. Keep every non-filler word exactly as spoken.
+        - NEVER output Chinese characters, markdown lists, bullet points, or extra explanations.
+        - Technical terms must appear EXACTLY as in the transcript.
+        - Output ONLY the cleaned text.
 
-        Example 1 (Paragraph):
-        Input: "şey bu fonksiyonu yani async yapalım ee sonra await ekleyelim"
-        Output: "Bu fonksiyonu async yapalım, sonra await ekleyelim."
-
-        Example 2 (Automatic Bullet List):
-        Input: "ilk olarak database bağlantısını kuralım ikincisi auth middleware ekleyelim üçüncüsü testleri çalıştıralım"
-        Output:
-        - Database bağlantısını kurun
-        - Auth middleware ekleyin
-        - Testleri çalıştırın
+        Example input: şey bu fonksiyonu yani async yapalım ee sonra await ekleyelim
+        Example output: Bu fonksiyonu async yapalım, sonra await ekleyelim.
         """
 
     /// Path to the user's personal glossary file (symlinked to the project's sozluk.txt in dev setups).
@@ -111,9 +100,15 @@ final class LLMCleanup: Sendable {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
 
-                // Sanity check: don't return empty or much longer than input
-                if !cleaned.isEmpty && cleaned.count < text.count * 3 {
+                // Sanity check: filter out Chinese characters or empty/huge outputs
+                let hasChinese = cleaned.unicodeScalars.contains { scalar in
+                    (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
+                }
+
+                if !hasChinese && !cleaned.isEmpty && cleaned.count < text.count * 3 {
                     return cleaned
+                } else if hasChinese {
+                    // Log internally if needed: print("[LLMCleanup] Detected Chinese hallucination")
                 }
             }
         } catch {

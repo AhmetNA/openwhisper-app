@@ -8,151 +8,265 @@ final class SpotifyManager: @unchecked Sendable {
 
     private init() {}
 
+    // MARK: - Shared Command Table
+    //
+    // Both the gate (`isSpotifyCommand`) and the handler (`handleCommand`) read from this
+    // single table so they can never drift out of sync. Order matters: more specific /
+    // longer phrases must come before shorter ones they contain (e.g. "müziği durdur"
+    // before bare "durdur") since matching is leading-prefix based.
+
+    private enum TransportCommand {
+        case pause
+        case play
+        case next
+        case previous
+    }
+
+    private static let transportPrefixes: [(String, TransportCommand)] = [
+        ("müziği durdur", .pause),
+        ("müzik durdur", .pause),
+        ("müziği kapat", .pause),
+        ("müzik kapat", .pause),
+        ("spotify pause", .pause),
+        ("spotify durdur", .pause),
+        ("durdur", .pause),
+        ("kapat", .pause),
+
+        ("müziği başlat", .play),
+        ("müzik başlat", .play),
+        ("müziği çal", .play),
+        ("müzik çal", .play),
+        ("müziği aç", .play),
+        ("müzik aç", .play),
+        ("müziği oynat", .play),
+        ("müzik oynat", .play),
+        ("şarkı çal", .play),
+        ("şarkı aç", .play),
+        ("spotify play", .play),
+        ("play music", .play),
+        ("başlat", .play),
+
+        ("sonraki şarkı", .next),
+        ("sonraki parça", .next),
+        ("sonraki", .next),
+        ("next song", .next),
+        ("next track", .next),
+
+        ("önceki şarkı", .previous),
+        ("önceki parça", .previous),
+        ("önceki", .previous),
+        ("previous song", .previous),
+        ("prev track", .previous)
+    ]
+
+    /// Play-family prefixes whose trailing residue should be treated as a search query
+    /// rather than a plain "resume playback" instruction — e.g. "müzik çal Tarkan" means
+    /// search+play "Tarkan", not a bare resume. Pause/next/prev never do this: residue
+    /// after those is just noise ("durdur lütfen") and is ignored.
+    private static let playFamilyPrefixes: Set<String> = [
+        "müziği başlat", "müzik başlat", "müziği çal", "müzik çal",
+        "müziği aç", "müzik aç", "müziği oynat", "müzik oynat",
+        "şarkı çal", "şarkı aç", "spotify play", "play music", "başlat"
+    ]
+
+    /// Words stripped from a search-query residue. Filtered as whole words (not substring
+    /// replacement) so we don't mangle artist/song names that happen to contain these
+    /// letter sequences (e.g. "açık", "ağaç").
+    private static let searchJunkWords: Set<String> = [
+        "spotifyda", "spotifydan", "spotifya", "spotify",
+        "bana", "lütfen", "şarkısını", "şarkısı", "parçasını", "müziğini",
+        "çal", "aç", "oynat", "başlat", "dinlet", "play", "adlı"
+    ]
+
+    private static let maxCommandWordCount = 8
+
+    // MARK: - Normalization
+
+    private static func normalize(_ text: String) -> String {
+        var lower = text.lowercased(with: Locale(identifier: "tr_TR"))
+        lower = lower.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = lower.unicodeScalars.last, CharacterSet(charactersIn: ".!?,;:").contains(last) {
+            lower.removeLast()
+        }
+        lower = lower.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return lower.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Detection
 
-    /// Check if transcribed text is a Spotify voice command.
+    /// Check if transcribed text is a Spotify voice command. Deliberately tight: it only
+    /// fires on a recognized *leading* command phrase (not "contains anywhere") and caps
+    /// the sentence length, so an ordinary dictation that happens to mention "spotify" or
+    /// "durdur" mid-sentence is not swallowed as a command.
     static func isSpotifyCommand(_ text: String) -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let triggers = [
-            "spotify",
-            "müzik çal",
-            "müziği başlat",
-            "müziği durdur",
-            "müziği kapat",
-            "müzik aç",
-            "şarkı çal",
-            "şarkı aç",
-            "sonraki şarkı",
-            "önceki şarkı",
-            "next song",
-            "play music"
-        ]
-        return triggers.contains(where: { lower.contains($0) })
+        let normalized = normalize(text)
+        guard !normalized.isEmpty else { return false }
+
+        let wordCount = normalized.split(separator: " ").count
+        guard wordCount <= maxCommandWordCount else { return false }
+
+        if normalized.hasPrefix("spotify") { return true }
+        return transportPrefixes.contains { normalized.hasPrefix($0.0) }
     }
 
     // MARK: - Command Handler
 
-    // MARK: - Command Handler
-
     func handleCommand(text: String) async -> Bool {
-        let cleanText = text
-            .lowercased()
-            .components(separatedBy: CharacterSet.letters.union(.whitespaces).inverted)
-            .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = Self.normalize(text)
 
-        // 1. Pause commands
-        let pauseKeywords = ["müziği durdur", "müzik durdur", "müziği kapat", "müzik kapat", "spotify pause", "durdur", "kapat"]
-        if pauseKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
-            let script = "tell application \"Spotify\" to pause"
-            _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Müzik durduruldu")
+        // 1. Leading transport phrase (longest/most-specific match wins per table order).
+        if let (prefix, command) = Self.transportPrefixes.first(where: { normalized.hasPrefix($0.0) }) {
+            let residue = String(normalized.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+
+            if command == .play, Self.playFamilyPrefixes.contains(prefix), !residue.isEmpty {
+                let query = extractSearchQuery(residue)
+                if !query.isEmpty {
+                    await playSearchQuery(query)
+                    return true
+                }
+            }
+
+            await runTransport(command)
             return true
         }
 
-        // 2. Play / Resume commands
-        let playKeywords = ["müzik çal", "müziği çal", "müziği başlat", "müzik başlat", "müziği aç", "müzik aç", "spotify play", "müzik oynat", "müziği oynat", "başlat"]
-        if playKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
-            let script = """
+        // 2. Bare "spotify ..." with no recognized verb → remainder is a search query.
+        if normalized.hasPrefix("spotify") {
+            let residue = String(normalized.dropFirst("spotify".count)).trimmingCharacters(in: .whitespaces)
+            let query = extractSearchQuery(residue)
+            if !query.isEmpty {
+                await playSearchQuery(query)
+                return true
+            }
+
+            // "Spotify" said alone with nothing else — toggle playback as a safe fallback.
+            switch runAppleScript("tell application \"Spotify\" to playpause") {
+            case .success:
+                sendNotification(title: "🎵 Spotify", body: "Spotify oynatma durumu değiştirildi")
+            case .failure(let error):
+                handleScriptError(error)
+            }
+            return true
+        }
+
+        return false
+    }
+
+    // MARK: - Transport
+
+    private func runTransport(_ command: TransportCommand) async {
+        let script: String
+        let successBody: String
+
+        switch command {
+        case .pause:
+            script = "tell application \"Spotify\" to pause"
+            successBody = "Müzik durduruldu"
+        case .play:
+            script = """
                 tell application "Spotify"
                     activate
                     play
                 end tell
                 """
-            _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Müzik oynatılıyor")
-            return true
+            successBody = "Müzik oynatılıyor"
+        case .next:
+            script = "tell application \"Spotify\" to next track"
+            successBody = "Sonraki şarkıya geçildi"
+        case .previous:
+            script = "tell application \"Spotify\" to previous track"
+            successBody = "Önceki şarkıya geçildi"
         }
 
-        // 3. Next track
-        if cleanText.contains("sonraki") || cleanText.contains("next song") || cleanText.contains("next track") {
-            let script = "tell application \"Spotify\" to next track"
-            _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Sonraki şarkıya geçildi")
-            return true
+        switch runAppleScript(script) {
+        case .success:
+            sendNotification(title: "🎵 Spotify", body: successBody)
+        case .failure(let error):
+            handleScriptError(error)
         }
-
-        // 4. Previous track
-        if cleanText.contains("önceki") || cleanText.contains("previous song") || cleanText.contains("prev track") {
-            let script = "tell application \"Spotify\" to previous track"
-            _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Önceki şarkıya geçildi")
-            return true
-        }
-
-        // 4. Search and Play Song / Artist
-        let query = extractSearchQuery(text: text)
-        guard !query.isEmpty else {
-            let script = "tell application \"Spotify\" to playpause"
-            _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Spotify oynatılıyor")
-            return true
-        }
-
-        return playSearchQuery(query)
     }
 
     // MARK: - Search Query Extraction
 
-    private func extractSearchQuery(text: String) -> String {
-        var lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let junk = [
-            "spotify'da", "spotify'dan", "spotify'a", "spotifyda", "spotifydan",
-            "spotify", "bana", "lütfen", "şarkısını", "parçasını", "müziğini",
-            "çal", "aç", "oynat", "başlat", "dinlet", "play"
-        ]
-
-        for word in junk {
-            lower = lower.replacingOccurrences(of: word, with: " ")
-        }
-
-        // Clean out stray apostrophes or special punctuation left behind
-        let cleaned = lower
+    private func extractSearchQuery(_ residue: String) -> String {
+        let words = residue
+            .lowercased()
             .replacingOccurrences(of: "'", with: "")
             .replacingOccurrences(of: "`", with: "")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .filter { !Self.searchJunkWords.contains($0) }
 
-        return cleaned
+        return words.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func playSearchQuery(_ query: String) -> Bool {
+    // MARK: - Search and Play
+
+    private let tabKeyCode: CGKeyCode = 48
+    private let returnKeyCode: CGKeyCode = 36
+
+    private func playSearchQuery(_ query: String) async {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "spotify:search:\(encoded)") else { return false }
-
-        // Open Spotify search view
-        NSWorkspace.shared.open(url)
-
-        // Give Spotify 0.6s to render search results, then navigate & play top result
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            self.sendPlayToSpotify()
-        }
-
-        // Secondary fallback 0.6s later
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            self.sendPlayToSpotify()
-        }
-
-        sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor...")
-        return true
-    }
-
-    private func sendPlayToSpotify() {
-        guard let spotifyApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.spotify.client" }) else {
-            _ = runAppleScript("tell application \"Spotify\" to play")
+              let url = URL(string: "spotify:search:\(encoded)") else {
+            sendNotification(title: "🎵 Spotify", body: "\"\(query)\" için arama başlatılamadı.")
             return
         }
-        spotifyApp.activate()
 
-        let tabKeyCode: CGKeyCode = 48
-        let returnKeyCode: CGKeyCode = 36
+        sendNotification(title: "🎵 Spotify", body: "\"\(query)\" aranıyor...")
+        NSWorkspace.shared.open(url)
 
-        // Move focus from search bar input to top result card, then press Return
+        guard await waitUntilSpotifyFrontmost(timeout: 3.0) else {
+            sendNotification(title: "🎵 Spotify", body: "Spotify öne getirilemedi, arama sonucu çalınamadı.")
+            return
+        }
+
+        // Spotify's AppleScript dictionary has no "play top search result" verb, so this
+        // falls back to UI automation: wait for the search results to render, move focus
+        // to the top result, then press Return. Inherently fragile — kept honest with a
+        // real playback check afterward rather than assumed to have worked.
+        try? await Task.sleep(nanoseconds: 700_000_000)
         postKey(code: tabKeyCode)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            self.postKey(code: returnKeyCode)
-            _ = self.runAppleScript("tell application \"Spotify\" to play")
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        postKey(code: returnKeyCode)
+
+        if await confirmPlaying() {
+            sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor")
+            return
+        }
+
+        // One retry before giving up honestly.
+        postKey(code: returnKeyCode)
+        if await confirmPlaying() {
+            sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor")
+        } else {
+            sendNotification(
+                title: "🎵 Spotify",
+                body: "\"\(query)\" otomatik oynatılamadı. Spotify'ı kontrol edin."
+            )
+        }
+    }
+
+    private func waitUntilSpotifyFrontmost(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        if let spotify = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.spotify.client" }) {
+            spotify.activate()
+        }
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.spotify.client" {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.spotify.client"
+    }
+
+    private func confirmPlaying() async -> Bool {
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        switch runAppleScript("tell application \"Spotify\" to player state") {
+        case .success(let state):
+            return state == "playing"
+        case .failure:
+            return false
         }
     }
 
@@ -169,15 +283,50 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - AppleScript Execution
 
-    private func runAppleScript(_ script: String) -> String? {
+    private enum SpotifyScriptError: Error {
+        case permissionDenied(errorNumber: Int)
+        case appNotRunning
+        case other(errorNumber: Int, message: String)
+    }
+
+    private func runAppleScript(_ script: String) -> Result<String?, SpotifyScriptError> {
         var error: NSDictionary?
-        guard let scriptObject = NSAppleScript(source: script) else { return nil }
+        guard let scriptObject = NSAppleScript(source: script) else {
+            return .failure(.other(errorNumber: -1, message: "Failed to parse AppleScript"))
+        }
         let output = scriptObject.executeAndReturnError(&error)
         if let error = error {
-            owLog("[Spotify] AppleScript error: \(error)")
-            return nil
+            let number = (error[NSAppleScript.errorNumber] as? Int) ?? 0
+            let message = (error[NSAppleScript.errorMessage] as? String) ?? "unknown error"
+            owLog("[Spotify] AppleScript error \(number): \(message)")
+
+            switch number {
+            case -1743, -1744:
+                // -1743: user denied Automation access. -1744: process couldn't even
+                // prompt for consent (same root cause from the user's point of view).
+                return .failure(.permissionDenied(errorNumber: number))
+            case -600:
+                return .failure(.appNotRunning)
+            default:
+                return .failure(.other(errorNumber: number, message: message))
+            }
         }
-        return output.stringValue
+        return .success(output.stringValue)
+    }
+
+    private func handleScriptError(_ error: SpotifyScriptError) {
+        switch error {
+        case .permissionDenied:
+            sendNotification(
+                title: "🎵 Spotify",
+                body: "Spotify kontrolü için izin gerekli — Sistem Ayarları > Gizlilik ve Güvenlik > Otomasyon > OpenWhisper > Spotify açık olmalı."
+            )
+        case .appNotRunning:
+            sendNotification(title: "🎵 Spotify", body: "Spotify çalışmıyor görünüyor.")
+        case .other(let number, let message):
+            owLog("[Spotify] Command failed (\(number)): \(message)")
+            sendNotification(title: "🎵 Spotify", body: "Spotify komutu başarısız oldu (\(number)).")
+        }
     }
 
     // MARK: - Notification

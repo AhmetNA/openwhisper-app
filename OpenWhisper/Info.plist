@@ -26,5 +26,7 @@
     <string>OpenWhisper needs microphone access to transcribe your speech to text.</string>
     <key>NSRemindersUsageDescription</key>
     <string>OpenWhisper needs access to Apple Reminders to create reminders from your voice commands.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>OpenWhisper needs to control Spotify to play, pause and search music with your voice.</string>
 </dict>
 </plist>
