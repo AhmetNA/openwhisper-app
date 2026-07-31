@@ -18,6 +18,9 @@ final class GlobalHotkey {
     private let fnKeyCode: UInt16 = 63
     private let spaceKeyCode: Int64 = 49
     private let zKeyCode: Int64 = 6
+    /// TEMPORARY diagnostic shortcut (Option+Shift+D) — triggers AXProbe. Remove along with
+    /// AXProbe.swift once the AX-readability measurement is done.
+    private let dKeyCode: Int64 = 2
 
     private let onPress: () -> Void
     private let onRelease: () -> Void
@@ -31,6 +34,8 @@ final class GlobalHotkey {
     /// a still-held Fn: posting synthetic Delete/Cmd+V while Fn is down risks the OS
     /// merging live Fn into the event (Fn+Delete is Forward Delete on macOS, not Backspace).
     private let onSwapCommit: () -> Void
+    /// TEMPORARY: fired on Option+Shift+D to run the AX-readability diagnostic probe.
+    private let onDiagnosticProbe: () -> Void
 
     /// Timestamp of the most recent Fn keyDown (idle → holding transition); the swap
     /// gesture's 2s window is measured from here.
@@ -50,12 +55,14 @@ final class GlobalHotkey {
         onPress: @escaping () -> Void,
         onRelease: @escaping () -> Void,
         onSwapRequest: @escaping () -> Void,
-        onSwapCommit: @escaping () -> Void
+        onSwapCommit: @escaping () -> Void,
+        onDiagnosticProbe: @escaping () -> Void = {}
     ) {
         self.onPress = onPress
         self.onRelease = onRelease
         self.onSwapRequest = onSwapRequest
         self.onSwapCommit = onSwapCommit
+        self.onDiagnosticProbe = onDiagnosticProbe
     }
 
     /// Called by AppState whenever it gains/loses a stored raw/cleaned dictation pair.
@@ -209,6 +216,24 @@ final class GlobalHotkey {
         return false
     }
 
+    // MARK: - Option + Shift + D (TEMPORARY: AX-readability diagnostic probe)
+
+    /// Called from the CGEventTap callback on every 'D' keyDown.
+    /// Returns `true` if Option+Shift+D is pressed, swallowing the key event. The probe itself
+    /// only fires once per physical keypress — `isRepeat` (autorepeat from holding the chord)
+    /// still swallows the key so 'ﬂ'/'∂' etc. never leaks into the focused app, but skips
+    /// re-running the probe (and its AX calls) on every repeat tick.
+    fileprivate func handleDiagnosticProbeKeyDown(flags: CGEventFlags, isRepeat: Bool) -> Bool {
+        let optionDown = flags.contains(.maskAlternate)
+        let shiftDown = flags.contains(.maskShift)
+        let noCmdOrCtrl = !flags.contains(.maskCommand) && !flags.contains(.maskControl)
+        guard optionDown && shiftDown && noCmdOrCtrl else { return false }
+        if !isRepeat {
+            onDiagnosticProbe()
+        }
+        return true
+    }
+
     private func installSpaceEventTap() {
         let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
@@ -237,6 +262,11 @@ final class GlobalHotkey {
                 }
             } else if keyCode == me.zKeyCode {
                 if me.handleOptionZKeyDown(flags: event.flags) {
+                    return nil
+                }
+            } else if keyCode == me.dKeyCode {
+                let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+                if me.handleDiagnosticProbeKeyDown(flags: event.flags, isRepeat: isRepeat) {
                     return nil
                 }
             }

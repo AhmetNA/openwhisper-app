@@ -183,6 +183,16 @@ final class AppState {
             },
             onSwapCommit: { [weak self] in
                 Task { @MainActor in self?.commitSwap() }
+            },
+            onDiagnosticProbe: {
+                // TEMPORARY: AX-readability diagnostic. Dispatched off the CGEventTap callback
+                // thread (same reasoning as TextInjector's backspace burst): cross-process AX
+                // calls to a slow/unresponsive target app can block for a while, and running
+                // that inline in the tap callback risks macOS force-disabling the tap
+                // (tapDisabledByTimeout), which would drop Fn/Space/Option+Z events meanwhile.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    AXProbe.run()
+                }
             }
         )
         hotkey?.register()
@@ -234,6 +244,11 @@ final class AppState {
             owLog("[OpenWhisper] Cannot record — model not loaded yet")
             return
         }
+
+        // If a previous dictation's field is still pending a re-read/diff, do that FIRST —
+        // otherwise this new dictation's own (much larger) edit to the same field would look
+        // like one giant "correction" of the old one. See DictationSnapshot.swift.
+        DictationSnapshot.shared.handleNewDictationStarting()
 
         // Save the currently focused app BEFORE we start recording,
         // so we can re-activate it when pasting the transcription
@@ -318,6 +333,7 @@ final class AppState {
                 // ordinary transcripts and as the fallback when a Spotify command turns out
                 // not to have actually applied (e.g. Automation permission not yet granted)
                 // — in that case the transcript must not just vanish.
+                @MainActor
                 func pasteAsDictation() async {
                     // Use the already-trimmed transcript as "raw" so it exactly matches what
                     // TextInjector ends up pasting (pasteText trims too, but idempotently) —
@@ -327,6 +343,22 @@ final class AppState {
                     if llmCleanupEnabled && ollamaAvailable {
                         cleanedText = await llmCleanup?.cleanup(text: rawText) ?? rawText
                         owLog("[OpenWhisper] Cleaned: \(cleanedText)")
+                    }
+
+                    // Apply learned corrections (from past manual edits) AFTER LLM cleanup but
+                    // BEFORE swapPair/lastInjectedText are set — those two have to reflect the
+                    // exact string that ends up pasted, since Option+Z's backspace count is
+                    // derived from lastInjectedText.count. swapPair.raw is intentionally left
+                    // un-corrected: its meaning stays "pre-Ollama raw", not "pre-correction".
+                    let activePairs = CorrectionStore.shared.activePairs
+                    if !activePairs.isEmpty {
+                        let (corrected, applied) = CorrectionEngine.applyCorrections(to: cleanedText, pairs: activePairs)
+                        if !applied.isEmpty {
+                            cleanedText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                            for (wrong, right) in applied {
+                                owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
+                            }
+                        }
                     }
 
                     lastTranscription = cleanedText
@@ -340,11 +372,16 @@ final class AppState {
                         hotkey?.setSwapAvailable(true)
 
                         let backupText = rawText
+                        let pastedForLearning = cleanedText
+                        let pasteTargetApp = targetApp
                         textInjector?.pasteText(cleanedText, targetApp: targetApp) { [weak self] in
                             Task { @MainActor in
                                 // Leave the NOT-currently-injected version on the clipboard as
                                 // a backup, only after the paste has had time to complete.
                                 self?.textInjector?.copyToClipboard(backupText)
+                                // Snapshot the field now so a later manual edit can be diffed
+                                // and learned from — see DictationSnapshot.swift.
+                                DictationSnapshot.shared.capture(pastedText: pastedForLearning, targetApp: pasteTargetApp)
                             }
                         }
                     } else {
@@ -364,7 +401,7 @@ final class AppState {
                     }
                 } else if isSpotifyCommand {
                     owLog("[OpenWhisper] Spotify command detected: \(text)")
-                    let handled = await SpotifyManager.shared.handleCommand(text: text)
+                    let handled = await SpotifyManager.shared.handleCommand(text: text, targetApp: targetApp)
                     if handled {
                         lastTranscription = text
                     } else {
@@ -430,6 +467,10 @@ final class AppState {
     private func commitSwap() {
         guard let pair = swapPair, !isSwapping else { return }
         isSwapping = true
+
+        // The raw<->cleaned toggle is not a user "correction" — it's our own swap — so any
+        // pending snapshot for the text about to be replaced must be dropped, not diffed.
+        DictationSnapshot.shared.invalidateForSwap()
 
         let newIsCleaned = !lastInjectedIsCleaned
         let newText = newIsCleaned ? pair.cleaned : pair.raw
