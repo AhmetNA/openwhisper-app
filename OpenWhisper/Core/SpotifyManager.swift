@@ -32,11 +32,24 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Command Handler
 
-    func handleCommand(text: String) async -> Bool {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    // MARK: - Command Handler
 
-        // 1. Controls: Play/Pause/Resume
-        if lower == "müzik çal" || lower == "müziği başlat" || lower == "müziği durdur" || lower == "müziği kapat" || lower == "spotify pause" || lower == "spotify play" {
+    func handleCommand(text: String) async -> Bool {
+        let cleanText = text
+            .lowercased()
+            .components(separatedBy: CharacterSet.letters.union(.whitespaces).inverted)
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 1. Controls: Play / Pause / Resume
+        let playPauseKeywords = [
+            "müzik çal", "müziği çal", "müziği başlat", "müzik başlat",
+            "müziği durdur", "müzik durdur", "müziği kapat", "müzik kapat",
+            "müziği aç", "müzik aç", "spotify pause", "spotify play",
+            "müzik oynat", "müziği oynat"
+        ]
+
+        if playPauseKeywords.contains(where: { cleanText == $0 || cleanText.hasPrefix($0) }) {
             let script = "tell application \"Spotify\" to playpause"
             _ = runAppleScript(script)
             sendNotification(title: "🎵 Spotify", body: "Müzik oynatılıyor / durduruldu")
@@ -44,7 +57,7 @@ final class SpotifyManager: @unchecked Sendable {
         }
 
         // 2. Next track
-        if lower.contains("sonraki şarkı") || lower.contains("next song") {
+        if cleanText.contains("sonraki") || cleanText.contains("next song") || cleanText.contains("next track") {
             let script = "tell application \"Spotify\" to next track"
             _ = runAppleScript(script)
             sendNotification(title: "🎵 Spotify", body: "Sonraki şarkıya geçildi")
@@ -52,7 +65,7 @@ final class SpotifyManager: @unchecked Sendable {
         }
 
         // 3. Previous track
-        if lower.contains("önceki şarkı") || lower.contains("previous song") {
+        if cleanText.contains("önceki") || cleanText.contains("previous song") || cleanText.contains("prev track") {
             let script = "tell application \"Spotify\" to previous track"
             _ = runAppleScript(script)
             sendNotification(title: "🎵 Spotify", body: "Önceki şarkıya geçildi")
@@ -62,10 +75,9 @@ final class SpotifyManager: @unchecked Sendable {
         // 4. Search and Play Song / Artist
         let query = extractSearchQuery(text: text)
         guard !query.isEmpty else {
-            // Default to opening/playing Spotify if no query extracted
-            let script = "tell application \"Spotify\" to play"
+            let script = "tell application \"Spotify\" to playpause"
             _ = runAppleScript(script)
-            sendNotification(title: "🎵 Spotify", body: "Spotify başlatıldı")
+            sendNotification(title: "🎵 Spotify", body: "Spotify oynatılıyor")
             return true
         }
 
@@ -104,35 +116,46 @@ final class SpotifyManager: @unchecked Sendable {
         // Open Spotify search view
         NSWorkspace.shared.open(url)
 
-        // Give Spotify 0.6s to focus search results, then send Return key via CGEvent to play top result
+        // Give Spotify 0.6s to render search results, then navigate & play top result
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            self.sendReturnKeyToSpotify()
+            self.sendPlayToSpotify()
         }
 
-        // Additional fallback tap 0.5s later if needed
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
-            self.sendReturnKeyToSpotify()
+        // Secondary fallback 0.6s later
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.sendPlayToSpotify()
         }
 
         sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor...")
         return true
     }
 
-    private func sendReturnKeyToSpotify() {
+    private func sendPlayToSpotify() {
         guard let spotifyApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.spotify.client" }) else {
+            _ = runAppleScript("tell application \"Spotify\" to play")
             return
         }
         spotifyApp.activate()
 
+        let tabKeyCode: CGKeyCode = 48
         let returnKeyCode: CGKeyCode = 36
-        if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
-           let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) {
+
+        // Move focus from search bar input to top result card, then press Return
+        postKey(code: tabKeyCode)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            self.postKey(code: returnKeyCode)
+            _ = self.runAppleScript("tell application \"Spotify\" to play")
+        }
+    }
+
+    private func postKey(code: CGKeyCode) {
+        if let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
+           let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) {
             keyDown.flags = []
             keyUp.flags = []
             keyDown.post(tap: .cghidEventTap)
-            usleep(30_000)
+            usleep(20_000)
             keyUp.post(tap: .cghidEventTap)
-            owLog("[Spotify] Posted Return key CGEvent to Spotify")
         }
     }
 
