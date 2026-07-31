@@ -123,6 +123,19 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Command Handler
 
+    /// Handles a transcript already identified as a Spotify command.
+    ///
+    /// Return contract (this is load-bearing for the caller in `AppState`, which pastes
+    /// the raw transcript as normal dictation whenever this returns `false`):
+    /// - `true`  — the command was actually applied (verified where practical, e.g. via
+    ///             `player state`), so the transcript should be swallowed, not pasted.
+    /// - `false` — nothing happened. This includes AppleScript permission errors: on a
+    ///             fresh install/rebuild the *first* command always fails this way while
+    ///             macOS shows the Automation consent dialog, and swallowing that
+    ///             transcript would make the app look broken twice over — the command
+    ///             didn't run *and* the user's words vanished. A notification about the
+    ///             permission is still shown, but the text falls through to normal
+    ///             dictation so it isn't lost.
     func handleCommand(text: String) async -> Bool {
         let normalized = Self.normalize(text)
 
@@ -133,13 +146,11 @@ final class SpotifyManager: @unchecked Sendable {
             if command == .play, Self.playFamilyPrefixes.contains(prefix), !residue.isEmpty {
                 let query = extractSearchQuery(residue)
                 if !query.isEmpty {
-                    await playSearchQuery(query)
-                    return true
+                    return await playSearchQuery(query)
                 }
             }
 
-            await runTransport(command)
-            return true
+            return await runTransport(command)
         }
 
         // 2. Bare "spotify ..." with no recognized verb → remainder is a search query.
@@ -151,18 +162,17 @@ final class SpotifyManager: @unchecked Sendable {
             let residue = tokens.joined(separator: " ")
             let query = extractSearchQuery(residue)
             if !query.isEmpty {
-                await playSearchQuery(query)
-                return true
+                return await playSearchQuery(query)
             }
 
             // "Spotify" said alone with nothing else — toggle playback as a safe fallback.
             switch runAppleScript("tell application \"Spotify\" to playpause") {
             case .success:
                 sendNotification(title: "🎵 Spotify", body: "Spotify oynatma durumu değiştirildi")
+                return true
             case .failure(let error):
-                handleScriptError(error)
+                return handleScriptError(error)
             }
-            return true
         }
 
         return false
@@ -170,7 +180,9 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Transport
 
-    private func runTransport(_ command: TransportCommand) async {
+    /// Runs a transport command and returns whether it actually took effect (see
+    /// `handleCommand` for the return contract this feeds into).
+    private func runTransport(_ command: TransportCommand) async -> Bool {
         let script: String
         let successBody: String
 
@@ -202,17 +214,20 @@ final class SpotifyManager: @unchecked Sendable {
             if command == .play {
                 if await confirmPlaying() {
                     sendNotification(title: "🎵 Spotify", body: successBody)
+                    return true
                 } else {
                     sendNotification(
                         title: "🎵 Spotify",
                         body: "Komut kabul edildi ama Spotify çalmıyor. Çalma listesi boş olabilir."
                     )
+                    return false
                 }
             } else {
                 sendNotification(title: "🎵 Spotify", body: successBody)
+                return true
             }
         case .failure(let error):
-            handleScriptError(error)
+            return handleScriptError(error)
         }
     }
 
@@ -235,11 +250,13 @@ final class SpotifyManager: @unchecked Sendable {
     private let tabKeyCode: CGKeyCode = 48
     private let returnKeyCode: CGKeyCode = 36
 
-    private func playSearchQuery(_ query: String) async {
+    /// Searches Spotify for `query` and tries to play the top result, returning whether
+    /// playback was actually confirmed (see `handleCommand` for the return contract).
+    private func playSearchQuery(_ query: String) async -> Bool {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "spotify:search:\(encoded)") else {
             sendNotification(title: "🎵 Spotify", body: "\"\(query)\" için arama başlatılamadı.")
-            return
+            return false
         }
 
         sendNotification(title: "🎵 Spotify", body: "\"\(query)\" aranıyor...")
@@ -247,7 +264,7 @@ final class SpotifyManager: @unchecked Sendable {
 
         guard await waitUntilSpotifyFrontmost(timeout: 3.0) else {
             sendNotification(title: "🎵 Spotify", body: "Spotify öne getirilemedi, arama sonucu çalınamadı.")
-            return
+            return false
         }
 
         // Spotify's AppleScript dictionary has no "play top search result" verb, so this
@@ -261,18 +278,20 @@ final class SpotifyManager: @unchecked Sendable {
 
         if await confirmPlaying() {
             sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor")
-            return
+            return true
         }
 
         // One retry before giving up honestly.
         postKey(code: returnKeyCode)
         if await confirmPlaying() {
             sendNotification(title: "🎵 Spotify", body: "\"\(query)\" çalınıyor")
+            return true
         } else {
             sendNotification(
                 title: "🎵 Spotify",
                 body: "\"\(query)\" otomatik oynatılamadı. Spotify'ı kontrol edin."
             )
+            return false
         }
     }
 
@@ -344,7 +363,11 @@ final class SpotifyManager: @unchecked Sendable {
         return .success(output.stringValue)
     }
 
-    private func handleScriptError(_ error: SpotifyScriptError) {
+    /// Shows an honest failure notification and reports whether the transcript should
+    /// still be swallowed (see `handleCommand`'s doc comment for the contract). Every
+    /// branch here returns `false`: nothing was actually done to Spotify in any of these
+    /// cases, so the dictation falls through to normal paste rather than being lost.
+    private func handleScriptError(_ error: SpotifyScriptError) -> Bool {
         switch error {
         case .permissionDenied:
             sendNotification(
@@ -357,6 +380,7 @@ final class SpotifyManager: @unchecked Sendable {
             owLog("[Spotify] Command failed (\(number)): \(message)")
             sendNotification(title: "🎵 Spotify", body: "Spotify komutu başarısız oldu (\(number)).")
         }
+        return false
     }
 
     // MARK: - Notification

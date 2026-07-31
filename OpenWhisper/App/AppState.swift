@@ -314,19 +314,11 @@ final class AppState {
                 let isReminderCommand = ReminderManager.isReminder(text)
                 let isSpotifyCommand = SpotifyManager.isSpotifyCommand(text)
 
-                if isReminderCommand {
-                    owLog("[OpenWhisper] Reminder detected: \(text)")
-                    lastTranscription = text
-                    if ollamaAvailable {
-                        let _ = await reminderManager?.handleReminder(text: text)
-                    } else {
-                        owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
-                    }
-                } else if isSpotifyCommand {
-                    owLog("[OpenWhisper] Spotify command detected: \(text)")
-                    lastTranscription = text
-                    let _ = await SpotifyManager.shared.handleCommand(text: text)
-                } else {
+                // Shared normal-dictation path (LLM cleanup + paste/copy). Used both for
+                // ordinary transcripts and as the fallback when a Spotify command turns out
+                // not to have actually applied (e.g. Automation permission not yet granted)
+                // — in that case the transcript must not just vanish.
+                func pasteAsDictation() async {
                     // Use the already-trimmed transcript as "raw" so it exactly matches what
                     // TextInjector ends up pasting (pasteText trims too, but idempotently) —
                     // that keeps lastInjectedText's character count exact for swap backspacing.
@@ -360,6 +352,29 @@ final class AppState {
                         // no injected text to swap later — leave any prior swap pair alone.
                         textInjector?.copyToClipboard(cleanedText)
                     }
+                }
+
+                if isReminderCommand {
+                    owLog("[OpenWhisper] Reminder detected: \(text)")
+                    lastTranscription = text
+                    if ollamaAvailable {
+                        let _ = await reminderManager?.handleReminder(text: text)
+                    } else {
+                        owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
+                    }
+                } else if isSpotifyCommand {
+                    owLog("[OpenWhisper] Spotify command detected: \(text)")
+                    let handled = await SpotifyManager.shared.handleCommand(text: text)
+                    if handled {
+                        lastTranscription = text
+                    } else {
+                        // Command wasn't actually applied (e.g. Automation permission not
+                        // granted yet) — don't lose the transcript, treat it as dictation.
+                        owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
+                        await pasteAsDictation()
+                    }
+                } else {
+                    await pasteAsDictation()
                 }
             } catch {
                 owLog("[OpenWhisper] Error: \(error)")

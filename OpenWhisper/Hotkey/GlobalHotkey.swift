@@ -185,6 +185,14 @@ final class GlobalHotkey {
         }
     }
 
+    /// Called from the CGEventTap callback on Enter (keyCode 36 or 76) when in hands-free mode.
+    fileprivate func handleEnterKeyDown() -> Bool {
+        guard mode == .handsFree else { return false }
+        mode = .idle
+        onRelease()
+        return true
+    }
+
     // MARK: - Option + Z (output swap shortcut)
 
     /// Called from the CGEventTap callback on every 'Z' keyDown.
@@ -221,6 +229,10 @@ final class GlobalHotkey {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if keyCode == 49 {
                 if me.handleSpaceKeyDown(flags: event.flags) {
+                    return nil
+                }
+            } else if keyCode == 36 || keyCode == 76 {
+                if me.handleEnterKeyDown() {
                     return nil
                 }
             } else if keyCode == me.zKeyCode {
