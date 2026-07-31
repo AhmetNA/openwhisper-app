@@ -80,6 +80,15 @@ final class SpotifyManager: @unchecked Sendable {
 
     private static let maxCommandWordCount = 8
 
+    /// Prefix match with a word-boundary check, so "durdur" doesn't also match
+    /// "durdurma şarkısını çal" or "kapat" match "kapatma...".
+    private static func hasCommandPrefix(_ normalized: String, _ prefix: String) -> Bool {
+        guard normalized.hasPrefix(prefix) else { return false }
+        if normalized.count == prefix.count { return true }
+        let indexAfterPrefix = normalized.index(normalized.startIndex, offsetBy: prefix.count)
+        return normalized[indexAfterPrefix] == " "
+    }
+
     // MARK: - Normalization
 
     private static func normalize(_ text: String) -> String {
@@ -105,8 +114,11 @@ final class SpotifyManager: @unchecked Sendable {
         let wordCount = normalized.split(separator: " ").count
         guard wordCount <= maxCommandWordCount else { return false }
 
-        if normalized.hasPrefix("spotify") { return true }
-        return transportPrefixes.contains { normalized.hasPrefix($0.0) }
+        // "spotify" is a proper noun that takes Turkish case suffixes ("spotify'da",
+        // "spotifydan"), so match it as a whole leading token rather than requiring an
+        // exact word boundary — a plain hasCommandPrefix would reject "spotify'da...".
+        if normalized.split(separator: " ").first?.hasPrefix("spotify") == true { return true }
+        return transportPrefixes.contains { hasCommandPrefix(normalized, $0.0) }
     }
 
     // MARK: - Command Handler
@@ -115,7 +127,7 @@ final class SpotifyManager: @unchecked Sendable {
         let normalized = Self.normalize(text)
 
         // 1. Leading transport phrase (longest/most-specific match wins per table order).
-        if let (prefix, command) = Self.transportPrefixes.first(where: { normalized.hasPrefix($0.0) }) {
+        if let (prefix, command) = Self.transportPrefixes.first(where: { Self.hasCommandPrefix(normalized, $0.0) }) {
             let residue = String(normalized.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
 
             if command == .play, Self.playFamilyPrefixes.contains(prefix), !residue.isEmpty {
@@ -131,8 +143,12 @@ final class SpotifyManager: @unchecked Sendable {
         }
 
         // 2. Bare "spotify ..." with no recognized verb → remainder is a search query.
-        if normalized.hasPrefix("spotify") {
-            let residue = String(normalized.dropFirst("spotify".count)).trimmingCharacters(in: .whitespaces)
+        //    Drop the whole first token (not just the "spotify" prefix) so a Turkish case
+        //    suffix like "'da"/"'dan" doesn't leak into the search text.
+        var tokens = normalized.split(separator: " ").map(String.init)
+        if tokens.first?.hasPrefix("spotify") == true {
+            tokens.removeFirst()
+            let residue = tokens.joined(separator: " ")
             let query = extractSearchQuery(residue)
             if !query.isEmpty {
                 await playSearchQuery(query)
@@ -180,7 +196,21 @@ final class SpotifyManager: @unchecked Sendable {
 
         switch runAppleScript(script) {
         case .success:
-            sendNotification(title: "🎵 Spotify", body: successBody)
+            // AppleScript returning success only means the command was accepted, not
+            // that audio is actually flowing — e.g. "play" with nothing queued succeeds
+            // but plays nothing. Verify actual playback state before claiming success.
+            if command == .play {
+                if await confirmPlaying() {
+                    sendNotification(title: "🎵 Spotify", body: successBody)
+                } else {
+                    sendNotification(
+                        title: "🎵 Spotify",
+                        body: "Komut kabul edildi ama Spotify çalmıyor. Çalma listesi boş olabilir."
+                    )
+                }
+            } else {
+                sendNotification(title: "🎵 Spotify", body: successBody)
+            }
         case .failure(let error):
             handleScriptError(error)
         }

@@ -5,14 +5,14 @@ final class LLMCleanup: Sendable {
     private let model = "qwen2.5:7b"
 
     private static let basePrompt = """
-        You are a transcript cleaner. The transcript is spoken by a Turkish software developer who mixes Turkish and English (code-switching). Your ONLY job: remove filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan) and fix punctuation/casing.
+        You are a minimal transcript cleaner. Your SINGLE task is to remove spoken filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan, vs.) and fix capitalization/punctuation.
 
-        STRICT RULES:
-        - NEVER translate any word. Turkish stays Turkish, English stays English.
-        - NEVER rephrase, reorder, or substitute words. Keep every non-filler word exactly as spoken.
-        - NEVER output Chinese characters, markdown lists, bullet points, or extra explanations.
-        - Technical terms must appear EXACTLY as in the transcript.
-        - Output ONLY the cleaned text.
+        ABSOLUTE STRICT RULES:
+        1. DO NOT REPHRASE: Keep every non-filler word in its exact original order and wording.
+        2. DO NOT REWRITE: Do not improve grammar, do not shorten sentences, do not replace synonyms.
+        3. DO NOT TRANSLATE: Keep Turkish in Turkish and English in English.
+        4. REMOVE ONLY FILLER WORDS: Delete only speech hesitation words like "şey", "yani", "ee", "ıı", "hani".
+        5. Output ONLY the cleaned transcript, nothing else.
 
         Example input: şey bu fonksiyonu yani async yapalım ee sonra await ekleyelim
         Example output: Bu fonksiyonu async yapalım, sonra await ekleyelim.
@@ -49,9 +49,8 @@ final class LLMCleanup: Sendable {
         return basePrompt + """
 
 
-            KNOWN TECHNICAL TERMS the speaker commonly uses: \(joined)
-
-            If a word or short phrase in the transcript is not a real Turkish or English word and appears to be a speech-to-text mishearing of one of the known terms above (judge by sound-alike syllables AND surrounding technical context, not spelling), replace it with the exact known term. Only correct when the phonetic similarity is clearly obvious; never guess otherwise, and never touch words that are already valid Turkish or English words.
+            KNOWN TECHNICAL TERMS: \(joined)
+            If a technical term is misspelled due to speech-to-text, fix only that term's spelling. Do not change any other words.
             """
     }
 
@@ -83,7 +82,7 @@ final class LLMCleanup: Sendable {
             "prompt": "\(Self.cleanupPrompt())\n\nTranscript: \(text)",
             "stream": false,
             "options": [
-                "temperature": 0.1,
+                "temperature": 0.0,
                 "num_predict": max(200, text.count * 2)
             ]
         ]
