@@ -245,6 +245,9 @@ final class AppState {
         audioLevel = 0
         lastError = nil
 
+        // Lower system output volume to 30% while holding dictation hotkey
+        AudioDucker.shared.duckVolume(targetVolume: 30)
+
         audioEngine?.startRecording(deviceUID: inputDeviceUID) { [weak self] rawLevel in
             let rms = max(rawLevel, 0.0001)
             let dB = 20 * log10(rms)
@@ -267,6 +270,10 @@ final class AppState {
 
     func stopRecording() {
         guard recordingState == .recording else { return }
+
+        // Restore system output volume immediately when Fn key is released
+        AudioDucker.shared.restoreVolume()
+
         recordingState = .transcribing
         owLog("[OpenWhisper] Transcribing...")
 
