@@ -303,8 +303,9 @@ final class AppState {
 
                 owLog("[OpenWhisper] Raw: \(text)")
 
-                // Check raw text for reminder intent BEFORE LLM cleanup can alter it
+                // Check raw text for reminder or Spotify commands BEFORE LLM cleanup
                 let isReminderCommand = ReminderManager.isReminder(text)
+                let isSpotifyCommand = SpotifyManager.isSpotifyCommand(text)
 
                 if isReminderCommand {
                     owLog("[OpenWhisper] Reminder detected: \(text)")
@@ -314,6 +315,10 @@ final class AppState {
                     } else {
                         owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
                     }
+                } else if isSpotifyCommand {
+                    owLog("[OpenWhisper] Spotify command detected: \(text)")
+                    lastTranscription = text
+                    let _ = await SpotifyManager.shared.handleCommand(text: text)
                 } else {
                     // Use the already-trimmed transcript as "raw" so it exactly matches what
                     // TextInjector ends up pasting (pasteText trims too, but idempotently) —
