@@ -23,5 +23,8 @@ Package.resolved
 # Logs
 *.log
 
+# Models & Local cache
+.whisperkit-models/
+
 # Claude
 .claude/

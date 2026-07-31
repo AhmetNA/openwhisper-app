@@ -35,6 +35,12 @@ final class AppState {
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
+    var ollamaModel: String {
+        didSet {
+            UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel")
+            llmCleanup = LLMCleanup(model: ollamaModel)
+        }
+    }
     var flowBarEnabled: Bool {
         didSet {
             UserDefaults.standard.set(flowBarEnabled, forKey: "flowBarEnabled")
@@ -138,6 +144,7 @@ final class AppState {
         whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
         language = defaults.string(forKey: "language") ?? "tr"
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
+        ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
@@ -153,7 +160,7 @@ final class AppState {
         }
         audioEngine = AudioEngine()
         transcriber = WhisperTranscriber()
-        llmCleanup = LLMCleanup()
+        llmCleanup = LLMCleanup(model: ollamaModel)
         textInjector = TextInjector()
         flowBarController = FlowBarController(appState: self)
         syncFlowBarVisibility()
@@ -260,8 +267,8 @@ final class AppState {
         audioLevel = 0
         lastError = nil
 
-        // Lower system output volume to 30% while holding dictation hotkey
-        AudioDucker.shared.duckVolume(targetVolume: 30)
+        // Lower system output volume to 15% while holding dictation hotkey
+        AudioDucker.shared.duckVolume(targetVolume: 15)
 
         audioEngine?.startRecording(deviceUID: inputDeviceUID) { [weak self] rawLevel in
             let rms = max(rawLevel, 0.0001)
@@ -327,7 +334,7 @@ final class AppState {
 
                 // Check raw text for reminder or Spotify commands BEFORE LLM cleanup
                 let isReminderCommand = ReminderManager.isReminder(text)
-                let isSpotifyCommand = SpotifyManager.isSpotifyCommand(text)
+                let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(text, ollamaAvailable: ollamaAvailable)
 
                 // Shared normal-dictation path (LLM cleanup + paste/copy). Used both for
                 // ordinary transcripts and as the fallback when a Spotify command turns out

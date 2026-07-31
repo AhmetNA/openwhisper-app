@@ -2,7 +2,11 @@ import Foundation
 
 final class LLMCleanup: Sendable {
     private let baseURL = "http://localhost:11434"
-    private let model = "qwen2.5:7b"
+    let model: String
+
+    init(model: String = "qwen2.5:7b") {
+        self.model = model
+    }
 
     private static let basePrompt = """
         You are a minimal transcript cleaner. Your SINGLE task is to remove spoken filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan, vs.) and fix capitalization/punctuation.
@@ -79,11 +83,12 @@ final class LLMCleanup: Sendable {
 
         let body: [String: Any] = [
             "model": model,
-            "prompt": "\(Self.cleanupPrompt())\n\nTranscript: \(text)",
+            "prompt": "\(Self.cleanupPrompt())\n\nTranscript: \(text)\nCleaned transcript:",
             "stream": false,
             "options": [
                 "temperature": 0.0,
-                "num_predict": max(200, text.count * 2)
+                "num_predict": min(max(50, text.count + 30), 200),
+                "stop": ["\n", "\n\n", "</think>", "Transcript:"]
             ]
         ]
 

@@ -1,238 +1,123 @@
-# OpenWhisper — Free Voice-to-Text App for macOS
+# 🎙️ OpenWhisper — macOS için %100 Yerel ve Yapay Zeka Destekli Sesli Yazma (Voice-to-Text)
 
-**Open-source, offline speech-to-text for Mac.** Hold a key, speak, and your words appear at the cursor — 100% local, nothing leaves your machine.
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14.0%2B-blue?style=for-the-badge&logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Architecture-Apple%20Silicon%20(M1%2FM2%2FM3%2FM4)-orange?style=for-the-badge&logo=apple" alt="Apple Silicon">
+  <img src="https://img.shields.io/badge/Swift-5.10-F05138?style=for-the-badge&logo=swift" alt="Swift 5.10">
+  <img src="https://img.shields.io/badge/Engine-WhisperKit%20CoreML-teal?style=for-the-badge" alt="WhisperKit CoreML">
+  <img src="https://img.shields.io/badge/AI%20Cleanup-Ollama%20(ZORUNLU)-black?style=for-the-badge&logo=ollama" alt="Ollama Mandatory">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License">
+</p>
 
-OpenWhisper is a free dictation app for macOS that transcribes speech to text entirely on your Mac using [WhisperKit](https://github.com/argmaxinc/WhisperKit) (OpenAI Whisper optimized for Apple Silicon). Optional local LLM cleanup via [Ollama](https://ollama.com) fixes grammar and removes filler words — all without an internet connection.
+**OpenWhisper**, macOS işletim sistemi için geliştirilmiş, konuşmalarınızı **%100 yerel (offline)** olarak yüksek doğrulukla metne dönüştüren açık kaynaklı bir sesli yazma uygulamasıdır.
 
-No cloud. No subscription. No data collection. Just fast, accurate voice typing on Mac.
+Hiçbir ses veriniz bulut sunucularına gönderilmez. Whisper modeli doğrudan Mac'inizdeki **Apple Silicon (CoreML & Neural Engine)** üzerinde çalışır. Yerel yapay zeka **Ollama** entegrasyonu sayesinde konuşmanızdaki dolgu kelimeler ("ııı", "şey", "um", "yani") otomatik olarak temizlenir, noktalama ve gramer kusursuzlaştırılır.
 
-## Features
+---
 
-- **100% Local & Private** — All speech recognition runs on-device. No audio ever leaves your Mac.
-- **Offline Voice-to-Text** — Works without internet. Transcribe speech to text anywhere.
-- **Hold-to-Talk** — Hold the 🌐 Fn/Globe key, speak, release. Text appears at your cursor.
-- **Hands-Free Mode** — While holding 🌐 Fn, tap Space to lock recording on. Talk as long as you want, then tap Space again to stop.
-- **Works in Any App** — VS Code, Terminal, Chrome, Slack, Notes, Pages — anywhere you can type.
-- **AI Grammar Cleanup** — Optional local LLM removes "um", "uh", fixes punctuation (via Ollama). Includes a Turkish/English code-switching mode for developers who dictate in mixed Turkish and English.
-- **Multiple Whisper Models** — Choose tiny (39 MB), base (140 MB), small (460 MB), or Large v3 Turbo (~1.6 GB) based on your needs.
-- **29 Languages** — English, Spanish, French, German, Hindi, Chinese, Japanese, and more.
-- **Lightweight** — <100 MB RAM, <1% CPU when idle. No background drain.
-- **Menu Bar App** — Lives quietly in your menu bar. No dock icon clutter.
+## ⚠️ ZORUNLU SİSTEM GEREKSİNİMLERİ (PREREQUISITES)
 
-## OpenWhisper vs Cloud Dictation Services
+Uygulamanın kurulup çalışabilmesi için sisteminizde aşağıdaki **3 bileşenin** bulunması **ZORUNLUDUR**:
 
-| | OpenWhisper | Cloud Services (Wispr Flow, Otter.ai, etc.) |
+| Bileşen | Zorunluluk Durumu | Açıklama |
 |---|---|---|
-| **Privacy** | 100% local — nothing leaves your Mac | Voice uploaded to remote servers |
-| **Internet** | Works offline | Requires internet |
-| **Cost** | Free & open-source | $10-20/month subscriptions |
-| **Latency** | Instant on-device processing | Network round-trip delay |
-| **Resource usage** | <100 MB RAM idle | 400-800 MB RAM |
-| **Data collection** | None | Voice data stored on third-party servers |
-| **Accuracy** | OpenAI Whisper (state-of-the-art) | Varies |
+| 🍏 **Apple Silicon Mac** | **ZORUNLU** | M1, M2, M3, M4 işlemcili Mac (Intel desteklenmez). |
+| 🛠️ **Command Line Tools** | **ZORUNLU** | **Xcode uygulamasını indirmeye GEREK YOKTUR!** Sadece komut satırı araçları (`xcode-select --install`) yeterlidir. |
+| 🦙 **Ollama (Yerel AI)** | **ZORUNLU** | Dikte edilen metindeki dolgu kelimelerini ("ııı", "şey", "um") temizlemek ve grameri düzeltmek için **Ollama ve `qwen2.5:7b` modelinin kurulması ZORUNLUDUR.** |
 
-## Requirements
+---
 
-- **macOS 14.0** (Sonoma) or later
-- **Apple Silicon** Mac (M1, M2, M3, M4) — required for WhisperKit CoreML acceleration
-- **Xcode Command Line Tools** — `xcode-select --install`
-- **Ollama** (optional) — for AI grammar cleanup: [ollama.com](https://ollama.com)
+## 🚀 ZORUNLU KURULUM ADIMLARI (STEP-BY-STEP INSTALLATION)
 
-## Quick Install (One Line)
+Projeyi yeni bir Mac bilgisayara kurarken aşağıdaki adımları **sırasıyla ve eksiksiz** uygulayınız.
 
+### 1. Adım: Command Line Tools Kurulumu (ZORUNLU)
+*(Tam Xcode uygulamasını App Store'dan indirmenize gerek yoktur)*
+
+Terminal uygulamasını açın ve şu komutu çalıştırın:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Rajvardhman05/openwhisper-app/main/install.sh | bash
+xcode-select --install
 ```
+Ekrana gelen açılır pencerede **"Yükle" (Install)** butonuna basıp kurulumun tamamlanmasını bekleyin (~1-2 dk).
 
-This clones the repo, builds the app, installs it to `/Applications`, and launches it. First install takes ~2 min (downloads WhisperKit dependencies). Also works to **update** an existing install to the latest version.
+---
 
-### Manual Install
+### 2. Adım: Ollama ve AI Modelinin Kurulumu (ZORUNLU)
+Dikte temizleme motorunun çalışabilmesi için Ollama'nın ve yapay zeka modelinin yüklenmesi **şarttır**.
 
-```bash
-git clone https://github.com/Rajvardhman05/openwhisper-app.git
-cd openwhisper-app
-bash build.sh
-open build/OpenWhisper.app
-```
-
-### After launching
-
-1. **Grant Microphone access** when prompted (or: System Settings → Privacy & Security → Microphone)
-2. **Grant Accessibility access**: System Settings → Privacy & Security → Accessibility → toggle ON OpenWhisper
-3. The Whisper model downloads automatically on first launch (~1.6 GB for the default `Large v3 Turbo` model)
-
-OpenWhisper lives in your **menu bar** (no dock icon). Look for the teal microphone icon.
-
-## How to Use Voice-to-Text on Mac with OpenWhisper
-
-OpenWhisper has two recording modes — pick whichever fits the moment.
-
-### Hold-to-Talk (quick dictation)
-
-**Hold the 🌐 Fn/Globe key**, speak, release. Text appears at your cursor.
-
-### Hands-Free Mode (long dictation)
-
-**Hold 🌐 Fn, then tap Space** while still holding — recording locks on. Release Fn freely and keep talking. **Tap Space again** to stop, transcribe, and paste.
-
-Use hands-free when you don't want to keep a finger on Fn — long emails, blog drafts, anything multi-sentence.
-
-### How it works
-
-1. **Hold 🌐 Fn** → recording starts, Flow Bar shows "Listening..." with animated dots
-2. **(Optional) Tap Space** while still holding Fn → recording locks into hands-free; release Fn whenever
-3. **Speak** → audio captured locally at 16 kHz mono
-4. **Release Fn** (hold mode) or **tap Space** (hands-free) → audio transcribed by on-device Whisper model
-5. **Cleanup** → text cleaned up by local LLM (if enabled)
-6. **Paste** → text automatically pasted at your cursor (or copied to clipboard)
-
-> **Note:** macOS may intercept the Fn/Globe key for its own features (emoji picker, dictation, Siri). Go to **System Settings → Keyboard → "Press 🌐 key to"** and set it to **"Do Nothing"** so OpenWhisper receives the key press instead.
-
-Works in any app — VS Code, Terminal, Chrome, Slack, Notes, Pages, Word, and more.
-
-## Whisper Model Selection
-
-Click the menu bar icon to open settings and choose your model:
-
-| Model | Download Size | Speed | Accuracy | Best for |
-|---|---|---|---|---|
-| tiny | 39 MB | Fastest | Good | Quick notes, short phrases |
-| base | 140 MB | Fast | Better | General dictation |
-| small | 460 MB | Moderate | Best | Longer passages, multiple languages |
-| small.en | 460 MB | Moderate | Best (English) | English-only, highest accuracy |
-| Large v3 Turbo | ~1.6 GB | Moderate | Highest | Mixed-language dictation, best overall accuracy (recommended, default) |
-
-Models are downloaded once from HuggingFace and cached locally.
-
-## Settings
-
-| Setting | Options | Default |
-|---|---|---|
-| **Model** | tiny, base, small, small.en, Large v3 Turbo | Large v3 Turbo |
-| **Language** | 29 languages + auto-detect | Turkish |
-| **LLM Cleanup** | On/Off — Ollama grammar correction | On |
-| **Auto-paste** | On = paste at cursor, Off = clipboard only | On |
-| **Flow Bar** | Show/hide the floating status indicator | On |
-
-## Optional: Local LLM Grammar Cleanup
-
-When enabled, transcriptions are cleaned up by a local LLM — removes filler words ("um", "uh", "like"), fixes grammar and punctuation — before pasting. All processing stays on your Mac.
+Terminal'de sırasıyla şu iki komutu çalıştırın:
 
 ```bash
-# Install Ollama
+# 1. Homebrew ile Ollama'yı kurun (Homebrew yoksa: https://brew.sh)
 brew install ollama
 
-# Pull the model (~4.7 GB one-time download)
+# 2. Zorunlu yapay zeka modelini indirin
 ollama pull qwen2.5:7b
-
-# Ollama runs automatically — no extra steps needed
 ```
 
-OpenWhisper auto-detects Ollama. If it's not running, cleanup is skipped — raw Whisper transcription is used instead.
+> **Not:** Ollama kurulduktan sonra arka planda otomatik servis olarak çalışır (`http://localhost:11434`). Ekstra bir şey başlatmanıza gerek yoktur.
 
-## macOS Permissions
+---
 
-OpenWhisper needs two macOS permissions to function:
+### 3. Adım: OpenWhisper'ı Derleme ve Çalıştırma (ZORUNLU)
 
-| Permission | Why | How to grant |
-|---|---|---|
-| **Microphone** | To capture your voice for transcription | Prompted automatically on first use |
-| **Accessibility** | To detect the global hotkey & paste text at cursor | System Settings → Privacy & Security → Accessibility → toggle ON |
-
-## Supported Languages
-
-OpenWhisper supports 29 languages for speech-to-text transcription:
-
-English, Spanish, French, German, Italian, Portuguese, Dutch, Russian, Chinese, Japanese, Korean, Hindi, Arabic, Turkish, Polish, Czech, Swedish, Danish, Norwegian, Finnish, Greek, Hebrew, Thai, Vietnamese, Indonesian, Malay, Romanian, Hungarian, Ukrainian.
-
-Set your language in the settings menu or use auto-detect.
-
-## Architecture
-
-```
-OpenWhisper.app (menu bar)
-├── AudioEngine        — AVAudioEngine, 16kHz mono resampling
-├── WhisperTranscriber — WhisperKit (CoreML + Apple Neural Engine)
-├── LLMCleanup         — Ollama HTTP API (localhost:11434)
-├── TextInjector       — NSPasteboard + CGEvent Cmd+V
-├── GlobalHotkey       — 🌐 Fn via NSEvent + Space lock via CGEventTap
-└── UI
-    ├── MenuBar + Settings popover
-    └── FlowBar (floating NSPanel with voice-reactive animation)
-```
-
-All speech recognition runs locally. The only network calls are:
-- **One-time model download** from HuggingFace (first launch only)
-- **Ollama API** on `localhost:11434` (never leaves your machine)
-
-## Troubleshooting
-
-### "Model not loaded" in the Flow Bar
-The Whisper model is still downloading. Check the settings panel for a progress indicator. First download takes 1-2 minutes depending on model size and connection speed.
-
-### Text isn't pasting into my app
-- Verify Accessibility permission is granted (System Settings → Privacy & Security → Accessibility)
-- Some apps block CGEvent paste — switch "Auto-paste" off and use Cmd+V manually
-
-### Ollama cleanup isn't working
-- Check Ollama is running: `ollama list` should show `qwen2.5:7b`
-- If not installed: `brew install ollama && ollama pull qwen2.5:7b`
-- The settings panel shows a green dot next to "LLM Cleanup" when Ollama is reachable
-
-### Recording doesn't start when I hold 🌐 Fn
-- Grant Accessibility permission (required for global hotkey detection)
-- Check System Settings → Keyboard → "Press 🌐 key to" is set to "Do Nothing" — otherwise macOS intercepts the key for the emoji picker, dictation, or Siri before OpenWhisper sees it
-- Try restarting the app after granting permission
-
-### Build fails
-- Ensure Xcode Command Line Tools: `xcode-select --install`
-- Requires macOS 14.0+ and Apple Silicon (M1/M2/M3/M4)
-
-## FAQ
-
-### Is OpenWhisper really free?
-Yes. OpenWhisper is free and open-source under the MIT license. No subscriptions, no trials, no hidden costs.
-
-### Does OpenWhisper send my voice to the cloud?
-No. All speech recognition happens locally on your Mac using WhisperKit. No audio data ever leaves your machine.
-
-### Does OpenWhisper work offline?
-Yes. After the one-time model download, OpenWhisper works completely offline. No internet connection needed for transcription.
-
-### How accurate is the transcription?
-OpenWhisper uses OpenAI's Whisper model (via WhisperKit), which is one of the most accurate speech recognition models available. The `base` model handles most dictation well; `small` is even more accurate for longer or multilingual content.
-
-### What's the difference between OpenWhisper and macOS built-in dictation?
-macOS dictation sends audio to Apple's servers for processing. OpenWhisper processes everything locally — better privacy, works offline, and offers more control with model selection and LLM cleanup.
-
-### Can I use OpenWhisper for languages other than English?
-Yes. OpenWhisper supports 29 languages. Select your language in the settings, or use auto-detect to let Whisper identify the spoken language automatically.
-
-### Do I need Ollama?
-No. Ollama is optional — it provides AI grammar cleanup (removing filler words, fixing punctuation). Without it, OpenWhisper still transcribes perfectly; you just get the raw Whisper output.
-
-## Development
+Terminal'de proje klasörünün içine girip derleme betiğini çalıştırın:
 
 ```bash
-# Build debug
-swift build
+# Projenin app klasörüne gidin
+cd app
 
-# Build & package .app bundle
+# Uygulamayı derleyin, /Applications klasörüne kursun ve başlatsın
 bash build.sh
-
-# Run
-open build/OpenWhisper.app
-
-# Logs
-tail -f /tmp/openwhisper.log
 ```
 
-Built with Swift 5.10, SwiftUI, Swift Package Manager. No Xcode project required — builds entirely from the command line.
+---
 
-## Contributing
+## ⚙️ macOS İZİNLERİ VE KLAVYE AYARLARI
 
-Contributions are welcome! Feel free to open issues or submit pull requests.
+Uygulama ilk kez başladığında menü çubuğunuzda (sağ üstte) turkuaz renkli bir mikrofon ikonu belirir. Uygulamanın sorunsuz çalışması için şu 2 ayarın yapılması **ZORUNLUDUR**:
 
-## License
+### 1. Erişilebilirlik (Accessibility) İzni
+Uygulamanın `Fn` tuşunu algılaması ve yazılan metni imlecin olduğu yere yapıştırabilmesi için:
+* **Sistem Ayarları → Gizlilik ve Güvenlik → Erişilebilirlik** bölümüne gidin.
+* listeden **OpenWhisper** uygulamasını bulun ve anahtarı **AÇIK (ON)** konuma getirin.
 
-MIT License — see [LICENSE](LICENSE).
+### 2. Klavye Fn/Globe Tuşu Ayarı
+macOS varsayılan olarak `Fn` tuşuna basıldığında Emoji menüsünü açar. Bunun çakışmaması için:
+1. **Sistem Ayarları → Klavye** menüsüne gidin.
+2. **"🌐 tuşuna basıldığında"** (Press 🌐 key to) seçeneğini **"Hiçbir Şey Yapma" (Do Nothing)** olarak ayarlayın.
+
+---
+
+## 📖 KULLANIM KILAVUZU
+
+OpenWhisper menü çubuğunuzda sessizce çalışır. Metin girişi yapılabilen her yerde (VS Code, Terminal, Slack, Notlar, Chrome vs.) kullanılabilir.
+
+- 🎙️ **Bas-Konuş (Hold-to-Talk)**:
+  `🌐 Fn` tuşuna **basılı tutun**, konuşun ve tuşu **bırakın**. Metin temizlenerek anında imlecinize yazılır.
+  *(İlk konuşmada Whisper ses modeli otomatik indirilir, ~1-2 dk sürer).*
+
+- 🔒 **Eller Serbest Modu (Hands-Free Lock)**:
+  `🌐 Fn` tuşuna basılı tutarken **`Space`** veya **`Enter`** tuşuna bir kez basın. Kilit aktifleşir. Parmağınızı Fn'den çekip uzun uzun konuşun. Bitirmek için tekrar **`Space`** veya **`Enter`** tuşuna basın.
+
+- ❌ **İptal Etme**:
+  Konuşma sırasında **`Esc`** tuşuna basarsanız kayıt metne dönüştürülmeden anında iptal edilir.
+
+---
+
+## 📊 WHISPER MODEL SEÇENEKLERİ
+
+Uygulama menü çubuğundaki ikona tıklanarak Ayarlar menüsünden model değiştirilebilir:
+
+| Model | Boyut | Hız | Kullanım Amacı |
+|---|---|---|---|
+| **tiny** | 39 MB | En Hızlı | Kısa basit notlar |
+| **base** | 140 MB | Hızlı | Günlük standart dikte |
+| **small** | 460 MB | Orta | Uzun paragraflar ve çoklu dil |
+| **Large v3 Turbo** *(Varsayılan & Önerilen)* | ~1.6 GB | Dengeli | En yüksek doğruluk (Türkçe & İngilizce hibrit mod) |
+
+---
+
+## 📄 LİSANS
+
+Bu proje [MIT Lisansı](LICENSE) altında lisanslanmıştır. Free & Open Source.

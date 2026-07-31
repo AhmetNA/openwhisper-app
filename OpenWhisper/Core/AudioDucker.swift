@@ -10,8 +10,8 @@ final class AudioDucker: @unchecked Sendable {
 
     private init() {}
 
-    /// Lower system volume to target percentage (default 30%) instantly when dictation starts
-    func duckVolume(targetVolume: Int = 30) {
+    /// Lower system volume to target percentage (default 15%) instantly when dictation starts
+    func duckVolume(targetVolume: Int = 15) {
         lock.lock()
         defer { lock.unlock() }
 

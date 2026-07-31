@@ -78,19 +78,36 @@ struct SettingsView: View {
             Divider()
 
             // LLM Cleanup
-            HStack {
-                Label("LLM Cleanup", systemImage: "sparkles")
-                Spacer()
-                if appState.llmCleanupEnabled {
-                    Circle()
-                        .fill(appState.ollamaAvailable ? .green : .red)
-                        .frame(width: 6, height: 6)
-                        .help(appState.ollamaAvailable ? "Ollama connected" : "Ollama not running")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("LLM Cleanup", systemImage: "sparkles")
+                    Spacer()
+                    if appState.llmCleanupEnabled {
+                        Circle()
+                            .fill(appState.ollamaAvailable ? .green : .red)
+                            .frame(width: 6, height: 6)
+                            .help(appState.ollamaAvailable ? "Ollama connected" : "Ollama not running")
+                    }
+                    Toggle("", isOn: $appState.llmCleanupEnabled)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
                 }
-                Toggle("", isOn: $appState.llmCleanupEnabled)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .controlSize(.small)
+
+                if appState.llmCleanupEnabled {
+                    HStack {
+                        Text("AI Model")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Picker("", selection: $appState.ollamaModel) {
+                            Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
+                            Text("🧠 Yüksek Zekalı (Qwen 3 8B)").tag("qwen3:8b")
+                        }
+                        .labelsHidden()
+                        .frame(width: 195)
+                    }
+                }
             }
 
             Divider()
@@ -591,7 +608,7 @@ struct SettingsView: View {
                                     DictationSnapshot.shared.checkpointsString = newValue
                                     checkpointsWarning = nil
                                 } else {
-                                    checkpointsWarning = "Geçersiz girdi. En fazla 6 adet, 1-300 saniye arası virgülle ayrılmış sayı girin (örn: 5, 10, 40)."
+                                    checkpointsWarning = "Geçersiz girdi. En fazla 60 adet, 1-300 saniye arası virgülle ayrılmış sayı girin (örn: 1, 2, 3... 30)."
                                 }
                             }
                         ))

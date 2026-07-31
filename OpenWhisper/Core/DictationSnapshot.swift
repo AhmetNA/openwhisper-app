@@ -62,8 +62,8 @@ final class DictationSnapshot {
     /// multiple checkpoint rereads from recording the same edit more than once per dictation.
     private var learnedInCurrentGen: Set<String> = []
 
-    /// Configured checkpoint intervals (seconds). Default: [5.0, 10.0, 40.0]
-    private(set) var checkpointIntervals: [TimeInterval] = [5, 10, 40]
+    /// Configured checkpoint intervals (seconds). Default: 1..30
+    private(set) var checkpointIntervals: [TimeInterval] = CorrectionEngine.defaultCheckpoints
 
     /// Raw comma-separated string persisted in UserDefaults.
     var checkpointsString: String {

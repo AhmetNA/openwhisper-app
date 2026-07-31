@@ -126,24 +126,127 @@ final class SpotifyManager: @unchecked Sendable {
         return lower.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Detection
+    // MARK: - Detection & LLM Intent Classification
 
-    /// Check if transcribed text is a Spotify voice command. Deliberately tight: it only
-    /// fires on a recognized *leading* command phrase (not "contains anywhere") and caps
-    /// the sentence length, so an ordinary dictation that happens to mention "spotify" or
-    /// "durdur" mid-sentence is not swallowed as a command.
-    static func isSpotifyCommand(_ text: String) -> Bool {
+    /// Check if transcribed text is a Spotify voice command.
+    /// When Ollama is available, uses local LLM intent classification to verify
+    /// whether the user truly intended to trigger music playback vs regular dictation.
+    static func isSpotifyCommand(_ text: String, ollamaAvailable: Bool = false) async -> Bool {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return false }
 
         let wordCount = normalized.split(separator: " ").count
         guard wordCount <= maxCommandWordCount else { return false }
 
-        // "spotify" is a proper noun that takes Turkish case suffixes ("spotify'da",
-        // "spotifydan"), so match it as a whole leading token rather than requiring an
-        // exact word boundary — a plain hasCommandPrefix would reject "spotify'da...".
-        if normalized.split(separator: " ").first?.hasPrefix("spotify") == true { return true }
-        return transportPrefixes.contains { hasCommandPrefix(normalized, $0.0) }
+        // Fast candidate pre-check: must start with "spotify" or match a transport prefix
+        let isCandidate = (normalized.split(separator: " ").first?.hasPrefix("spotify") == true) ||
+                          transportPrefixes.contains { hasCommandPrefix(normalized, $0.0) }
+
+        guard isCandidate else { return false }
+
+        // If Ollama is available, perform LLM intent classification
+        if ollamaAvailable {
+            if let llmVerdict = await verifyIntentWithOllama(text: text) {
+                owLog("[Spotify] Ollama intent classification for '\(text)': \(llmVerdict)")
+                return llmVerdict
+            }
+        }
+
+        // Strict heuristic fallback (when Ollama is unavailable or times out)
+        return isStrictSpotifyCommand(normalized)
+    }
+
+    /// Strict heuristic matching used as a fallback when Ollama is not available.
+    /// Excludes bare ambiguous single words like "başlat", "kapat", "durdur", "sonraki", "önceki"
+    /// unless accompanied by explicit music context.
+    private static func isStrictSpotifyCommand(_ normalized: String) -> Bool {
+        let explicitKeywords = ["spotify", "müzik", "şarkı", "beğenilen", "beğendik", "parça", "playlist", "albüm", "liked songs"]
+        if explicitKeywords.contains(where: { normalized.contains($0) }) {
+            return true
+        }
+
+        let ambiguousPrefixes: Set<String> = ["başlat", "kapat", "durdur", "sonraki", "önceki"]
+        if let (prefix, _) = transportPrefixes.first(where: { hasCommandPrefix(normalized, $0.0) }) {
+            if !ambiguousPrefixes.contains(prefix) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Uses local Ollama LLM to classify whether the voice transcript is an intentional
+    /// command to play music or control Spotify, rather than general dictation.
+    private static func verifyIntentWithOllama(text: String) async -> Bool? {
+        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
+
+        let prompt = """
+            You are a voice command intent classifier for a Mac speech-to-text application.
+            Determine whether the following spoken transcript is an INTENTIONAL VOICE COMMAND to play music, search for a song, or control Spotify/music playback (e.g. play, pause, stop, next track, previous track, play liked songs, open playlist/artist/album).
+
+            CRITICAL RULES:
+            - If the transcript is normal spoken prose, dictation, a general question, or general conversation that merely happens to contain common verbs (like "başlat", "kapat", "durdur", "oynat", "çal") or the word "spotify", answer false.
+            - Answer true ONLY if the primary intent of the user is to trigger music playback or control music playback.
+
+            EXAMPLES:
+            - "spotify'da tarkan çal" -> {"is_music_command": true}
+            - "müziği durdur" -> {"is_music_command": true}
+            - "sonraki şarkıya geç" -> {"is_music_command": true}
+            - "beğenilenleri çal" -> {"is_music_command": true}
+            - "sezen aksu şarkı çal" -> {"is_music_command": true}
+            - "bu projeyi bugün başlatacağız" -> {"is_music_command": false}
+            - "kapıyı kapat lütfen" -> {"is_music_command": false}
+            - "spotify hakkında bir makale yazıyorum" -> {"is_music_command": false}
+            - "durdur şu işlemi" -> {"is_music_command": false}
+
+            Respond ONLY with a JSON object: {"is_music_command": true} or {"is_music_command": false}.
+            Transcript: "\(text)"
+            """
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 3
+
+        let body: [String: Any] = [
+            "model": "qwen2.5:7b",
+            "prompt": prompt,
+            "stream": false,
+            "options": [
+                "temperature": 0.0,
+                "num_predict": 30
+            ]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let responseText = json["response"] as? String else { return nil }
+
+            let cleaned = responseText
+                .replacingOccurrences(of: "```json", with: "")
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let respData = cleaned.data(using: .utf8),
+               let parsed = try JSONSerialization.jsonObject(with: respData) as? [String: Bool],
+               let isCmd = parsed["is_music_command"] {
+                return isCmd
+            }
+
+            let lower = cleaned.lowercased()
+            if lower.contains("\"is_music_command\": true") || lower.contains("\"is_music_command\":true") {
+                return true
+            } else if lower.contains("\"is_music_command\": false") || lower.contains("\"is_music_command\":false") {
+                return false
+            }
+        } catch {
+            return nil
+        }
+        return nil
     }
 
     // MARK: - Command Handler

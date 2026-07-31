@@ -124,7 +124,7 @@ check("parseCheckpoints invalid letters '5, 10, abc'", CorrectionEngine.parseChe
 check("parseCheckpoints negative '-5, 10'", CorrectionEngine.parseCheckpoints("-5, 10") == nil)
 check("parseCheckpoints zero '0, 10'", CorrectionEngine.parseCheckpoints("0, 10") == nil)
 check("parseCheckpoints >300 '5, 301'", CorrectionEngine.parseCheckpoints("5, 301") == nil)
-check("parseCheckpoints >6 items '1,2,3,4,5,6,7'", CorrectionEngine.parseCheckpoints("1,2,3,4,5,6,7") == nil)
+check("parseCheckpoints >60 items", CorrectionEngine.parseCheckpoints((1...61).map { "\($0)" }.joined(separator: ",")) == nil)
 check("parseCheckpoints empty ''", CorrectionEngine.parseCheckpoints("") == nil)
 
 print("\n\(total - failures)/\(total) passed")

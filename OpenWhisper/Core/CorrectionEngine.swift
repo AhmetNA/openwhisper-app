@@ -12,16 +12,16 @@ enum CorrectionEngine {
 
     // MARK: - Checkpoint Interval Settings
 
-    static let defaultCheckpointsString = "5, 10, 40"
-    static let defaultCheckpoints: [TimeInterval] = [5, 10, 40]
+    static let defaultCheckpointsString = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+    static let defaultCheckpoints: [TimeInterval] = Array(1...30).map { TimeInterval($0) }
 
     /// Validate and parse a user-supplied comma-separated seconds string for checkpoint intervals.
-    /// Returns sorted TimeInterval array if valid (1-6 items, each 1..300 integer seconds), or nil if invalid.
+    /// Returns sorted TimeInterval array if valid (1-60 items, each 1..300 integer seconds), or nil if invalid.
     static func parseCheckpoints(_ input: String) -> [TimeInterval]? {
         let trimmedInput = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInput.isEmpty else { return nil }
         let parts = trimmedInput.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !parts.isEmpty, parts.count <= 6 else { return nil }
+        guard !parts.isEmpty, parts.count <= 60 else { return nil }
         var intervals: [TimeInterval] = []
         for part in parts {
             guard let val = Int(part), val >= 1, val <= 300 else { return nil }
