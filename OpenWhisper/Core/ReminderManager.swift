@@ -63,9 +63,10 @@ final class ReminderManager {
     /// Matches when the sentence starts with or contains reminder keywords in English or Turkish.
     static func isReminder(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let triggers = [
-            "reminder",
-            "remind",
+
+        // Multi-word phrases are safe to match anywhere via plain substring search — the
+        // surrounding words already give them a natural boundary.
+        let phraseTriggers = [
             "remind me",
             "set a reminder",
             "set reminder",
@@ -76,24 +77,36 @@ final class ReminderManager {
             "bana hatırlat",
             "hatırlatıcı kur",
             "hatırlatıcı ekle",
-            "hatırlatıcı",
-            "hatırlat",
-            "bana unutturma",
-            "unutturma"
+            "bana unutturma"
         ]
-        return triggers.contains(where: {
-            lower.hasPrefix($0) || lower.contains("reminder") || lower.contains("remind") || lower.contains("hatırlat") || lower.contains("unutturma")
-        })
+        if phraseTriggers.contains(where: { lower.contains($0) }) { return true }
+
+        // Single-word triggers MUST match as a whole word — otherwise Turkish agglutination
+        // turns ordinary narration ("hatırlattım", "hatırlatmalıyım") into false positives.
+        let wordTriggers = ["reminder", "remind", "hatırlatıcı", "hatırlat", "unutturma"]
+        for word in wordTriggers {
+            guard let re = try? NSRegularExpression(pattern: "\\b\(NSRegularExpression.escapedPattern(for: word))\\b") else { continue }
+            let range = NSRange(lower.startIndex..., in: lower)
+            if re.firstMatch(in: lower, range: range) != nil { return true }
+        }
+        return false
     }
 
     // MARK: - Parse & Schedule
 
-    /// Parse reminder text using Ollama and schedule a notification
+    /// Parse reminder text and schedule a notification. Tries the deterministic Turkish
+    /// relative-date parser first (fast, exact, no network dependency); only falls back to
+    /// the Ollama LLM for phrasing the regex parser doesn't recognize.
     func handleReminder(text: String) async -> Bool {
         owLog("[Reminders] Processing: \(text)")
 
-        // Parse via Ollama
-        guard let parsed = await parseWithOllama(text: text) else {
+        let parsed: ParsedReminder
+        if let detParsed = TurkishDateParser.parse(text) {
+            owLog("[Reminders] Parsed deterministically — task: \(detParsed.task), date: \(detParsed.fireDate)")
+            parsed = ParsedReminder(task: detParsed.task, fireDate: detParsed.fireDate)
+        } else if let llmParsed = await parseWithOllama(text: text) {
+            parsed = llmParsed
+        } else {
             owLog("[Reminders] Failed to parse reminder")
             sendConfirmation(title: "Hatırlatıcı Anlaşılamadı", body: "Örnek: \"Bana 10 dakika sonra toplantıyı hatırlat\"")
             return false
@@ -130,7 +143,10 @@ final class ReminderManager {
             )
             owLog("[Reminders] Scheduled: \(reminder.task) at \(reminder.fireDate) (Apple Reminders: \(savedApple))")
         }
-        return scheduled
+        // A reminder is a success if EITHER the local notification was scheduled or it landed
+        // in Apple Reminders — previously this only checked `scheduled`, so a successful Apple
+        // Reminders save with a failed/denied notification was silently reported as failure.
+        return scheduled || savedApple
     }
 
     // MARK: - Ollama Parsing
@@ -138,6 +154,15 @@ final class ReminderManager {
     private struct ParsedReminder {
         let task: String
         let fireDate: Date
+    }
+
+    /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
+    /// "ollamaModel", default "qwen3:8b"). ReminderManager is a standalone singleton with no
+    /// AppState reference, so it reads the same UserDefaults key directly rather than
+    /// hardcoding a model that may not actually be installed (this was the root cause of
+    /// reminders silently never firing — see git history).
+    private var selectedOllamaModel: String {
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "qwen3:8b"
     }
 
     /// Ask Ollama to parse task description and target fireDate from voice text
@@ -177,6 +202,7 @@ final class ReminderManager {
             - Expressions like "bugün 18'de", "bugün 18 e" = today at 18:00:00 (\(currentDateStr)T18:00:00)
             - Specific dates like "17 Temmuz", "15 Ağustos" = use that specific date and current/next year.
             - "X dakika sonra" / "X saat sonra" = add X minutes/hours to reference time \(currentTime).
+            - If the command does NOT mention a specific time of day, default the time to 09:00:00.
 
             CRITICAL TASK EXTRACTION RULES:
             - The "task" field MUST BE IN THE EXACT ORIGINAL LANGUAGE (Turkish if spoken in Turkish).
@@ -201,12 +227,18 @@ final class ReminderManager {
         request.timeoutInterval = 15
 
         let body: [String: Any] = [
-            "model": "qwen2.5:3b",
+            "model": selectedOllamaModel,
             "prompt": prompt,
             "stream": false,
+            // qwen3 (and other "thinking" models) emit a <think>...</think> block by default,
+            // which used to eat the whole num_predict budget and leave "response" empty
+            // (done_reason "length") before any JSON was produced. "think": false skips that,
+            // and "format": "json" makes Ollama constrain the output to valid JSON.
+            "think": false,
+            "format": "json",
             "options": [
                 "temperature": 0.1,
-                "num_predict": 100
+                "num_predict": 150
             ]
         ]
 
@@ -214,23 +246,22 @@ final class ReminderManager {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                owLog("[Reminders] Ollama HTTP error: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+                return nil
+            }
 
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let responseText = json["response"] as? String else { return nil }
 
             owLog("[Reminders] Ollama response: \(responseText)")
 
-            // Extract JSON from response (handle possible markdown wrapping)
-            let cleanedResponse = responseText
-                .replacingOccurrences(of: "```json", with: "")
-                .replacingOccurrences(of: "```", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard let responseData = cleanedResponse.data(using: .utf8),
-                  let parsed = try JSONSerialization.jsonObject(with: responseData) as? [String: String],
+            guard let parsed = Self.extractJSONObject(from: responseText),
                   let task = parsed["task"],
-                  let datetimeStr = parsed["datetime"] else { return nil }
+                  let datetimeStr = parsed["datetime"] else {
+                owLog("[Reminders] Could not extract task/datetime from Ollama response")
+                return nil
+            }
 
             guard let fireDate = parseDateString(datetimeStr) else {
                 owLog("[Reminders] Failed to parse date: \(datetimeStr)")
@@ -242,6 +273,41 @@ final class ReminderManager {
             owLog("[Reminders] Ollama parse error: \(error)")
             return nil
         }
+    }
+
+    /// Extract the first `{...}` JSON object from a model response and return its top-level
+    /// fields as strings. Uses `[String: Any]` rather than `[String: String]` because a model
+    /// can return a number or nested value for a field — that used to make the whole parse
+    /// return nil instead of just coercing the value to a string. Also strips any stray
+    /// `<think>...</think>` block and markdown code fences some models still emit even with
+    /// "think": false / "format": "json" set on the request.
+    private static func extractJSONObject(from text: String) -> [String: String]? {
+        var cleaned = text
+        if let thinkRange = cleaned.range(of: "<think>"), let thinkEnd = cleaned.range(of: "</think>") {
+            cleaned.removeSubrange(thinkRange.lowerBound..<thinkEnd.upperBound)
+        }
+        cleaned = cleaned
+            .replacingOccurrences(of: "```json", with: "")
+            .replacingOccurrences(of: "```", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let openBrace = cleaned.firstIndex(of: "{"),
+              let closeBrace = cleaned.lastIndex(of: "}"),
+              openBrace < closeBrace else { return nil }
+
+        let jsonSlice = String(cleaned[openBrace...closeBrace])
+        guard let data = jsonSlice.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+        var result: [String: String] = [:]
+        for (key, value) in obj {
+            switch value {
+            case let s as String: result[key] = s
+            case let n as NSNumber: result[key] = n.stringValue
+            default: continue
+            }
+        }
+        return result
     }
 
     private func parseDateString(_ datetimeStr: String) -> Date? {
@@ -297,7 +363,10 @@ final class ReminderManager {
     // MARK: - EventKit (Apple Reminders App)
 
     private func createAppleReminder(reminder: Reminder) async -> Bool {
-        let store = EKEventStore()
+        // Reuse the single shared eventStore instance rather than creating a fresh
+        // EKEventStore() per call — a new store has to re-establish its authorization state
+        // with the OS on every call, which can spuriously appear unauthorized/denied.
+        let store = eventStore
         var granted = false
         if #available(macOS 14.0, *) {
             granted = (try? await store.requestFullAccessToReminders()) ?? false

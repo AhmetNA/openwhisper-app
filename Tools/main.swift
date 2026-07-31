@@ -127,6 +127,129 @@ check("parseCheckpoints >300 '5, 301'", CorrectionEngine.parseCheckpoints("5, 30
 check("parseCheckpoints >60 items", CorrectionEngine.parseCheckpoints((1...61).map { "\($0)" }.joined(separator: ",")) == nil)
 check("parseCheckpoints empty ''", CorrectionEngine.parseCheckpoints("") == nil)
 
+// MARK: - 11. TurkishDateParser — relative date/time parsing for voice reminders
+
+do {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Europe/Istanbul")!
+    // Fixed reference "now": Friday 2026-07-31 10:00:00 (matches system prompt's currentDate).
+    var comps = DateComponents()
+    comps.year = 2026; comps.month = 7; comps.day = 31; comps.hour = 10; comps.minute = 0; comps.second = 0
+    comps.timeZone = cal.timeZone
+    let now = cal.date(from: comps)!
+
+    func dateAt(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+        var c = DateComponents()
+        c.year = y; c.month = mo; c.day = d; c.hour = h; c.minute = mi; c.second = 0
+        c.timeZone = cal.timeZone
+        return cal.date(from: c)!
+    }
+
+    func run(_ input: String) -> TurkishDateParser.ParsedResult? {
+        TurkishDateParser.parse(input, now: now, calendar: cal)
+    }
+
+    if let r = run("hatırlatıcı iki gün sonra telefonu yıka") {
+        check("'iki gün sonra' -> +2 days at default 09:00", r.fireDate == dateAt(2026, 8, 2, 9, 0))
+        check("'iki gün sonra' task extracted", r.task.lowercased() == "telefonu yıka")
+    } else {
+        check("'iki gün sonra telefonu yıka' parses", false)
+    }
+
+    if let r = run("hatırlatıcı 3 gün sonra saat 14'te rapor gönder") {
+        check("'3 gün sonra saat 14'te' -> +3 days at 14:00", r.fireDate == dateAt(2026, 8, 3, 14, 0))
+        check("'3 gün sonra saat 14'te' task extracted", r.task.lowercased() == "rapor gönder")
+    } else {
+        check("'3 gün sonra saat 14'te rapor gönder' parses", false)
+    }
+
+    if let r = run("hatırlatıcı öbür gün doktora git") {
+        check("'öbür gün' -> +2 days at default 09:00", r.fireDate == dateAt(2026, 8, 2, 9, 0))
+        check("'öbür gün' task extracted", r.task.lowercased() == "doktora git")
+    } else {
+        check("'öbür gün doktora git' parses", false)
+    }
+
+    if let r = run("hatırlatıcı haftaya market") {
+        check("'haftaya' -> +7 days at default 09:00", r.fireDate == dateAt(2026, 8, 7, 9, 0))
+        check("'haftaya' task extracted", r.task.lowercased() == "market")
+    } else {
+        check("'haftaya market' parses", false)
+    }
+
+    if let r = run("hatırlatıcı yarın 17'ye telefonu yıka") {
+        check("'yarın 17'ye' -> tomorrow 17:00", r.fireDate == dateAt(2026, 8, 1, 17, 0))
+        check("'yarın 17'ye' task extracted", r.task.lowercased() == "telefonu yıka")
+    } else {
+        check("'yarın 17'ye telefonu yıka' parses", false)
+    }
+
+    if let r = run("bana 10 dakika sonra kahve içmeyi hatırlat") {
+        check("'10 dakika sonra' -> now + 10 minutes", r.fireDate == now.addingTimeInterval(600))
+        check("'bana ... hatırlat' strips dangling 'bana' from task", r.task.lowercased() == "kahve içmeyi")
+    } else {
+        check("'10 dakika sonra kahve içmeyi hatırlat' parses", false)
+    }
+
+    if let r = run("hatırlatıcı önümüzdeki salı toplantı") {
+        // 2026-07-31 is a Friday; next Tuesday is 2026-08-04.
+        check("'önümüzdeki salı' -> next Tuesday at default 09:00", r.fireDate == dateAt(2026, 8, 4, 9, 0))
+        check("'önümüzdeki salı' task extracted", r.task.lowercased() == "toplantı")
+    } else {
+        check("'önümüzdeki salı toplantı' parses", false)
+    }
+
+    // Non-date sentence should NOT be claimed by the deterministic parser (falls back to LLM).
+    check("plain sentence with no date expression returns nil", run("hatırlatıcı telefonu yıka") == nil)
+
+    // Bare dative suffixes ("e"/"a" with no leading consonant) — the exact phrasing used in
+    // ReminderManager's own in-code Ollama prompt examples ("bugün 18'de", "yarın 17 ye"), plus
+    // the bare-vowel variants ("18 e", "9'a") that a naive suffix regex could silently drop.
+    if let r = run("hatırlatıcı bugün 18 e markete git") {
+        check("'bugün 18 e' -> today 18:00", r.fireDate == dateAt(2026, 7, 31, 18, 0))
+        check("'bugün 18 e' task extracted", r.task.lowercased() == "markete git")
+    } else {
+        check("'bugün 18 e markete git' parses", false)
+    }
+
+    if let r = run("hatırlatıcı yarın 9'a spor") {
+        check("'yarın 9'a' -> tomorrow 09:00", r.fireDate == dateAt(2026, 8, 1, 9, 0))
+        check("'yarın 9'a' task extracted", r.task.lowercased() == "spor")
+    } else {
+        check("'yarın 9'a spor' parses", false)
+    }
+
+    // "ayın 15'i" (day-of-month with possessive suffix) — the apostrophe + bare "i" must be
+    // fully consumed so it doesn't leak into the task as a stray "İ".
+    if let r = run("hatırlatıcı ayın 15'i markete git") {
+        check("'ayın 15'i' -> day 15 of current month at default 09:00", r.fireDate == dateAt(2026, 8, 15, 9, 0))
+        check("'ayın 15'i' task extracted (no stray apostrophe remnant)", r.task.lowercased() == "markete git")
+    } else {
+        check("'ayın 15'i markete git' parses", false)
+    }
+
+    if let r = run("hatırlatıcı gelecek ay diş hekimine git") {
+        check("'gelecek ay' -> +1 month at default 09:00", r.fireDate == dateAt(2026, 8, 31, 9, 0))
+        check("'gelecek ay' task extracted", r.task.lowercased() == "diş hekimine git")
+    } else {
+        check("'gelecek ay diş hekimine git' parses", false)
+    }
+
+    if let r = run("hatırlatıcı iki hafta sonra kira öde") {
+        check("'iki hafta sonra' -> +14 days at default 09:00", r.fireDate == dateAt(2026, 8, 14, 9, 0))
+        check("'iki hafta sonra' task extracted", r.task.lowercased() == "kira öde")
+    } else {
+        check("'iki hafta sonra kira öde' parses", false)
+    }
+
+    if let r = run("hatırlatıcı gelecek hafta diş randevusu") {
+        check("'gelecek hafta' -> +7 days at default 09:00", r.fireDate == dateAt(2026, 8, 7, 9, 0))
+        check("'gelecek hafta' task extracted", r.task.lowercased() == "diş randevusu")
+    } else {
+        check("'gelecek hafta diş randevusu' parses", false)
+    }
+}
+
 print("\n\(total - failures)/\(total) passed")
 if failures > 0 {
     exit(1)

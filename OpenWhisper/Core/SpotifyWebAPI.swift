@@ -215,7 +215,15 @@ actor SpotifyWebAPI {
     /// paste the exact same string into the dashboard.
     static let redirectURI = "http://127.0.0.1:8888/callback"
     private static let redirectPort: UInt16 = 8888
-    private static let userScope = "user-library-read"
+    // `user-library-modify` was added alongside `addTrackToLikedSongs(trackID:)` below.
+    // Accounts connected before this change only hold a refresh token scoped to
+    // `user-library-read` and will get a 403 from the modify endpoint until the user
+    // reconnects via Ayarlar > Spotify (new consent grants both scopes at once).
+    //
+    // NOTE: `addTrackToLikedSongs` is currently unused (see its doc comment) because the
+    // whole `/authorize` flow this scope feeds is broken for this user (`error=server_error`
+    // with no `code`). Left as-is, not removed, in case OAuth is unblocked later.
+    private static let userScope = "user-library-read user-library-modify"
     /// 5 minutes: a user who doesn't already have a Spotify session in their default
     /// browser needs time to log in (plus 2FA) before consenting. The original 2-minute
     /// window was routinely too short for that and indistinguishable from every other
@@ -356,6 +364,62 @@ actor SpotifyWebAPI {
             throw SpotifyAPIError.noResults
         }
         return TrackResult(uri: chosen.uri, name: chosen.name, artist: chosen.artist)
+    }
+
+    /// Adds a track to the user's Liked Songs library. `trackID` is the raw Spotify ID
+    /// (e.g. `"1301WleyT98MSxVHPZCA6M"`), not the `spotify:track:` URI — callers get the
+    /// ID out of the AppleScript `id of current track` result (which returns the full
+    /// URI) by taking the last `:`-separated component.
+    ///
+    /// Requires the user's own token (`.notConnected` if not connected) AND the
+    /// `user-library-modify` scope specifically — a token from before that scope was added
+    /// comes back with an HTTP 403, surfaced here as `.authorizationFailed` with a message
+    /// telling the user to reconnect, rather than a generic/confusing error.
+    ///
+    /// NOT CURRENTLY CALLED. `SpotifyManager.likeCurrentTrack()` used to call this but was
+    /// switched to a local ⌥⇧B keyboard-shortcut path: on this user's account `/authorize`
+    /// deterministically returns `error=server_error` (reproduced across browsers and a
+    /// brand-new Spotify app), so there is no way to obtain the token this method needs.
+    /// Left in place rather than deleted in case OAuth gets independently unblocked later.
+    func addTrackToLikedSongs(trackID: String) async throws {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+
+        var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
+        components.queryItems = [URLQueryItem(name: "ids", value: trackID)]
+        guard let url = components.url else {
+            throw SpotifyAPIError.unexpected("invalid liked-songs URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = requestTimeout
+
+        let response: URLResponse
+        do {
+            (_, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyAPIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw SpotifyAPIError.unexpected("no HTTP response")
+        }
+
+        switch http.statusCode {
+        case 200, 201:
+            return
+        case 401:
+            throw SpotifyAPIError.invalidCredentials
+        case 403:
+            throw SpotifyAPIError.authorizationFailed("Bu işlem için ek izin gerekiyor, Ayarlar > Spotify'dan hesabını yeniden bağla")
+        case 429:
+            throw SpotifyAPIError.rateLimited
+        default:
+            throw SpotifyAPIError.unexpected("like HTTP \(http.statusCode)")
+        }
     }
 
     /// Clears every cached token (app + user), e.g. after the user edits stored

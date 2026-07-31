@@ -4,23 +4,63 @@ import Foundation
 final class WhisperTranscriber: @unchecked Sendable {
     private var whisperKit: WhisperKit?
 
-    /// Maximum number of glossary prompt tokens to condition the decoder with.
+    /// Maximum number of glossary prompt tokens to condition the decoder with, IF glossary
+    /// conditioning is ever re-enabled (see the `promptTokens: [Int]? = nil` line in
+    /// `transcribe(audioData:language:)` — it currently is not).
     ///
-    /// WhisperKit itself hard-caps `promptTokens` internally at
-    /// `(Constants.maxTokenContext / 2) - 1` (= 111 for this model) via
-    /// `TextDecoder.prefillDecoderInputs`, applied with `.suffix(...)` — i.e. it would keep
-    /// the *last* N tokens if we ever exceeded that, silently reversing our front-of-file
-    /// priority ordering. We stay well under it ourselves so our own `.prefix(...)` below is
-    /// the one that applies.
+    /// EMPIRICAL VERDICT FIRST: glossary conditioning via `DecodingOptions.promptTokens` is not
+    /// usable as a general-purpose feature on this model, at any token cap. Testing against the
+    /// real glossary.txt (159 terms) and 3 unrelated Turkish test sentences, synthesized with
+    /// `say` and transcribed with a temporary local verification harness (since deleted; full
+    /// logs are in the task report that introduced this comment), found: at 48 tokens
+    /// (sanitized, see below), 2 of 3 sentences decoded to an EMPTY transcript, and the 1 that
+    /// didn't came back WORSE than the unprompted baseline ("Cloudflare" was corrupted into
+    /// "Claude Flare" — the prompt actively misled the decoder rather than helping it). A cap
+    /// sweep at 16/24/32/40/48/64/80/96 tokens against one fixed sentence showed the same
+    /// pattern: works or breaks depending on which specific tokens land in which prefill
+    /// position, not on token count. There is no cap that reliably fixes this.
     ///
-    /// Separately, CLI testing (whisperkit-cli --prompt, same turbo model) showed that
-    /// decode can return an empty transcript with conditioning prompts as short as ~33
-    /// tokens (8 glossary terms), while ~29 tokens (7 terms) decoded fine, on both short and
-    /// medium-length synthetic audio. That is a much tighter practical ceiling than the
-    /// architectural 111-token cap, so we stay conservative here too. The runtime fallback
-    /// in `transcribe(audioData:language:)` (retry without prompt tokens on an empty result)
-    /// is the real safety net against this fragility.
-    private static let maxGlossaryPromptTokens = 24
+    /// Root causes, both confirmed by reading `TextDecoder.swift`:
+    ///
+    /// 1. `DecodingOptions.firstTokenLogProbThreshold` (default -1.5) — REAL BUG, FULLY FIXED
+    ///    (app-side, see `runDecode`). When `promptTokens` is set, WhisperKit skips the prefill
+    ///    KV-cache (`prefilledIndex` stays 0 — `TextDecoder.prefillDecoderInputs`'s
+    ///    `options?.promptTokens == nil` guard), so the decode loop's very first inference step
+    ///    (`tokenIndex == 0`, right after `<|startofprev|>`) is misclassified as `isFirstToken`.
+    ///    The model's prediction there is immediately discarded and overwritten by the forced
+    ///    prompt token one line later, but its log-probability is still checked against
+    ///    `firstTokenLogProbThreshold`; a low score aborts the whole segment. We now pass `nil`
+    ///    for this threshold whenever a prompt is present. This was NOT, however, the actual
+    ///    cause of the empty transcripts reproduced above — disabling it did not fix them.
+    /// 2. `TextDecoder.decodeText`'s `isSegmentCompleted` check (`sampleResult.completed || ...`,
+    ///    TextDecoder.swift ~858-861) has NO `isPrefill` guard — NOT FIXABLE app-side. If the
+    ///    sampler's argmax at ANY forced prompt position happens to be `<|endoftext|>` (again, a
+    ///    prediction that would otherwise be silently discarded and overwritten by the forced
+    ///    prompt token), the whole decode aborts with an empty transcript. This is what actually
+    ///    produced every empty result above. It is not gated by prompt length in any clean way —
+    ///    a single 4-token prompt ("ChatGPT", unrelated to the test audio) triggered it just as a
+    ///    96-token one did — and fixing it requires forking WhisperKit's `TextDecoder`, which is
+    ///    out of scope.
+    ///
+    /// Mitigations applied (kept, and correct, but insufficient on their own — see verdict above):
+    ///  - `glossaryPromptText()` strips `.`/`!`/`?` from each term. Sentence-final punctuation
+    ///    inside the prompt measurably raised the odds of triggering bug #2 in testing (a 7-term
+    ///    prompt ending "...Claude.md, Sonnet..." reliably produced an empty transcript before
+    ///    stripping the `.`, and decoded correctly after) — but did not make the full glossary
+    ///    reliable, as the verdict above shows.
+    ///  - Staying far under WhisperKit's own hard cap on `promptTokens`
+    ///    (`(Constants.maxTokenContext / 2) - 1` = `(224 / 2) - 1` = 111, applied via
+    ///    `.suffix(...)` in `TextDecoder.prefillDecoderInputs`, which would silently reverse our
+    ///    front-of-file term-priority ordering if we ever hit it). This bound is real but was
+    ///    never the binding constraint in practice — bug #2 hits well before 111 tokens.
+    ///
+    /// The glossary is not wasted, though: `LLMCleanup.cleanupPrompt()` (LLMCleanup.swift:44-59)
+    /// independently reads the full, untruncated glossary.txt and appends it to the Ollama
+    /// cleanup prompt as "KNOWN TECHNICAL TERMS", asking the model to fix misspelled terms
+    /// against that list post-decode. That path is entirely separate from this file, has no
+    /// token limit, is unaffected by anything above, and is verified (by reading the code, not
+    /// just glossary.txt's own header comment) to be live and wired up today.
+    private static let maxGlossaryPromptTokens = 48
 
     /// Path to the user's personal glossary file (symlinked to the project's sozluk.txt in dev setups).
     private static var glossaryURL: URL {
@@ -44,9 +84,26 @@ final class WhisperTranscriber: @unchecked Sendable {
     /// Comma-joined glossary text (nil when the glossary is missing/empty). Re-read from disk
     /// on every call (rather than cached) so an edit to glossary.txt takes effect on the very
     /// next dictation, with no app restart needed.
+    ///
+    /// Strips `.`/`!`/`?` from each term (e.g. "Claude.md" -> "Claudemd") before joining. This
+    /// is a mitigation, not a full fix, for a real WhisperKit bug: `TextDecoder.decodeText`'s
+    /// `isSegmentCompleted` check (TextDecoder.swift:858-861) has no `isPrefill` guard, so if
+    /// the sampler's argmax at ANY forced prompt position happens to be `<|endoftext|>` — a
+    /// prediction that would otherwise be silently discarded and overwritten by the forced
+    /// prompt token one line later — the entire decode aborts with an empty transcript. Sentence-
+    /// final punctuation inside the prompt measurably raises the odds of that happening (verified
+    /// empirically: a 7-term prompt ending in "...Claude.md, Sonnet..." reliably produced an
+    /// empty transcript pre-sanitization, and decoded correctly once the `.` was stripped). This
+    /// does not eliminate the underlying bug — a long enough / sufficiently audio-irrelevant
+    /// prompt can still trigger it even without punctuation — which is why the empty-result
+    /// fallback in `transcribe(audioData:language:)` is a real safety net, not a formality. We
+    /// cannot fix the root cause without forking WhisperKit's TextDecoder.
     private static func glossaryPromptText() -> String? {
         guard let terms = loadGlossaryTerms() else { return nil }
-        return terms.joined(separator: ", ")
+        let sanitizedTerms = terms.map { term in
+            term.filter { !".!?".contains($0) }
+        }
+        return sanitizedTerms.joined(separator: ", ")
     }
 
     /// Encodes the glossary text with the loaded WhisperKit tokenizer and truncates it to
@@ -57,7 +114,13 @@ final class WhisperTranscriber: @unchecked Sendable {
     private func glossaryPromptTokens() -> [Int]? {
         guard let text = Self.glossaryPromptText(), !text.isEmpty else { return nil }
         guard let tokenizer = whisperKit?.tokenizer else { return nil }
-        let tokens = tokenizer.encode(text: text)
+        // `tokenizer.encode(text:)` may include special tokens (e.g. BOS/EOS) depending on the
+        // tokenizer implementation. WhisperKit's own prefill strips anything
+        // `>= specialTokenBegin` (TextDecoder.swift, prefillDecoderInputs), so keeping them here
+        // would waste our `.prefix` budget on tokens that never reach the model. Strip them
+        // first so the token count we truncate to is the count that actually lands in the prompt.
+        let specialTokenBegin = tokenizer.specialTokens.specialTokenBegin
+        let tokens = tokenizer.encode(text: text).filter { $0 < specialTokenBegin }
         guard !tokens.isEmpty else { return nil }
         return Array(tokens.prefix(Self.maxGlossaryPromptTokens))
     }
@@ -120,15 +183,47 @@ final class WhisperTranscriber: @unchecked Sendable {
 
         owLog("[Whisper] Transcribing with language='\(language)' task=transcribe samples=\(audioData.count)")
 
-        // Glossary conditioning is temporarily disabled. With the current Large v3 Turbo
-        // runtime it frequently returns an empty first pass for short Turkish dictation,
-        // forcing the fallback decode and adding 6–10 seconds before paste.
-        let text = try await runDecode(
+        // Glossary conditioning via `DecodingOptions.promptTokens` stays DISABLED. This is a
+        // deliberate decision, not a leftover — see the long comment on `maxGlossaryPromptTokens`
+        // below for the full investigation. Short version: WhisperKit has a real bug
+        // (`TextDecoder.decodeText`'s `isSegmentCompleted` has no `isPrefill` guard, so any
+        // forced prompt token the sampler would have predicted as `<|endoftext|>` — a prediction
+        // that is normally discarded — kills the whole segment) that empirically produces empty
+        // or WORSE transcripts even with a short (48-token), punctuation-sanitized glossary
+        // prompt (verified with `Tools/GlossaryCheck`, a temporary harness): 2 of 3 test
+        // sentences came back empty, and the one that didn't ("Cloudflare" -> "Claude Flare")
+        // was actively corrupted relative to the unprompted baseline. We cannot fix the
+        // WhisperKit bug without forking `TextDecoder`, which is out of scope. The glossary is
+        // still put to use elsewhere: `LLMCleanup.cleanupPrompt()` (LLMCleanup.swift:44-59)
+        // independently gives the full glossary (no token limit) to the Ollama cleanup pass and
+        // corrects misheard terms against it post-decode — that path is unaffected by any of
+        // this and remains the mechanism actually doing glossary-driven correction today.
+        //
+        // `glossaryPromptTokens()`, the `firstTokenLogProbThreshold` conditional in `runDecode`,
+        // and the empty-result fallback below are all still correct, verified fixes to real bugs
+        // — they're just currently unused because the whole feature is off. Re-enabling for a
+        // short (a handful of terms), hand-picked, audio-relevant prompt is a one-line change
+        // (pass `glossaryPromptTokens()` instead of `nil` here) if that's ever worth revisiting.
+        let promptTokens: [Int]? = nil
+
+        var text = try await runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
-            promptTokens: nil
+            promptTokens: promptTokens
         )
+
+        // Safety net: if a prompted decode ever comes back empty (relevant again the moment
+        // `promptTokens` above is switched back on), retry once without the glossary prompt.
+        if text.isEmpty, promptTokens != nil {
+            owLog("[Whisper] Prompted decode returned empty transcript — retrying without glossary prompt")
+            text = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: audioData,
+                language: language,
+                promptTokens: nil
+            )
+        }
 
         // Filter out Whisper hallucinations on silence/noise
         let hallucinations: Set<String> = [
@@ -151,6 +246,18 @@ final class WhisperTranscriber: @unchecked Sendable {
         language: String,
         promptTokens: [Int]?
     ) async throws -> String {
+        // `firstTokenLogProbThreshold` (WhisperKit default: -1.5) is meant to abort a segment
+        // when the FIRST REAL sampled token is low-confidence. It only makes sense when there's
+        // no prompt: with `promptTokens` set, WhisperKit skips the prefill KV-cache (see
+        // `TextDecoder.prefillDecoderInputs`'s `options?.promptTokens == nil` guard), so
+        // `prefilledIndex` stays 0 and `isFirstToken` fires on `tokenIndex == 0` — the position
+        // right after `<|startofprev|>`, still inside the forced prompt prefill. The sampled
+        // "prediction" there is discarded and overwritten by the forced prompt token one line
+        // later, but its log-probability is still checked against the threshold, and a low
+        // score there kills the whole segment (empty transcript) for no good reason. Disable
+        // the check when we're conditioning on a prompt; leave the default in place otherwise.
+        let firstTokenLogProbThreshold: Float? = promptTokens == nil ? -1.5 : nil
+
         let options = DecodingOptions(
             task: .transcribe,  // Transcribe in original language, NOT translate to English
             language: language.isEmpty ? nil : language,
@@ -162,6 +269,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             supressTokens: nil,
             compressionRatioThreshold: 2.4,
             logProbThreshold: -1.0,
+            firstTokenLogProbThreshold: firstTokenLogProbThreshold,
             noSpeechThreshold: 0.6
         )
 

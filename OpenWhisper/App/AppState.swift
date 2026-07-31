@@ -314,9 +314,12 @@ final class AppState {
             return
         }
 
-        Task {
+        Task { @MainActor in
+            defer {
+                self.recordingState = .idle
+            }
             do {
-                let text = try await transcriber?.transcribe(
+                let text = try await self.transcriber?.transcribe(
                     audioData: audioData,
                     language: language
                 ) ?? ""
@@ -326,37 +329,23 @@ final class AppState {
                       !trimmed.hasPrefix("[BLANK"),
                       !trimmed.hasPrefix("(BLANK") else {
                     owLog("[OpenWhisper] Empty/blank transcription, skipping")
-                    recordingState = .idle
                     return
                 }
 
                 owLog("[OpenWhisper] Raw: \(text)")
 
-                // Check raw text for reminder or Spotify commands BEFORE LLM cleanup
                 let isReminderCommand = ReminderManager.isReminder(text)
-                let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(text, ollamaAvailable: ollamaAvailable)
+                let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(text, ollamaAvailable: self.ollamaAvailable)
 
-                // Shared normal-dictation path (LLM cleanup + paste/copy). Used both for
-                // ordinary transcripts and as the fallback when a Spotify command turns out
-                // not to have actually applied (e.g. Automation permission not yet granted)
-                // — in that case the transcript must not just vanish.
                 @MainActor
                 func pasteAsDictation() async {
-                    // Use the already-trimmed transcript as "raw" so it exactly matches what
-                    // TextInjector ends up pasting (pasteText trims too, but idempotently) —
-                    // that keeps lastInjectedText's character count exact for swap backspacing.
                     let rawText = trimmed
                     var cleanedText = rawText
-                    if llmCleanupEnabled && ollamaAvailable {
-                        cleanedText = await llmCleanup?.cleanup(text: rawText) ?? rawText
+                    if self.llmCleanupEnabled && self.ollamaAvailable {
+                        cleanedText = await self.llmCleanup?.cleanup(text: rawText) ?? rawText
                         owLog("[OpenWhisper] Cleaned: \(cleanedText)")
                     }
 
-                    // Apply learned corrections (from past manual edits) AFTER LLM cleanup but
-                    // BEFORE swapPair/lastInjectedText are set — those two have to reflect the
-                    // exact string that ends up pasted, since Option+Z's backspace count is
-                    // derived from lastInjectedText.count. swapPair.raw is intentionally left
-                    // un-corrected: its meaning stays "pre-Ollama raw", not "pre-correction".
                     let activePairs = CorrectionStore.shared.activePairs
                     if !activePairs.isEmpty {
                         let (corrected, applied) = CorrectionEngine.applyCorrections(to: cleanedText, pairs: activePairs)
@@ -368,52 +357,42 @@ final class AppState {
                         }
                     }
 
-                    lastTranscription = cleanedText
+                    self.lastTranscription = cleanedText
 
-                    if autoPasteEnabled {
-                        // Only when we actually paste do we have something at the cursor to
-                        // swap later — reset the swap pair to this dictation.
-                        swapPair = DictationPair(raw: rawText, cleaned: cleanedText)
-                        lastInjectedIsCleaned = true
-                        lastInjectedText = cleanedText
-                        hotkey?.setSwapAvailable(true)
+                    if self.autoPasteEnabled {
+                        self.swapPair = DictationPair(raw: rawText, cleaned: cleanedText)
+                        self.lastInjectedIsCleaned = true
+                        self.lastInjectedText = cleanedText
+                        self.hotkey?.setSwapAvailable(true)
 
                         let backupText = rawText
                         let pastedForLearning = cleanedText
-                        let pasteTargetApp = targetApp
-                        textInjector?.pasteText(cleanedText, targetApp: targetApp) { [weak self] in
+                        let pasteTargetApp = self.targetApp
+                        self.textInjector?.pasteText(cleanedText, targetApp: self.targetApp) { [weak self] in
                             Task { @MainActor in
-                                // Leave the NOT-currently-injected version on the clipboard as
-                                // a backup, only after the paste has had time to complete.
                                 self?.textInjector?.copyToClipboard(backupText)
-                                // Snapshot the field now so a later manual edit can be diffed
-                                // and learned from — see DictationSnapshot.swift.
                                 DictationSnapshot.shared.capture(pastedText: pastedForLearning, targetApp: pasteTargetApp)
                             }
                         }
                     } else {
-                        // Nothing is actually placed at the cursor in this mode, so there is
-                        // no injected text to swap later — leave any prior swap pair alone.
-                        textInjector?.copyToClipboard(cleanedText)
+                        self.textInjector?.copyToClipboard(cleanedText)
                     }
                 }
 
                 if isReminderCommand {
                     owLog("[OpenWhisper] Reminder detected: \(text)")
-                    lastTranscription = text
-                    if ollamaAvailable {
-                        let _ = await reminderManager?.handleReminder(text: text)
+                    self.lastTranscription = text
+                    if self.ollamaAvailable {
+                        let _ = await self.reminderManager?.handleReminder(text: text)
                     } else {
                         owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
                     }
                 } else if isSpotifyCommand {
                     owLog("[OpenWhisper] Spotify command detected: \(text)")
-                    let handled = await SpotifyManager.shared.handleCommand(text: text, targetApp: targetApp)
+                    let handled = await SpotifyManager.shared.handleCommand(text: text, targetApp: self.targetApp)
                     if handled {
-                        lastTranscription = text
+                        self.lastTranscription = text
                     } else {
-                        // Command wasn't actually applied (e.g. Automation permission not
-                        // granted yet) — don't lose the transcript, treat it as dictation.
                         owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
                         await pasteAsDictation()
                     }
@@ -422,10 +401,8 @@ final class AppState {
                 }
             } catch {
                 owLog("[OpenWhisper] Error: \(error)")
-                lastError = error.localizedDescription
+                self.lastError = error.localizedDescription
             }
-
-            recordingState = .idle
         }
     }
 

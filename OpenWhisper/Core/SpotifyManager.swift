@@ -138,8 +138,10 @@ final class SpotifyManager: @unchecked Sendable {
         let wordCount = normalized.split(separator: " ").count
         guard wordCount <= maxCommandWordCount else { return false }
 
-        // Fast candidate pre-check: must start with "spotify" or match a transport prefix
+        // Fast candidate pre-check: must start with "spotify" or contain music-related keywords
+        let musicKeywords = ["spotify", "müzik", "muzik", "şarkı", "sarki", "parça", "playlist", "albüm", "beğenilen", "beğendik", "çal", "cal", "çalıyor", "caliyor", "oynat", "başlat", "durdur", "kapat", "sesi", "ses ", "dinlemek", "liste"]
         let isCandidate = (normalized.split(separator: " ").first?.hasPrefix("spotify") == true) ||
+                          musicKeywords.contains(where: { normalized.contains($0) }) ||
                           transportPrefixes.contains { hasCommandPrefix(normalized, $0.0) }
 
         guard isCandidate else { return false }
@@ -160,7 +162,7 @@ final class SpotifyManager: @unchecked Sendable {
     /// Excludes bare ambiguous single words like "başlat", "kapat", "durdur", "sonraki", "önceki"
     /// unless accompanied by explicit music context.
     private static func isStrictSpotifyCommand(_ normalized: String) -> Bool {
-        let explicitKeywords = ["spotify", "müzik", "şarkı", "beğenilen", "beğendik", "parça", "playlist", "albüm", "liked songs"]
+        let explicitKeywords = ["spotify", "müzik", "şarkı", "beğenilen", "beğendik", "parça", "playlist", "albüm", "liked songs", "sesi", "çalıyor", "liste", "dinlemek"]
         if explicitKeywords.contains(where: { normalized.contains($0) }) {
             return true
         }
@@ -182,21 +184,23 @@ final class SpotifyManager: @unchecked Sendable {
 
         let prompt = """
             You are a voice command intent classifier for a Mac speech-to-text application.
-            Determine whether the following spoken transcript is an INTENTIONAL VOICE COMMAND to play music, search for a song, or control Spotify/music playback (e.g. play, pause, stop, next track, previous track, play liked songs, open playlist/artist/album).
+            Determine whether the following spoken transcript is an INTENTIONAL VOICE COMMAND to play music, search for a song, query currently playing track, change volume, or control Spotify/music playback.
 
             CRITICAL RULES:
-            - If the transcript is normal spoken prose, dictation, a general question, or general conversation that merely happens to contain common verbs (like "başlat", "kapat", "durdur", "oynat", "çal") or the word "spotify", answer false.
+            - If the transcript is normal spoken prose, dictation, a general question, or general conversation that merely happens to contain common verbs or words, answer false.
             - Answer true ONLY if the primary intent of the user is to trigger music playback or control music playback.
 
             EXAMPLES:
             - "spotify'da tarkan çal" -> {"is_music_command": true}
             - "müziği durdur" -> {"is_music_command": true}
             - "sonraki şarkıya geç" -> {"is_music_command": true}
-            - "beğenilenleri çal" -> {"is_music_command": true}
-            - "sezen aksu şarkı çal" -> {"is_music_command": true}
+            - "sesi yüzde 50 yap" -> {"is_music_command": true}
+            - "şu an ne çalıyor" -> {"is_music_command": true}
+            - "çalan şarkıyı beğenilenlerime ekle" -> {"is_music_command": true}
+            - "sporda dinlemek için hareketli bir müzik aç" -> {"is_music_command": true}
+            - "bana arkada çalacak dinlendirici bir liste aç" -> {"is_music_command": true}
             - "bu projeyi bugün başlatacağız" -> {"is_music_command": false}
             - "kapıyı kapat lütfen" -> {"is_music_command": false}
-            - "spotify hakkında bir makale yazıyorum" -> {"is_music_command": false}
             - "durdur şu işlemi" -> {"is_music_command": false}
 
             Respond ONLY with a JSON object: {"is_music_command": true} or {"is_music_command": false}.
@@ -218,29 +222,20 @@ final class SpotifyManager: @unchecked Sendable {
             ]
         ]
 
+        guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = requestData
+
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
 
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let responseText = json["response"] as? String else { return nil }
 
-            let cleaned = responseText
-                .replacingOccurrences(of: "```json", with: "")
-                .replacingOccurrences(of: "```", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if let respData = cleaned.data(using: .utf8),
-               let parsed = try JSONSerialization.jsonObject(with: respData) as? [String: Bool],
-               let isCmd = parsed["is_music_command"] {
-                return isCmd
-            }
-
-            let lower = cleaned.lowercased()
-            if lower.contains("\"is_music_command\": true") || lower.contains("\"is_music_command\":true") {
+            let trimmed = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.contains("\"is_music_command\": true") || trimmed.contains("\"is_music_command\":true") {
                 return true
-            } else if lower.contains("\"is_music_command\": false") || lower.contains("\"is_music_command\":false") {
+            } else if trimmed.contains("\"is_music_command\": false") || trimmed.contains("\"is_music_command\":false") {
                 return false
             }
         } catch {
@@ -251,74 +246,72 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Command Handler
 
-    /// Handles a transcript already identified as a Spotify command.
-    ///
-    /// Return contract (this is load-bearing for the caller in `AppState`, which pastes
-    /// the raw transcript as normal dictation whenever this returns `false`):
-    /// - `true`  — some real side effect was produced on Spotify, whether or not we could
-    ///             fully confirm the outcome: a transport command was accepted, or a
-    ///             search was opened and Spotify brought to the front. Even when playback
-    ///             couldn't be confirmed, the transcript should be swallowed rather than
-    ///             pasted on top of the Spotify window we just focused. Also `true` for a
-    ///             recognized command that was deliberately declined for a reason already
-    ///             explained in its own notification (e.g. "beğenilenleri çal" with no
-    ///             account connected) — the user has been told why, so there's nothing to
-    ///             gain by also pasting "beğenilenleri çal" into whatever they were typing.
-    /// - `false` — *nothing* happened to Spotify at all. This includes AppleScript
-    ///             permission errors: on a fresh install/rebuild the *first* command
-    ///             always fails this way while macOS shows the Automation consent
-    ///             dialog, and swallowing that transcript would make the app look broken
-    ///             twice over — the command didn't run *and* the user's words vanished.
-    ///             A notification about the permission is still shown, but the text
-    ///             falls through to normal dictation so it isn't lost.
+    /// Handles a transcript already identified as a Spotify command via LocalMCPBridge.
     func handleCommand(text: String, targetApp: NSRunningApplication? = nil) async -> Bool {
         let activeApp = targetApp ?? NSWorkspace.shared.frontmostApplication
         let normalized = Self.normalize(text)
+        owLog("[SpotifyManager] Handling command via LocalMCPBridge: '\(text)'")
 
         var result = false
+        var notificationText = ""
+        // Set by branches (like, search & play) that already send their own notification
+        // via the verified-working `SpotifyWebAPI`/AppleScript path below, so the shared
+        // `sendNotification` call at the bottom doesn't double up on them.
+        var alreadyNotified = false
 
-        // 1. Leading transport phrase (longest/most-specific match wins per table order).
-        if let (prefix, command) = Self.transportPrefixes.first(where: { Self.hasCommandPrefix(normalized, $0.0) }) {
-            if command == .playLiked {
-                // Checked and dispatched before any residue/search-query extraction so
-                // "beğenilenleri çal" can never be misread as "play music" with residue
-                // "beğenilenleri" and sent to search instead.
-                result = await playRandomLikedTrack()
-            } else {
-                let residue = String(normalized.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
-
-                if command == .play, Self.playFamilyPrefixes.contains(prefix), !residue.isEmpty {
-                    let query = extractSearchQuery(residue)
-                    if !query.isEmpty {
-                        result = await playSearchQuery(query)
-                    } else {
-                        result = await runTransport(command)
-                    }
-                } else {
-                    result = await runTransport(command)
-                }
-            }
-        } else if normalized.split(separator: " ").first?.hasPrefix("spotify") == true {
-            // 2. Bare "spotify ..." with no recognized verb → remainder is a search query.
-            var tokens = normalized.split(separator: " ").map(String.init)
-            tokens.removeFirst()
-            let residue = tokens.joined(separator: " ")
-            let query = extractSearchQuery(residue)
-            if !query.isEmpty {
-                result = await playSearchQuery(query)
-            } else {
-                // "Spotify" said alone with nothing else — toggle playback as a safe fallback.
-                switch runAppleScript("tell application \"Spotify\" to playpause") {
-                case .success:
-                    sendNotification(title: "🎵 Spotify", body: "Spotify oynatma durumu değiştirildi")
-                    result = true
-                case .failure(let error):
-                    result = handleScriptError(error)
-                }
+        // 1. Volume commands ("sesi yüzde 50 yap", "sesi 80 yap", "ses %50")
+        if normalized.contains("sesi") || normalized.contains("volume") || normalized.contains("ses ") {
+            let digits = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+            if let vol = Int(digits), vol >= 0, vol <= 100 {
+                notificationText = await LocalMCPBridge.shared.setVolume(vol)
+                result = true
             }
         }
 
+        // 2. Currently playing info ("şu an ne çalıyor", "hangi şarkı çalıyor")
+        if !result && (normalized.contains("ne çalıyor") || normalized.contains("hangi şarkı") || normalized.contains("şu an ne")) {
+            notificationText = await LocalMCPBridge.shared.getCurrentTrack()
+            result = true
+        }
+
+        // 3. Like current track ("beğenilenlerime ekle", "beğendiklerime ekle", "şarkıyı beğen").
+        // Sends Spotify's native ⌥⇧B "Save to Liked Songs" keyboard shortcut instead of the
+        // Web API — see `likeCurrentTrack()` below for why.
+        if !result && (normalized.contains("beğenilenlerime") || normalized.contains("beğendiklerime") || normalized.contains("beğen")) {
+            result = await likeCurrentTrack(targetApp: activeApp)
+            alreadyNotified = true
+        }
+
+        // 4. Basic Transport (pause, play, next, prev)
+        if !result {
+            if normalized.contains("durdur") || normalized.contains("kapat") || normalized.contains("pause") {
+                notificationText = await LocalMCPBridge.shared.playPause()
+                result = true
+            } else if normalized.contains("sonraki") || normalized.contains("next") {
+                notificationText = await LocalMCPBridge.shared.nextTrack()
+                result = true
+            } else if normalized.contains("önceki") || normalized.contains("prev") {
+                notificationText = await LocalMCPBridge.shared.previousTrack()
+                result = true
+            }
+        }
+
+        // 5. Fallback: Search & Play ("Tarkan'ın son şarkısını çal", "Sporda dinlemek için...",
+        // "Bana arkada..."). Delegates to the already-verified `playSearchQuery` (Web API
+        // search + direct AppleScript `play track` by URI) instead of the MCP Python
+        // process, which has no access to the user's Spotify token and can only fall back
+        // to opening the search screen without actually starting playback.
+        if !result {
+            let searchQuery = extractSearchQuery(normalized)
+            let q = searchQuery.isEmpty ? text : searchQuery
+            result = await playSearchQuery(q)
+            alreadyNotified = true
+        }
+
         if result {
+            if !alreadyNotified {
+                sendNotification(title: "🎵 Spotify (MCP)", body: notificationText)
+            }
             keepInBackground(targetApp: activeApp)
         }
 
@@ -486,6 +479,87 @@ final class SpotifyManager: @unchecked Sendable {
             title: "🎵 Spotify",
             body: "Otomatik çalma başarısız (\(reason)). \"\(query)\" için arama ekranı açıldı."
         )
+        return true
+    }
+
+    // MARK: - Like Current Track ("şarkıyı beğen")
+
+    /// "beğenilenlerime ekle" / "şarkıyı beğen".
+    ///
+    /// This used to PUT the track ID to `SpotifyWebAPI.addTrackToLikedSongs` using the
+    /// user's Keychain-backed OAuth token. That path is now dead: on this user's account,
+    /// Spotify's `/authorize` endpoint deterministically returns `error=server_error`
+    /// before a `code` is ever issued — reproduced across browsers, a re-verified Web API
+    /// dashboard registration, and a brand-new Spotify app from scratch. There is no
+    /// Keychain token to refresh into existence, so `SpotifyWebAPI.addTrackToLikedSongs`
+    /// cannot work here regardless of what this method does. See the comment on
+    /// `SpotifyWebAPI.addTrackToLikedSongs` — it's kept, not deleted, for if OAuth ever
+    /// gets unblocked independently of this method.
+    ///
+    /// Instead this sends Spotify's native ⌥⇧B "Save to Liked Songs" keyboard shortcut via
+    /// System Events. Empirically verified by the user on the current Spotify macOS client
+    /// (this is undocumented — Spotify's own AppleScript dictionary and menu bar expose no
+    /// like/love/save command at all, confirmed by dumping both; the shortcut is the only
+    /// working local hook).
+    ///
+    /// IMPORTANT — this is a TOGGLE, not an idempotent "add": pressing it on an
+    /// already-liked track REMOVES it from Liked Songs (also user-verified). There is no
+    /// local way to read whether the current track is already liked — that too would
+    /// require the same dead Web API token — so this method cannot know in advance which
+    /// direction the toggle will go. The notification text below is deliberately
+    /// non-committal ("beğeni durumu değiştirildi") instead of claiming "eklendi"
+    /// (added), because half the time that claim would be false. Do not "fix" that wording
+    /// to sound more confident without first solving the read side of this problem.
+    private func likeCurrentTrack(targetApp: NSRunningApplication?) async -> Bool {
+        // Check Spotify is actually running before doing anything — `activate` below would
+        // otherwise cold-launch Spotify just to toggle a track that was never playing,
+        // which is a much more confusing failure than an honest "not running" message.
+        guard NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.spotify.client" }) else {
+            sendNotification(title: "🎵 Spotify", body: "Spotify çalışmıyor görünüyor.")
+            return true
+        }
+
+        guard case .success(let idOutput) = runAppleScript("tell application \"Spotify\" to return id of current track"),
+              let uri = idOutput, !uri.isEmpty else {
+            sendNotification(title: "🎵 Spotify", body: "Şu an çalan bir şarkı bulunamadı.")
+            return true
+        }
+        owLog("[Spotify] Toggling Liked Songs status for \(uri) via ⌥⇧B")
+
+        // The keystroke goes to whichever app is frontmost, so Spotify has to actually be
+        // in front for this to land. `activate` alone doesn't guarantee that's already true
+        // by the time the next AppleScript line runs, so poll briefly for it rather than
+        // trusting a blind delay.
+        guard case .success = runAppleScript("tell application \"Spotify\" to activate") else {
+            sendNotification(title: "🎵 Spotify", body: "Spotify öne getirilemedi.")
+            return true
+        }
+
+        var becameFrontmost = false
+        for _ in 0..<10 {
+            if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.spotify.client" {
+                becameFrontmost = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if !becameFrontmost {
+            // Didn't get a positive confirmation within ~1s, but `activate` itself didn't
+            // error — fall through with the fixed 0.3s delay the user's manual test used
+            // successfully, rather than giving up on a command that likely still works.
+            owLog("[Spotify] Could not confirm Spotify became frontmost, falling back to fixed delay")
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+
+        switch runAppleScript("tell application \"System Events\" to keystroke \"b\" using {option down, shift down}") {
+        case .success:
+            sendNotification(title: "🎵 Spotify", body: "Beğeni durumu değiştirildi ❤️ (şarkı zaten beğeniliyse kaldırılmış olabilir)")
+        case .failure(let error):
+            owLog("[Spotify] Like toggle keystroke failed: \(error)")
+            _ = handleScriptError(error)
+        }
+
+        keepInBackground(targetApp: targetApp)
         return true
     }
 
