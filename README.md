@@ -10,11 +10,11 @@ No cloud. No subscription. No data collection. Just fast, accurate voice typing 
 
 - **100% Local & Private** — All speech recognition runs on-device. No audio ever leaves your Mac.
 - **Offline Voice-to-Text** — Works without internet. Transcribe speech to text anywhere.
-- **Hold-to-Talk** — Hold Right ⌥ (Option), speak, release. Text appears at your cursor.
-- **Hands-Free Mode** — While holding Right ⌥, tap Space to lock recording on. Talk as long as you want, then tap Space again to stop.
+- **Hold-to-Talk** — Hold the 🌐 Fn/Globe key, speak, release. Text appears at your cursor.
+- **Hands-Free Mode** — While holding 🌐 Fn, tap Space to lock recording on. Talk as long as you want, then tap Space again to stop.
 - **Works in Any App** — VS Code, Terminal, Chrome, Slack, Notes, Pages — anywhere you can type.
-- **AI Grammar Cleanup** — Optional local LLM removes "um", "uh", fixes punctuation (via Ollama).
-- **Multiple Whisper Models** — Choose tiny (39 MB), base (140 MB), small (460 MB) based on your needs.
+- **AI Grammar Cleanup** — Optional local LLM removes "um", "uh", fixes punctuation (via Ollama). Includes a Turkish/English code-switching mode for developers who dictate in mixed Turkish and English.
+- **Multiple Whisper Models** — Choose tiny (39 MB), base (140 MB), small (460 MB), or Large v3 Turbo (~1.6 GB) based on your needs.
 - **29 Languages** — English, Spanish, French, German, Hindi, Chinese, Japanese, and more.
 - **Lightweight** — <100 MB RAM, <1% CPU when idle. No background drain.
 - **Menu Bar App** — Lives quietly in your menu bar. No dock icon clutter.
@@ -59,7 +59,7 @@ open build/OpenWhisper.app
 
 1. **Grant Microphone access** when prompted (or: System Settings → Privacy & Security → Microphone)
 2. **Grant Accessibility access**: System Settings → Privacy & Security → Accessibility → toggle ON OpenWhisper
-3. The Whisper model downloads automatically on first launch (~140 MB for `base`)
+3. The Whisper model downloads automatically on first launch (~1.6 GB for the default `Large v3 Turbo` model)
 
 OpenWhisper lives in your **menu bar** (no dock icon). Look for the teal microphone icon.
 
@@ -69,22 +69,24 @@ OpenWhisper has two recording modes — pick whichever fits the moment.
 
 ### Hold-to-Talk (quick dictation)
 
-**Hold Right ⌥ (Option)**, speak, release. Text appears at your cursor.
+**Hold the 🌐 Fn/Globe key**, speak, release. Text appears at your cursor.
 
 ### Hands-Free Mode (long dictation)
 
-**Hold Right ⌥, then tap Space** while still holding — recording locks on. Release Option freely and keep talking. **Tap Space again** to stop, transcribe, and paste.
+**Hold 🌐 Fn, then tap Space** while still holding — recording locks on. Release Fn freely and keep talking. **Tap Space again** to stop, transcribe, and paste.
 
-Use hands-free when you don't want to keep a finger on Option — long emails, blog drafts, anything multi-sentence.
+Use hands-free when you don't want to keep a finger on Fn — long emails, blog drafts, anything multi-sentence.
 
 ### How it works
 
-1. **Hold Right ⌥** → recording starts, Flow Bar shows "Listening..." with animated dots
-2. **(Optional) Tap Space** while still holding Option → recording locks into hands-free; release Option whenever
+1. **Hold 🌐 Fn** → recording starts, Flow Bar shows "Listening..." with animated dots
+2. **(Optional) Tap Space** while still holding Fn → recording locks into hands-free; release Fn whenever
 3. **Speak** → audio captured locally at 16 kHz mono
-4. **Release Option** (hold mode) or **tap Space** (hands-free) → audio transcribed by on-device Whisper model
+4. **Release Fn** (hold mode) or **tap Space** (hands-free) → audio transcribed by on-device Whisper model
 5. **Cleanup** → text cleaned up by local LLM (if enabled)
 6. **Paste** → text automatically pasted at your cursor (or copied to clipboard)
+
+> **Note:** macOS may intercept the Fn/Globe key for its own features (emoji picker, dictation, Siri). Go to **System Settings → Keyboard → "Press 🌐 key to"** and set it to **"Do Nothing"** so OpenWhisper receives the key press instead.
 
 Works in any app — VS Code, Terminal, Chrome, Slack, Notes, Pages, Word, and more.
 
@@ -95,9 +97,10 @@ Click the menu bar icon to open settings and choose your model:
 | Model | Download Size | Speed | Accuracy | Best for |
 |---|---|---|---|---|
 | tiny | 39 MB | Fastest | Good | Quick notes, short phrases |
-| base | 140 MB | Fast | Better | General dictation (recommended) |
+| base | 140 MB | Fast | Better | General dictation |
 | small | 460 MB | Moderate | Best | Longer passages, multiple languages |
 | small.en | 460 MB | Moderate | Best (English) | English-only, highest accuracy |
+| Large v3 Turbo | ~1.6 GB | Moderate | Highest | Mixed-language dictation, best overall accuracy (recommended, default) |
 
 Models are downloaded once from HuggingFace and cached locally.
 
@@ -105,8 +108,8 @@ Models are downloaded once from HuggingFace and cached locally.
 
 | Setting | Options | Default |
 |---|---|---|
-| **Model** | tiny, base, small, small.en | base |
-| **Language** | 29 languages + auto-detect | English |
+| **Model** | tiny, base, small, small.en, Large v3 Turbo | Large v3 Turbo |
+| **Language** | 29 languages + auto-detect | Turkish |
 | **LLM Cleanup** | On/Off — Ollama grammar correction | On |
 | **Auto-paste** | On = paste at cursor, Off = clipboard only | On |
 | **Flow Bar** | Show/hide the floating status indicator | On |
@@ -119,8 +122,8 @@ When enabled, transcriptions are cleaned up by a local LLM — removes filler wo
 # Install Ollama
 brew install ollama
 
-# Pull the model (1.5 GB one-time download)
-ollama pull qwen2.5:3b
+# Pull the model (~4.7 GB one-time download)
+ollama pull qwen2.5:7b
 
 # Ollama runs automatically — no extra steps needed
 ```
@@ -152,7 +155,7 @@ OpenWhisper.app (menu bar)
 ├── WhisperTranscriber — WhisperKit (CoreML + Apple Neural Engine)
 ├── LLMCleanup         — Ollama HTTP API (localhost:11434)
 ├── TextInjector       — NSPasteboard + CGEvent Cmd+V
-├── GlobalHotkey       — Right ⌥ via NSEvent + Space lock via CGEventTap
+├── GlobalHotkey       — 🌐 Fn via NSEvent + Space lock via CGEventTap
 └── UI
     ├── MenuBar + Settings popover
     └── FlowBar (floating NSPanel with voice-reactive animation)
@@ -172,12 +175,13 @@ The Whisper model is still downloading. Check the settings panel for a progress 
 - Some apps block CGEvent paste — switch "Auto-paste" off and use Cmd+V manually
 
 ### Ollama cleanup isn't working
-- Check Ollama is running: `ollama list` should show `qwen2.5:3b`
-- If not installed: `brew install ollama && ollama pull qwen2.5:3b`
+- Check Ollama is running: `ollama list` should show `qwen2.5:7b`
+- If not installed: `brew install ollama && ollama pull qwen2.5:7b`
 - The settings panel shows a green dot next to "LLM Cleanup" when Ollama is reachable
 
-### Recording doesn't start when I hold Right ⌥
+### Recording doesn't start when I hold 🌐 Fn
 - Grant Accessibility permission (required for global hotkey detection)
+- Check System Settings → Keyboard → "Press 🌐 key to" is set to "Do Nothing" — otherwise macOS intercepts the key for the emoji picker, dictation, or Siri before OpenWhisper sees it
 - Try restarting the app after granting permission
 
 ### Build fails

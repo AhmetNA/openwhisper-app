@@ -1,15 +1,25 @@
 #!/bin/bash
-# Build OpenWhisper and package into .app bundle
+# Build OpenWhisper and package into .app bundle cleanly
 set -e
 
 cd "$(dirname "$0")"
 
-echo "Building OpenWhisper..."
-swift build -c debug 2>&1
+echo "==> Cleaning old build artifacts and processes..."
+pkill -9 -x OpenWhisper 2>/dev/null || true
+rm -rf build
 
-APP_DIR="build/OpenWhisper.app/Contents"
-EXEC_SRC=".build/debug/OpenWhisper"
-BUNDLE_SRC=".build/debug/OpenWhisper_OpenWhisper.bundle"
+echo "==> Building OpenWhisper via SwiftPM..."
+swift build -c debug
+
+BIN_DIR="$(swift build -c debug --show-bin-path)"
+APP_BUNDLE="build/OpenWhisper.app"
+APP_DIR="$APP_BUNDLE/Contents"
+EXEC_SRC="$BIN_DIR/OpenWhisper"
+BUNDLE_SRC="$BIN_DIR/OpenWhisper_OpenWhisper.bundle"
+
+# Create the app bundle layout
+mkdir -p "$APP_DIR/MacOS" "$APP_DIR/Resources"
+cp "OpenWhisper/Info.plist" "$APP_DIR/Info.plist"
 
 # Copy executable
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
@@ -30,37 +40,35 @@ if [ -d ".build/debug/PackageFrameworks" ]; then
     cp -R .build/debug/PackageFrameworks/* "$APP_DIR/Frameworks/" 2>/dev/null || true
 fi
 
+# Sign with stable Apple identity (or fallback to ad-hoc)
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+if [ -z "$SIGNING_IDENTITY" ]; then
+    SIGNING_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk -F'"' '/Apple Development:|Developer ID Application:/{print $2; exit}')"
+fi
+
+if [ -z "$SIGNING_IDENTITY" ]; then
+    echo "WARNING: No Apple signing identity found. Falling back to ad-hoc signing (-)."
+    SIGNING_IDENTITY="-"
+fi
+
+echo "==> Signing with '$SIGNING_IDENTITY'..."
+codesign --force --deep --options runtime \
+    --entitlements OpenWhisper/OpenWhisper.entitlements \
+    --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then
-        echo "Installing to /Applications..."
+        echo "==> Installing to /Applications..."
         rm -rf /Applications/OpenWhisper.app
-        cp -R build/OpenWhisper.app /Applications/
+        cp -R "$APP_BUNDLE" /Applications/
         echo "  Installed at /Applications/OpenWhisper.app"
-        echo "  You can enable 'Launch at Login' in the app settings."
+
+        echo "==> Launching newly installed OpenWhisper..."
+        open /Applications/OpenWhisper.app
     fi
 }
 
-# Sign with persistent certificate (survives rebuilds — no need to re-grant Accessibility)
-CERT_NAME="OpenWhisper Developer"
-if security find-identity -v -p codesigning | grep -q "$CERT_NAME"; then
-    echo "Signing with '$CERT_NAME' certificate..."
-    codesign --force --deep --sign "$CERT_NAME" "build/OpenWhisper.app"
-    echo ""
-    echo "Done! App bundle at: build/OpenWhisper.app"
-    echo "  Signed with persistent certificate — Accessibility permission is preserved."
-    install_app
-else
-    echo "No persistent certificate found, falling back to ad-hoc signing..."
-    codesign --force --deep --sign - "build/OpenWhisper.app"
-    # Reset Accessibility TCC entry so the new binary gets a fresh grant
-    echo "Resetting Accessibility permission (you'll need to re-grant it)..."
-    tccutil reset Accessibility com.openwhisper.app 2>/dev/null || true
-    echo ""
-    echo "Done! App bundle at: build/OpenWhisper.app"
-    echo ""
-    echo "  IMPORTANT: After launching, grant Accessibility permission:"
-    echo "  System Settings → Privacy & Security → Accessibility → Toggle ON OpenWhisper"
-    echo "  Then restart the app."
-    install_app
-fi
+echo "Done! App bundle at: build/OpenWhisper.app"
+install_app
 echo ""

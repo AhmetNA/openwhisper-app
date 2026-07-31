@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import EventKit
 import Observation
 
 @Observable
@@ -9,6 +10,7 @@ final class ReminderManager {
     static let shared = ReminderManager()
 
     private let notificationCenter = UNUserNotificationCenter.current()
+    private let eventStore = EKEventStore()
     private let storageURL: URL = {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("OpenWhisper")
@@ -58,20 +60,30 @@ final class ReminderManager {
     // MARK: - Detection
 
     /// Check if transcribed text is a reminder command.
-    /// Only matches when the sentence STARTS with a trigger phrase — avoids false positives
-    /// when "remind" appears mid-sentence in normal dictation.
+    /// Matches when the sentence starts with or contains reminder keywords in English or Turkish.
     static func isReminder(_ text: String) -> Bool {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let triggers = [
+            "reminder",
+            "remind",
             "remind me",
             "set a reminder",
             "set reminder",
             "create a reminder",
             "add a reminder",
             "don't let me forget",
-            "don't forget to"
+            "don't forget to",
+            "bana hatırlat",
+            "hatırlatıcı kur",
+            "hatırlatıcı ekle",
+            "hatırlatıcı",
+            "hatırlat",
+            "bana unutturma",
+            "unutturma"
         ]
-        return triggers.contains(where: { lower.hasPrefix($0) })
+        return triggers.contains(where: {
+            lower.hasPrefix($0) || lower.contains("reminder") || lower.contains("remind") || lower.contains("hatırlat") || lower.contains("unutturma")
+        })
     }
 
     // MARK: - Parse & Schedule
@@ -83,7 +95,7 @@ final class ReminderManager {
         // Parse via Ollama
         guard let parsed = await parseWithOllama(text: text) else {
             owLog("[Reminders] Failed to parse reminder")
-            sendConfirmation(title: "Couldn't understand reminder", body: "Try: \"Remind me to [task] [when]\"")
+            sendConfirmation(title: "Hatırlatıcı Anlaşılamadı", body: "Örnek: \"Bana 10 dakika sonra toplantıyı hatırlat\"")
             return false
         }
 
@@ -103,7 +115,9 @@ final class ReminderManager {
         )
 
         let scheduled = await scheduleNotification(reminder: reminder)
-        if scheduled {
+        let savedApple = await createAppleReminder(reminder: reminder)
+
+        if scheduled || savedApple {
             reminders.append(reminder)
             saveReminders()
 
@@ -111,10 +125,10 @@ final class ReminderManager {
             formatter.dateStyle = .medium
             formatter.timeStyle = .short
             sendConfirmation(
-                title: "✓ Reminder Set",
+                title: "✓ Hatırlatıcı Kuruldu",
                 body: "\(reminder.task) — \(formatter.string(from: reminder.fireDate))"
             )
-            owLog("[Reminders] Scheduled: \(reminder.task) at \(reminder.fireDate)")
+            owLog("[Reminders] Scheduled: \(reminder.task) at \(reminder.fireDate) (Apple Reminders: \(savedApple))")
         }
         return scheduled
     }
@@ -126,36 +140,59 @@ final class ReminderManager {
         let fireDate: Date
     }
 
+    /// Ask Ollama to parse task description and target fireDate from voice text
     private func parseWithOllama(text: String) async -> ParsedReminder? {
         guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
 
         let now = Date()
-        let localFormatter = DateFormatter()
-        localFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        localFormatter.timeZone = TimeZone.current
-        let currentTime = localFormatter.string(from: now)
+        let cal = Calendar.current
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: now) ?? now
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        df.timeZone = TimeZone.current
+        let currentTime = df.string(from: now)
+
+        let dateOnlyFormatter = DateFormatter()
+        dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
+        dateOnlyFormatter.timeZone = TimeZone.current
+        let currentDateStr = dateOnlyFormatter.string(from: now)
+        let tomorrowDateStr = dateOnlyFormatter.string(from: tomorrow)
 
         let weekdayFormatter = DateFormatter()
         weekdayFormatter.dateFormat = "EEEE"
+        weekdayFormatter.locale = Locale(identifier: "tr_TR")
         let currentWeekday = weekdayFormatter.string(from: now)
 
         let prompt = """
-            Extract the task and scheduled time from this voice reminder command.
-            Current date/time: \(currentTime) (\(currentWeekday))
+            Extract the task description and scheduled date/time from this voice reminder command.
+            Current reference date & time: \(currentTime) (\(currentWeekday))
+            Today's date: \(currentDateStr)
+            Tomorrow's date: \(tomorrowDateStr)
 
-            Rules:
-            - Return ONLY a JSON object: {"task": "...", "datetime": "YYYY-MM-DDTHH:MM:SS"}
-            - Use 24-hour time format
-            - "tomorrow" = next day, "tonight" = today evening
-            - If user says "today", ALWAYS use today's date even if the time has already passed
-            - If just a time is given with no date and no "today", assume today (or tomorrow if time has passed)
-            - If no specific time given, default to 09:00 for morning, 18:00 for evening
-            - "in X hours/minutes" = add X to the current time above
-            - Extract the task description without the time parts
-            - Do NOT include "remind me to" in the task
-            - Output ONLY the JSON, nothing else
+            TURKISH & ENGLISH TIME PARSING RULES:
+            - "bugün" = today (\(currentDateStr))
+            - "yarın" = tomorrow (\(tomorrowDateStr))
+            - Expressions like "yarın 17 ye", "yarın 17'ye", "yarın saat 17", "yarın 17:00" = tomorrow at 17:00:00 (\(tomorrowDateStr)T17:00:00)
+            - Expressions like "bugün 18'de", "bugün 18 e" = today at 18:00:00 (\(currentDateStr)T18:00:00)
+            - Specific dates like "17 Temmuz", "15 Ağustos" = use that specific date and current/next year.
+            - "X dakika sonra" / "X saat sonra" = add X minutes/hours to reference time \(currentTime).
 
-            Voice command: \(text)
+            CRITICAL TASK EXTRACTION RULES:
+            - The "task" field MUST BE IN THE EXACT ORIGINAL LANGUAGE (Turkish if spoken in Turkish).
+            - The "task" field MUST contain ONLY the action to be done (e.g. "Telefonu yıka", "Raporu gönder").
+            - REMOVE all trigger words ("hatırlatıcı", "bana hatırlat", "hatırlatıcı kur", "remind me to", etc.) AND REMOVE all time/date expressions ("yarın 17 ye", "bugün 18'de", "10 dakika sonra", etc.).
+
+            EXAMPLES:
+            - Input: "hatırlatıcı yarın 17 ye telefonu yıka"
+              -> {"task": "Telefonu yıka", "datetime": "\(tomorrowDateStr)T17:00:00"}
+            - Input: "hatırlatıcı bugün 18 de markete git"
+              -> {"task": "Markete git", "datetime": "\(currentDateStr)T18:00:00"}
+            - Input: "bana 10 dakika sonra kahve içmeyi hatırlat"
+              -> {"task": "Kahve iç", "datetime": "..."}
+
+            Return ONLY a valid JSON object: {"task": "...", "datetime": "YYYY-MM-DDTHH:MM:SS"}.
+            Voice command: "\(text)"
             """
 
         var request = URLRequest(url: url)
@@ -195,13 +232,7 @@ final class ReminderManager {
                   let task = parsed["task"],
                   let datetimeStr = parsed["datetime"] else { return nil }
 
-            // Parse the datetime string (Ollama returns local time, not UTC)
-            let dateFormatter = DateFormatter()
-            dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-            dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-            dateFormatter.timeZone = TimeZone.current
-
-            guard let fireDate = dateFormatter.date(from: datetimeStr) else {
+            guard let fireDate = parseDateString(datetimeStr) else {
                 owLog("[Reminders] Failed to parse date: \(datetimeStr)")
                 return nil
             }
@@ -211,6 +242,26 @@ final class ReminderManager {
             owLog("[Reminders] Ollama parse error: \(error)")
             return nil
         }
+    }
+
+    private func parseDateString(_ datetimeStr: String) -> Date? {
+        let clean = datetimeStr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formats = [
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd HH:mm"
+        ]
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone.current
+        for fmt in formats {
+            df.dateFormat = fmt
+            if let date = df.date(from: clean) {
+                return date
+            }
+        }
+        return nil
     }
 
     // MARK: - Notification Scheduling
@@ -239,6 +290,47 @@ final class ReminderManager {
             return true
         } catch {
             owLog("[Reminders] Schedule error: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - EventKit (Apple Reminders App)
+
+    private func createAppleReminder(reminder: Reminder) async -> Bool {
+        let store = EKEventStore()
+        var granted = false
+        if #available(macOS 14.0, *) {
+            granted = (try? await store.requestFullAccessToReminders()) ?? false
+        } else {
+            granted = (try? await store.requestAccess(to: .reminder)) ?? false
+        }
+
+        guard granted else {
+            owLog("[Reminders] EventKit permission not granted")
+            return false
+        }
+
+        guard let calendar = store.defaultCalendarForNewReminders() else {
+            owLog("[Reminders] No default calendar found in Apple Reminders")
+            return false
+        }
+
+        let ekReminder = EKReminder(eventStore: store)
+        ekReminder.title = reminder.task
+        ekReminder.calendar = calendar
+
+        let alarm = EKAlarm(absoluteDate: reminder.fireDate)
+        ekReminder.addAlarm(alarm)
+
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: reminder.fireDate)
+        ekReminder.dueDateComponents = components
+
+        do {
+            try store.save(ekReminder, commit: true)
+            owLog("[Reminders] Successfully created Apple Reminder: \(reminder.task)")
+            return true
+        } catch {
+            owLog("[Reminders] Failed to save Apple Reminder: \(error)")
             return false
         }
     }

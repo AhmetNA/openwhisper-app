@@ -10,20 +10,57 @@ final class GlobalHotkey {
 
     /// What's currently driving the recording, if anything.
     /// - `idle`: nothing pressed.
-    /// - `holding`: Right Option held → release stops recording.
-    /// - `handsFree`: Option+Space toggled on → bare Space stops it.
+    /// - `holding`: Fn/Globe held → release stops recording.
+    /// - `handsFree`: Fn+Space toggled on → bare Space stops it.
     private enum Mode { case idle, holding, handsFree }
     private var mode: Mode = .idle
 
-    private let rightOptionKeyCode: UInt16 = 61
+    private let fnKeyCode: UInt16 = 63
     private let spaceKeyCode: Int64 = 49
+    private let zKeyCode: Int64 = 6
 
     private let onPress: () -> Void
     private let onRelease: () -> Void
+    /// Fired the instant a valid Fn+Z swap gesture is recognized (Z tapped within
+    /// `swapWindow` of the Fn keyDown while holding). This is the moment to silently
+    /// cancel whatever recording started on this Fn-down — it involves no synthetic
+    /// keystrokes, so it's safe to run immediately, Fn still physically down or not.
+    private let onSwapRequest: () -> Void
+    /// Fired once Fn is physically released *after* a swap was requested. The actual
+    /// text replacement (backspace + paste) is deferred to this point so it never races
+    /// a still-held Fn: posting synthetic Delete/Cmd+V while Fn is down risks the OS
+    /// merging live Fn into the event (Fn+Delete is Forward Delete on macOS, not Backspace).
+    private let onSwapCommit: () -> Void
 
-    init(onPress: @escaping () -> Void, onRelease: @escaping () -> Void) {
+    /// Timestamp of the most recent Fn keyDown (idle → holding transition); the swap
+    /// gesture's 2s window is measured from here.
+    private var fnPressTime: Date?
+    private let swapWindow: TimeInterval = 2.0
+    /// Whether AppState currently has a stored dictation pair to swap between. Mirrored
+    /// here (rather than read live from AppState) so the CGEventTap callback — which must
+    /// stay synchronous and cheap — can decide to swallow the Z key without touching
+    /// MainActor-isolated state.
+    private var swapAvailable = false
+    /// Set true the instant a swap gesture is recognized; cleared when the deferred
+    /// Fn-up commit fires. While true, any further Z keyDowns (autorepeat from the still-held
+    /// key) are also swallowed rather than leaking into the focused app.
+    private var pendingSwap = false
+
+    init(
+        onPress: @escaping () -> Void,
+        onRelease: @escaping () -> Void,
+        onSwapRequest: @escaping () -> Void,
+        onSwapCommit: @escaping () -> Void
+    ) {
         self.onPress = onPress
         self.onRelease = onRelease
+        self.onSwapRequest = onSwapRequest
+        self.onSwapCommit = onSwapCommit
+    }
+
+    /// Called by AppState whenever it gains/loses a stored raw/cleaned dictation pair.
+    func setSwapAvailable(_ available: Bool) {
+        swapAvailable = available
     }
 
     /// Check and optionally prompt for Accessibility permissions.
@@ -56,7 +93,7 @@ final class GlobalHotkey {
         return false
     }
 
-    /// Register monitors for Right Option hold-to-talk and Option+Space hands-free toggle.
+    /// Register monitors for Fn/Globe hold-to-talk and Fn+Space hands-free toggle.
     func register() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
@@ -82,25 +119,34 @@ final class GlobalHotkey {
         removeSpaceEventTap()
     }
 
-    // MARK: - Right Option (hold-to-talk)
+    // MARK: - Fn/Globe (hold-to-talk)
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        guard event.keyCode == rightOptionKeyCode else { return }
-        let optionPressed = event.modifierFlags.contains(.option)
+        // flagsChanged fires for the Fn/Globe key itself with keyCode 63; guarding on the
+        // keyCode (in addition to the .function flag) keeps arrow-key/function-flag noise out,
+        // since other keys can also toggle modifier flags without being the Fn key press itself.
+        guard event.keyCode == fnKeyCode else { return }
+        let fnPressed = event.modifierFlags.contains(.function)
 
         switch mode {
         case .idle:
-            if optionPressed {
+            if fnPressed {
                 mode = .holding
+                fnPressTime = Date()
                 onPress()
+            } else if pendingSwap {
+                // Fn released after a recognized swap gesture — safe now to post the
+                // synthetic backspace/paste keystrokes without a live Fn modifier around.
+                pendingSwap = false
+                onSwapCommit()
             }
         case .holding:
-            if !optionPressed {
+            if !fnPressed {
                 mode = .idle
                 onRelease()
             }
         case .handsFree:
-            // Hands-free recording ignores Option presses — only Space toggles it off.
+            // Hands-free recording ignores Fn presses — only Space toggles it off.
             break
         }
     }
@@ -110,15 +156,15 @@ final class GlobalHotkey {
     /// Called from the CGEventTap callback on every Space keyDown.
     /// Returns `true` if the event should be swallowed (don't pass through to the focused app).
     fileprivate func handleSpaceKeyDown(flags: CGEventFlags) -> Bool {
-        let optionDown = flags.contains(.maskAlternate)
+        let fnDown = flags.contains(.maskSecondaryFn)
         // Ignore the chord if Cmd/Ctrl are also down — those are reserved for other shortcuts.
-        let onlyOption = optionDown
+        let onlyFn = fnDown
             && !flags.contains(.maskCommand)
             && !flags.contains(.maskControl)
 
         switch mode {
         case .idle:
-            if onlyOption {
+            if onlyFn {
                 mode = .handsFree
                 onPress()
                 return true
@@ -127,7 +173,7 @@ final class GlobalHotkey {
         case .holding:
             // User is already hold-to-talking; tapping Space locks it into hands-free.
             // Don't fire onPress/onRelease — the recording is already running.
-            if onlyOption {
+            if onlyFn {
                 mode = .handsFree
                 return true
             }
@@ -137,6 +183,22 @@ final class GlobalHotkey {
             onRelease()
             return true
         }
+    }
+
+    // MARK: - Option + Z (output swap shortcut)
+
+    /// Called from the CGEventTap callback on every 'Z' keyDown.
+    /// Returns `true` if Option+Z is pressed and a swappable pair is available,
+    /// swallowing the key event (so 'Ω' is NOT typed) and triggering the text swap.
+    fileprivate func handleOptionZKeyDown(flags: CGEventFlags) -> Bool {
+        guard swapAvailable else { return false }
+        let optionDown = flags.contains(.maskAlternate)
+        let noCmdOrCtrl = !flags.contains(.maskCommand) && !flags.contains(.maskControl)
+        if optionDown && noCmdOrCtrl {
+            onSwapCommit()
+            return true
+        }
+        return false
     }
 
     private func installSpaceEventTap() {
@@ -161,6 +223,10 @@ final class GlobalHotkey {
                 if me.handleSpaceKeyDown(flags: event.flags) {
                     return nil
                 }
+            } else if keyCode == me.zKeyCode {
+                if me.handleOptionZKeyDown(flags: event.flags) {
+                    return nil
+                }
             }
             return Unmanaged.passUnretained(event)
         }
@@ -183,7 +249,7 @@ final class GlobalHotkey {
 
         eventTap = tap
         runLoopSource = source
-        owLog("[GlobalHotkey] CGEventTap installed (hands-free: ⌥Space to start, Space to stop)")
+        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space to start, Space to stop)")
     }
 
     private func removeSpaceEventTap() {

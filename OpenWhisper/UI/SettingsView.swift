@@ -25,6 +25,7 @@ struct SettingsView: View {
                     Text("Base (140 MB)").tag("base")
                     Text("Small (460 MB)").tag("small")
                     Text("Small EN").tag("small.en")
+                    Text("Large v3 Turbo (~1.6 GB)").tag("large-v3-v20240930_turbo")
                 }
                 .labelsHidden()
                 .frame(width: 150)
@@ -135,7 +136,7 @@ struct SettingsView: View {
             HStack {
                 Label("Trigger", systemImage: "keyboard")
                 Spacer()
-                Text("Hold Right ⌥")
+                Text("Hold 🌐 Fn")
                     .font(.system(.body, design: .monospaced))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)

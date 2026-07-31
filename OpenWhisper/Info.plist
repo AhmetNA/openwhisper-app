@@ -24,5 +24,7 @@
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>OpenWhisper needs microphone access to transcribe your speech to text.</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>OpenWhisper needs access to Apple Reminders to create reminders from your voice commands.</string>
 </dict>
 </plist>
