@@ -14,7 +14,11 @@ enum AXTextAccess {
 
     /// The currently focused AX element system-wide, if any (walks systemWide ->
     /// focused application -> focused UI element, same path as AXProbe).
-    static func focusedElement() -> AXUIElement? {
+    /// When `matchingPID` is supplied, the focused element must belong to that
+    /// application. Electron/WebKit apps can replace their text element after an edit;
+    /// callers can use this to reacquire the replacement without accidentally reading a
+    /// different frontmost app.
+    static func focusedElement(matchingPID: pid_t? = nil) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedAppRef: AnyObject?
@@ -35,7 +39,15 @@ enum AXTextAccess {
               CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID() else {
             return nil
         }
-        return (focusedElementRef as! AXUIElement)
+        let focusedElement = focusedElementRef as! AXUIElement
+        if let matchingPID {
+            var focusedPID: pid_t = 0
+            guard AXUIElementGetPid(focusedElement, &focusedPID) == .success,
+                  focusedPID == matchingPID else {
+                return nil
+            }
+        }
+        return focusedElement
     }
 
     static func readString(_ element: AXUIElement, _ attribute: CFString) -> (value: String?, error: AXError) {

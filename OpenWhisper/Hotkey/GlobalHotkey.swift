@@ -21,6 +21,8 @@ final class GlobalHotkey {
     /// TEMPORARY diagnostic shortcut (Option+Shift+D) — triggers AXProbe. Remove along with
     /// AXProbe.swift once the AX-readability measurement is done.
     private let dKeyCode: Int64 = 2
+    /// Manual correction review shortcut: Option+Shift+C.
+    private let cKeyCode: Int64 = 8
 
     private let onPress: () -> Void
     private let onRelease: () -> Void
@@ -36,6 +38,8 @@ final class GlobalHotkey {
     private let onSwapCommit: () -> Void
     /// TEMPORARY: fired on Option+Shift+D to run the AX-readability diagnostic probe.
     private let onDiagnosticProbe: () -> Void
+    /// Fired on Option+Shift+C to compare the active pasted text with its current field text.
+    private let onCorrectionReview: () -> Void
 
     /// Timestamp of the most recent Fn keyDown (idle → holding transition); the swap
     /// gesture's 2s window is measured from here.
@@ -56,13 +60,15 @@ final class GlobalHotkey {
         onRelease: @escaping () -> Void,
         onSwapRequest: @escaping () -> Void,
         onSwapCommit: @escaping () -> Void,
-        onDiagnosticProbe: @escaping () -> Void = {}
+        onDiagnosticProbe: @escaping () -> Void = {},
+        onCorrectionReview: @escaping () -> Void = {}
     ) {
         self.onPress = onPress
         self.onRelease = onRelease
         self.onSwapRequest = onSwapRequest
         self.onSwapCommit = onSwapCommit
         self.onDiagnosticProbe = onDiagnosticProbe
+        self.onCorrectionReview = onCorrectionReview
     }
 
     /// Called by AppState whenever it gains/loses a stored raw/cleaned dictation pair.
@@ -234,6 +240,22 @@ final class GlobalHotkey {
         return true
     }
 
+    // MARK: - Option + Shift + C (manual correction review)
+
+    /// Called from the CGEventTap callback on every 'C' keyDown. The event is swallowed so
+    /// the shortcut cannot leak a character into the focused app; autorepeat is swallowed too
+    /// but only the first physical press starts a review.
+    fileprivate func handleCorrectionReviewKeyDown(flags: CGEventFlags, isRepeat: Bool) -> Bool {
+        let optionDown = flags.contains(.maskAlternate)
+        let shiftDown = flags.contains(.maskShift)
+        let noCmdOrCtrl = !flags.contains(.maskCommand) && !flags.contains(.maskControl)
+        guard optionDown && shiftDown && noCmdOrCtrl else { return false }
+        if !isRepeat {
+            onCorrectionReview()
+        }
+        return true
+    }
+
     private func installSpaceEventTap() {
         let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
@@ -269,6 +291,11 @@ final class GlobalHotkey {
                 if me.handleDiagnosticProbeKeyDown(flags: event.flags, isRepeat: isRepeat) {
                     return nil
                 }
+            } else if keyCode == me.cKeyCode {
+                let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+                if me.handleCorrectionReviewKeyDown(flags: event.flags, isRepeat: isRepeat) {
+                    return nil
+                }
             }
             return Unmanaged.passUnretained(event)
         }
@@ -281,7 +308,7 @@ final class GlobalHotkey {
             callback: callback,
             userInfo: userInfo
         ) else {
-            owLog("[GlobalHotkey] Failed to create CGEventTap for Space — hands-free mode disabled")
+            owLog("[GlobalHotkey] Failed to create CGEventTap for Space — hands-free and correction review shortcuts disabled")
             return
         }
 
@@ -291,7 +318,7 @@ final class GlobalHotkey {
 
         eventTap = tap
         runLoopSource = source
-        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space to start, Space to stop)")
+        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space to start, Space to stop; review: ⌥⇧C)")
     }
 
     private func removeSpaceEventTap() {

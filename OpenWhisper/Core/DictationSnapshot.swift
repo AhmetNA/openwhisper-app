@@ -269,6 +269,17 @@ final class DictationSnapshot {
         }
     }
 
+    /// Immediately compares the text that was pasted by OpenWhisper with the current
+    /// contents of the same field. This is the manual shortcut path for cases where the
+    /// user has finished editing and does not want to wait for a checkpoint or app switch.
+    func reviewCurrentDifference() {
+        guard current != nil else {
+            owLog("[Corrections] Manual review skipped — no active pasted-text snapshot")
+            return
+        }
+        triggerReread(reason: "manual correction shortcut", isFinal: true)
+    }
+
     private func handleActivation(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
@@ -293,7 +304,24 @@ final class DictationSnapshot {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let valueResult = AXTextAccess.readString(boxed.element, kAXValueAttribute as CFString)
-            guard let newFieldText = valueResult.value else {
+            var newFieldText = valueResult.value
+
+            // GPT/ChatGPT and other Electron/WebKit apps can replace the focused AX text
+            // element as soon as the user edits it. The original element then returns
+            // kAXErrorInvalidUIElement even though the current composer is readable through
+            // a newly-created focused element. Reacquire that replacement before giving up.
+            if newFieldText == nil,
+               let refreshedElement = AXTextAccess.focusedElement(matchingPID: boxed.pid) {
+                let refreshedResult = AXTextAccess.readString(refreshedElement, kAXValueAttribute as CFString)
+                newFieldText = refreshedResult.value
+                if newFieldText != nil {
+                    owLog("[Corrections] Reread reacquired refreshed focused element (gen \(boxed.generation))")
+                } else {
+                    owLog("[Corrections] Reread refreshed element unreadable (gen \(boxed.generation)) — \(AXTextAccess.describe(refreshedResult.error))")
+                }
+            }
+
+            guard let newFieldText else {
                 owLog("[Corrections] Reread skipped (gen \(boxed.generation)) — element/value unreadable (\(AXTextAccess.describe(valueResult.error)))")
                 return
             }
@@ -325,10 +353,16 @@ final class DictationSnapshot {
             return
         }
 
-        let newSliceStart = newFieldText.index(newFieldText.startIndex, offsetBy: prefix.count)
-        let newSliceEnd = newFieldText.index(newFieldText.endIndex, offsetBy: -suffix.count)
-        guard newSliceStart <= newSliceEnd else { return }
-        let newSlice = String(newFieldText[newSliceStart..<newSliceEnd])
+        // AX ranges are UTF-16 based. Using String.Index offsetBy with `prefix.count` /
+        // `suffix.count` breaks as soon as the surrounding text contains a composed emoji
+        // or another multi-scalar character, causing the wrong span to be diffed.
+        let newSliceStart = prefix.utf16.count
+        let newSliceEnd = newFieldText.utf16.count - suffix.utf16.count
+        guard newSliceStart >= 0, newSliceEnd >= newSliceStart,
+              let newSlice = Self.utf16Substring(newFieldText, newSliceStart..<newSliceEnd) else {
+            owLog("[Corrections] Reread (gen \(boxed.generation), \(reason)) — UTF-16 pasted span could not be extracted")
+            return
+        }
 
         guard newSlice != oldSlice else {
             owLog("[Corrections] Reread (gen \(boxed.generation), \(reason)) — pasted span unchanged, nothing to learn")

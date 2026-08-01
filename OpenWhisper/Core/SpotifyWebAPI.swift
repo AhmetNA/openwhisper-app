@@ -316,16 +316,18 @@ actor SpotifyWebAPI {
         _ = try await validClientCredentialsToken()
     }
 
-    /// Fetches up to 50 of the user's Liked Songs, in Spotify's default (most-recently-saved
-    /// first) order — the caller (`SpotifyManager.playLikedSongs`) shuffles this window
-    /// client-side before handing the URIs to the player endpoint.
+    /// Fetches up to `limit` of the user's Liked Songs from a random position in their
+    /// library, so repeated "beğenilenleri çal" commands actually surface the whole
+    /// library over time instead of only ever the most-recently-saved `limit` tracks.
+    /// The caller (`SpotifyManager.playLikedSongs`) additionally shuffles the returned
+    /// window client-side before handing the URIs to the player endpoint.
     ///
-    /// NOTE: this is a single unpaginated request (`limit=50`, no `offset`), so it always
-    /// returns the 50 most recently liked tracks, not a random sample of the whole library.
-    /// A true random sample would need to first read `total` from this same endpoint, then
-    /// re-request with a random `offset` — left as a known limitation for now (the previous
-    /// single-track version had the identical limitation, just applied after fetching instead
-    /// of before).
+    /// Two requests when the library is larger than `limit`: first `limit=1` just to read
+    /// `total` (Spotify always includes it, even for a 1-item page), then a second request
+    /// with a random `offset` in `0...(total - limit)` so the window itself is drawn from
+    /// anywhere in the library, not just the front. If `total <= limit`, the first request's
+    /// own items ARE the entire library — no second request needed, and the whole Liked
+    /// Songs list plays every time.
     ///
     /// Requires the user's own token — this is `/v1/me/tracks`, `user-library-read` scope,
     /// which a client-credentials (app-only) token cannot access at all. Throws
@@ -336,8 +338,37 @@ actor SpotifyWebAPI {
             throw SpotifyAPIError.notConnected
         }
 
+        let (firstPageTracks, total) = try await fetchLikedTracksPage(limit: 1, offset: 0, token: token)
+
+        if total <= limit {
+            // The whole library fits in one window — re-fetch at the real `limit` (the
+            // probe above used limit=1) so we return everything, not just that one item.
+            let (allTracks, _) = try await fetchLikedTracksPage(limit: limit, offset: 0, token: token)
+            guard !allTracks.isEmpty else { throw SpotifyAPIError.noResults }
+            return allTracks
+        }
+
+        let maxOffset = total - limit
+        let offset = Int.random(in: 0...maxOffset)
+        let (windowTracks, _) = try await fetchLikedTracksPage(limit: limit, offset: offset, token: token)
+        guard !windowTracks.isEmpty else {
+            // Shouldn't happen given total > limit and a valid offset range, but don't
+            // silently return an empty list if it somehow does.
+            throw SpotifyAPIError.noResults
+        }
+        _ = firstPageTracks // probe page's items are discarded; only its `total` was needed
+        return windowTracks
+    }
+
+    /// One `GET /v1/me/tracks?limit=&offset=` request. Returns the page's tracks plus the
+    /// library-wide `total` Spotify reports on every page (used by `fetchLikedTracksWindow`
+    /// to pick a random offset without a separate "count" endpoint — there isn't one).
+    private func fetchLikedTracksPage(limit: Int, offset: Int, token: String) async throws -> (tracks: [TrackResult], total: Int) {
         var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
-        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        components.queryItems = [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "offset", value: String(offset))
+        ]
         guard let url = components.url else {
             throw SpotifyAPIError.unexpected("invalid liked tracks URL")
         }
@@ -372,10 +403,11 @@ actor SpotifyWebAPI {
 
         // Each item is a SavedTrackObject: { "added_at": ..., "track": { "id", "uri",
         // "name", "artists": [...] } } — the track fields are nested one level deeper
-        // than in a /v1/search response.
+        // than in a /v1/search response. `total` is a top-level sibling of `items`.
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let rawItems = json["items"] as? [[String: Any]]
+            let rawItems = json["items"] as? [[String: Any]],
+            let total = json["total"] as? Int
         else {
             throw SpotifyAPIError.unexpected("malformed liked tracks response")
         }
@@ -389,10 +421,7 @@ actor SpotifyWebAPI {
             return TrackResult(uri: uri, name: name, artist: artist)
         }
 
-        guard !tracks.isEmpty else {
-            throw SpotifyAPIError.noResults
-        }
-        return tracks
+        return (tracks, total)
     }
 
     // MARK: - Public API — Playback (Web API player endpoints)
@@ -542,10 +571,15 @@ actor SpotifyWebAPI {
     /// telling the user to reconnect, rather than a generic/confusing error.
     ///
     /// NOT CURRENTLY CALLED. `SpotifyManager.likeCurrentTrack()` used to call this but was
-    /// switched to a local ⌥⇧B keyboard-shortcut path: on this user's account `/authorize`
-    /// deterministically returns `error=server_error` (reproduced across browsers and a
-    /// brand-new Spotify app), so there is no way to obtain the token this method needs.
-    /// Left in place rather than deleted in case OAuth gets independently unblocked later.
+    /// switched to a local ⌥⇧B keyboard-shortcut path instead, for a reason UNRELATED to
+    /// OAuth: OAuth itself works fine (token exchange returns HTTP 200, the refresh token
+    /// is persisted in the Keychain, and `connectUserAccount()` above is a working flow).
+    /// The original switch was made under the belief that `/authorize` was dead
+    /// (`error=server_error`); that belief is now known to be stale — see the comment on
+    /// `userScope` above. Left unwired rather than reconnected here because re-plumbing
+    /// `likeCurrentTrack()` to call this again is a separate, deliberate decision this
+    /// change does not make; see the comment on `likeCurrentTrack()` itself for its current
+    /// (⌥⇧B-based) behavior.
     func addTrackToLikedSongs(trackID: String) async throws {
         guard let token = await validUserAccessToken() else {
             throw SpotifyAPIError.notConnected

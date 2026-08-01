@@ -167,8 +167,8 @@ enum CorrectionEngine {
         let right: String
     }
 
-    /// Walk the LCS alignment and collect only the gaps where old-length == new-length
-    /// (a true 1:1 substitution) and the gap is 1-3 words — per spec, insertions/deletions
+    /// Walk the LCS alignment and collect true substitutions plus the supported compound-word
+    /// merge shape (two old words becoming one new word). Insertions/deletions, split words,
     /// and longer rewrites are NOT candidates at all (discarded here, not later).
     static func substitutionCandidates(oldWords: [String], newWords: [String]) -> [RawSubstitution] {
         let matches = lcsMatches(oldWords, newWords)
@@ -177,7 +177,9 @@ enum CorrectionEngine {
         func handleGap(oldStart: Int, oldEnd: Int, newStart: Int, newEnd: Int) {
             let oldLen = oldEnd - oldStart
             let newLen = newEnd - newStart
-            guard oldLen == newLen, oldLen >= 1, oldLen <= 3 else { return }
+            let isSameWordCount = oldLen == newLen && oldLen >= 1 && oldLen <= 3
+            let isCompoundMerge = oldLen == 2 && newLen == 1
+            guard isSameWordCount || isCompoundMerge else { return }
             let wrong = oldWords[oldStart..<oldEnd].joined(separator: " ")
             let right = newWords[newStart..<newEnd].joined(separator: " ")
             guard wrong != right else { return }
@@ -228,26 +230,33 @@ enum CorrectionEngine {
         let wrong = raw.wrong
         let right = raw.right
 
+        let wrongWords = wrong.split(separator: " ").map(String.init)
+        let rightWords = right.split(separator: " ").map(String.init)
+        let isCompoundMerge = wrongWords.count == 2 && rightWords.count == 1
+
         // Case-only or punctuation-only difference — LLM cleanup already handles that.
         if trLower(wrong) == trLower(right) { return nil }
         let stripPunct: (String) -> String = { s in
             String(s.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
         }
-        if trLower(stripPunct(wrong)) == trLower(stripPunct(right)) { return nil }
+        // For a compound merge, whitespace is the actual semantic difference, so it must not
+        // be mistaken for punctuation-only noise by the normalized comparison below.
+        if !isCompoundMerge, trLower(stripPunct(wrong)) == trLower(stripPunct(right)) { return nil }
 
         // Word-length floor: any individual word under 2 chars kills the whole candidate.
-        let wrongWords = wrong.split(separator: " ").map(String.init)
-        let rightWords = right.split(separator: " ").map(String.init)
         guard wrongWords.allSatisfy({ $0.count >= 2 }), rightWords.allSatisfy({ $0.count >= 2 }) else {
             return nil
         }
 
         // Blacklist: common short words may never sit on the "wrong" side.
-        guard !wrongWords.contains(where: { blacklist.contains(trLower($0)) }) else { return nil }
+        // A compound phrase is not a standalone occurrence of any one word, so allow common
+        // components such as "her şey" or "bir çok" to be learned as a single compound.
+        if !isCompoundMerge {
+            guard !wrongWords.contains(where: { blacklist.contains(trLower($0)) }) else { return nil }
+        }
 
-        // 1-3 word phrase cap (already enforced when building the gap, re-checked here
-        // defensively since this function may be called directly by callers/tests).
-        guard wrongWords.count >= 1, wrongWords.count <= 3 else { return nil }
+        // 1-3 word phrase cap for ordinary substitutions; compound merges are exactly 2 -> 1.
+        guard (wrongWords.count >= 1 && wrongWords.count <= 3) || isCompoundMerge else { return nil }
 
         // Similarity floor: normalized Levenshtein distance <= 0.4 (similarity >= 0.6).
         // A full rewrite of the phrase (different wording, not a mishearing) fails this.
@@ -270,6 +279,13 @@ enum CorrectionEngine {
     ///    if both resulting stems stay at least 3 characters long and still differ — this
     ///    keeps normal (non-agglutinating) word pairs like "kod"/"kot" untouched.
     static func extractRoot(wrong: String, right: String) -> (wrong: String, right: String) {
+        // Root extraction is defined for one-word inflected forms. A compound merge must keep
+        // its complete phrase (e.g. "her şey" -> "herşey") so the learned pair can be applied
+        // as a multi-token replacement later.
+        if words(wrong).count != 1 || words(right).count != 1 {
+            return (wrong, right)
+        }
+
         if let wApos = lastApostropheIndex(wrong), let rApos = lastApostropheIndex(right) {
             let wSuffix = wrong[wApos...]
             let rSuffix = right[rApos...]
@@ -332,36 +348,98 @@ enum CorrectionEngine {
         return replacement
     }
 
-    /// Apply every ACTIVE learned correction to `text`, matching whole words/roots (Turkish
-    /// locale-aware, apostrophe-suffix preserved), and preserving the original occurrence's
-    /// case pattern. Longest `wrong` roots are matched first so e.g. "bakan" doesn't shadow
-    /// a longer learned root that happens to start with it.
+    /// Apply every ACTIVE learned correction to `text`, matching whole words/roots or learned
+    /// compound phrases (Turkish locale-aware, apostrophe-suffix preserved), and preserving
+    /// the original occurrence's case pattern. Longest phrases/roots are matched first so e.g.
+    /// "her şey" doesn't get shadowed by a shorter learned pair.
     /// Returns the corrected text plus the list of (wrong, right) pairs that actually fired.
     static func applyCorrections(to text: String, pairs: [LearnedPair]) -> (result: String, applied: [(String, String)]) {
         guard !pairs.isEmpty else { return (text, []) }
-        let sortedPairs = pairs.sorted { $0.wrong.count > $1.wrong.count }
+        let sortedPairs = pairs.sorted {
+            let leftWordCount = words($0.wrong).count
+            let rightWordCount = words($1.wrong).count
+            if leftWordCount != rightWordCount { return leftWordCount > rightWordCount }
+            return $0.wrong.count > $1.wrong.count
+        }
         var tokens = tokenize(text)
         var applied: [(String, String)] = []
 
-        for i in tokens.indices {
-            guard tokens[i].isWord else { continue }
-            let token = tokens[i].text
-            let (stem, suffix): (String, String)
-            if let aposIdx = lastApostropheIndex(token) {
-                stem = String(token[token.startIndex..<aposIdx])
-                suffix = String(token[aposIdx...])
-            } else {
-                stem = token
-                suffix = ""
+        var i = 0
+        while i < tokens.count {
+            guard tokens[i].isWord else {
+                i += 1
+                continue
             }
-            let lowerStem = trLower(stem)
-            guard let match = sortedPairs.first(where: { $0.wrong == lowerStem }) else { continue }
-            let replacedStem = matchCase(of: stem, applyTo: match.right)
-            tokens[i] = Token(text: replacedStem + suffix, isWord: true)
-            applied.append((match.wrong, match.right))
+
+            var didApply = false
+            for pair in sortedPairs {
+                let patternWords = words(pair.wrong)
+                guard !patternWords.isEmpty else { continue }
+
+                if patternWords.count > 1 {
+                    guard let end = phraseMatchEnd(
+                        in: tokens,
+                        start: i,
+                        patternWords: patternWords
+                    ) else { continue }
+
+                    let firstOriginal = tokens[i].text
+                    let replacement = matchCase(of: firstOriginal, applyTo: pair.right)
+                    tokens.replaceSubrange(i..<end, with: [Token(text: replacement, isWord: true)])
+                    applied.append((pair.wrong, pair.right))
+                    didApply = true
+                    break
+                }
+
+                let token = tokens[i].text
+                let (stem, suffix): (String, String)
+                if let aposIdx = lastApostropheIndex(token) {
+                    stem = String(token[token.startIndex..<aposIdx])
+                    suffix = String(token[aposIdx...])
+                } else {
+                    stem = token
+                    suffix = ""
+                }
+                let lowerStem = trLower(stem)
+                guard pair.wrong == lowerStem else { continue }
+                let replacedStem = matchCase(of: stem, applyTo: pair.right)
+                tokens[i] = Token(text: replacedStem + suffix, isWord: true)
+                applied.append((pair.wrong, pair.right))
+                didApply = true
+                break
+            }
+
+            // Move beyond a replacement so a learned result cannot be immediately reprocessed
+            // by another pair during this pass.
+            i += 1
+            _ = didApply
         }
 
         let result = tokens.map(\.text).joined()
         return (result, applied)
+    }
+
+    /// Returns the exclusive token end for a learned multi-word phrase. Only whitespace may
+    /// separate phrase words; punctuation prevents a match across sentence boundaries.
+    private static func phraseMatchEnd(
+        in tokens: [Token],
+        start: Int,
+        patternWords: [String]
+    ) -> Int? {
+        var cursor = start
+        for (index, expected) in patternWords.enumerated() {
+            guard cursor < tokens.count,
+                  tokens[cursor].isWord,
+                  trLower(tokens[cursor].text) == trLower(expected) else {
+                return nil
+            }
+            cursor += 1
+            guard index < patternWords.count - 1 else { continue }
+
+            guard cursor < tokens.count, !tokens[cursor].isWord else { return nil }
+            guard tokens[cursor].text.allSatisfy({ $0.isWhitespace }) else { return nil }
+            cursor += 1
+        }
+        return cursor
     }
 }

@@ -200,6 +200,13 @@ final class AppState {
                 DispatchQueue.global(qos: .userInitiated).async {
                     AXProbe.run()
                 }
+            },
+            onCorrectionReview: { [weak self] in
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    DictationSnapshot.shared.reviewCurrentDifference()
+                    owLog("[OpenWhisper] Manual correction review requested (⌥⇧C)")
+                }
             }
         )
         hotkey?.register()

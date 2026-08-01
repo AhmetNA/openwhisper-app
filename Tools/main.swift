@@ -141,7 +141,32 @@ check("parseCheckpoints >300 '5, 301'", CorrectionEngine.parseCheckpoints("5, 30
 check("parseCheckpoints >60 items", CorrectionEngine.parseCheckpoints((1...61).map { "\($0)" }.joined(separator: ",")) == nil)
 check("parseCheckpoints empty ''", CorrectionEngine.parseCheckpoints("") == nil)
 
-// MARK: - 11. TurkishDateParser — relative date/time parsing for voice reminders
+// MARK: - 11. Compound-word merge learning: two words -> one word
+
+do {
+    let oldText = "her şey bugün hazır"
+    let newText = "herşey bugün hazır"
+    let raws = CorrectionEngine.substitutionCandidates(
+        oldWords: CorrectionEngine.words(oldText),
+        newWords: CorrectionEngine.words(newText)
+    )
+    check("compound merge diff finds her şey -> herşey", raws.contains { $0.wrong == "her şey" && $0.right == "herşey" })
+    let accepted = raws.compactMap(CorrectionEngine.accept)
+    check("compound merge candidate is accepted", accepted.contains { $0.wrong == "her şey" && $0.right == "herşey" })
+    if let candidate = accepted.first(where: { $0.wrong == "her şey" && $0.right == "herşey" }) {
+        let (wrong, right) = CorrectionEngine.extractRoot(wrong: candidate.wrong, right: candidate.right)
+        check("compound merge keeps the full phrase", wrong == "her şey" && right == "herşey")
+        let pair = CorrectionEngine.LearnedPair(wrong: wrong, right: right)
+        let (applied, pairs) = CorrectionEngine.applyCorrections(
+            to: "Her şey güzel. Her şey tamam.",
+            pairs: [pair]
+        )
+        check("compound merge applies as one word", applied == "Herşey güzel. Herşey tamam.")
+        check("compound merge reports both applications", pairs.count == 2)
+    }
+}
+
+// MARK: - 12. TurkishDateParser — relative date/time parsing for voice reminders
 
 do {
     var cal = Calendar(identifier: .gregorian)
@@ -286,4 +311,3 @@ print("\n\(total - failures)/\(total) passed")
 if failures > 0 {
     exit(1)
 }
-

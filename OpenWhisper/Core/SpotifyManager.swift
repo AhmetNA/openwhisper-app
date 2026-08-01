@@ -574,29 +574,30 @@ final class SpotifyManager: @unchecked Sendable {
     /// "beğenilenlerime ekle" / "şarkıyı beğen".
     ///
     /// This used to PUT the track ID to `SpotifyWebAPI.addTrackToLikedSongs` using the
-    /// user's Keychain-backed OAuth token. That path is now dead: on this user's account,
-    /// Spotify's `/authorize` endpoint deterministically returns `error=server_error`
-    /// before a `code` is ever issued — reproduced across browsers, a re-verified Web API
-    /// dashboard registration, and a brand-new Spotify app from scratch. There is no
-    /// Keychain token to refresh into existence, so `SpotifyWebAPI.addTrackToLikedSongs`
-    /// cannot work here regardless of what this method does. See the comment on
-    /// `SpotifyWebAPI.addTrackToLikedSongs` — it's kept, not deleted, for if OAuth ever
-    /// gets unblocked independently of this method.
+    /// user's Keychain-backed OAuth token, and was switched to the local ⌥⇧B shortcut below
+    /// instead — but NOT because OAuth was broken. OAuth works fine (token exchange returns
+    /// HTTP 200, refresh token persists in the Keychain); the original switch was made under
+    /// a since-corrected belief that `/authorize` deterministically failed. See the comment
+    /// on `SpotifyWebAPI.addTrackToLikedSongs` for the current, accurate status — it's kept
+    /// unwired, not deleted, in case re-plumbing this method to call it is a deliberate
+    /// choice made later (not made by this comment fix).
     ///
-    /// Instead this sends Spotify's native ⌥⇧B "Save to Liked Songs" keyboard shortcut via
-    /// System Events. Empirically verified by the user on the current Spotify macOS client
-    /// (this is undocumented — Spotify's own AppleScript dictionary and menu bar expose no
-    /// like/love/save command at all, confirmed by dumping both; the shortcut is the only
-    /// working local hook).
+    /// This method still sends Spotify's native ⌥⇧B "Save to Liked Songs" keyboard shortcut
+    /// via System Events. Empirically verified by the user on the current Spotify macOS
+    /// client (this is undocumented — Spotify's own AppleScript dictionary and menu bar
+    /// expose no like/love/save command at all, confirmed by dumping both; the shortcut is
+    /// the only working local hook).
     ///
     /// IMPORTANT — this is a TOGGLE, not an idempotent "add": pressing it on an
     /// already-liked track REMOVES it from Liked Songs (also user-verified). There is no
-    /// local way to read whether the current track is already liked — that too would
-    /// require the same dead Web API token — so this method cannot know in advance which
-    /// direction the toggle will go. The notification text below is deliberately
-    /// non-committal ("beğeni durumu değiştirildi") instead of claiming "eklendi"
-    /// (added), because half the time that claim would be false. Do not "fix" that wording
-    /// to sound more confident without first solving the read side of this problem.
+    /// local way to read whether the current track is already liked from THIS method — it
+    /// has no track ID to check with, only the frontmost-Spotify keystroke path — so it
+    /// cannot know in advance which direction the toggle will go. The notification text
+    /// below is deliberately non-committal ("beğeni durumu değiştirildi") instead of
+    /// claiming "eklendi" (added), because half the time that claim would be false. Do not
+    /// "fix" that wording to sound more confident without first solving the read side of
+    /// this problem (which, now that OAuth is confirmed working, would mean wiring up
+    /// `/v1/me/tracks/contains` here — a separate change, not done by this comment fix).
     private func likeCurrentTrack(targetApp: NSRunningApplication?) async -> Bool {
         // Check Spotify is actually running before doing anything — `activate` below would
         // otherwise cold-launch Spotify just to toggle a track that was never playing,
@@ -785,7 +786,14 @@ final class SpotifyManager: @unchecked Sendable {
             }
             return true
         case .failure(let error):
-            return handleScriptError(error)
+            // KORU: preserve the known-cause-notification-already-sent convention (see
+            // `handleScriptError`'s doc comment and `likeCurrentTrack`'s identical pattern)
+            // — `handleScriptError` always returns `false`, which here would let
+            // `handleCommand` fall through to step 5 and paste/search the *original*
+            // "beğenilenler listesini çal" transcript as an unrelated search query on top
+            // of the failure notification this already sent.
+            _ = handleScriptError(error)
+            return true
         }
     }
 

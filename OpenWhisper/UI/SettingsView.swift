@@ -576,6 +576,10 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+
+                Text("Düzenlemeyi bitirince ⌥⇧C ile farkları hemen onaya gönder.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
         .onAppear {
