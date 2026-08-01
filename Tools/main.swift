@@ -1,9 +1,23 @@
 import Foundation
 
-// Standalone verification harness for CorrectionEngine — NOT part of the app target
-// (kept outside OpenWhisper/ so SwiftPM never compiles it into the executable).
+// Standalone verification harness — NOT part of the app target (kept outside
+// OpenWhisper/ so SwiftPM never compiles it into the executable).
+//
+// SpotifyManager.swift pulls in LocalMCPBridge.swift and SpotifyWebAPI.swift as
+// dependencies, and all three call the app's `owLog` (defined in
+// OpenWhisper/App/OpenWhisperApp.swift, alongside `@main`, which top-level-code files
+// like this one can't link against) — so a tiny local `owLog` stub is passed in its
+// place instead of pulling in the whole App/ target.
+//
 // Run with:
-//   swiftc Tools/CorrectionEngineHarness.swift OpenWhisper/Core/CorrectionEngine.swift -o /tmp/ce_harness && /tmp/ce_harness
+//   cat > /tmp/owlog_stub.swift <<'EOF'
+//   import Foundation
+//   func owLog(_ msg: String) {}
+//   EOF
+//   swiftc Tools/main.swift OpenWhisper/Core/CorrectionEngine.swift \
+//     OpenWhisper/Core/TurkishDateParser.swift OpenWhisper/Core/SpotifyManager.swift \
+//     OpenWhisper/Core/LocalMCPBridge.swift OpenWhisper/Core/SpotifyWebAPI.swift \
+//     /tmp/owlog_stub.swift -o /tmp/ow_harness && /tmp/ow_harness
 
 var failures = 0
 var total = 0
@@ -248,6 +262,24 @@ do {
     } else {
         check("'gelecek hafta diş randevusu' parses", false)
     }
+}
+
+// MARK: - 12. SpotifyManager.extractSearchQuery — Turkish "şarkı" command residue extraction
+
+do {
+    let sm = SpotifyManager.shared
+    check("'şarkıyı çal' -> empty residue (resume, not literal search)",
+          sm.extractSearchQuery("şarkıyı çal").isEmpty)
+    check("'şarkıyı durdur' residue is just 'durdur' (pause branch, unaffected by junk-word list)",
+          sm.extractSearchQuery("şarkıyı durdur") == "durdur")
+    check("'... şarkısına aç' junk word stripped: 'tarkan şarkısına aç' -> 'tarkan'",
+          sm.extractSearchQuery("tarkan şarkısına aç") == "tarkan")
+    check("'tarkan çal' -> 'tarkan' (step 5 search not shadowed by resume guard)",
+          sm.extractSearchQuery("tarkan çal") == "tarkan")
+    check("'sporda dinlemek için hareketli bir müzik aç' -> non-empty residue (mood search, not resume)",
+          !sm.extractSearchQuery("sporda dinlemek için hareketli bir müzik aç").isEmpty)
+    check("'müziği aç' -> empty residue (resume)",
+          sm.extractSearchQuery("müziği aç").isEmpty)
 }
 
 print("\n\(total - failures)/\(total) passed")

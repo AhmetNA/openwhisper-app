@@ -68,8 +68,7 @@ final class LocalMCPBridge: @unchecked Sendable {
         let mainBundlePath = Bundle.main.bundlePath
         let possiblePaths = [
             Bundle.main.path(forResource: "spotify_smart_mcp", ofType: "py"),
-            (mainBundlePath as NSString).deletingLastPathComponent + "/scripts/spotify_smart_mcp.py",
-            "/Users/ahmetna/Documents/Voice2TextLocal/app/scripts/spotify_smart_mcp.py"
+            (mainBundlePath as NSString).deletingLastPathComponent + "/scripts/spotify_smart_mcp.py"
         ]
 
         var scriptPath: String?

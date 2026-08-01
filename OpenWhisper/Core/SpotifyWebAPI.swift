@@ -165,6 +165,14 @@ actor SpotifyWebAPI {
         case notConnected            // no user refresh token stored
         case authorizationFailed(String)
         case alreadyInProgress       // a connect attempt is already waiting on the listener
+        // Player-endpoint-specific outcomes. Kept distinct from `authorizationFailed` and
+        // `unexpected` (rather than folded into them) because each has a different fix and
+        // conflating them into one generic message was exactly the trap `user-library-modify`
+        // fell into before (see the comment on `userScope` above) — a 403 with no explanation
+        // of which scope was missing or why.
+        case scopeInsufficient       // 403 on a player call: stored token predates the scope
+        case noActiveDevice          // 404 NO_ACTIVE_DEVICE: Spotify is open but not "active"
+        case premiumRequired         // 403 with "Premium required" in the response body
         case unexpected(String)
 
         var userMessage: String {
@@ -185,6 +193,12 @@ actor SpotifyWebAPI {
                 return "Bağlantı başarısız: \(detail)"
             case .alreadyInProgress:
                 return "Zaten bir bağlantı denemesi sürüyor — tarayıcıda tamamlayın ya da birkaç dakika bekleyin"
+            case .scopeInsufficient:
+                return "Listeyi çalmak için ek izin gerekiyor — Ayarlar > Spotify'dan yeniden bağlan"
+            case .noActiveDevice:
+                return "Spotify'da aktif bir cihaz bulunamadı — Spotify'ı açıp bir kez manuel çalmayı dene, sonra tekrar söyle"
+            case .premiumRequired:
+                return "Beğenilenler listesini çalmak için Spotify Premium gerekiyor"
             case .unexpected(let detail):
                 return "Beklenmeyen hata: \(detail)"
             }
@@ -195,6 +209,14 @@ actor SpotifyWebAPI {
         let uri: String
         let name: String
         let artist: String
+    }
+
+    /// One entry from `/v1/me/player/devices`.
+    struct SpotifyDevice {
+        let id: String
+        let isActive: Bool
+        let name: String
+        let type: String
     }
 
     /// One search result plus its raw track ID — the ID (not the `spotify:track:` URI) is
@@ -216,14 +238,17 @@ actor SpotifyWebAPI {
     static let redirectURI = "http://127.0.0.1:8888/callback"
     private static let redirectPort: UInt16 = 8888
     // `user-library-modify` was added alongside `addTrackToLikedSongs(trackID:)` below.
-    // Accounts connected before this change only hold a refresh token scoped to
-    // `user-library-read` and will get a 403 from the modify endpoint until the user
-    // reconnects via Ayarlar > Spotify (new consent grants both scopes at once).
+    // `user-modify-playback-state` and `user-read-playback-state` were added for
+    // `startPlayback`/`fetchAvailableDevices` (playing the Liked Songs queue via the Web
+    // API player endpoints instead of AppleScript's single-track `play track`). Accounts
+    // connected before any of these scopes were added only hold a refresh token scoped to
+    // the earlier set and will get a 403 from the corresponding endpoint until the user
+    // reconnects via Ayarlar > Spotify (new consent grants all current scopes at once).
     //
-    // NOTE: `addTrackToLikedSongs` is currently unused (see its doc comment) because the
-    // whole `/authorize` flow this scope feeds is broken for this user (`error=server_error`
-    // with no `code`). Left as-is, not removed, in case OAuth is unblocked later.
-    private static let userScope = "user-library-read user-library-modify"
+    // NOTE: `addTrackToLikedSongs` is currently unused (see its doc comment) — unrelated to
+    // OAuth, which works fine (token exchange returns HTTP 200 and the refresh token is
+    // persisted in the Keychain). Left as-is, not removed, in case it's wired up later.
+    private static let userScope = "user-library-read user-library-modify user-modify-playback-state user-read-playback-state"
     /// 5 minutes: a user who doesn't already have a Spotify session in their default
     /// browser needs time to log in (plus 2FA) before consenting. The original 2-minute
     /// window was routinely too short for that and indistinguishable from every other
@@ -291,23 +316,28 @@ actor SpotifyWebAPI {
         _ = try await validClientCredentialsToken()
     }
 
-    /// Fetches up to 50 of the user's Liked Songs and returns one at random (chosen
-    /// client-side, not via the API — there is no "random saved track" endpoint). Random
-    /// selection also means a rejected/unsupported playback context (see
-    /// `SpotifyManager.playLikedTrack`) still results in a different song each time the
-    /// command is used, rather than always the same most-recently-liked track.
+    /// Fetches up to 50 of the user's Liked Songs, in Spotify's default (most-recently-saved
+    /// first) order — the caller (`SpotifyManager.playLikedSongs`) shuffles this window
+    /// client-side before handing the URIs to the player endpoint.
+    ///
+    /// NOTE: this is a single unpaginated request (`limit=50`, no `offset`), so it always
+    /// returns the 50 most recently liked tracks, not a random sample of the whole library.
+    /// A true random sample would need to first read `total` from this same endpoint, then
+    /// re-request with a random `offset` — left as a known limitation for now (the previous
+    /// single-track version had the identical limitation, just applied after fetching instead
+    /// of before).
     ///
     /// Requires the user's own token — this is `/v1/me/tracks`, `user-library-read` scope,
     /// which a client-credentials (app-only) token cannot access at all. Throws
     /// `.notConnected` immediately rather than attempting the request and getting a
     /// confusing 401 back.
-    func fetchRandomLikedTrack() async throws -> TrackResult {
+    func fetchLikedTracksWindow(limit: Int = 50) async throws -> [TrackResult] {
         guard let token = await validUserAccessToken() else {
             throw SpotifyAPIError.notConnected
         }
 
         var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
-        components.queryItems = [URLQueryItem(name: "limit", value: "50")]
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
         guard let url = components.url else {
             throw SpotifyAPIError.unexpected("invalid liked tracks URL")
         }
@@ -350,20 +380,155 @@ actor SpotifyWebAPI {
             throw SpotifyAPIError.unexpected("malformed liked tracks response")
         }
 
-        let tracks: [SearchItem] = rawItems.compactMap { item in
+        let tracks: [TrackResult] = rawItems.compactMap { item in
             guard let track = item["track"] as? [String: Any],
-                  let id = track["id"] as? String,
                   let uri = track["uri"] as? String,
                   let name = track["name"] as? String else { return nil }
             let artists = track["artists"] as? [[String: Any]]
             let artist = (artists?.first?["name"] as? String) ?? ""
-            return SearchItem(id: id, uri: uri, name: name, artist: artist)
+            return TrackResult(uri: uri, name: name, artist: artist)
         }
 
-        guard let chosen = tracks.randomElement() else {
+        guard !tracks.isEmpty else {
             throw SpotifyAPIError.noResults
         }
-        return TrackResult(uri: chosen.uri, name: chosen.name, artist: chosen.artist)
+        return tracks
+    }
+
+    // MARK: - Public API — Playback (Web API player endpoints)
+
+    /// Starts playback of `uris` (max 100, per Spotify's limit) via `PUT
+    /// /v1/me/player/play`, which creates a real playback queue — next/previous/shuffle
+    /// all work through it, unlike AppleScript's per-track `play track` command. This is
+    /// the only way to actually "play a list" rather than a single track: Spotify's
+    /// AppleScript dictionary has no context/queue concept, and `spotify:collection:tracks`
+    /// (Liked Songs) is not a documented, working `context_uri` value either way.
+    ///
+    /// Every non-2xx response is logged to `owLog` with its full status code AND response
+    /// body before throwing — no silent fallback — because 403 alone is ambiguous between
+    /// "missing scope, reconnect in Settings" and "Premium required", and 404 here
+    /// specifically means "no active device", not "not found". See `SpotifyAPIError` cases
+    /// `scopeInsufficient` / `noActiveDevice` / `premiumRequired`.
+    func startPlayback(uris: [String], deviceID: String?) async throws {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+        guard !uris.isEmpty else {
+            throw SpotifyAPIError.noResults
+        }
+
+        var components = URLComponents(string: "https://api.spotify.com/v1/me/player/play")!
+        if let deviceID {
+            components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
+        }
+        guard let url = components.url else {
+            throw SpotifyAPIError.unexpected("invalid player play URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = requestTimeout
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["uris": Array(uris.prefix(100))])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyAPIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw SpotifyAPIError.unexpected("no HTTP response")
+        }
+
+        switch http.statusCode {
+        case 200, 202, 204:
+            return
+        case 401:
+            throw SpotifyAPIError.invalidCredentials
+        case 403:
+            let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
+            owLog("[Spotify] player play HTTP 403, body: \(bodyText)")
+            if bodyText.localizedCaseInsensitiveContains("premium") {
+                throw SpotifyAPIError.premiumRequired
+            }
+            throw SpotifyAPIError.scopeInsufficient
+        case 404:
+            let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
+            owLog("[Spotify] player play HTTP 404, body: \(bodyText)")
+            throw SpotifyAPIError.noActiveDevice
+        case 429:
+            throw SpotifyAPIError.rateLimited
+        default:
+            let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
+            owLog("[Spotify] player play HTTP \(http.statusCode), body: \(bodyText)")
+            throw SpotifyAPIError.unexpected("player play HTTP \(http.statusCode)")
+        }
+    }
+
+    /// Lists the user's available Spotify Connect devices via `GET
+    /// /v1/me/player/devices`. Needed because "Spotify is open" is not the same thing as
+    /// "there's an active device" — a freshly opened desktop client that hasn't played
+    /// anything yet has zero active devices and `startPlayback` would 404
+    /// (`NO_ACTIVE_DEVICE`) without ever calling this. Requires `user-read-playback-state`.
+    func fetchAvailableDevices() async throws -> [SpotifyDevice] {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+        guard let url = URL(string: "https://api.spotify.com/v1/me/player/devices") else {
+            throw SpotifyAPIError.unexpected("invalid devices URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = requestTimeout
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyAPIError.network(error)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw SpotifyAPIError.unexpected("no HTTP response")
+        }
+
+        switch http.statusCode {
+        case 200:
+            break
+        case 401:
+            throw SpotifyAPIError.invalidCredentials
+        case 403:
+            let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
+            owLog("[Spotify] devices HTTP 403, body: \(bodyText)")
+            throw SpotifyAPIError.scopeInsufficient
+        case 429:
+            throw SpotifyAPIError.rateLimited
+        default:
+            let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
+            owLog("[Spotify] devices HTTP \(http.statusCode), body: \(bodyText)")
+            throw SpotifyAPIError.unexpected("devices HTTP \(http.statusCode)")
+        }
+
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let rawDevices = json["devices"] as? [[String: Any]]
+        else {
+            throw SpotifyAPIError.unexpected("malformed devices response")
+        }
+
+        return rawDevices.compactMap { device in
+            guard let id = device["id"] as? String, let name = device["name"] as? String else { return nil }
+            let isActive = (device["is_active"] as? Bool) ?? false
+            let type = (device["type"] as? String) ?? ""
+            return SpotifyDevice(id: id, isActive: isActive, name: name, type: type)
+        }
     }
 
     /// Adds a track to the user's Liked Songs library. `trackID` is the raw Spotify ID

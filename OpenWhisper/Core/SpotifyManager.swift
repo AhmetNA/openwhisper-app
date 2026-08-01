@@ -10,10 +10,13 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Shared Command Table
     //
-    // Both the gate (`isSpotifyCommand`) and the handler (`handleCommand`) read from this
-    // single table so they can never drift out of sync. Order matters: more specific /
-    // longer phrases must come before shorter ones they contain (e.g. "müziği durdur"
-    // before bare "durdur") since matching is leading-prefix based.
+    // NOTE: only the gate (`isSpotifyCommand`, via `hasCommandPrefix`) reads this table.
+    // `handleCommand` was rewritten for MCP and now matches on its own `normalized.contains(...)`
+    // checks in each numbered step below — it does NOT consult `transportPrefixes`. Adding a
+    // row here only affects whether `isSpotifyCommand` accepts the utterance as a candidate;
+    // it does nothing to route it once inside `handleCommand`. Order still matters here for the
+    // gate's own leading-prefix matching: more specific / longer phrases must come before shorter
+    // ones they contain (e.g. "müziği durdur" before bare "durdur").
 
     private enum TransportCommand {
         case pause
@@ -21,12 +24,9 @@ final class SpotifyManager: @unchecked Sendable {
         case next
         case previous
         /// "beğenilenleri çal" and friends — play a random track from the user's Liked
-        /// Songs. Listed first in `transportPrefixes` (see that table's ordering note):
-        /// none of these phrases start with "spotify" or share a prefix with the
-        /// play-family entries below, but placing them first keeps this command
-        /// unambiguous against the generic play-family residue-as-search-query path
-        /// (step 1 in `handleCommand` always wins over step 2's bare "spotify ..." search
-        /// fallback, and these are checked as part of step 1).
+        /// Songs. Listed first in `transportPrefixes` purely so the gate (`isSpotifyCommand`)
+        /// accepts these phrases unambiguously. `handleCommand` does NOT read this table (see
+        /// the note above `transportPrefixes`) — its own liked-songs routing lives in step 3a.
         case playLiked
     }
 
@@ -97,11 +97,40 @@ final class SpotifyManager: @unchecked Sendable {
     /// Words stripped from a search-query residue. Filtered as whole words (not substring
     /// replacement) so we don't mangle artist/song names that happen to contain these
     /// letter sequences (e.g. "açık", "ağaç").
+    // "şarkı ..." inflections are stripped as whole words too — the trade-off is that a
+    // track literally titled just one of these words (e.g. "Şarkı Söylemek") would have
+    // that word stripped from its own search query. Accepted trade-off per product call.
     private static let searchJunkWords: Set<String> = [
         "spotifyda", "spotifydan", "spotifya", "spotify",
         "bana", "lütfen", "şarkısını", "şarkısı", "parçasını", "müziğini",
-        "çal", "aç", "oynat", "başlat", "dinlet", "play", "adlı"
+        "çal", "aç", "oynat", "başlat", "dinlet", "play", "adlı",
+        "şarkıyı", "şarkıya", "şarkısına", "şarkısıyla", "şarkı", "şarkılar",
+        "şarkıları", "şarkılarını", "parçayı", "parça", "müzik", "müziği"
     ]
+
+    /// Content-based (not prefix-based) matching for "play my Liked Songs" used by
+    /// `handleCommand` step 3a. Prefix matching via `hasCommandPrefix`/`transportPrefixes`
+    /// doesn't work here: `hasCommandPrefix` requires a space right after the prefix, so a
+    /// prefix like "beğenilen şarkılar" never matches "beğenilen şarkıları aç" (next char is
+    /// "ı", not a space). A noun (what) + verb (do) combination checked with plain
+    /// `.contains` against `Self.normalize`d text sidesteps that entirely.
+    private static let likedSongsNouns: Set<String> = [
+        "beğenilen", "beğenilenler", "beğendiklerim", "beğenilerim", "liked songs"
+    ]
+    private static let likedSongsVerbs: Set<String> = ["çal", "aç", "oynat", "liste"]
+
+    /// True for "beğenilen şarkıları aç", "beğenilerimin listesini çal", "liked songs çal",
+    /// etc. Excludes anything containing "ekle" ("beğenilerime ekle" = add current track to
+    /// Liked Songs, not play Liked Songs) so this can't shadow the Like branch (step 3) —
+    /// e.g. "çalan şarkıyı beğenilerime ekle" contains both a liked-noun ("beğenilerim") and,
+    /// incidentally, the "çal" verb substring (from "çalan"), but is clearly an add-to-liked
+    /// command, not a play-liked-songs command.
+    private static func isLikedSongsPlaybackCommand(_ normalized: String) -> Bool {
+        guard !normalized.contains("ekle") else { return false }
+        let hasNoun = likedSongsNouns.contains { normalized.contains($0) }
+        let hasVerb = likedSongsVerbs.contains { normalized.contains($0) }
+        return hasNoun && hasVerb
+    }
 
     private static let maxCommandWordCount = 8
 
@@ -177,6 +206,17 @@ final class SpotifyManager: @unchecked Sendable {
         return false
     }
 
+    /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
+    /// "ollamaModel", default "qwen3:8b"). SpotifyManager is a standalone singleton with no
+    /// AppState reference, so it reads the same UserDefaults key directly rather than
+    /// hardcoding a model — this used to hardcode "qwen2.5:7b", a model that isn't installed
+    /// (installed models are qwen3:8b, llama3.2:3b), so every classification request failed
+    /// and silently fell through to the heuristic fallback. See ReminderManager's identical
+    /// `selectedOllamaModel` for the same fix applied there.
+    private static var selectedOllamaModel: String {
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "qwen3:8b"
+    }
+
     /// Uses local Ollama LLM to classify whether the voice transcript is an intentional
     /// command to play music or control Spotify, rather than general dictation.
     private static func verifyIntentWithOllama(text: String) async -> Bool? {
@@ -213,9 +253,14 @@ final class SpotifyManager: @unchecked Sendable {
         request.timeoutInterval = 3
 
         let body: [String: Any] = [
-            "model": "qwen2.5:7b",
+            "model": selectedOllamaModel,
             "prompt": prompt,
             "stream": false,
+            // qwen3 (and other "thinking" models) emit a <think>...</think> block by default,
+            // which eats the num_predict budget and leaves "response" empty before any real
+            // output is produced. "think": false skips that. See ReminderManager's identical
+            // fix for the same failure mode.
+            "think": false,
             "options": [
                 "temperature": 0.0,
                 "num_predict": 30
@@ -274,10 +319,24 @@ final class SpotifyManager: @unchecked Sendable {
             result = true
         }
 
-        // 3. Like current track ("beğenilenlerime ekle", "beğendiklerime ekle", "şarkıyı beğen").
-        // Sends Spotify's native ⌥⇧B "Save to Liked Songs" keyboard shortcut instead of the
-        // Web API — see `likeCurrentTrack()` below for why.
-        if !result && (normalized.contains("beğenilenlerime") || normalized.contains("beğendiklerime") || normalized.contains("beğen")) {
+        // 3a. Play Liked Songs ("beğenilenleri çal", "beğenilen şarkıları aç", "beğenilerimin
+        // listesini çal", "liked songs çal"). Must be checked BEFORE the Like branch below —
+        // both branches key off "beğen..." substrings, and without this ordering "beğenilen
+        // şarkıları aç" would fall into the Like (single-track toggle) branch instead of
+        // actually playing the Liked Songs list. See `isLikedSongsPlaybackCommand` for why
+        // this is content-based rather than prefix-based matching.
+        if !result && Self.isLikedSongsPlaybackCommand(normalized) {
+            result = await playLikedSongs()
+            alreadyNotified = true
+        }
+
+        // 3b. Like current track ("beğenilerime ekle", "beğenilenlerime ekle",
+        // "beğendiklerime ekle", "şarkıyı beğen"). Sends Spotify's native ⌥⇧B "Save to Liked
+        // Songs" keyboard shortcut instead of the Web API — see `likeCurrentTrack()` below for
+        // why. Keyed off "ekle" (the verb in every real "add to Liked Songs" phrasing seen in
+        // logs) OR the literal "şarkıyı beğen" pattern, rather than a bare `contains("beğen")`,
+        // so this can't swallow the "play Liked Songs" phrasings handled by 3a above.
+        if !result && (normalized.contains("ekle") || normalized.contains("şarkıyı beğen")) {
             result = await likeCurrentTrack(targetApp: activeApp)
             alreadyNotified = true
         }
@@ -285,14 +344,34 @@ final class SpotifyManager: @unchecked Sendable {
         // 4. Basic Transport (pause, play, next, prev)
         if !result {
             if normalized.contains("durdur") || normalized.contains("kapat") || normalized.contains("pause") {
-                notificationText = await LocalMCPBridge.shared.playPause()
-                result = true
+                // Native AppleScript `pause` via `runTransport(.pause)`, NOT
+                // `LocalMCPBridge.shared.playPause()` — that's a TOGGLE, so it would
+                // start playback instead of pausing whenever music is already stopped,
+                // making "şarkıyı durdur" and "şarkıyı çal" the same command depending
+                // on current state. Mirrors the resume branch below for the same reason.
+                result = await runTransport(.pause)
+                alreadyNotified = true
             } else if normalized.contains("sonraki") || normalized.contains("next") {
                 notificationText = await LocalMCPBridge.shared.nextTrack()
                 result = true
             } else if normalized.contains("önceki") || normalized.contains("prev") {
                 notificationText = await LocalMCPBridge.shared.previousTrack()
                 result = true
+            } else if (normalized.contains("çal") || normalized.contains("aç") ||
+                       normalized.contains("oynat") || normalized.contains("başlat") ||
+                       normalized.contains("play")) && extractSearchQuery(normalized).isEmpty {
+                // Bare resume ("şarkıyı çal", "müziği aç") — no search terms remain once
+                // junk words (incl. "şarkı" inflections, see `searchJunkWords`) are
+                // stripped. `LocalMCPBridge.shared.playPause()` is a TOGGLE, not a
+                // dedicated resume, and would make this indistinguishable from the pause
+                // branch above — so this uses the native AppleScript `play` command via
+                // `runTransport(.play)` instead (which also verifies playback actually
+                // started via `confirmPlaying()` and sends its own notification).
+                // Guarded on the residue being empty so real search+play requests like
+                // "tarkan çal" or "... hareketli bir müzik aç" (non-empty residue) are
+                // NOT swallowed here — they fall through to step 5 as before.
+                result = await runTransport(.play)
+                alreadyNotified = true
             }
         }
 
@@ -303,8 +382,14 @@ final class SpotifyManager: @unchecked Sendable {
         // to opening the search screen without actually starting playback.
         if !result {
             let searchQuery = extractSearchQuery(normalized)
-            let q = searchQuery.isEmpty ? text : searchQuery
-            result = await playSearchQuery(q)
+            if searchQuery.isEmpty {
+                // No search terms AND step 4's guarded resume branch above didn't match
+                // (e.g. no çal/aç/oynat/başlat/play verb was even present) — resume
+                // playback rather than literally searching Spotify for raw junk text.
+                result = await runTransport(.play)
+            } else {
+                result = await playSearchQuery(searchQuery)
+            }
             alreadyNotified = true
         }
 
@@ -356,7 +441,7 @@ final class SpotifyManager: @unchecked Sendable {
         case .previous:
             fatalError("previous track is handled by runPreviousTrack(), not this switch")
         case .playLiked:
-            fatalError("playLiked is handled by playRandomLikedTrack(), not this switch")
+            fatalError("playLiked is handled by playLikedSongs(), not this switch")
         }
 
         switch runAppleScript(script) {
@@ -409,7 +494,9 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Search Query Extraction
 
-    private func extractSearchQuery(_ residue: String) -> String {
+    // Internal (not private) so the standalone Tools/main.swift harness can call it
+    // directly — it's a pure function of `searchJunkWords`, safe to exercise in isolation.
+    func extractSearchQuery(_ residue: String) -> String {
         let words = residue
             .lowercased()
             .replacingOccurrences(of: "'", with: "")
@@ -565,77 +652,136 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Liked Songs ("beğenilenleri çal")
 
-    /// "beğenilenleri çal" and its aliases: fetches the user's Liked Songs via the Web
-    /// API and plays a random one. Requires the user to have connected their account
-    /// (Settings > Spotify) — a client-credentials-only setup cannot read `/v1/me/tracks`
-    /// at all, so this is reported honestly rather than silently falling back to search.
-    private func playRandomLikedTrack() async -> Bool {
+    /// "beğenilenleri çal" and its aliases: fetches a window of the user's Liked Songs,
+    /// shuffles it client-side, and starts REAL queue playback of the whole list via the
+    /// Web API player endpoint (`SpotifyWebAPI.startPlayback`) — next/previous/shuffle all
+    /// keep working through the rest of the list afterward. Requires the user to have
+    /// connected their account (Settings > Spotify) with the player scopes
+    /// (`user-modify-playback-state`, `user-read-playback-state`) — a client-credentials-only
+    /// setup, or a token predating those scopes, cannot do this at all, so every failure
+    /// mode here is reported with a specific, actionable notification rather than a generic
+    /// one (see `SpotifyWebAPI.SpotifyAPIError`).
+    ///
+    /// PRIOR BEHAVIOR (dead, do not resurrect): this used to call AppleScript's
+    /// `play track "<uri>" in context "spotify:collection:tracks"`. Spotify's AppleScript
+    /// dictionary does not support arbitrary playback contexts, so that call always played
+    /// only the single named track — empirically confirmed, not a hypothesis. There is no
+    /// AppleScript-only fix for "play the whole list"; the Web API player endpoint is the
+    /// only way.
+    private func playLikedSongs() async -> Bool {
+        let tracks: [SpotifyWebAPI.TrackResult]
         do {
-            let track = try await SpotifyWebAPI.shared.fetchRandomLikedTrack()
-            return await playLikedTrack(uri: track.uri, name: track.name, artist: track.artist)
+            tracks = try await SpotifyWebAPI.shared.fetchLikedTracksWindow(limit: 50)
         } catch let error as SpotifyWebAPI.SpotifyAPIError {
             owLog("[Spotify] Liked Songs fetch failed: \(error)")
             sendNotification(title: "🎵 Spotify", body: error.userMessage)
-            // A recognized command that was declined for a known, already-explained
-            // reason (not connected, rate limited, etc.) — not a miss. Returning `true`
-            // here (matching `fallBackToSearchScreen`'s convention) keeps the transcript
-            // from also being pasted as dictation on top of the notification we just sent.
             return true
         } catch {
             owLog("[Spotify] Liked Songs fetch failed: \(error)")
             sendNotification(title: "🎵 Spotify", body: "Beğenilenler alınamadı: beklenmeyen hata")
             return true
         }
+
+        // Shuffle client-side: `uris` in the player call plays back in array order, so this
+        // is what makes repeated "beğenilenleri çal" commands not always start with the
+        // same most-recently-liked track. No extra API/scope needed for this part.
+        let shuffled = tracks.shuffled()
+        let uris = shuffled.map(\.uri)
+
+        let deviceID = await resolveActivePlaybackDevice()
+
+        do {
+            try await SpotifyWebAPI.shared.startPlayback(uris: uris, deviceID: deviceID)
+            sendNotification(title: "🎵 Spotify", body: "♪ Beğenilenler çalınıyor (\(uris.count) şarkı)")
+            return true
+        } catch let error as SpotifyWebAPI.SpotifyAPIError {
+            owLog("[Spotify] startPlayback failed: \(error)")
+            if case .premiumRequired = error {
+                // Honest downgrade to today's known-working behavior: a single track via
+                // AppleScript. Not the "whole list" experience, but Free accounts cannot
+                // get that from this API at all (player endpoints are Premium-only).
+                return await playSingleLikedTrackFallback(shuffled.first, reason: error.userMessage)
+            }
+            sendNotification(title: "🎵 Spotify", body: error.userMessage)
+            return true
+        } catch {
+            owLog("[Spotify] startPlayback failed: \(error)")
+            sendNotification(title: "🎵 Spotify", body: "Beğenilenler çalınamadı: beklenmeyen hata")
+            return true
+        }
     }
 
-    /// Plays a Liked Songs track within the "spotify:collection:tracks" context so
-    /// Spotify's next/previous/shuffle keep moving through the rest of the library —
-    /// unverified against a live account whether Spotify's AppleScript dictionary
-    /// actually accepts this context string (its docs don't list valid context URIs).
-    /// Falls back to the exact same track with a plain, context-less `play track` in two
-    /// distinct failure modes, since an unsupported context could plausibly show up as
-    /// either one: the AppleScript command itself erroring, OR "succeeding" while Spotify
-    /// silently plays nothing. Either way the fallback notification is explicit that only
-    /// that one track — not the whole library — ended up playing.
-    private func playLikedTrack(uri: String, name: String, artist: String) async -> Bool {
-        // Best-effort, applied before the context play below: if Spotify accepts the
-        // "spotify:collection:tracks" context, this makes next/previous continue shuffling
-        // through Liked Songs rather than playing in saved order. Not fatal if rejected —
-        // the single chosen track still plays either way, this only affects what happens
-        // to playback *after* it.
-        if case .failure(let error) = runAppleScript("tell application \"Spotify\" to set shuffling to true") {
-            owLog("[Spotify] Could not enable shuffle (non-fatal): \(error)")
+    /// Finds a device to target for `startPlayback`. Prefers whichever device Spotify
+    /// already reports as `is_active`; if none is active (most commonly: Spotify is open
+    /// but hasn't played anything yet, or was just launched), wakes Spotify locally via
+    /// AppleScript and checks the device list one more time before giving up. Returns nil
+    /// if still nothing is found — `startPlayback` is called without a `device_id` in that
+    /// case and will surface `SpotifyAPIError.noActiveDevice` (404) itself.
+    private func resolveActivePlaybackDevice() async -> String? {
+        if let deviceID = await firstUsableDevice() {
+            return deviceID
         }
 
-        let label = artist.isEmpty ? name : "\(artist) — \(name)"
+        owLog("[Spotify] No active device found, waking Spotify locally and retrying")
+        if case .failure(let error) = runAppleScript("tell application \"Spotify\" to activate") {
+            owLog("[Spotify] Could not activate Spotify to wake a device (non-fatal): \(error)")
+        }
+        // `activate` only foregrounds the client — it doesn't reliably register it as an
+        // active Spotify Connect device. A `play` nudge is what actually does that. This
+        // briefly plays whatever was last queued (if anything) for a moment before
+        // `startPlayback` immediately replaces it with the shuffled Liked Songs `uris` —
+        // an acceptable ~1.5s blip in exchange for not 404ing on a cold-launched client.
+        if case .failure(let error) = runAppleScript("tell application \"Spotify\" to play") {
+            owLog("[Spotify] Could not nudge Spotify to register as active device (non-fatal): \(error)")
+        }
+        // Give Spotify Connect a moment to register the freshly-launched/foregrounded
+        // client as a device before asking the API about it again.
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
 
-        let contextScript = "tell application \"Spotify\" to play track \"\(uri)\" in context \"spotify:collection:tracks\""
+        return await firstUsableDevice()
+    }
 
-        switch runAppleScript(contextScript) {
-        case .success:
-            if await confirmPlaying() {
-                sendNotification(title: "🎵 Spotify", body: "♪ Beğenilenlerden: \(label)")
-                return true
+    /// One `/v1/me/player/devices` lookup: prefers the `is_active` device, then the first
+    /// `"Computer"`-type device (so a phone/speaker listed alongside an idle desktop client
+    /// doesn't win playback while the user is sitting at their Mac), then whatever's first,
+    /// or nil if the call fails or the list is empty. Errors here are swallowed (logged, not
+    /// thrown) — this is a best-effort device pick; `startPlayback` reports the real,
+    /// user-facing error itself (scope 403 / device 404 / etc.) whether or not this
+    /// succeeded.
+    private func firstUsableDevice() async -> String? {
+        do {
+            let devices = try await SpotifyWebAPI.shared.fetchAvailableDevices()
+            let chosen = devices.first(where: { $0.isActive })
+                ?? devices.first(where: { $0.type == "Computer" })
+                ?? devices.first
+            if let chosen {
+                owLog("[Spotify] Chosen playback device: \(chosen.name) (type: \(chosen.type), active: \(chosen.isActive))")
             }
-            owLog("[Spotify] Liked Songs context play accepted but not confirmed playing, retrying without context")
-        case .failure(let contextError):
-            owLog("[Spotify] Liked Songs context play failed, retrying without context: \(contextError)")
+            return chosen?.id
+        } catch {
+            owLog("[Spotify] fetchAvailableDevices failed (non-fatal, startPlayback will report the real error): \(error)")
+            return nil
         }
+    }
 
-        let plainScript = "tell application \"Spotify\" to play track \"\(uri)\""
+    /// Premium-required fallback: plays exactly one track (the first of the shuffled
+    /// window) via AppleScript's plain `play track`, matching the app's pre-existing
+    /// single-track behavior for users without Premium (Web API player endpoints all
+    /// require Premium; there is no way to queue a whole list without them).
+    private func playSingleLikedTrackFallback(_ track: SpotifyWebAPI.TrackResult?, reason: String) async -> Bool {
+        guard let track else {
+            sendNotification(title: "🎵 Spotify", body: reason)
+            return true
+        }
+        let label = track.artist.isEmpty ? track.name : "\(track.artist) — \(track.name)"
+        let script = "tell application \"Spotify\" to play track \"\(track.uri)\""
 
-        switch runAppleScript(plainScript) {
+        switch runAppleScript(script) {
         case .success:
             if await confirmPlaying() {
-                sendNotification(
-                    title: "🎵 Spotify",
-                    body: "♪ \(label) (yalnızca bu şarkı çalınıyor, beğenilenler bağlamı desteklenmedi)"
-                )
+                sendNotification(title: "🎵 Spotify", body: "\(reason) — tek şarkı çalınıyor: ♪ \(label)")
             } else {
-                sendNotification(
-                    title: "🎵 Spotify",
-                    body: "Komut kabul edildi ama Spotify çalmıyor: ♪ \(label)"
-                )
+                sendNotification(title: "🎵 Spotify", body: "\(reason) — komut kabul edildi ama Spotify çalmıyor: ♪ \(label)")
             }
             return true
         case .failure(let error):
