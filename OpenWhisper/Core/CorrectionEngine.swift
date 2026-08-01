@@ -12,8 +12,11 @@ enum CorrectionEngine {
 
     // MARK: - Checkpoint Interval Settings
 
-    static let defaultCheckpointsString = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
-    static let defaultCheckpoints: [TimeInterval] = Array(1...30).map { TimeInterval($0) }
+    /// Sparse safety net for apps that do not expose AX value-change notifications.
+    /// Observer-capable apps do not use checkpoint timers at all.
+    static let defaultCheckpointsString = "3, 10, 30"
+    static let defaultCheckpoints: [TimeInterval] = [3, 10, 30]
+    static let legacyDefaultCheckpointsString = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
 
     /// Validate and parse a user-supplied comma-separated seconds string for checkpoint intervals.
     /// Returns sorted TimeInterval array if valid (1-60 items, each 1..300 integer seconds), or nil if invalid.

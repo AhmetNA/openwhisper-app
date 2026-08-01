@@ -52,6 +52,7 @@ final class DictationSnapshot {
     private var current: Boxed?
     private var generationCounter = 0
     private var checkpointTimers: [Timer] = []
+    private var observerDebounceTimer: Timer?
     private var axObserver: AXObserver?
     private var axObserverElement: AXUIElement?
     private var installedAt: Date?
@@ -62,7 +63,7 @@ final class DictationSnapshot {
     /// multiple checkpoint rereads from recording the same edit more than once per dictation.
     private var learnedInCurrentGen: Set<String> = []
 
-    /// Configured checkpoint intervals (seconds). Default: 1..30
+    /// Configured checkpoint intervals (seconds), used only when AXObserver is unavailable.
     private(set) var checkpointIntervals: [TimeInterval] = CorrectionEngine.defaultCheckpoints
 
     /// Raw comma-separated string persisted in UserDefaults.
@@ -76,7 +77,11 @@ final class DictationSnapshot {
     }
 
     private init() {
-        let stored = UserDefaults.standard.string(forKey: "correctionCheckpoints") ?? CorrectionEngine.defaultCheckpointsString
+        let storedValue = UserDefaults.standard.string(forKey: "correctionCheckpoints")
+        // Migrate the old every-second default while preserving a user's deliberate custom list.
+        let stored = storedValue == CorrectionEngine.legacyDefaultCheckpointsString
+            ? CorrectionEngine.defaultCheckpointsString
+            : (storedValue ?? CorrectionEngine.defaultCheckpointsString)
         if let parsed = CorrectionEngine.parseCheckpoints(stored) {
             self.checkpointsString = stored
             self.checkpointIntervals = parsed
@@ -176,8 +181,9 @@ final class DictationSnapshot {
         // Attempt instant AXObserver setup
         let observerActive = setupAXObserver(pid: boxed.pid, element: boxed.element)
 
-        // Schedule safety-net checkpoint timers
-        let intervals = checkpointIntervals
+        // AXObserver delivers the relevant edits immediately. Timers are needed only for apps
+        // which cannot provide that notification; otherwise they caused 30 needless wakeups.
+        let intervals = observerActive ? [] : checkpointIntervals
         for (index, interval) in intervals.enumerated() {
             let isLast = (index == intervals.count - 1)
             let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
@@ -236,8 +242,17 @@ final class DictationSnapshot {
 
     private func handleAXObserverEvent() {
         guard let boxed = current else { return }
-        owLog("[Corrections] AXObserver value change detected (gen \(boxed.generation))")
-        triggerReread(reason: "AXObserver event", isFinal: false)
+        // Text fields can emit a burst of value-change notifications for one user edit. Coalesce
+        // the burst before performing the cross-process AX read and diff.
+        observerDebounceTimer?.invalidate()
+        observerDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.current?.generation == boxed.generation else { return }
+                self.observerDebounceTimer = nil
+                owLog("[Corrections] AXObserver value change settled (gen \(boxed.generation))")
+                self.triggerReread(reason: "AXObserver event", isFinal: false)
+            }
+        }
     }
 
     // MARK: - Checkpoints & Invalidation
@@ -402,6 +417,8 @@ final class DictationSnapshot {
     }
 
     private func clearTimersAndObserver() {
+        observerDebounceTimer?.invalidate()
+        observerDebounceTimer = nil
         for timer in checkpointTimers {
             timer.invalidate()
         }

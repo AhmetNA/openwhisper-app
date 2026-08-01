@@ -9,6 +9,9 @@ final class FlowBarController {
     /// stale `hide()` completion can't `orderOut` a bar that's since been re-shown — e.g. a
     /// dictation ending and a new one starting in quick succession.
     private var isShown = false
+    /// SwiftUI updates fitting size on the next main-loop turn after a recording-state change.
+    /// A second, coalesced measurement keeps wider content centered.
+    private var recenterScheduled = false
 
     init(appState: AppState) {
         self.appState = appState
@@ -22,17 +25,19 @@ final class FlowBarController {
             createPanel()
         }
         centerPanelOnScreen()
-        guard !isShown else { return }
-        isShown = true
-        owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
-        panel?.alphaValue = 0
-        panel?.orderFront(nil)
+        if !isShown {
+            isShown = true
+            owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
+            panel?.alphaValue = 0
+            panel?.orderFront(nil)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            self.panel?.animator().alphaValue = 1
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.3
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.panel?.animator().alphaValue = 1
+            }
         }
+        recenterAfterContentLayout()
     }
 
     /// Hide the flow bar. Idempotent, and safe to race with a subsequent `show()` — the
@@ -59,6 +64,7 @@ final class FlowBarController {
     private func centerPanelOnScreen() {
         guard let panel = panel, let screen = NSScreen.main else { return }
         if let hostingView = panel.contentView {
+            hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
             if fittingSize.width > 0 && fittingSize.height > 0 {
                 panel.setContentSize(fittingSize)
@@ -70,6 +76,19 @@ final class FlowBarController {
         let y = screenFrame.minY + 16
         panel.setFrameOrigin(NSPoint(x: x, y: y))
         owLog("[FlowBar] Centered at (\(x), \(y)) with width \(panelWidth) on screen \(screenFrame)")
+    }
+
+    /// Re-measure after Observation/SwiftUI has rendered the new state (such as the
+    /// wider "transcribing" label) rather than reusing the waveform's former width.
+    private func recenterAfterContentLayout() {
+        guard !recenterScheduled else { return }
+        recenterScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.recenterScheduled = false
+            guard self.isShown else { return }
+            self.centerPanelOnScreen()
+        }
     }
 
     /// Show a brief "done" flash, then shrink back to idle pill

@@ -45,14 +45,14 @@ cp mic-guard.sh ~/.local/bin/mic-guard.sh
 chmod +x ~/.local/bin/mic-guard.sh
 
 # 2. launch agent (edit the plist path if your username differs)
-cp com.raja.micguard.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.raja.micguard.plist
+cp com.openwhisper.micguard.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.openwhisper.micguard.plist
 ```
 
 Disable anytime:
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.raja.micguard.plist
+launchctl unload ~/Library/LaunchAgents/com.openwhisper.micguard.plist
 ```
 
 ## Handy aliases (optional, add to `~/.zshrc`)
@@ -68,5 +68,8 @@ alias micnow='SwitchAudioSource -c -t input'                           # show cu
 - Device names in `mic-guard.sh` (`OnePlus Nord Buds 3r`, `MacBook Pro
   Microphone`) are hardcoded — change them for your hardware. List names with
   `SwitchAudioSource -a -t input`.
-- Poll interval is 10s (`StartInterval` in the plist); it only acts on an
-  absent→present transition of the buds.
+- macOS does not expose a reliable standalone Bluetooth connection notification to this
+  shell-only LaunchAgent. Its conservative fallback checks once per minute
+  (`StartInterval` in the plist) and only acts on an absent→present transition of the buds.
+  This removes five out of every six former idle wakeups; a newly connected buds pair can take
+  up to one minute to be corrected.

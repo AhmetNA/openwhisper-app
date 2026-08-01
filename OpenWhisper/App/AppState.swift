@@ -289,9 +289,9 @@ final class AppState {
         }
 
         // Start duration timer
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.recordingDuration += 0.1
+                self?.recordingDuration += 0.25
             }
         }
 

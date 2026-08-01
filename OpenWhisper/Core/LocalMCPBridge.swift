@@ -31,9 +31,44 @@ final class LocalMCPBridge: @unchecked Sendable {
 
     static let shared = LocalMCPBridge()
     private let state = BridgeState()
+    private let idleTimeout: TimeInterval = 120
+    private var idleShutdownGeneration = 0
 
-    private init() {
-        startServerIfNeeded()
+    private init() {}
+
+    private func cancelIdleShutdown() {
+        state.withLock { idleShutdownGeneration += 1 }
+    }
+
+    private func scheduleIdleShutdown() {
+        let generation = state.withLock { () -> Int in
+            idleShutdownGeneration += 1
+            return idleShutdownGeneration
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + idleTimeout) { [weak self] in
+            self?.shutdownIfIdle(generation: generation)
+        }
+    }
+
+    private func shutdownIfIdle(generation: Int) {
+        let processToTerminate = state.withLock { () -> Process? in
+            guard generation == idleShutdownGeneration,
+                  state.pendingContinuations.isEmpty,
+                  let process = state.process,
+                  process.isRunning else { return nil }
+            state.process = nil
+            state.stdinPipe?.fileHandleForWriting.closeFile()
+            state.stdoutPipe?.fileHandleForReading.readabilityHandler = nil
+            state.stderrPipe?.fileHandleForReading.readabilityHandler = nil
+            state.stdinPipe = nil
+            state.stdoutPipe = nil
+            state.stderrPipe = nil
+            state.stdoutBuffer.removeAll()
+            return process
+        }
+        guard let processToTerminate else { return }
+        owLog("[MCPBridge] Stopping idle Spotify MCP Server after \(Int(idleTimeout))s.")
+        processToTerminate.terminate()
     }
 
     /// Locates and launches `spotify_smart_mcp.py` as a background process.
@@ -212,6 +247,7 @@ final class LocalMCPBridge: @unchecked Sendable {
 
     /// Sends a JSON-RPC request to the MCP server with a 3-second timeout.
     private func executeTool(name: String, arguments: [String: Any] = [:]) async -> String {
+        cancelIdleShutdown()
         startServerIfNeeded()
 
         let (currentStdin, currentID) = state.withLock { () -> (FileHandle?, Int) in
@@ -240,7 +276,7 @@ final class LocalMCPBridge: @unchecked Sendable {
 
         jsonString += "\n"
 
-        return await withTaskGroup(of: String.self) { group in
+        let result = await withTaskGroup(of: String.self) { group in
             group.addTask {
                 await withCheckedContinuation { continuation in
                     self.state.withLock {
@@ -277,6 +313,8 @@ final class LocalMCPBridge: @unchecked Sendable {
             }
             return "MCP işlemi tamamlandı."
         }
+        scheduleIdleShutdown()
+        return result
     }
 
     private func sendRawRequest(method: String, params: [String: Any]) {

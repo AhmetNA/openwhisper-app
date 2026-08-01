@@ -15,6 +15,8 @@ final class AudioEngine: @unchecked Sendable {
     private var samples: [Float] = []
     private var inputSampleRate: Double = 48000
     private var levelCallback: ((Float) -> Void)?
+    private var lastLevelUpdate = Date.distantPast
+    private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
 
     /// Request microphone permission (call before first recording)
     func requestPermission() async -> Bool {
@@ -31,6 +33,7 @@ final class AudioEngine: @unchecked Sendable {
     /// otherwise the system default input is used.
     func startRecording(deviceUID: String?, levelCallback: @escaping (Float) -> Void) {
         self.levelCallback = levelCallback
+        lastLevelUpdate = .distantPast
         lock.lock()
         samples = []
         lock.unlock()
@@ -60,9 +63,15 @@ final class AudioEngine: @unchecked Sendable {
             guard let channelData = buffer.floatChannelData?[0] else { return }
             let frameLength = Int(buffer.frameLength)
 
-            var rms: Float = 0
-            vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameLength))
-            self.levelCallback?(rms)
+            // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
+            // microphone sample for transcription.
+            let now = Date()
+            if now.timeIntervalSince(self.lastLevelUpdate) >= self.levelUpdateInterval {
+                var rms: Float = 0
+                vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameLength))
+                self.lastLevelUpdate = now
+                self.levelCallback?(rms)
+            }
 
             let channelSamples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
             self.lock.lock()

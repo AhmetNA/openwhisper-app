@@ -5,7 +5,6 @@ final class AudioDucker: @unchecked Sendable {
     static let shared = AudioDucker()
 
     private var originalVolume: Int?
-    private var fadeTimer: Timer?
     private let lock = NSLock()
 
     private init() {}
@@ -14,12 +13,6 @@ final class AudioDucker: @unchecked Sendable {
     func duckVolume(targetVolume: Int = 15) {
         lock.lock()
         defer { lock.unlock() }
-
-        // Cancel any active restoration fade timer if Fn is pressed again quickly
-        DispatchQueue.main.async {
-            self.fadeTimer?.invalidate()
-            self.fadeTimer = nil
-        }
 
         guard originalVolume == nil else { return } // already ducked
 
@@ -31,7 +24,8 @@ final class AudioDucker: @unchecked Sendable {
         }
     }
 
-    /// Smoothly restore system volume back to original level over ~0.35s when dictation ends
+    /// Restore in one AppleScript call. The previous 10-step fade spawned ten independent
+    /// AppleScript executions for a short cosmetic animation after every dictation.
     func restoreVolume() {
         lock.lock()
         guard let target = originalVolume else {
@@ -44,29 +38,8 @@ final class AudioDucker: @unchecked Sendable {
         let current = getCurrentVolume()
         guard current < target else { return }
 
-        let steps = 10
-        let interval = 0.035 // 35ms per step -> ~0.35s total smooth fade-in
-        let stepDelta = Double(target - current) / Double(steps)
-
-        DispatchQueue.main.async {
-            self.fadeTimer?.invalidate()
-            var currentStep = 0
-            var runningVolume = Double(current)
-
-            self.fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { timer in
-                currentStep += 1
-                runningVolume += stepDelta
-                let vol = min(Int(round(runningVolume)), target)
-                self.setSystemVolume(vol)
-
-                if currentStep >= steps || vol >= target {
-                    timer.invalidate()
-                    self.fadeTimer = nil
-                    self.setSystemVolume(target)
-                    owLog("[AudioDucker] Smooth fade-in completed to \(target)%")
-                }
-            }
-        }
+        setSystemVolume(target)
+        owLog("[AudioDucker] Restored volume to \(target)%")
     }
 
     private func getCurrentVolume() -> Int {

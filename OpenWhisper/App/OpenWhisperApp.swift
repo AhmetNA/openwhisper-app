@@ -1,6 +1,30 @@
 import SwiftUI
 import UserNotifications
 
+enum OpenWhisperNotification {
+    /// Results such as "a song started" are useful briefly, but should not accumulate in
+    /// Notification Center. Errors remain visible until the user clears them.
+    static func post(title: String, body: String, isError: Bool, identifierPrefix: String) {
+        let identifier = "\(identifierPrefix)-\(UUID().uuidString)"
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = isError ? .default : nil
+
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: identifier, content: content, trigger: nil),
+            withCompletionHandler: nil
+        )
+
+        guard !isError else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            // Remove both forms in case macOS delayed delivery while the app was busy.
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+        }
+    }
+}
+
 func owLog(_ msg: String) {
     let line = "\(Date()): \(msg)\n"
     let path = "/tmp/openwhisper.log"

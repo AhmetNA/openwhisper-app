@@ -872,17 +872,11 @@ final class SpotifyManager: @unchecked Sendable {
     // MARK: - Notification
 
     private func sendNotification(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-
-        let request = UNNotificationRequest(
-            identifier: "spotify-\(UUID().uuidString)",
-            content: content,
-            trigger: nil
-        )
-
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        let text = "\(title) \(body)".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let isError = [
+            "error", "hata", "başarısız", "gerekli", "çalışmıyor", "çalınamadı",
+            "çalmıyor", "bulunamadı", "öne getirilemedi", "zaman aşımı", "not connected"
+        ].contains { text.contains($0) }
+        OpenWhisperNotification.post(title: title, body: body, isError: isError, identifierPrefix: "spotify")
     }
 }

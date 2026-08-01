@@ -468,12 +468,8 @@ struct SettingsView: View {
     }
 
     private func postSpotifyConnectNotification(body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "🎵 Spotify"
-        content.body = body
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: "spotify-connect-\(UUID().uuidString)", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+        let isError = body.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains("başarısız")
+        OpenWhisperNotification.post(title: "🎵 Spotify", body: body, isError: isError, identifierPrefix: "spotify-connect")
     }
 
     private func disconnectSpotifyAccount() {

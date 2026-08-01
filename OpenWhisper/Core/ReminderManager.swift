@@ -407,22 +407,8 @@ final class ReminderManager {
     // MARK: - Instant Confirmation Notification
 
     private func sendConfirmation(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-
-        let request = UNNotificationRequest(
-            identifier: "confirmation-\(UUID().uuidString)",
-            content: content,
-            trigger: nil // fires immediately
-        )
-
-        notificationCenter.add(request) { error in
-            if let error = error {
-                owLog("[Reminders] Confirmation notification error: \(error)")
-            }
-        }
+        let isError = title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current).contains("anlaşılamadı")
+        OpenWhisperNotification.post(title: title, body: body, isError: isError, identifierPrefix: "reminder-confirmation")
     }
 
     // MARK: - Persistence
