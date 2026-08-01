@@ -1,9 +1,9 @@
 #!/bin/bash
 # OpenWhisper — one-line install & update script
-# Usage: curl -fsSL https://raw.githubusercontent.com/Rajvardhman05/openwhisper-app/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/AhmetNA/openwhisper-app/main/install.sh | bash
 set -e
 
-REPO="https://github.com/Rajvardhman05/openwhisper-app.git"
+REPO="https://github.com/AhmetNA/openwhisper-app.git"
 INSTALL_DIR="$HOME/.openwhisper"
 
 echo "==> OpenWhisper installer"

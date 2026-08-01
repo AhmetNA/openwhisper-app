@@ -3,11 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.raja.micguard</string>
+    <string>com.openwhisper.micguard</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/rajvardhman/.local/bin/mic-guard.sh</string>
+        <string>-c</string>
+        <string>"$HOME/.local/bin/mic-guard.sh"</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
