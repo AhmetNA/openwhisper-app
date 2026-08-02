@@ -9,11 +9,38 @@ struct AudioInputDevice: Identifiable, Hashable, Sendable {
     let isBluetooth: Bool
 }
 
+/// A bounded, immutable Whisper-ready audio unit. `overlapSampleCount` describes the leading
+/// audio repeated from the preceding unit so the transcript owner can de-duplicate text safely.
+struct CompletedAudioSegment: Sendable {
+    let samples: [Float]
+    let overlapSampleCount: Int
+}
+
 final class AudioEngine: @unchecked Sendable {
+    /// Fixed-size storage avoids allocating a Swift Array for every input callback. The final
+    /// contiguous array is intentionally produced only at the existing `stopRecording()` API
+    /// boundary, immediately before WhisperKit consumes it.
+    private final class SampleChunk {
+        var values: [Float]
+        var count = 0
+
+        init(capacity: Int) {
+            values = Array(repeating: 0, count: capacity)
+        }
+    }
+
+    private static let targetSampleRate: Double = 16_000
+    private static let chunkCapacity = 16_384
+
     private var engine = AVAudioEngine()
     private let lock = NSLock()
-    private var samples: [Float] = []
-    private var inputSampleRate: Double = 48000
+    private var sampleChunks: [SampleChunk] = []
+    private var capturedSampleCount = 0
+    private var converter: AVAudioConverter?
+    private var convertedBuffer: AVAudioPCMBuffer?
+    private var segmentCallback: (@Sendable (CompletedAudioSegment) -> Void)?
+    private var leadingOverlapSampleCount = 0
+    private let segmentDeliveryQueue = DispatchQueue(label: "com.openwhisper.audio-segments")
     private var levelCallback: ((Float) -> Void)?
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
@@ -31,11 +58,20 @@ final class AudioEngine: @unchecked Sendable {
 
     /// Start recording. If `deviceUID` is non-nil, route AUHAL to that input device;
     /// otherwise the system default input is used.
-    func startRecording(deviceUID: String?, levelCallback: @escaping (Float) -> Void) {
+    func startRecording(
+        deviceUID: String?,
+        levelCallback: @escaping (Float) -> Void,
+        completedSegmentCallback: (@Sendable (CompletedAudioSegment) -> Void)? = nil
+    ) {
         self.levelCallback = levelCallback
         lastLevelUpdate = .distantPast
         lock.lock()
-        samples = []
+        sampleChunks = []
+        capturedSampleCount = 0
+        converter = nil
+        convertedBuffer = nil
+        segmentCallback = completedSegmentCallback
+        leadingOverlapSampleCount = 0
         lock.unlock()
 
         // Always start from a fresh engine so any prior HAL claim is fully released
@@ -55,8 +91,35 @@ final class AudioEngine: @unchecked Sendable {
         }
 
         let format = inputNode.outputFormat(forBus: 0)
-        inputSampleRate = format.sampleRate
         owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
+
+        guard let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Self.targetSampleRate,
+            channels: 1,
+            interleaved: false
+        ), let converter = AVAudioConverter(from: format, to: targetFormat) else {
+            owLog("[AudioEngine] Failed to create 16kHz recording converter")
+            return
+        }
+
+        // The tap buffer size is 4096 frames. Keep one reusable destination buffer for the
+        // whole recording, with enough headroom for sample-rate expansion and converter delay.
+        let outputCapacity = AVAudioFrameCount(
+            ceil(Double(4096) * Self.targetSampleRate / format.sampleRate) + 256
+        )
+        guard let convertedBuffer = AVAudioPCMBuffer(
+            pcmFormat: targetFormat,
+            frameCapacity: max(outputCapacity, 1)
+        ) else {
+            owLog("[AudioEngine] Failed to allocate 16kHz recording buffer")
+            return
+        }
+
+        lock.lock()
+        self.converter = converter
+        self.convertedBuffer = convertedBuffer
+        lock.unlock()
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             guard let self else { return }
@@ -73,9 +136,8 @@ final class AudioEngine: @unchecked Sendable {
                 self.levelCallback?(rms)
             }
 
-            let channelSamples = Array(UnsafeBufferPointer(start: channelData, count: frameLength))
             self.lock.lock()
-            self.samples.append(contentsOf: channelSamples)
+            self.convert(buffer)
             self.lock.unlock()
         }
 
@@ -97,75 +159,163 @@ final class AudioEngine: @unchecked Sendable {
         levelCallback = nil
 
         lock.lock()
-        let captured = samples
-        samples = []
+        flushConverter()
+        let captured = flattenedSamples()
+        let callback = segmentCallback
+        let finalOverlap = leadingOverlapSampleCount
+        sampleChunks = []
+        capturedSampleCount = 0
+        converter = nil
+        convertedBuffer = nil
+        segmentCallback = nil
+        leadingOverlapSampleCount = 0
         lock.unlock()
 
-        guard !captured.isEmpty else { return nil }
-        return resampleTo16kHz(captured, fromRate: inputSampleRate)
+        // Segmented callers receive the final bounded unit through the same ordered callback
+        // path. Legacy callers keep the original return-value behavior unchanged.
+        if let callback {
+            if !captured.isEmpty {
+                deliver(CompletedAudioSegment(samples: captured, overlapSampleCount: finalOverlap), to: callback)
+            }
+            return nil
+        }
+        return captured.isEmpty ? nil : captured
     }
 
-    // MARK: - Resampling
-
-    private func resampleTo16kHz(_ input: [Float], fromRate: Double) -> [Float]? {
-        let targetRate: Double = 16000
-
-        if abs(fromRate - targetRate) < 1.0 {
-            return input
-        }
-
-        guard let inputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: fromRate,
-            channels: 1,
-            interleaved: false
-        ),
-        let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetRate,
-            channels: 1,
-            interleaved: false
-        ),
-        let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            return nil
-        }
-
-        let inputFrameCount = AVAudioFrameCount(input.count)
-        guard let inputBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: inputFrameCount) else {
-            return nil
-        }
-        inputBuffer.frameLength = inputFrameCount
-        if let dest = inputBuffer.floatChannelData?[0] {
-            input.withUnsafeBufferPointer { src in
-                dest.initialize(from: src.baseAddress!, count: input.count)
+    /// Allows an async owner to establish that all callbacks queued before this call have begun
+    /// and finished. Segment callbacks themselves must not synchronously call this method.
+    func waitForCompletedSegmentDelivery() async {
+        await withCheckedContinuation { continuation in
+            segmentDeliveryQueue.async {
+                continuation.resume()
             }
         }
+    }
 
-        let ratio = targetRate / fromRate
-        let outputFrameCount = AVAudioFrameCount(Double(input.count) * ratio) + 100
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputFrameCount) else {
-            return nil
-        }
+    // MARK: - Streaming conversion and storage
 
-        var consumed = false
+    /// Runs the one converter instance throughout a recording so resampling filter state is
+    /// continuous across input buffers. This work stays inside the audio callback, but only
+    /// copies the already-required 16kHz output into fixed-size storage.
+    private func convert(_ inputBuffer: AVAudioPCMBuffer) {
+        guard let converter, let convertedBuffer else { return }
+
+        convertedBuffer.frameLength = 0
+        var suppliedInput = false
         var error: NSError?
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-            if consumed {
-                outStatus.pointee = .endOfStream
+        converter.convert(to: convertedBuffer, error: &error) { _, status in
+            if suppliedInput {
+                status.pointee = .noDataNow
                 return nil
             }
-            consumed = true
-            outStatus.pointee = .haveData
+            suppliedInput = true
+            status.pointee = .haveData
             return inputBuffer
         }
 
         guard error == nil,
-              let channelData = outputBuffer.floatChannelData?[0],
-              outputBuffer.frameLength > 0 else {
-            return nil
+              let output = convertedBuffer.floatChannelData?[0],
+              convertedBuffer.frameLength > 0 else { return }
+        appendSamples(output, count: Int(convertedBuffer.frameLength))
+        emitCompletedSegmentIfNeeded()
+    }
+
+    /// Drains converter delay after the tap is removed, preserving the tail of the recording.
+    private func flushConverter() {
+        guard let converter, let convertedBuffer else { return }
+
+        while true {
+            convertedBuffer.frameLength = 0
+            var error: NSError?
+            let status = converter.convert(to: convertedBuffer, error: &error) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+
+            guard error == nil,
+                  let output = convertedBuffer.floatChannelData?[0],
+                  convertedBuffer.frameLength > 0 else { break }
+            appendSamples(output, count: Int(convertedBuffer.frameLength))
+
+            if status == .endOfStream { break }
+        }
+    }
+
+    private func appendSamples(_ source: UnsafePointer<Float>, count: Int) {
+        var sourceOffset = 0
+        while sourceOffset < count {
+            let chunk: SampleChunk
+            if let last = sampleChunks.last, last.count < last.values.count {
+                chunk = last
+            } else {
+                chunk = SampleChunk(capacity: Self.chunkCapacity)
+                sampleChunks.append(chunk)
+            }
+
+            let writable = min(chunk.values.count - chunk.count, count - sourceOffset)
+            chunk.values.withUnsafeMutableBufferPointer { destination in
+                destination.baseAddress!.advanced(by: chunk.count).update(
+                    from: source.advanced(by: sourceOffset),
+                    count: writable
+                )
+            }
+            chunk.count += writable
+            capturedSampleCount += writable
+            sourceOffset += writable
+        }
+    }
+
+    private func flattenedSamples() -> [Float] {
+        var result: [Float] = []
+        result.reserveCapacity(capturedSampleCount)
+        for chunk in sampleChunks where chunk.count > 0 {
+            result.append(contentsOf: chunk.values.prefix(chunk.count))
+        }
+        return result
+    }
+
+    /// Keeps only the still-active segment in AudioEngine memory. AudioSegmentation chooses the
+    /// exact same silence-preferred cut used by the post-recording path; retaining one second of
+    /// prior audio gives the next unit context without retaining completed recordings.
+    private func emitCompletedSegmentIfNeeded() {
+        guard let callback = segmentCallback,
+              capturedSampleCount > AudioSegmentation.maximumDuration * AudioSegmentation.sampleRate else {
+            return
         }
 
-        return Array(UnsafeBufferPointer(start: channelData, count: Int(outputBuffer.frameLength)))
+        let activeSamples = flattenedSamples()
+        let segments = AudioSegmentation.makeSegments(from: activeSamples)
+        guard segments.count > 1, let completed = segments.first else { return }
+
+        let completedSamples = Array(completed.samples)
+        let completedOverlap = leadingOverlapSampleCount
+        let retainedOverlap = min(
+            AudioSegmentation.overlapDuration * AudioSegmentation.sampleRate,
+            completedSamples.count
+        )
+        let remainingSamples = Array(activeSamples[(completedSamples.count - retainedOverlap)...])
+
+        sampleChunks = []
+        capturedSampleCount = 0
+        remainingSamples.withUnsafeBufferPointer { source in
+            if let baseAddress = source.baseAddress {
+                appendSamples(baseAddress, count: remainingSamples.count)
+            }
+        }
+        leadingOverlapSampleCount = retainedOverlap
+        deliver(
+            CompletedAudioSegment(samples: completedSamples, overlapSampleCount: completedOverlap),
+            to: callback
+        )
+    }
+
+    private func deliver(
+        _ segment: CompletedAudioSegment,
+        to callback: @escaping @Sendable (CompletedAudioSegment) -> Void
+    ) {
+        segmentDeliveryQueue.async {
+            callback(segment)
+        }
     }
 
     // MARK: - Device enumeration

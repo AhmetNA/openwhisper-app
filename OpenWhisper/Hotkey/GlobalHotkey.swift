@@ -107,6 +107,9 @@ final class GlobalHotkey {
     }
 
     /// Register monitors for Fn/Globe hold-to-talk and Fn+Space hands-free toggle.
+    ///
+    /// The flags monitors stay registered so an idle Fn press can begin dictation. The more
+    /// expensive key-down tap is intentionally armed only for an active dictation session.
     func register() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
@@ -117,7 +120,6 @@ final class GlobalHotkey {
             return event
         }
 
-        installSpaceEventTap()
     }
 
     func unregister() {
@@ -129,6 +131,22 @@ final class GlobalHotkey {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
         }
+        endActiveKeyDownCapture()
+    }
+
+    /// Arms the key-down event tap for an active dictation session.
+    ///
+    /// This is idempotent so AppState may call it alongside the automatic Fn/Globe path
+    /// without creating a second tap. Keep this capture limited to the period where
+    /// hands-free stop keys and dictation shortcuts are meaningful.
+    func beginActiveKeyDownCapture() {
+        installSpaceEventTap()
+    }
+
+    /// Disarms the key-down event tap after dictation has ended or been cancelled.
+    ///
+    /// This is idempotent and is safe to call on every terminal recording path.
+    func endActiveKeyDownCapture() {
         removeSpaceEventTap()
     }
 
@@ -146,6 +164,9 @@ final class GlobalHotkey {
             if fnPressed {
                 mode = .holding
                 fnPressTime = Date()
+                // The Fn flags event arrives before the following Space key-down, so this
+                // makes Fn+Space available without paying for a permanent key-down tap.
+                beginActiveKeyDownCapture()
                 onPress()
             } else if pendingSwap {
                 // Fn released after a recognized swap gesture — safe now to post the
@@ -157,6 +178,7 @@ final class GlobalHotkey {
             if !fnPressed {
                 mode = .idle
                 onRelease()
+                endActiveKeyDownCapture()
             }
         case .handsFree:
             // Hands-free recording ignores Fn presses — only Space toggles it off.
@@ -194,6 +216,7 @@ final class GlobalHotkey {
         case .handsFree:
             mode = .idle
             onRelease()
+            endActiveKeyDownCapture()
             return true
         }
     }
@@ -203,6 +226,7 @@ final class GlobalHotkey {
         guard mode == .handsFree else { return false }
         mode = .idle
         onRelease()
+        endActiveKeyDownCapture()
         return true
     }
 
