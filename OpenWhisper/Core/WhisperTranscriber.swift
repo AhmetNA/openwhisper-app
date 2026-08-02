@@ -225,6 +225,16 @@ final class WhisperTranscriber: @unchecked Sendable {
             )
         }
 
+        // Whisper can hallucinate the Turkish subtitle-credit phrase "Altyazı M.K."
+        // at the end of a recording, especially when the recording ends in silence.
+        // Remove only a terminal credit-shaped suffix; an occurrence in the middle of
+        // an intentionally dictated sentence must remain untouched.
+        let filteredText = Self.removeTrailingSubtitleCredit(from: text)
+        if filteredText != text {
+            owLog("[Whisper] Removed hallucinated trailing subtitle credit")
+            text = filteredText
+        }
+
         // Filter out Whisper hallucinations on silence/noise
         let hallucinations: Set<String> = [
             "Thank you.", "Thanks for watching.", "Subscribe.",
@@ -237,6 +247,14 @@ final class WhisperTranscriber: @unchecked Sendable {
         if text.count < 3 { return "" }  // Too short to be meaningful
 
         return text
+    }
+
+    private static func removeTrailingSubtitleCredit(from text: String) -> String {
+        let pattern = #"(?is)(?:^|\s)altyaz(?:ı|i)\s+m\.?\s*k\.?\s*[.!?…]*\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let filtered = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Runs a single WhisperKit decode pass with the given (optional) glossary prompt tokens.
