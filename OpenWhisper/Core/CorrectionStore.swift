@@ -104,6 +104,14 @@ final class CorrectionStore {
         save()
     }
 
+    /// Discard an unimportant candidate without assigning it any meaning.
+    /// Unlike `reject`, this removes the record entirely so it cannot be applied,
+    /// shown as rejected, or treated as a permanent user decision.
+    func discard(id: String) {
+        records.removeAll { $0.id == id }
+        save()
+    }
+
     func setDisabled(id: String, disabled: Bool) {
         guard let idx = records.firstIndex(where: { $0.id == id }) else { return }
         records[idx].status = disabled ? .disabled : .active

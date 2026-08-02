@@ -7,8 +7,10 @@ import Accelerate
 /// boundary has to fall during speech.
 struct AudioSegmentation {
     static let sampleRate = 16_000
-    static let preferredDuration = 5 * 60
-    static let maximumDuration = 5 * 60 + 10
+    /// Whisper's Core ML feature window is 30 seconds. Keep our units just below that limit so
+    /// long dictations never depend on WhisperKit's internal seek loop to recover the tail.
+    static let preferredDuration = 25
+    static let maximumDuration = 30
     static let overlapDuration = 1
 
     struct Segment: Sendable {
@@ -17,7 +19,7 @@ struct AudioSegmentation {
         let overlapSampleCount: Int
     }
 
-    /// Uses a conservative 400 ms low-energy run around the five-minute point when one exists.
+    /// Uses a conservative 400 ms low-energy run around the 25-second point when one exists.
     /// If continuous speech/noise makes that unsafe, the hard limit is used and the following
     /// segment includes one second of preceding audio.
     static func makeSegments(from samples: [Float]) -> [Segment] {
@@ -46,7 +48,7 @@ struct AudioSegmentation {
         return segments
     }
 
-    /// Looks from 4:50 through 5:10 for the quietest 400 ms run.  The RMS threshold is
+    /// Looks from 20 through 30 seconds for the quietest 400 ms run. The RMS threshold is
     /// intentionally conservative: a questionable quiet patch is worse than using overlap at
     /// the hard boundary.
     private static func preferredSilenceCut(
@@ -56,7 +58,7 @@ struct AudioSegmentation {
     ) -> Int? {
         let frame = sampleRate / 50 // 20 ms
         let requiredFrames = 20 // 400 ms
-        let searchStart = max(0, preferredCut - 10 * sampleRate)
+        let searchStart = max(0, preferredCut - 5 * sampleRate)
         let searchEnd = hardCut
         guard searchEnd - searchStart >= requiredFrames * frame else { return nil }
 

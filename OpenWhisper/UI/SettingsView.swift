@@ -669,7 +669,7 @@ struct CorrectionsManagementView: View {
                 }
             }
 
-            Text("Metin alanlarında elle yaptığın düzeltmeler burada listelenir. Bekleyen adayları onaylayarak otomatik aktifleştirebilirsin.")
+            Text("Metin alanlarında elle yaptığın düzeltmeler burada listelenir. Bekleyen adayları onaylayarak otomatik aktifleştirebilir, önemsiz olanları listeden kaldırabilirsin.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -783,6 +783,13 @@ struct CorrectionsManagementView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
+                    .controlSize(.regular)
+
+                    Button("Önemsiz") {
+                        store.discard(id: record.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.secondary)
                     .controlSize(.regular)
 
                     Button("Reddet") {

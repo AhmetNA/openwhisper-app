@@ -17,9 +17,8 @@ struct CompletedAudioSegment: Sendable {
 }
 
 final class AudioEngine: @unchecked Sendable {
-    /// Fixed-size storage avoids allocating a Swift Array for every input callback. The final
-    /// contiguous array is intentionally produced only at the existing `stopRecording()` API
-    /// boundary, immediately before WhisperKit consumes it.
+    /// Fixed-size storage avoids allocating a Swift Array for every input callback. Completed
+    /// units are copied out only when the existing `stopRecording()` API takes ownership of them.
     private final class SampleChunk {
         var values: [Float]
         var count = 0
@@ -38,9 +37,10 @@ final class AudioEngine: @unchecked Sendable {
     private var capturedSampleCount = 0
     private var converter: AVAudioConverter?
     private var convertedBuffer: AVAudioPCMBuffer?
-    private var segmentCallback: (@Sendable (CompletedAudioSegment) -> Void)?
+    /// Completed units are owned by AudioEngine until stopRecording takes them atomically.
+    /// Keeping them here avoids a second asynchronous delivery queue racing the stop path.
+    private var completedSegments: [CompletedAudioSegment] = []
     private var leadingOverlapSampleCount = 0
-    private let segmentDeliveryQueue = DispatchQueue(label: "com.openwhisper.audio-segments")
     private var levelCallback: ((Float) -> Void)?
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
@@ -60,8 +60,7 @@ final class AudioEngine: @unchecked Sendable {
     /// otherwise the system default input is used.
     func startRecording(
         deviceUID: String?,
-        levelCallback: @escaping (Float) -> Void,
-        completedSegmentCallback: (@Sendable (CompletedAudioSegment) -> Void)? = nil
+        levelCallback: @escaping (Float) -> Void
     ) {
         self.levelCallback = levelCallback
         lastLevelUpdate = .distantPast
@@ -70,7 +69,7 @@ final class AudioEngine: @unchecked Sendable {
         capturedSampleCount = 0
         converter = nil
         convertedBuffer = nil
-        segmentCallback = completedSegmentCallback
+        completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
         lock.unlock()
 
@@ -149,7 +148,7 @@ final class AudioEngine: @unchecked Sendable {
         }
     }
 
-    func stopRecording() -> [Float]? {
+    func stopRecording() -> [CompletedAudioSegment] {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         // Drop the AUAudioUnit and its HAL device claim now, not lazily on the next start.
@@ -161,35 +160,20 @@ final class AudioEngine: @unchecked Sendable {
         lock.lock()
         flushConverter()
         let captured = flattenedSamples()
-        let callback = segmentCallback
         let finalOverlap = leadingOverlapSampleCount
+        var segments = completedSegments
+        if !captured.isEmpty {
+            segments.append(CompletedAudioSegment(samples: captured, overlapSampleCount: finalOverlap))
+        }
         sampleChunks = []
         capturedSampleCount = 0
         converter = nil
         convertedBuffer = nil
-        segmentCallback = nil
+        completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
         lock.unlock()
 
-        // Segmented callers receive the final bounded unit through the same ordered callback
-        // path. Legacy callers keep the original return-value behavior unchanged.
-        if let callback {
-            if !captured.isEmpty {
-                deliver(CompletedAudioSegment(samples: captured, overlapSampleCount: finalOverlap), to: callback)
-            }
-            return nil
-        }
-        return captured.isEmpty ? nil : captured
-    }
-
-    /// Allows an async owner to establish that all callbacks queued before this call have begun
-    /// and finished. Segment callbacks themselves must not synchronously call this method.
-    func waitForCompletedSegmentDelivery() async {
-        await withCheckedContinuation { continuation in
-            segmentDeliveryQueue.async {
-                continuation.resume()
-            }
-        }
+        return segments
     }
 
     // MARK: - Streaming conversion and storage
@@ -278,8 +262,7 @@ final class AudioEngine: @unchecked Sendable {
     /// exact same silence-preferred cut used by the post-recording path; retaining one second of
     /// prior audio gives the next unit context without retaining completed recordings.
     private func emitCompletedSegmentIfNeeded() {
-        guard let callback = segmentCallback,
-              capturedSampleCount > AudioSegmentation.maximumDuration * AudioSegmentation.sampleRate else {
+        guard capturedSampleCount > AudioSegmentation.maximumDuration * AudioSegmentation.sampleRate else {
             return
         }
 
@@ -303,19 +286,9 @@ final class AudioEngine: @unchecked Sendable {
             }
         }
         leadingOverlapSampleCount = retainedOverlap
-        deliver(
-            CompletedAudioSegment(samples: completedSamples, overlapSampleCount: completedOverlap),
-            to: callback
+        completedSegments.append(
+            CompletedAudioSegment(samples: completedSamples, overlapSampleCount: completedOverlap)
         )
-    }
-
-    private func deliver(
-        _ segment: CompletedAudioSegment,
-        to callback: @escaping @Sendable (CompletedAudioSegment) -> Void
-    ) {
-        segmentDeliveryQueue.async {
-            callback(segment)
-        }
     }
 
     // MARK: - Device enumeration

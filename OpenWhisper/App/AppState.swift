@@ -5,28 +5,6 @@ import ApplicationServices
 import ServiceManagement
 import UserNotifications
 
-/// AudioEngine delivers completed units on its own serial queue. This small locked collector
-/// keeps AppState's MainActor free of audio delivery work and preserves delivery order until the
-/// user ends the one visible dictation session.
-private final class CompletedAudioSegmentCollector: @unchecked Sendable {
-    private let lock = NSLock()
-    private var segments: [CompletedAudioSegment] = []
-
-    func append(_ segment: CompletedAudioSegment) {
-        lock.lock()
-        segments.append(segment)
-        lock.unlock()
-    }
-
-    func takeAll() -> [CompletedAudioSegment] {
-        lock.lock()
-        defer { lock.unlock() }
-        let result = segments
-        segments.removeAll(keepingCapacity: false)
-        return result
-    }
-}
-
 @Observable
 @MainActor
 final class AppState {
@@ -125,7 +103,6 @@ final class AppState {
     private var reminderManager: ReminderManager?
     private var recordingTimer: Timer?
     private var targetApp: NSRunningApplication?
-    private var activeSegmentCollector: CompletedAudioSegmentCollector?
 
     // MARK: - Output Swap State
 
@@ -300,8 +277,6 @@ final class AppState {
         // Lower system output volume to 15% while holding dictation hotkey
         AudioDucker.shared.duckVolume(targetVolume: 15)
 
-        let segmentCollector = CompletedAudioSegmentCollector()
-        activeSegmentCollector = segmentCollector
         audioEngine?.startRecording(
             deviceUID: inputDeviceUID,
             levelCallback: { [weak self] rawLevel in
@@ -313,11 +288,6 @@ final class AppState {
                     let factor: Float = target > self.audioLevel ? 0.6 : 0.25
                     self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
                 }
-            },
-            completedSegmentCallback: { segment in
-                // This callback is deliberately limited to an ordered, locked append. Whisper
-                // is decoded only after recording has stopped, so it cannot contend with audio.
-                segmentCollector.append(segment)
             }
         )
 
@@ -342,21 +312,18 @@ final class AppState {
         recordingTimer?.invalidate()
         recordingTimer = nil
 
-        guard let audioEngine, let segmentCollector = activeSegmentCollector else {
-            owLog("[OpenWhisper] No audio engine or segment collector")
+        guard let audioEngine else {
+            owLog("[OpenWhisper] No audio engine")
             recordingState = .idle
             return
         }
-        _ = audioEngine.stopRecording()
+        let segments = audioEngine.stopRecording()
 
         Task { @MainActor in
             defer {
                 self.recordingState = .idle
-                self.activeSegmentCollector = nil
             }
             do {
-                await audioEngine.waitForCompletedSegmentDelivery()
-                let segments = segmentCollector.takeAll()
                 let sampleCount = segments.reduce(0) { $0 + $1.samples.count }
                 guard sampleCount > 4800 else {
                     owLog("[OpenWhisper] Audio too short (\(sampleCount) samples)")
@@ -490,7 +457,6 @@ final class AppState {
         recordingTimer?.invalidate()
         recordingTimer = nil
         _ = audioEngine?.stopRecording()  // discard captured samples — no transcription
-        activeSegmentCollector = nil
         recordingState = .idle
         recordingDuration = 0
         audioLevel = 0

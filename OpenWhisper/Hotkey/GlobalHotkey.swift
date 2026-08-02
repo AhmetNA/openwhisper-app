@@ -106,10 +106,10 @@ final class GlobalHotkey {
         return false
     }
 
-    /// Register monitors for Fn/Globe hold-to-talk and Fn+Space hands-free toggle.
-    ///
-    /// The flags monitors stay registered so an idle Fn press can begin dictation. The more
-    /// expensive key-down tap is intentionally armed only for an active dictation session.
+    /// Register monitors for Fn/Globe hold-to-talk and the global key-down tap used by
+    /// Option+Z / Option+Shift+C. The tap remains installed while the app is running so
+    /// post-dictation shortcuts work while the user is editing in another app; Space and
+    /// Enter are still acted on only when the internal recording mode allows them.
     func register() {
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlagsChanged(event)
@@ -120,6 +120,7 @@ final class GlobalHotkey {
             return event
         }
 
+        installSpaceEventTap()
     }
 
     func unregister() {
@@ -131,23 +132,23 @@ final class GlobalHotkey {
             NSEvent.removeMonitor(localMonitor)
             self.localMonitor = nil
         }
-        endActiveKeyDownCapture()
+        removeSpaceEventTap()
     }
 
-    /// Arms the key-down event tap for an active dictation session.
+    /// Ensures the global key-down event tap is installed. The tap is also installed during
+    /// register(), but keeping this call makes the recording path resilient if macOS or another
+    /// component temporarily removes the tap.
     ///
     /// This is idempotent so AppState may call it alongside the automatic Fn/Globe path
-    /// without creating a second tap. Keep this capture limited to the period where
-    /// hands-free stop keys and dictation shortcuts are meaningful.
+    /// without creating a second tap.
     func beginActiveKeyDownCapture() {
         installSpaceEventTap()
     }
 
-    /// Disarms the key-down event tap after dictation has ended or been cancelled.
-    ///
-    /// This is idempotent and is safe to call on every terminal recording path.
+    /// Kept as a compatibility hook for recording paths. The tap must remain installed after
+    /// dictation so Option+Z and Option+Shift+C continue to work while editing the pasted text.
     func endActiveKeyDownCapture() {
-        removeSpaceEventTap()
+        // Intentionally keep the tap alive. Space/Enter remain mode-gated in their handlers.
     }
 
     // MARK: - Fn/Globe (hold-to-talk)
@@ -281,6 +282,8 @@ final class GlobalHotkey {
     }
 
     private func installSpaceEventTap() {
+        guard eventTap == nil else { return }
+
         let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
@@ -332,7 +335,7 @@ final class GlobalHotkey {
             callback: callback,
             userInfo: userInfo
         ) else {
-            owLog("[GlobalHotkey] Failed to create CGEventTap for Space — hands-free and correction review shortcuts disabled")
+            owLog("[GlobalHotkey] Failed to create CGEventTap — global shortcuts disabled")
             return
         }
 
@@ -342,7 +345,7 @@ final class GlobalHotkey {
 
         eventTap = tap
         runLoopSource = source
-        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space to start, Space to stop; review: ⌥⇧C)")
+        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space; swap: ⌥Z; review: ⌥⇧C)")
     }
 
     private func removeSpaceEventTap() {
