@@ -1,0 +1,447 @@
+# Kişisel Sözlük (Vocabulary Biasing)
+#
+# Bu dosya, Whisper'ın sık karıştırdığı teknik terimleri ve Ollama'nın
+# temizleme adımında doğru yazılmasını istediğimiz kelimeleri içerir.
+# Her satır bir terimdir. '#' ile başlayan satırlar ve boş satırlar yok sayılır.
+#
+# ÖNCELİK DÜZENİ
+# P0: Her gün kullanılan AI agent, Codex ve temel yazılım terimleri.
+# P1: Web, Android ve backend geliştirme terimleri.
+# P2: Makine öğrenmesi, veri, DevOps ve daha seyrek kullanılan terimler.
+#
+# Not: Güncel uygulamada Whisper prompt biasing kapalıdır; sözlüğün tamamı
+# Ollama temizleme adımına verilir. Sıralama yine de önemlidir: en çok
+# karıştırılan terimleri üstte tutmak bakım ve ilerideki biasing için yararlıdır.
+
+# ── P0: AI agent / Codex / günlük yazılım ──
+GitHub
+OpenAI
+OpenAI API
+Codex
+ChatGPT
+GPT
+GPT-5
+AI agent
+agent
+agentic
+subagent
+Agent.md
+tool calling
+function calling
+tool use
+MCP
+Model Context Protocol
+MCP server
+MCP client
+context window
+system prompt
+developer prompt
+user prompt
+prompt
+prompting
+structured output
+JSON schema
+token
+tokenizer
+embedding
+vector
+RAG
+retrieval
+reranking
+hallucination
+workflow
+orchestration
+delegation
+handoff
+approval
+sandbox
+permission
+connector
+plugin
+skill
+automation
+Responses API
+Realtime API
+webhook
+streaming
+SSE
+JSON
+YAML
+TOML
+Markdown
+regex
+Ollama
+Qwen
+Qwen3
+Llama
+llama.cpp
+Claude
+Claude.md
+Sonnet
+Opus
+Haiku
+Gemini
+DeepSeek
+Mistral
+Whisper
+WhisperKit
+speech-to-text
+text-to-speech
+multimodal
+Fable
+Sol
+Luna
+Terra
+Cloudflare
+
+# ── P1: Web / frontend ──
+HTML
+CSS
+JavaScript
+TypeScript
+React
+component
+props
+hook
+custom hook
+useState
+useEffect
+useMemo
+useCallback
+useRef
+useContext
+cleanup
+cleanup function
+remove
+event listener
+DOM
+render
+re-render
+server rendering
+SSR
+SSG
+ISR
+frontend
+backend
+full-stack
+framework
+Next.js
+Next.js App Router
+App Router
+Server Component
+Client Component
+API route
+route handler
+Server Action
+Vite
+Webpack
+Tailwind
+CSS Grid
+Flexbox
+responsive
+shadcn/ui
+Radix UI
+state management
+Redux
+context API
+lifecycle method
+Node.js
+Bun
+Deno
+Express
+Fastify
+REST API
+GraphQL
+tRPC
+OpenAPI
+endpoint
+fetch
+axios
+async
+await
+Promise
+API
+websocket
+WebSocket
+npm
+pnpm
+yarn
+package.json
+node_modules
+localStorage
+sessionStorage
+cookie
+cache
+environment variable
+CORS
+CSRF
+XSS
+OAuth
+PKCE
+JWT
+session
+middleware
+database
+query
+SQL
+Google Cloud
+Vercel
+deploy
+deployment
+localhost
+
+# ── P1: Android / Kotlin ──
+Android
+Android Studio
+Kotlin
+Jetpack
+Jetpack Compose
+Material 3
+Composable
+Modifier
+Scaffold
+LazyColumn
+Activity
+Fragment
+ViewModel
+viewModelScope
+ViewModelScope
+LiveData
+LiveData observer
+StateFlow
+SharedFlow
+Flow
+coroutine
+Kotlin coroutines
+suspend function
+sealed class
+data class
+companion object
+extension function
+null safety
+lateinit
+intent
+adapter
+RecyclerView
+Navigation Component
+Navigation Compose
+repository
+use case
+DTO
+mapper
+domain
+Hilt
+Dagger
+dependency injection
+Room
+Retrofit
+OkHttp
+WorkManager
+DataStore
+FCM
+push notification
+notification
+Coil
+Glide
+ViewBinding
+DataBinding
+lifecycle
+manifest
+Gradle
+build.gradle
+build.gradle.kts
+Gradle sync
+APK
+AAB
+emulator
+ADB
+logcat
+Proguard
+R8
+deep link
+
+# ── P1: Backend / güvenlik / veri sözleşmeleri ──
+Supabase
+PostgreSQL
+RLS
+row-level security
+policy
+RPC
+Edge Function
+Supabase Edge Function
+Supabase Auth
+Supabase Storage
+Supabase Realtime
+db
+db push
+supabase db push
+migration
+schema
+table
+column
+primary key
+foreign key
+unique constraint
+index
+transaction
+join
+service role
+RLS policy
+E2EE
+end-to-end encryption
+vault
+secret
+access token
+refresh token
+authentication
+authorization
+session restore
+rate limit
+input validation
+data contract
+
+# ── P2: Makine öğrenmesi / yapay zekâ ──
+machine learning
+makine öğrenmesi
+deep learning
+derin öğrenme
+neural network
+sinir ağı
+model
+training
+eğitim
+inference
+çıkarım
+dataset
+veri kümesi
+feature
+özellik
+label
+etiket
+target
+prediction
+tahmin
+classification
+sınıflandırma
+regression
+regresyon
+clustering
+kümeleme
+supervised learning
+unsupervised learning
+reinforcement learning
+fine-tuning
+fine tuning
+transfer learning
+LLM
+SLM
+transformer
+attention
+prompt engineering
+vision model
+ASR
+automatic speech recognition
+speech recognition
+NLP
+natural language processing
+OCR
+computer vision
+precision
+recall
+F1 score
+accuracy
+ROC AUC
+confusion matrix
+cross-validation
+overfitting
+underfitting
+regularization
+gradient descent
+loss function
+learning rate
+batch size
+epoch
+checkpoint
+data augmentation
+normalization
+standardization
+feature engineering
+train set
+training set
+validation set
+test set
+inference latency
+quantization
+GGUF
+ONNX
+Apple Silicon
+Neural Engine
+PyTorch
+TensorFlow
+scikit-learn
+pandas
+NumPy
+Jupyter
+CUDA
+GPU
+CPU
+
+# ── P2: Veri / analitik ──
+DuckDB
+CSV
+TSV
+Parquet
+data pipeline
+ETL
+ELT
+data warehouse
+data lake
+data quality
+data validation
+schema validation
+chart
+metric
+KPI
+benchmark
+evaluation
+eval
+experiment
+feature store
+data provenance
+cutoff date
+
+# ── P2: Git / DevOps / araçlar ──
+Git
+GitLab
+merge
+main
+merge main
+branch
+commit
+pull request
+push
+rebase
+conflict
+merge conflict
+refactor
+debug
+build
+release
+checkout
+stash
+cherry-pick
+squash
+CI/CD
+pipeline
+Docker
+container
+staging
+production
+SSH
+TLS
+certificate
+signing
+macOS
+Swift
+SwiftUI
+Core ML
