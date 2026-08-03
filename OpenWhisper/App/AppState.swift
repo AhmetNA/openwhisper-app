@@ -997,50 +997,45 @@ final class AppState {
         @MainActor
         func pasteAsDictation() async {
             let rawText = trimmed
-            var cleanedText = rawText
-            if self.llmCleanupEnabled && self.ollamaAvailable {
-                cleanedText = await self.llmCleanup?.cleanup(text: rawText) ?? rawText
-                owLog("[OpenWhisper] Cleaned: \(cleanedText)")
-            }
+            var initialText = rawText
 
             let activePairs = CorrectionStore.shared.activePairs
             if !activePairs.isEmpty {
-                let (corrected, applied) = CorrectionEngine.applyCorrections(to: cleanedText, pairs: activePairs)
+                let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
                 if !applied.isEmpty {
-                    cleanedText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                    initialText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
                     for (wrong, right) in applied {
                         owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
                     }
                 }
             }
 
-            self.lastTranscription = cleanedText
+            self.lastTranscription = initialText
 
             if self.autoPasteEnabled {
-                let backupText = rawText
-                let pastedForLearning = cleanedText
+                let targetApp = session.targetApp
+                let pasteContext = session.pasteContext
+
+                // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
                 self.textInjector?.pasteTextResult(
-                    cleanedText,
-                    targetApp: session.targetApp,
-                    context: session.pasteContext
+                    initialText,
+                    targetApp: targetApp,
+                    context: pasteContext
                 ) { [weak self] outcome in
                     Task { @MainActor in
                         guard let self else { return }
                         switch outcome {
                         case .pastedVerified, .pastedUnverified:
-                            // Swap state and the learning snapshot become authoritative only after
-                            // a real paste outcome. The raw backup is intentionally copied after
-                            // delivery; a clipboard-only fallback must keep its exact payload.
-                            self.swapPair = DictationPair(raw: rawText, cleaned: cleanedText)
-                            self.swapTargetApp = session.targetApp
-                            self.lastInjectedIsCleaned = true
-                            self.lastInjectedText = pastedForLearning
+                            self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
+                            self.swapTargetApp = targetApp
+                            self.lastInjectedIsCleaned = false
+                            self.lastInjectedText = initialText
                             self.hotkey?.setSwapAvailable(true)
-                            self.textInjector?.copyToClipboard(backupText)
                             DictationSnapshot.shared.capture(
-                                pastedText: pastedForLearning,
-                                targetApp: session.targetApp
+                                pastedText: initialText,
+                                targetApp: targetApp
                             )
+
                             if case .pastedUnverified = outcome {
                                 self.dismissFlowBarMessage()
                             } else if session.hadDiarizedOverlap {
@@ -1052,6 +1047,36 @@ final class AppState {
                                     self.dismissFlowBarMessage()
                                 }
                             }
+
+                            // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
+                            // Once Ollama finishes, replace the initially pasted text in-place.
+                            if self.llmCleanupEnabled && self.ollamaAvailable {
+                                Task { @MainActor [weak self] in
+                                    guard let self else { return }
+                                    let cleaned = await self.llmCleanup?.cleanup(text: rawText) ?? rawText
+                                    let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                                    guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+                                    owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
+
+                                    self.textInjector?.replaceInjectedText(
+                                        oldText: initialText,
+                                        newText: trimmedCleaned,
+                                        targetApp: targetApp
+                                    ) { [weak self] in
+                                        Task { @MainActor in
+                                            guard let self else { return }
+                                            self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
+                                            self.lastTranscription = trimmedCleaned
+                                            self.lastInjectedIsCleaned = true
+                                            self.lastInjectedText = trimmedCleaned
+                                            self.textInjector?.copyToClipboard(rawText)
+                                            self.showFlowBarMessage("fixed", durationMs: 1000)
+                                            owLog("[OpenWhisper] Async LLM replacement finished.")
+                                        }
+                                    }
+                                }
+                            }
                         case .clipboardOnly(let reason):
                             self.swapPair = nil
                             self.hotkey?.setSwapAvailable(false)
@@ -1060,7 +1085,7 @@ final class AppState {
                     }
                 }
             } else {
-                self.textInjector?.copyToClipboard(cleanedText)
+                self.textInjector?.copyToClipboard(initialText)
             }
         }
 
@@ -1103,12 +1128,12 @@ final class AppState {
         }
     }
 
-    private func showFlowBarMessage(_ message: String) {
+    func showFlowBarMessage(_ message: String, durationMs: Int = 1500) {
         flowBarMessageTask?.cancel()
         flowBarMessage = message
         syncFlowBarVisibility()
         flowBarMessageTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(1_500))
+            try? await Task.sleep(for: .milliseconds(durationMs))
             guard !Task.isCancelled, let self else { return }
             self.flowBarMessage = nil
             self.syncFlowBarVisibility()
