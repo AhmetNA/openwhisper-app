@@ -39,14 +39,8 @@ final class FlowBarController {
         if !isShown {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
-            panel?.alphaValue = 0
+            panel?.alphaValue = 1
             panel?.orderFront(nil)
-
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.3
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                self.panel?.animator().alphaValue = 1
-            }
         }
         recenterAfterContentLayout()
     }

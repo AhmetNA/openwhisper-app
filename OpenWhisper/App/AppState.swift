@@ -11,7 +11,7 @@ import UserNotifications
 final class RecordingTranscriptionSession {
     let id: UInt64
     let targetApp: NSRunningApplication?
-    let pasteContext: PasteContext
+    var pasteContext: PasteContext
     let stream: AsyncStream<CompletedAudioSegment>
     let continuation: AsyncStream<CompletedAudioSegment>.Continuation
     let targetSpeakerEnabled: Bool
@@ -539,25 +539,17 @@ final class AppState {
             return
         }
 
-        // If a previous dictation's field is still pending a re-read/diff, do that FIRST —
-        // otherwise this new dictation's own (much larger) edit to the same field would look
-        // like one giant "correction" of the old one. See DictationSnapshot.swift.
-        DictationSnapshot.shared.handleNewDictationStarting()
-
-        // Save the currently focused app BEFORE we start recording,
-        // and retain the exact editable destination for asynchronous delivery.
+        // Save the currently focused app BEFORE we start recording (instant NSWorkspace query)
         targetApp = NSWorkspace.shared.frontmostApplication
-        let pasteContext = PasteContext.capture(targetApp: targetApp)
         owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
 
+        // 1. Immediately update recordingState to .recording so flow bar UI shows up instantly
         recordingState = .recording
         recordingDuration = 0
         audioLevel = 0
         lastError = nil
 
-        // Lower system output volume to 15% while holding dictation hotkey
-        AudioDucker.shared.duckVolume(targetVolume: 15)
-
+        // 2. Immediately start microphone recording via AudioEngine
         let recordingInputDeviceUID = resolvedInputDeviceUID
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
         audioEngine?.startRecording(
@@ -566,22 +558,24 @@ final class AppState {
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 48) / 36, 0.0), 1.0))
+                let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
                 Task { @MainActor in
                     guard let self else { return }
-                    let factor: Float = target > self.audioLevel ? 0.6 : 0.25
+                    let factor: Float = target > self.audioLevel ? 0.85 : 0.45
                     self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
                 }
             }
         )
 
+        // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1
+        let initialContext = PasteContext.initial(targetApp: targetApp)
         let session = RecordingTranscriptionSession(
             id: nextTranscriptionID,
             targetApp: targetApp,
             targetSpeakerEnabled: targetSpeakerEnabled,
             targetSpeakerProfile: targetSpeakerProfile,
-            pasteContext: pasteContext
+            pasteContext: initialContext
         )
         activeTranscriptionSession = session
         pendingTranscriptionCount += 1
@@ -603,8 +597,7 @@ final class AppState {
         transcriptionQueueTail = transcriptionTask
         transcriptionQueueTailID = session.id
 
-        // Start duration timer and transfer completed three-minute batches to the background
-        // transcription queue without stopping or restarting the microphone.
+        // 4. Start duration timer
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.recordingState == .recording else { return }
@@ -613,6 +606,23 @@ final class AppState {
             }
         }
 
+        // Dictation snapshot reset (instant if no active snapshot)
+        DictationSnapshot.shared.handleNewDictationStarting()
+
+        // 5. Perform non-essential background tasks asynchronously without delaying flow bar or mic start:
+        //    a) System volume ducking off main thread (AppleScript IPC)
+        DispatchQueue.global(qos: .userInitiated).async {
+            AudioDucker.shared.duckVolume(targetVolume: 15)
+        }
+
+        //    b) Async paste context capture off main thread
+        let currentTargetApp = targetApp
+        Task.detached(priority: .userInitiated) { [weak session] in
+            let capturedContext = PasteContext.capture(targetApp: currentTargetApp)
+            await MainActor.run {
+                session?.pasteContext = capturedContext
+            }
+        }
     }
 
     func stopRecording() {
@@ -1405,10 +1415,11 @@ final class AppState {
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 48) / 36, 0.0), 1.0))
+                let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
                 Task { @MainActor in
                     guard let self else { return }
-                    self.audioLevel += (target - self.audioLevel) * (target > self.audioLevel ? 0.6 : 0.25)
+                    let factor: Float = target > self.audioLevel ? 0.85 : 0.45
+                    self.audioLevel += (target - self.audioLevel) * factor
                 }
             }
         )

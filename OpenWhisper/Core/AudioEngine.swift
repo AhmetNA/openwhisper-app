@@ -53,7 +53,7 @@ final class AudioEngine: @unchecked Sendable {
     private var leadingOverlapSampleCount = 0
     private var levelCallback: ((Float) -> Void)?
     private var lastLevelUpdate = Date.distantPast
-    private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
+    private let levelUpdateInterval: TimeInterval = 1.0 / 25.0
     private var didLogInputChannelSelection = false
 
     /// Request microphone permission (call before first recording)

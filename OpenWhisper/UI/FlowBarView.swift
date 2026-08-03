@@ -10,7 +10,7 @@ struct FlowBarView: View {
                     rejectedRecordingOfferContent(message: message)
                 } else {
                     Text(message)
-                        .font(.custom("Bradley Hand", size: 15).bold())
+                        .font(.custom("Bradley Hand", size: 16).weight(.medium))
                         .foregroundStyle(.white.opacity(0.9))
                         .padding(.horizontal, 8)
                         .frame(height: 26)
@@ -91,8 +91,8 @@ struct FlowBarView: View {
 
     private var transcribingContent: some View {
         Text("transcribing")
-            .font(.custom("Bradley Hand", size: 15).bold())
-            .foregroundStyle(.white.opacity(0.9))
+            .font(.custom("Bradley Hand", size: 16).weight(.medium))
+            .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 6)
             .frame(height: 26)
     }

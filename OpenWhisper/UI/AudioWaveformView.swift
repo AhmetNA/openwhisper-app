@@ -9,14 +9,11 @@ struct AudioWaveformView: View {
 
     // Minimal flat baseline height when quiet/silent (level = 0)
     private let baseHeight: CGFloat = 4.0
-    // Low but perfectly normal speech levels should still read clearly in the compact flow bar.
-    // This only affects the visual scale; microphone capture and speech detection are unchanged.
-    private let visualGain: CGFloat = 2.2
+    private let maxHeight: CGFloat = 22.0
+    // Reduced visual gain so normal speaking voice does not hit max height prematurely
+    private let visualGain: CGFloat = 1.1
 
-    // Waveform envelope multipliers (defines the curve shape as voice volume grows)
-    private let waveShape: [CGFloat] = [
-        5, 9, 15, 23, 14, 19, 12, 18, 23, 15, 19, 12, 8, 5
-    ]
+    @State private var samples: [CGFloat] = Array(repeating: 0.0, count: 14)
 
     var body: some View {
         HStack(spacing: barSpacing) {
@@ -27,12 +24,30 @@ struct AudioWaveformView: View {
             }
         }
         .frame(height: 26, alignment: .center)
-        .animation(.easeOut(duration: 0.08), value: level)
+        .animation(.linear(duration: 0.04), value: samples)
+        .onChange(of: level) { _, newLevel in
+            pushSample(newLevel)
+        }
+        .onAppear {
+            pushSample(level)
+        }
+    }
+
+    private func pushSample(_ level: Float) {
+        let clamped = min(max(CGFloat(level), 0), 1.0)
+        let norm = pow(clamped, 1.2) * 0.85
+        let addedHeight = norm * (maxHeight - baseHeight)
+
+        var updated = samples
+        if updated.count >= barCount {
+            updated.removeFirst()
+        }
+        updated.append(addedHeight)
+        samples = updated
     }
 
     private func currentHeight(for index: Int) -> CGFloat {
-        let norm = min(max(CGFloat(level) * visualGain, 0), 1.0)
-        let add = waveShape[index] * norm
-        return max(baseHeight, min(26, baseHeight + add))
+        guard index < samples.count else { return baseHeight }
+        return max(baseHeight, min(maxHeight, baseHeight + samples[index]))
     }
 }
