@@ -7,6 +7,8 @@ struct AudioInputDevice: Identifiable, Hashable, Sendable {
     let uid: String
     let name: String
     let isBluetooth: Bool
+    let hasOutputStream: Bool
+    let isBuiltIn: Bool
 }
 
 /// A bounded, immutable Whisper-ready audio unit. `overlapSampleCount` describes the leading
@@ -36,6 +38,10 @@ final class AudioEngine: @unchecked Sendable {
     private var sampleChunks: [SampleChunk] = []
     private var capturedSampleCount = 0
     private var converter: AVAudioConverter?
+    /// Voice-processing I/O can expose a multichannel input (for example 9 channels on a
+    /// built-in microphone). Downmix it explicitly before the 16 kHz converter; letting
+    /// AVAudioConverter infer a multichannel-to-mono mix can select an empty channel.
+    private var monoInputBuffer: AVAudioPCMBuffer?
     private var convertedBuffer: AVAudioPCMBuffer?
     /// Completed units are owned by AudioEngine until stopRecording takes them atomically.
     /// Keeping them here avoids a second asynchronous delivery queue racing the stop path.
@@ -48,6 +54,7 @@ final class AudioEngine: @unchecked Sendable {
     private var levelCallback: ((Float) -> Void)?
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
+    private var didLogInputChannelSelection = false
 
     /// Request microphone permission (call before first recording)
     func requestPermission() async -> Bool {
@@ -64,6 +71,7 @@ final class AudioEngine: @unchecked Sendable {
     /// otherwise the system default input is used.
     func startRecording(
         deviceUID: String?,
+        noiseSuppressionEnabled: Bool,
         levelCallback: @escaping (Float) -> Void
     ) {
         // A previous stop waits for this queue, but keep start safe if a caller reuses the
@@ -75,9 +83,11 @@ final class AudioEngine: @unchecked Sendable {
         sampleChunks = []
         capturedSampleCount = 0
         converter = nil
+        monoInputBuffer = nil
         convertedBuffer = nil
         completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
+        didLogInputChannelSelection = false
         lock.unlock()
 
         // Always start from a fresh engine so any prior HAL claim is fully released
@@ -96,15 +106,39 @@ final class AudioEngine: @unchecked Sendable {
             owLog("[AudioEngine] Using system default input")
         }
 
+        // Apple voice processing is the system-provided real-time noise suppression. On some
+        // macOS microphone routes it changes the input to a multichannel 48 kHz stream, so the
+        // capture path below explicitly selects the loudest input channel before resampling to
+        // Whisper's mono 16 kHz format. The setting is captured at recording start so a mode
+        // change cannot alter an already-running recording.
+        do {
+            try inputNode.setVoiceProcessingEnabled(noiseSuppressionEnabled)
+            owLog(
+                "[AudioEngine] Apple voice processing "
+                    + (noiseSuppressionEnabled ? "enabled" : "disabled")
+            )
+        } catch {
+            owLog("[AudioEngine] Apple voice processing unavailable: \(error). Continuing without it.")
+        }
+
         let format = inputNode.outputFormat(forBus: 0)
         owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
 
-        guard let targetFormat = AVAudioFormat(
+        guard let monoInputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: format.sampleRate,
+            channels: 1,
+            interleaved: false
+        ), let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Self.targetSampleRate,
             channels: 1,
             interleaved: false
-        ), let converter = AVAudioConverter(from: format, to: targetFormat) else {
+        ), let converter = AVAudioConverter(from: monoInputFormat, to: targetFormat),
+        let monoInputBuffer = AVAudioPCMBuffer(
+            pcmFormat: monoInputFormat,
+            frameCapacity: 4096
+        ) else {
             owLog("[AudioEngine] Failed to create 16kHz recording converter")
             return
         }
@@ -124,26 +158,34 @@ final class AudioEngine: @unchecked Sendable {
 
         lock.lock()
         self.converter = converter
+        self.monoInputBuffer = monoInputBuffer
         self.convertedBuffer = convertedBuffer
         lock.unlock()
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            guard let channelData = buffer.floatChannelData?[0] else { return }
             let frameLength = Int(buffer.frameLength)
+            guard frameLength > 0, let selection = self.loudestInputChannel(in: buffer) else { return }
+
+            if !self.didLogInputChannelSelection {
+                self.didLogInputChannelSelection = true
+                owLog(
+                    "[AudioEngine] Input downmix: "
+                        + "selectedChannel=\(selection.index + 1)/\(buffer.format.channelCount) "
+                        + String(format: "rms=%.5f", selection.rms)
+                )
+            }
 
             // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
             // microphone sample for transcription.
             let now = Date()
             if now.timeIntervalSince(self.lastLevelUpdate) >= self.levelUpdateInterval {
-                var rms: Float = 0
-                vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameLength))
                 self.lastLevelUpdate = now
-                self.levelCallback?(rms)
+                self.levelCallback?(selection.rms)
             }
 
             self.lock.lock()
-            self.convert(buffer)
+            self.convert(buffer, channelIndex: selection.index)
             self.lock.unlock()
         }
 
@@ -207,8 +249,34 @@ final class AudioEngine: @unchecked Sendable {
     /// Runs the one converter instance throughout a recording so resampling filter state is
     /// continuous across input buffers. This work stays inside the audio callback, but only
     /// copies the already-required 16kHz output into fixed-size storage.
-    private func convert(_ inputBuffer: AVAudioPCMBuffer) {
-        guard let converter, let convertedBuffer else { return }
+    private func loudestInputChannel(in buffer: AVAudioPCMBuffer) -> (index: Int, rms: Float)? {
+        guard let channels = buffer.floatChannelData,
+              buffer.frameLength > 0,
+              buffer.format.channelCount > 0 else { return nil }
+
+        var selectedIndex = 0
+        var selectedRMS: Float = -.greatestFiniteMagnitude
+        for index in 0..<Int(buffer.format.channelCount) {
+            var rms: Float = 0
+            vDSP_rmsqv(channels[index], 1, &rms, vDSP_Length(buffer.frameLength))
+            if rms > selectedRMS {
+                selectedRMS = rms
+                selectedIndex = index
+            }
+        }
+        return (selectedIndex, selectedRMS)
+    }
+
+    private func convert(_ inputBuffer: AVAudioPCMBuffer, channelIndex: Int) {
+        guard let converter, let monoInputBuffer, let convertedBuffer,
+              let sourceChannels = inputBuffer.floatChannelData,
+              let monoChannel = monoInputBuffer.floatChannelData?[0] else { return }
+
+        let frameLength = min(Int(inputBuffer.frameLength), Int(monoInputBuffer.frameCapacity))
+        guard frameLength > 0 else { return }
+        let safeChannelIndex = min(max(channelIndex, 0), Int(inputBuffer.format.channelCount) - 1)
+        monoChannel.update(from: sourceChannels[safeChannelIndex], count: frameLength)
+        monoInputBuffer.frameLength = AVAudioFrameCount(frameLength)
 
         convertedBuffer.frameLength = 0
         var suppliedInput = false
@@ -220,7 +288,7 @@ final class AudioEngine: @unchecked Sendable {
             }
             suppliedInput = true
             status.pointee = .haveData
-            return inputBuffer
+            return monoInputBuffer
         }
 
         guard error == nil,
@@ -367,7 +435,14 @@ final class AudioEngine: @unchecked Sendable {
             guard hasInputStream(deviceID: id) else { return nil }
             guard let uid = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceUID) else { return nil }
             let name = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceNameCFString) ?? "Unknown"
-            return AudioInputDevice(id: id, uid: uid, name: name, isBluetooth: isBluetoothTransport(deviceID: id))
+            return AudioInputDevice(
+                id: id,
+                uid: uid,
+                name: name,
+                isBluetooth: isBluetoothTransport(deviceID: id),
+                hasOutputStream: hasOutputStream(deviceID: id),
+                isBuiltIn: isBuiltInTransport(deviceID: id)
+            )
         }
     }
 
@@ -380,6 +455,25 @@ final class AudioEngine: @unchecked Sendable {
     /// Look up an AudioDeviceID by its persistent UID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         return availableInputDevices().first(where: { $0.uid == uid })?.id
+    }
+
+    /// Select a headset-like input when automatic routing is enabled. A non-built-in
+    /// duplex device is preferred because it represents a headset or USB audio device;
+    /// Bluetooth input is also accepted when the device exposes no output stream. If no
+    /// external headset is present, fall back to the Mac's built-in microphone.
+    static func automaticInputDeviceUID() -> String? {
+        let devices = availableInputDevices()
+        let externalHeadset = devices
+            .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
+            .sorted { lhs, rhs in
+                if lhs.isBluetooth != rhs.isBluetooth {
+                    return lhs.isBluetooth
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            .first
+
+        return externalHeadset?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
     }
 
     // MARK: - Core Audio property helpers
@@ -427,6 +521,17 @@ final class AudioEngine: @unchecked Sendable {
         return size > 0
     }
 
+    private static func hasOutputStream(deviceID: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &addr, 0, nil, &size) == noErr else { return false }
+        return size > 0
+    }
+
     private static func stringProperty(deviceID: AudioDeviceID, selector: AudioObjectPropertySelector) -> String? {
         var addr = AudioObjectPropertyAddress(
             mSelector: selector,
@@ -455,5 +560,19 @@ final class AudioEngine: @unchecked Sendable {
         }
         return transport == kAudioDeviceTransportTypeBluetooth
             || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    private static func isBuiltInTransport(deviceID: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &transport) == noErr else {
+            return false
+        }
+        return transport == kAudioDeviceTransportTypeBuiltIn
     }
 }

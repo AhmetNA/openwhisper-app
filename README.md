@@ -27,7 +27,7 @@ Your microphone audio and transcript stay on your Mac during normal dictation. S
 - **Correction learning:** teach OpenWhisper recurring corrections from its settings window.
 - **Voice reminders:** say commands such as “bana 10 dakika sonra toplantıyı hatırlat”.
 - **Optional Spotify controls:** search, play, pause, skip, and use Liked Songs from voice commands.
-- **Input-device selection:** choose a microphone and avoid Bluetooth headset call-mode surprises.
+- **Input-device selection:** automatic mode prefers a connected headset microphone and falls back to the built-in Mac microphone; manual selection is also available.
 - **No cloud account required:** build and run the app locally with SwiftPM.
 
 ## How it works
@@ -159,7 +159,9 @@ Credentials and refresh tokens are stored in the macOS Keychain, not in `UserDef
 
 ## Optional mic-guard script
 
-`scripts/mic-guard/` contains an optional LaunchAgent helper for users whose Bluetooth earbuds unexpectedly become the system input device. It requires [SwitchAudioSource](https://github.com/deweller/switchaudio-osx):
+`scripts/mic-guard/` contains an optional LaunchAgent helper for controlling the macOS system-default input device. It is not required for OpenWhisper's automatic mode, which selects the connected headset directly when recording starts. If enabled, the helper intentionally switches the macOS system default back to the Mac microphone, which affects other apps that follow the system default.
+
+It requires [SwitchAudioSource](https://github.com/deweller/switchaudio-osx):
 
 ```bash
 brew install switchaudio-osx

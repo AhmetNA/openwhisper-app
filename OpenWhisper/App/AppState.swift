@@ -113,6 +113,9 @@ final class AppState {
     var language: String {
         didSet { UserDefaults.standard.set(language, forKey: "language") }
     }
+    var noiseSuppressionEnabled: Bool {
+        didSet { UserDefaults.standard.set(noiseSuppressionEnabled, forKey: "noiseSuppressionEnabled") }
+    }
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
@@ -315,6 +318,7 @@ final class AppState {
         let defaults = UserDefaults.standard
         whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
         language = defaults.string(forKey: "language") ?? "tr"
+        noiseSuppressionEnabled = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? true
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
@@ -554,8 +558,11 @@ final class AppState {
         // Lower system output volume to 15% while holding dictation hotkey
         AudioDucker.shared.duckVolume(targetVolume: 15)
 
+        let recordingInputDeviceUID = resolvedInputDeviceUID
+        owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
         audioEngine?.startRecording(
-            deviceUID: inputDeviceUID,
+            deviceUID: recordingInputDeviceUID,
+            noiseSuppressionEnabled: noiseSuppressionEnabled,
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
@@ -1393,7 +1400,8 @@ final class AppState {
         targetSpeakerPreparationMessage = ""
         lastError = nil
         audioEngine.startRecording(
-            deviceUID: inputDeviceUID,
+            deviceUID: resolvedInputDeviceUID,
+            noiseSuppressionEnabled: noiseSuppressionEnabled,
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
@@ -1639,19 +1647,29 @@ final class AppState {
     func refreshInputDevices() {
         availableInputDevices = AudioEngine.availableInputDevices()
         systemDefaultInputIsBluetooth = AudioEngine.systemDefaultInputIsBluetooth()
-        // If the previously selected device is no longer present, fall back to system default
+        // If the previously selected device is no longer present, automatic mode resolves the
+        // next recording to a connected headset or the built-in Mac microphone.
         if let uid = inputDeviceUID, !availableInputDevices.contains(where: { $0.uid == uid }) {
             inputDeviceUID = nil
         }
     }
 
-    /// Returns true when dictation will route through a Bluetooth device — i.e. either
-    /// the user explicitly picked one, or "System Default" is currently a BT device.
-    var resolvedInputIsBluetooth: Bool {
-        if let uid = inputDeviceUID {
-            return availableInputDevices.first(where: { $0.uid == uid })?.isBluetooth ?? false
+    /// Automatic mode prefers a connected headset and falls back to the built-in Mac
+    /// microphone. An explicit picker selection still wins, and a temporarily unavailable
+    /// explicit device falls back to the same automatic policy for the next recording.
+    var resolvedInputDeviceUID: String? {
+        let devices = AudioEngine.availableInputDevices()
+        if let inputDeviceUID,
+           devices.contains(where: { $0.uid == inputDeviceUID }) {
+            return inputDeviceUID
         }
-        return systemDefaultInputIsBluetooth
+        return AudioEngine.automaticInputDeviceUID()
+    }
+
+    /// Returns true when the resolved dictation input is a Bluetooth device.
+    var resolvedInputIsBluetooth: Bool {
+        guard let uid = resolvedInputDeviceUID else { return false }
+        return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false
     }
 
     func refreshOllamaStatus() async {

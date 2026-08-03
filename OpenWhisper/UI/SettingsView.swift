@@ -32,6 +32,10 @@ struct SettingsView: View {
         @Bindable var appState = appState
 
         VStack(alignment: .leading, spacing: 14) {
+            audioProcessingSection
+
+            Divider()
+
             // Language
             HStack {
                 Label("Language", systemImage: "globe")
@@ -184,6 +188,29 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Audio Processing Section
+
+    private var audioProcessingSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 7) {
+            Label("Ses işleme", systemImage: "waveform.and.mic")
+
+            Picker("Ses işleme modu", selection: $appState.noiseSuppressionEnabled) {
+                Text("Gürültü engelleme").tag(true)
+                Text("Engellemesiz").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(appState.recordingState != .idle)
+
+            Text(appState.recordingState == .idle
+                 ? "Seçim bir sonraki kayıtta uygulanır."
+                 : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Input Device Section
 
     private var inputDeviceSection: some View {
@@ -196,7 +223,7 @@ struct SettingsView: View {
                     get: { appState.inputDeviceUID ?? "" },
                     set: { appState.inputDeviceUID = $0.isEmpty ? nil : $0 }
                 )) {
-                    Text("System Default").tag("")
+                    Text("Automatic: headset → Mac mic").tag("")
                     ForEach(appState.availableInputDevices) { device in
                         Text(device.isBluetooth ? "🔵 \(device.name)" : device.name)
                             .tag(device.uid)
@@ -238,11 +265,6 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .disabled(!appState.hasTargetSpeakerProfile && !appState.targetSpeakerEnabled)
             }
-
-            Text("Yalnızca kayıtlı ses profiline eşleşen konuşmayı Whisper'a gönderir. Profil, oturma ve yatma gibi farklı pozisyonları kapsayacak şekilde kaydedilir.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 Image(systemName: appState.hasTargetSpeakerProfile
