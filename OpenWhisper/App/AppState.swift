@@ -52,6 +52,9 @@ final class RecordingTranscriptionSession {
     var nextSegmentNumber = 0
     var isCancelled = false
     var hasFinished = false
+    /// Set when the first below-threshold rejection is detected so the UI can show
+    /// "Ses eşleşmedi" immediately without waiting for Whisper transcription.
+    var earlyRejectionShown = false
     var acceptedTargetSpeechSamples = 0
     /// True once any segment in this recording hit the fail-closed (model/profile error) path.
     /// `TargetSpeakerOutputGate.shouldSkipPostProcessing` only looks at accepted sample counts,
@@ -136,6 +139,7 @@ final class AppState {
     }
     var targetSpeakerEnabled: Bool {
         didSet {
+            owLog("[TargetSpeaker] targetSpeakerEnabled changed to \(targetSpeakerEnabled)")
             UserDefaults.standard.set(targetSpeakerEnabled, forKey: "targetSpeakerEnabled")
             if targetSpeakerEnabled {
                 startTargetSpeakerDiarizationPreparation()
@@ -431,13 +435,16 @@ final class AppState {
             if let profile = targetSpeakerProfile {
                 if profile.isCompatible(with: targetSpeakerModel.modelIdentifier) {
                     targetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                    owLog("[TargetSpeaker] loadTargetSpeakerProfile: loaded valid profile (embeddings=\(profile.embeddings.count), schema=\(profile.schemaVersion), model=\(profile.modelIdentifier))")
                 } else {
                     targetSpeakerProfile = nil
                     targetSpeakerEnabled = false
                     targetSpeakerProfileStatus = "Model sürümü değişti — yeniden kayıt gerekli"
+                    owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile incompatible with model '\(targetSpeakerModel.modelIdentifier)'")
                 }
             } else {
                 targetSpeakerEnabled = false
+                owLog("[TargetSpeaker] loadTargetSpeakerProfile: no saved profile found")
             }
         } catch {
             targetSpeakerProfile = nil
@@ -445,6 +452,7 @@ final class AppState {
             targetSpeakerEnabled = false
             targetSpeakerProfileStatus = "Profil okunamadı — yeniden kayıt gerekli"
             lastError = error.localizedDescription
+            owLog("[TargetSpeaker] loadTargetSpeakerProfile error: \(error)")
         }
         refreshTargetSpeakerProfileCoherence()
     }
@@ -456,6 +464,9 @@ final class AppState {
     /// are never retroactively invalidated by a low score here; this is purely informational.
     private func refreshTargetSpeakerProfileCoherence() {
         targetSpeakerProfileCoherence = targetSpeakerProfile.map { TargetSpeakerFilter.recordingCoherence($0.embeddings) }
+        if let coherence = targetSpeakerProfileCoherence {
+            owLog("[TargetSpeaker] Profile coherence refreshed: \(String(format: "%.3f", coherence))")
+        }
     }
 
     /// Starts the optional overlap stack in the background. Normal dictation never awaits this
@@ -466,13 +477,18 @@ final class AppState {
         guard targetSpeakerEnabled,
               targetSpeakerProfile != nil,
               !targetSpeakerDiarizationReady,
-              targetSpeakerDiarizationPreparationTask == nil else { return }
+              targetSpeakerDiarizationPreparationTask == nil else {
+            owLog("[TargetSpeaker] startTargetSpeakerDiarizationPreparation skipped (enabled=\(targetSpeakerEnabled), profile=\(targetSpeakerProfile != nil), ready=\(targetSpeakerDiarizationReady), taskInFlight=\(targetSpeakerDiarizationPreparationTask != nil))")
+            return
+        }
 
+        owLog("[TargetSpeaker] startTargetSpeakerDiarizationPreparation starting task...")
         let progressHandler: TargetSpeakerDiarizationProgressHandler = { [weak self] progress in
             Task { @MainActor in
                 guard let self, !self.targetSpeakerEnrollmentActive else { return }
                 self.targetSpeakerPreparationProgress = progress.fractionCompleted
                 self.targetSpeakerPreparationMessage = progress.message
+                owLog("[TargetSpeaker] Diarization prep progress: phase=\(progress.phase), msg='\(progress.message)'")
             }
         }
         targetSpeakerDiarizationPreparationTask = Task { @MainActor [weak self] in
@@ -688,11 +704,13 @@ final class AppState {
 
         let filtered: TargetSpeakerFilterResult
         if session.targetSpeakerEnabled {
+            owLog("[TargetSpeaker] Batch \(segmentNumber) filtering segment: samples=\(segment.samples.count), targetSpeakerEnabled=true, profileEmbeddings=\(session.targetSpeakerProfile?.embeddings.count ?? 0)")
             filtered = await targetSpeakerFilter.filter(
                 samples: segment.samples,
                 profile: session.targetSpeakerProfile,
                 enabled: true
             )
+            owLog("[TargetSpeaker] Batch \(segmentNumber) filter result: decision=\(filtered.decision), acceptedSamples=\(filtered.acceptedSampleCount)/\(segment.samples.count), hadVoice=\(filtered.hadVoiceActivity), wasFailClosed=\(filtered.wasFailClosed)")
             if filtered.wasFailClosed, let error = filtered.errorDescription {
                 lastError = error
                 targetSpeakerProfileStatus = "Filtre hata verdi — bu kayıt işlenmedi"
@@ -701,6 +719,7 @@ final class AppState {
             }
             session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
         } else {
+            owLog("[TargetSpeaker] Batch \(segmentNumber) targetSpeakerEnabled=false, bypassing filter")
             filtered = TargetSpeakerFilterResult(
                 samples: segment.samples,
                 acceptedSampleCount: segment.samples.count,
@@ -806,6 +825,17 @@ final class AppState {
                     session.belowThresholdRejectedSamples.count - maxRetainedSamples
                 )
             }
+            // --- Early rejection UI: show "Ses eşleşmedi" IMMEDIATELY ---
+            // Don't wait for Whisper transcription; give the user instant feedback.
+            // Transcription still continues in the background for clipboard salvage.
+            if !session.earlyRejectionShown {
+                session.earlyRejectionShown = true
+                owLog("[TargetSpeaker] Batch \(segmentNumber) early rejection — showing 'Ses eşleşmedi' immediately")
+                showFlowBarMessage("Ses eşleşmedi")
+                if recordingState == .transcribing {
+                    recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
+                }
+            }
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
                 return
@@ -904,6 +934,7 @@ final class AppState {
     func finishTranscription(_ session: RecordingTranscriptionSession) async {
         guard !session.hasFinished else { return }
         session.hasFinished = true
+        owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
 
         defer {
             // Break the session ↔ worker reference cycle once the worker has drained the
@@ -968,10 +999,14 @@ final class AppState {
             if hasSalvageableText {
                 owLog("[OpenWhisper] No accepted target speech in recording; unmatched transcript copied to clipboard")
                 textInjector?.copyToClipboard(trimmedUnmatched)
+                // Update the early message to include "(panoda)" now that clipboard text is ready
                 showFlowBarMessage("Ses eşleşmedi (panoda)")
-            } else {
+            } else if !session.earlyRejectionShown {
+                // Only show if we didn't already show it early during streaming
                 owLog("[OpenWhisper] No accepted target speech in recording; all post-processing skipped")
                 showFlowBarMessage("Ses eşleşmedi")
+            } else {
+                owLog("[OpenWhisper] No accepted target speech in recording; early rejection already shown")
             }
             return
         }
@@ -1175,6 +1210,7 @@ final class AppState {
     /// pending `flowBarMessageTask` so a stray 1.5s timer can't yank the message out from under
     /// the offer.
     private func showTargetSpeakerAppendOffer(message: String) {
+        owLog("[TargetSpeaker] showTargetSpeakerAppendOffer: message='\(message)'")
         flowBarMessageTask?.cancel()
         flowBarMessageTask = nil
         flowBarMessage = message
@@ -1185,6 +1221,7 @@ final class AppState {
         targetSpeakerAppendOfferTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(8))
             guard !Task.isCancelled, let self else { return }
+            owLog("[TargetSpeaker] Target speaker offer timed out after 8s")
             self.dismissTargetSpeakerAppendOffer()
             self.flowBarMessage = nil
             self.syncFlowBarVisibility()
@@ -1197,6 +1234,7 @@ final class AppState {
     /// Internal (not `private`) so tests can simulate the 8s offer timeout firing without an
     /// actual 8-second sleep -- see `AppStateTargetSpeakerIntegrationTests`.
     func dismissTargetSpeakerAppendOffer() {
+        owLog("[TargetSpeaker] dismissTargetSpeakerAppendOffer")
         targetSpeakerAppendOfferTask?.cancel()
         targetSpeakerAppendOfferTask = nil
         targetSpeakerAppendOfferActive = false
@@ -1215,9 +1253,11 @@ final class AppState {
         targetApp: NSRunningApplication?
     ) {
         guard !candidate.samples.isEmpty, !text.isEmpty else {
+            owLog("[TargetSpeaker] retainConfirmation rejected empty candidate or text")
             dismissTargetSpeakerAppendOffer()
             return
         }
+        owLog("[TargetSpeaker] retainConfirmation stored candidate with \(candidate.samples.count) samples and text length \(text.count)")
         retainedConfirmationCandidate = candidate
         retainedConfirmationText = text
         retainedConfirmationPasteContext = pasteContext
@@ -1227,11 +1267,15 @@ final class AppState {
     /// Fired by the flow bar's "Bu benim sesimdi" tap. It delivers the retained transcript once
     /// and then explicitly appends the retained coherent candidate to the active profile.
     func confirmRetainedRecordingWasTargetSpeaker() {
+        owLog("[TargetSpeaker] confirmRetainedRecordingWasTargetSpeaker called: offerActive=\(targetSpeakerAppendOfferActive), inFlight=\(isConfirmationInFlight), hasCandidate=\(retainedConfirmationCandidate != nil), textLength=\(retainedConfirmationText?.count ?? 0)")
         guard !isConfirmationInFlight,
               targetSpeakerAppendOfferActive,
               let candidate = retainedConfirmationCandidate,
               let textToPaste = retainedConfirmationText,
-              let profile = targetSpeakerProfile else { return }
+              let profile = targetSpeakerProfile else {
+            owLog("[TargetSpeaker] confirmRetainedRecordingWasTargetSpeaker guard failed")
+            return
+        }
 
         let pasteContext = retainedConfirmationPasteContext
         let targetApp = retainedConfirmationTargetApp
@@ -1255,6 +1299,7 @@ final class AppState {
         syncFlowBarVisibility()
 
         // Start delivery before the profile append, using the exact retained PasteContext.
+        owLog("[TargetSpeaker] Starting paste delivery and profile append for confirmed candidate...")
         textInjector?.pasteTextResult(
             textToPaste,
             targetApp: targetApp,
@@ -1262,6 +1307,7 @@ final class AppState {
         ) { [weak self] outcome in
             Task { @MainActor in
                 guard let self, self.confirmationOperationID == operationID else { return }
+                owLog("[TargetSpeaker] Confirmed candidate paste outcome: \(outcome)")
                 self.confirmationPasteOutcome = outcome
                 self.confirmationPasteCompleted = true
                 self.finishConfirmationOperationIfReady(operationID: operationID)
@@ -1284,6 +1330,7 @@ final class AppState {
                 self.lastConfirmedAppendReceipt = receipt
                 self.confirmationAppendSucceeded = true
                 self.confirmationAppendError = nil
+                owLog("[TargetSpeaker] Confirmed candidate appended successfully to profile: new count=\(receipt.appendedProfile.embeddings.count)")
             } catch {
                 guard self.confirmationOperationID == operationID else { return }
                 self.confirmationAppendSucceeded = false
@@ -1310,6 +1357,8 @@ final class AppState {
         if !appendSucceeded, let appendError {
             lastError = appendError
         }
+
+        owLog("[TargetSpeaker] finishConfirmationOperationIfReady: pasteOutcome=\(pasteOutcome), appendSucceeded=\(appendSucceeded), appendError=\(appendError ?? "none")")
 
         switch (pasteOutcome, appendSucceeded) {
         case (.pastedVerified, true), (.pastedUnverified, true):
@@ -1410,7 +1459,11 @@ final class AppState {
     }
 
     func beginTargetSpeakerEnrollment() {
-        guard recordingState == .idle, !targetSpeakerEnrollmentIsProcessing else { return }
+        owLog("[TargetSpeaker] beginTargetSpeakerEnrollment called")
+        guard recordingState == .idle, !targetSpeakerEnrollmentIsProcessing else {
+            owLog("[TargetSpeaker] beginTargetSpeakerEnrollment skipped (state=\(recordingState), processing=\(targetSpeakerEnrollmentIsProcessing))")
+            return
+        }
         invalidateTargetSpeakerEnrollmentWork()
         _ = teardownTargetSpeakerEnrollmentRecording()
         targetSpeakerEnrollmentActive = true
@@ -1423,10 +1476,14 @@ final class AppState {
     }
 
     func startTargetSpeakerEnrollmentRecording() {
+        owLog("[TargetSpeaker] startTargetSpeakerEnrollmentRecording step=\(targetSpeakerEnrollmentStep + 1)/\(TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount)")
         guard recordingState == .idle,
               !targetSpeakerEnrollmentIsProcessing,
               targetSpeakerEnrollmentStep < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount,
-              let audioEngine else { return }
+              let audioEngine else {
+            owLog("[TargetSpeaker] startTargetSpeakerEnrollmentRecording skipped (state=\(recordingState), processing=\(targetSpeakerEnrollmentIsProcessing), step=\(targetSpeakerEnrollmentStep))")
+            return
+        }
 
         clearFlowBarMessage()
 
@@ -1460,6 +1517,7 @@ final class AppState {
                     TargetSpeakerFilterConfiguration.maximumEnrollmentDuration
                 )
                 if self.recordingDuration >= TargetSpeakerFilterConfiguration.maximumEnrollmentDuration {
+                    owLog("[TargetSpeaker] Enrollment recording step \(self.targetSpeakerEnrollmentStep + 1) reached max duration 30s")
                     self.stopTargetSpeakerEnrollmentRecording()
                 }
             }
@@ -1467,23 +1525,30 @@ final class AppState {
     }
 
     func stopTargetSpeakerEnrollmentRecording() {
+        owLog("[TargetSpeaker] stopTargetSpeakerEnrollmentRecording called")
         guard targetSpeakerEnrollmentIsRecording else { return }
         let samples = teardownTargetSpeakerEnrollmentRecording()
 
         guard !samples.isEmpty else {
             targetSpeakerEnrollmentStatus = "Kayıt alınamadı; tekrar deneyin."
+            owLog("[TargetSpeaker] Enrollment recording returned 0 samples")
             return
         }
 
+        owLog("[TargetSpeaker] Enrollment recording step \(targetSpeakerEnrollmentStep + 1) stopped: \(samples.count) samples (\(String(format: "%.2f", Double(samples.count)/16000.0))s)")
         processTargetSpeakerEnrollmentSamples(samples)
     }
 
     /// Shared enrollment boundary used by the audio path and deterministic state tests.
     func processTargetSpeakerEnrollmentSamples(_ samples: [Float]) {
+        owLog("[TargetSpeaker] processTargetSpeakerEnrollmentSamples: step=\(targetSpeakerEnrollmentStep + 1), samples=\(samples.count)")
         guard targetSpeakerEnrollmentActive,
               !targetSpeakerEnrollmentIsProcessing,
               targetSpeakerEnrollmentStep < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount,
-              !samples.isEmpty else { return }
+              !samples.isEmpty else {
+            owLog("[TargetSpeaker] processTargetSpeakerEnrollmentSamples skipped (active=\(targetSpeakerEnrollmentActive), processing=\(targetSpeakerEnrollmentIsProcessing), step=\(targetSpeakerEnrollmentStep))")
+            return
+        }
 
         targetSpeakerEnrollmentIsProcessing = true
         targetSpeakerEnrollmentStatus = "Kayıt doğrulanıyor…"
@@ -1512,6 +1577,7 @@ final class AppState {
                 }
             }
             do {
+                owLog("[TargetSpeaker] Validating enrollment sample \(sampleIndex + 1)...")
                 let result = try await self.targetSpeakerFilter.validateEnrollmentSample(
                     recording,
                     progressHandler: progressHandler
@@ -1519,24 +1585,29 @@ final class AppState {
                 guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                 guard result.isValid else {
                     self.targetSpeakerEnrollmentStatus = "Bu kayıt en az 10 saniye net konuşma içermiyor veya çok kırpılmış; aynı pozisyonda yeniden kaydedin."
+                    owLog("[TargetSpeaker] Enrollment sample \(sampleIndex + 1) invalid: voicedDuration=\(result.voicedDuration)s, clippedRatio=\(result.clippedSampleRatio)")
                     return
                 }
 
                 guard sampleIndex == self.targetSpeakerEnrollmentRecordings.count else {
                     self.targetSpeakerEnrollmentStatus = "Kayıt sırası değişti; lütfen yeniden başlayın."
+                    owLog("[TargetSpeaker] Sample index mismatch: sampleIndex=\(sampleIndex), count=\(self.targetSpeakerEnrollmentRecordings.count)")
                     return
                 }
                 self.targetSpeakerEnrollmentRecordings.append(recording)
+                owLog("[TargetSpeaker] Enrollment sample \(sampleIndex + 1) validated and stored (\(recording.count) samples)")
 
                 if self.targetSpeakerEnrollmentRecordings.count < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount {
                     self.targetSpeakerEnrollmentStep += 1
                     self.targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[1]
                     self.targetSpeakerEnrollmentStatus = "İlk kayıt tamamlandı. Duruşunu değiştir ve ikinci kaydı başlat."
+                    owLog("[TargetSpeaker] First enrollment sample completed. Prompting for second sample.")
                     return
                 }
 
                 self.targetSpeakerEnrollmentStep = TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount
                 self.targetSpeakerEnrollmentStatus = "İki kayıt doğrulandı; profil çıkarılıyor…"
+                owLog("[TargetSpeaker] Both enrollment samples validated. Creating profile...")
                 do {
                     let profile = try await self.targetSpeakerFilter.createProfile(
                         from: self.targetSpeakerEnrollmentRecordings,
@@ -1554,16 +1625,9 @@ final class AppState {
                     self.targetSpeakerEnrollmentStatus = "Profil hazır; farklı pozisyonlardaki sesin de işlenecek."
                     self.targetSpeakerEnrollmentActive = false
                     self.targetSpeakerPreparationProgress = nil
+                    owLog("[TargetSpeaker] Profile created and saved successfully! Total embeddings=\(profile.embeddings.count)")
                 } catch {
                     guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
-                    // `invalidSample`/`crossRecordingMismatch` can only ever implicate the most
-                    // recently captured recording (`sampleIndex`), since every earlier recording
-                    // already passed this exact validation once before being appended. A
-                    // `lowRecordingCoherence` failure is different: it names *which* recording was
-                    // contaminated, and that can be an *earlier* one (recording 0's contamination
-                    // was never checked until this pass). Falling back to `sampleIndex` there would
-                    // discard the wrong (clean) recording and keep the bad one -- an unbreakable
-                    // retry loop where redoing the prompted recording can never clear the error.
                     let failedIndex: Int
                     if case TargetSpeakerEnrollmentError.lowRecordingCoherence(let index, _, _) = error {
                         failedIndex = index
@@ -1575,15 +1639,18 @@ final class AppState {
                     self.targetSpeakerEnrollmentRecordings.removeSubrange(failedIndex...)
                     self.targetSpeakerEnrollmentStatus = error.localizedDescription
                     self.lastError = error.localizedDescription
+                    owLog("[TargetSpeaker] Profile creation failed: \(error.localizedDescription) (failedIndex=\(failedIndex))")
                 }
             } catch {
                 guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                 self.targetSpeakerEnrollmentStatus = error.localizedDescription
+                owLog("[TargetSpeaker] Enrollment sample validation failed with error: \(error)")
             }
         }
     }
 
     func cancelTargetSpeakerEnrollment() {
+        owLog("[TargetSpeaker] cancelTargetSpeakerEnrollment called")
         invalidateTargetSpeakerEnrollmentWork()
         _ = teardownTargetSpeakerEnrollmentRecording()
         targetSpeakerEnrollmentActive = false
@@ -1597,6 +1664,7 @@ final class AppState {
     }
 
     func deleteTargetSpeakerProfile() {
+        owLog("[TargetSpeaker] deleteTargetSpeakerProfile called")
         invalidateTargetSpeakerEnrollmentWork()
         _ = teardownTargetSpeakerEnrollmentRecording()
         do {
@@ -1616,13 +1684,19 @@ final class AppState {
             targetSpeakerPreparationProgress = nil
             targetSpeakerPreparationMessage = ""
             lastError = nil
+            owLog("[TargetSpeaker] Target speaker profile deleted")
         } catch {
             lastError = error.localizedDescription
+            owLog("[TargetSpeaker] Delete target speaker profile failed: \(error)")
         }
     }
 
     func undoLastConfirmedTargetSpeakerAppend() {
-        guard let receipt = lastConfirmedAppendReceipt else { return }
+        owLog("[TargetSpeaker] undoLastConfirmedTargetSpeakerAppend called")
+        guard let receipt = lastConfirmedAppendReceipt else {
+            owLog("[TargetSpeaker] undoLastConfirmedTargetSpeakerAppend: no receipt available")
+            return
+        }
         do {
             try targetSpeakerFilter.undoConfirmedAppend(receipt, store: targetSpeakerProfileStore)
             targetSpeakerProfile = receipt.previousProfile
@@ -1631,13 +1705,16 @@ final class AppState {
             targetSpeakerProfileStatus = "Son ekleme geri alındı"
             lastConfirmedAppendReceipt = nil
             lastError = nil
+            owLog("[TargetSpeaker] Last confirmed append undone successfully; restored embeddings count=\(receipt.previousProfile.embeddings.count)")
         } catch {
             lastError = error.localizedDescription
             targetSpeakerProfileStatus = error.localizedDescription
+            owLog("[TargetSpeaker] Undo last confirmed append failed: \(error)")
         }
     }
 
     func replaceTargetSpeakerProfile() {
+        owLog("[TargetSpeaker] replaceTargetSpeakerProfile called")
         guard !targetSpeakerEnrollmentIsProcessing else { return }
         if targetSpeakerEnrollmentIsRecording {
             _ = teardownTargetSpeakerEnrollmentRecording()

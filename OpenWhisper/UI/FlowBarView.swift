@@ -59,6 +59,7 @@ struct FlowBarView: View {
                 .foregroundStyle(.white.opacity(0.9))
 
             Button {
+                owLog("[TargetSpeaker] User tapped 'Bu benim sesimdi' chip in FlowBarView")
                 appState.confirmRetainedRecordingWasTargetSpeaker()
             } label: {
                 Text("Bu benim sesimdi")

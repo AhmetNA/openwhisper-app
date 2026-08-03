@@ -283,6 +283,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 if appState.canUndoTargetSpeakerAppend {
                     Button("Son eklemeyi geri al") {
+                        owLog("[TargetSpeaker] User clicked 'Son eklemeyi geri al' in SettingsView")
                         appState.undoLastConfirmedTargetSpeakerAppend()
                     }
                     .buttonStyle(.plain)
@@ -319,8 +320,10 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Button(appState.targetSpeakerEnrollmentIsRecording ? "Kaydı bitir" : "Sesimi kaydet") {
                     if appState.targetSpeakerEnrollmentIsRecording {
+                        owLog("[TargetSpeaker] User clicked 'Kaydı bitir' in SettingsView")
                         appState.stopTargetSpeakerEnrollmentRecording()
                     } else {
+                        owLog("[TargetSpeaker] User clicked 'Sesimi kaydet' in SettingsView")
                         if !appState.targetSpeakerEnrollmentActive {
                             appState.beginTargetSpeakerEnrollment()
                         }
@@ -332,20 +335,29 @@ struct SettingsView: View {
                 .disabled(appState.targetSpeakerEnrollmentIsProcessing)
 
                 if appState.targetSpeakerEnrollmentActive {
-                    Button("İptal") { appState.cancelTargetSpeakerEnrollment() }
-                        .buttonStyle(.plain)
-                        .font(.caption)
+                    Button("İptal") {
+                        owLog("[TargetSpeaker] User clicked 'İptal' enrollment in SettingsView")
+                        appState.cancelTargetSpeakerEnrollment()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
                 }
 
                 if appState.hasTargetSpeakerProfile || appState.hasStoredTargetSpeakerProfile {
-                    Button("Yenile") { appState.replaceTargetSpeakerProfile() }
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .disabled(appState.targetSpeakerEnrollmentIsProcessing)
-                    Button("Sil") { appState.deleteTargetSpeakerProfile() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.red)
-                        .font(.caption)
+                    Button("Yenile") {
+                        owLog("[TargetSpeaker] User clicked 'Yenile' profile in SettingsView")
+                        appState.replaceTargetSpeakerProfile()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+                    Button("Sil") {
+                        owLog("[TargetSpeaker] User clicked 'Sil' profile in SettingsView")
+                        appState.deleteTargetSpeakerProfile()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .font(.caption)
                 }
 
             }

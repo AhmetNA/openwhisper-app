@@ -214,8 +214,12 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
     }
 
     func prepare(progressHandler: TargetSpeakerDiarizationProgressHandler?) async throws {
-        if sortformer != nil, embeddingDiarizer != nil { return }
+        if sortformer != nil, embeddingDiarizer != nil {
+            owLog("[TargetSpeakerDiarization] Already prepared")
+            return
+        }
         if let preparationTask {
+            owLog("[TargetSpeakerDiarization] Preparation already in flight, awaiting task...")
             do {
                 try await preparationTask.value
             } catch let typedError as TargetSpeakerDiarizationError {
@@ -226,6 +230,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
             return
         }
 
+        owLog("[TargetSpeakerDiarization] Starting model preparation...")
         let task = Task { [weak self] () throws -> Void in
             guard let self else { return }
             try await self.loadModels(progressHandler: progressHandler)
@@ -234,8 +239,10 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         do {
             try await task.value
             preparationTask = nil
+            owLog("[TargetSpeakerDiarization] Model preparation completed successfully")
         } catch {
             preparationTask = nil
+            owLog("[TargetSpeakerDiarization] Model preparation failed: \(error)")
             if let typedError = error as? TargetSpeakerDiarizationError {
                 throw typedError
             }
@@ -244,6 +251,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
     }
 
     private func loadModels(progressHandler: TargetSpeakerDiarizationProgressHandler?) async throws {
+        owLog("[TargetSpeakerDiarization] Loading Diarizer models...")
         progressHandler?(TargetSpeakerDiarizationPreparationProgress(
             phase: .preparing,
             fractionCompleted: nil,
@@ -273,9 +281,11 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 ))
             }
         } catch {
+            owLog("[TargetSpeakerDiarization] DiarizerModels load failed: \(error)")
             throw TargetSpeakerDiarizationError.modelPreparationFailed(String(describing: error))
         }
 
+        owLog("[TargetSpeakerDiarization] Loading Sortformer models...")
         let sortformerModels: SortformerModels
         do {
             sortformerModels = try await SortformerModels.loadFromHuggingFace(
@@ -302,6 +312,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 ))
             }
         } catch {
+            owLog("[TargetSpeakerDiarization] SortformerModels load failed: \(error)")
             throw TargetSpeakerDiarizationError.modelPreparationFailed(String(describing: error))
         }
 
@@ -323,6 +334,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
 
         self.embeddingDiarizer = embeddingDiarizer
         self.sortformer = sortformer
+        owLog("[TargetSpeakerDiarization] All diarization models initialized successfully")
         progressHandler?(TargetSpeakerDiarizationPreparationProgress(
             phase: .ready,
             fractionCompleted: 1,
@@ -335,16 +347,20 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile
     ) async throws -> TargetSpeakerDiarizationResult {
+        owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count)")
         guard !audioData.isEmpty, audioData.allSatisfy({ $0.isFinite }) else {
+            owLog("[TargetSpeakerDiarization] Error: invalidAudio (empty or non-finite samples)")
             throw TargetSpeakerDiarizationError.invalidAudio
         }
         guard profile.isCompatible(with: FluidAudioTargetSpeakerDiarizationService.modelIdentifier) else {
+            owLog("[TargetSpeakerDiarization] Error: incompatibleProfile (expected \(FluidAudioTargetSpeakerDiarizationService.modelIdentifier), found \(profile.modelIdentifier))")
             throw TargetSpeakerDiarizationError.incompatibleProfile(
                 expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
                 actual: profile.modelIdentifier
             )
         }
         guard let sortformer, let embeddingDiarizer else {
+            owLog("[TargetSpeakerDiarization] Error: notPrepared (Sortformer or DiarizerManager nil)")
             throw TargetSpeakerDiarizationError.notPrepared
         }
 
@@ -358,7 +374,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 profile: profile,
                 embeddingDiarizer: embeddingDiarizer
             )
-            return try filterWords(
+            let result = try filterWords(
                 transcription.words,
                 audioData: audioData,
                 frames: frames,
@@ -367,9 +383,13 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 embeddingDiarizer: embeddingDiarizer,
                 intervals: intervals
             )
+            owLog("[TargetSpeakerDiarization] diarizeAndFilter succeeded: targetSlot=\(targetSlot), acceptedWords=\(result.acceptedWordCount)/\(transcription.words.count), rejectedWords=\(result.rejectedWordCount), uncertainWords=\(result.uncertainWordCount), hadOverlap=\(result.hadOverlap), text=\"\(result.text)\"")
+            return result
         } catch let error as TargetSpeakerDiarizationError {
+            owLog("[TargetSpeakerDiarization] Error: \(error.localizedDescription)")
             throw error
         } catch {
+            owLog("[TargetSpeakerDiarization] Processing failed error: \(error)")
             throw TargetSpeakerDiarizationError.processingFailed(String(describing: error))
         }
     }
