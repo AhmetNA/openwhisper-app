@@ -3,8 +3,6 @@ import ApplicationServices
 import CoreGraphics
 
 final class GlobalHotkey {
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
@@ -106,32 +104,15 @@ final class GlobalHotkey {
         return false
     }
 
-    /// Register monitors for Fn/Globe hold-to-talk and the global key-down tap used by
-    /// Option+Z / Option+Shift+C. The tap remains installed while the app is running so
-    /// post-dictation shortcuts work while the user is editing in another app; Space and
-    /// Enter are still acted on only when the internal recording mode allows them.
+    /// Register the global event tap used by Fn/Globe hold-to-talk and the key-down shortcuts.
+    /// Keeping both event types in the same tap is important: macOS can deliver the Fn key's
+    /// flagsChanged event differently from ordinary modifier keys, and NSEvent monitors do not
+    /// reliably see a bare Fn press in every focused application.
     func register() {
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.handleFlagsChanged(event)
-        }
-
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.handleFlagsChanged(event)
-            return event
-        }
-
         installSpaceEventTap()
     }
 
     func unregister() {
-        if let globalMonitor {
-            NSEvent.removeMonitor(globalMonitor)
-            self.globalMonitor = nil
-        }
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
         removeSpaceEventTap()
     }
 
@@ -153,21 +134,12 @@ final class GlobalHotkey {
 
     // MARK: - Fn/Globe (hold-to-talk)
 
-    private func handleFlagsChanged(_ event: NSEvent) {
-        // flagsChanged fires for the Fn/Globe key itself with keyCode 63; guarding on the
-        // keyCode (in addition to the .function flag) keeps arrow-key/function-flag noise out,
-        // since other keys can also toggle modifier flags without being the Fn key press itself.
-        guard event.keyCode == fnKeyCode else { return }
-        let fnPressed = event.modifierFlags.contains(.function)
-
+    private func handleFunctionKeyChanged(isPressed: Bool) {
         switch mode {
         case .idle:
-            if fnPressed {
+            if isPressed {
                 mode = .holding
                 fnPressTime = Date()
-                // The Fn flags event arrives before the following Space key-down, so this
-                // makes Fn+Space available without paying for a permanent key-down tap.
-                beginActiveKeyDownCapture()
                 onPress()
             } else if pendingSwap {
                 // Fn released after a recognized swap gesture — safe now to post the
@@ -176,10 +148,9 @@ final class GlobalHotkey {
                 onSwapCommit()
             }
         case .holding:
-            if !fnPressed {
+            if !isPressed {
                 mode = .idle
                 onRelease()
-                endActiveKeyDownCapture()
             }
         case .handsFree:
             // Hands-free recording ignores Fn presses — only Space toggles it off.
@@ -284,7 +255,8 @@ final class GlobalHotkey {
     private func installSpaceEventTap() {
         guard eventTap == nil else { return }
 
-        let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.flagsChanged.rawValue)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
         let callback: CGEventTapCallBack = { proxy, type, event, refcon in
@@ -301,6 +273,17 @@ final class GlobalHotkey {
             }
 
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            if type == .flagsChanged {
+                // Fn/Globe is key code 63. Its press/release state is represented by
+                // maskSecondaryFn on the CGEvent, which is also what the working Fn+Space
+                // path uses. Handle it in this tap so a bare Fn press starts recording even
+                // when the focused app does not deliver a modifier event to NSEvent monitors.
+                if keyCode == Int64(me.fnKeyCode) {
+                    me.handleFunctionKeyChanged(isPressed: event.flags.contains(.maskSecondaryFn))
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
             if keyCode == 49 {
                 if me.handleSpaceKeyDown(flags: event.flags) {
                     return nil

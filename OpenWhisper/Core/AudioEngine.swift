@@ -18,8 +18,8 @@ struct CompletedAudioSegment: Sendable {
 
 final class AudioEngine: @unchecked Sendable {
     /// Fixed-size storage avoids allocating a Swift Array for every input callback. Completed
-    /// units are copied out only when the existing `stopRecording()` API takes ownership of them.
-    private final class SampleChunk {
+    /// batches are detached from this storage and flattened on a utility queue.
+    private final class SampleChunk: @unchecked Sendable {
         var values: [Float]
         var count = 0
 
@@ -40,6 +40,10 @@ final class AudioEngine: @unchecked Sendable {
     /// Completed units are owned by AudioEngine until stopRecording takes them atomically.
     /// Keeping them here avoids a second asynchronous delivery queue racing the stop path.
     private var completedSegments: [CompletedAudioSegment] = []
+    private let segmentPreparationQueue = DispatchQueue(
+        label: "com.openwhisper.audio-segment-preparation",
+        qos: .utility
+    )
     private var leadingOverlapSampleCount = 0
     private var levelCallback: ((Float) -> Void)?
     private var lastLevelUpdate = Date.distantPast
@@ -62,6 +66,9 @@ final class AudioEngine: @unchecked Sendable {
         deviceUID: String?,
         levelCallback: @escaping (Float) -> Void
     ) {
+        // A previous stop waits for this queue, but keep start safe if a caller reuses the
+        // engine after an interrupted setup.
+        segmentPreparationQueue.sync {}
         self.levelCallback = levelCallback
         lastLevelUpdate = .distantPast
         lock.lock()
@@ -159,6 +166,13 @@ final class AudioEngine: @unchecked Sendable {
 
         lock.lock()
         flushConverter()
+        lock.unlock()
+
+        // A completed three-minute batch may still be flattening off the audio callback.
+        // Wait for that work before taking the final tail, preserving batch order.
+        segmentPreparationQueue.sync {}
+
+        lock.lock()
         let captured = flattenedSamples()
         let finalOverlap = leadingOverlapSampleCount
         var segments = completedSegments
@@ -173,6 +187,18 @@ final class AudioEngine: @unchecked Sendable {
         leadingOverlapSampleCount = 0
         lock.unlock()
 
+        return segments
+    }
+
+    /// Takes batches that crossed the three-minute boundary while recording is still active.
+    /// The recording engine keeps running; this only transfers already-completed audio to the
+    /// transcription queue.
+    func takeCompletedSegments() -> [CompletedAudioSegment] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let segments = completedSegments
+        completedSegments.removeAll(keepingCapacity: true)
         return segments
     }
 
@@ -258,37 +284,75 @@ final class AudioEngine: @unchecked Sendable {
         return result
     }
 
-    /// Keeps only the still-active segment in AudioEngine memory. AudioSegmentation chooses the
-    /// exact same silence-preferred cut used by the post-recording path; retaining one second of
-    /// prior audio gives the next unit context without retaining completed recordings.
+    /// Keeps only the still-active batch in AudioEngine memory. The duration boundary is kept
+    /// near three minutes; retaining one second of prior audio gives the next batch context
+    /// without interrupting the microphone.
     private func emitCompletedSegmentIfNeeded() {
         guard capturedSampleCount > AudioSegmentation.maximumDuration * AudioSegmentation.sampleRate else {
             return
         }
 
-        let activeSamples = flattenedSamples()
-        let segments = AudioSegmentation.makeSegments(from: activeSamples)
-        guard segments.count > 1, let completed = segments.first else { return }
-
-        let completedSamples = Array(completed.samples)
+        // Do not flatten three minutes of audio on the real-time input callback. Detach the
+        // immutable chunk storage, retain only one second for boundary context, and flatten the
+        // detached batch on a utility queue while the microphone continues uninterrupted.
+        let detachedChunks = sampleChunks
+        let detachedSampleCount = capturedSampleCount
         let completedOverlap = leadingOverlapSampleCount
         let retainedOverlap = min(
             AudioSegmentation.overlapDuration * AudioSegmentation.sampleRate,
-            completedSamples.count
+            detachedSampleCount
         )
-        let remainingSamples = Array(activeSamples[(completedSamples.count - retainedOverlap)...])
+        let overlapSamples = trailingSamples(count: retainedOverlap)
 
         sampleChunks = []
         capturedSampleCount = 0
-        remainingSamples.withUnsafeBufferPointer { source in
+        overlapSamples.withUnsafeBufferPointer { source in
             if let baseAddress = source.baseAddress {
-                appendSamples(baseAddress, count: remainingSamples.count)
+                appendSamples(baseAddress, count: overlapSamples.count)
             }
         }
         leadingOverlapSampleCount = retainedOverlap
-        completedSegments.append(
-            CompletedAudioSegment(samples: completedSamples, overlapSampleCount: completedOverlap)
-        )
+
+        segmentPreparationQueue.async { [weak self, detachedChunks] in
+            let completedSamples = Self.flattenedSamples(
+                from: detachedChunks,
+                sampleCount: detachedSampleCount
+            )
+            guard !completedSamples.isEmpty, let self else { return }
+
+            self.lock.lock()
+            self.completedSegments.append(
+                CompletedAudioSegment(samples: completedSamples, overlapSampleCount: completedOverlap)
+            )
+            self.lock.unlock()
+        }
+    }
+
+    private func trailingSamples(count: Int) -> [Float] {
+        guard count > 0 else { return [] }
+
+        var remaining = count
+        var reversed: [Float] = []
+        reversed.reserveCapacity(count)
+        for chunk in sampleChunks.reversed() where remaining > 0 {
+            let copied = min(chunk.count, remaining)
+            let start = chunk.count - copied
+            reversed.append(contentsOf: chunk.values[start..<chunk.count])
+            remaining -= copied
+        }
+        return Array(reversed.reversed())
+    }
+
+    private static func flattenedSamples(
+        from chunks: [SampleChunk],
+        sampleCount: Int
+    ) -> [Float] {
+        var result: [Float] = []
+        result.reserveCapacity(sampleCount)
+        for chunk in chunks where chunk.count > 0 {
+            result.append(contentsOf: chunk.values.prefix(chunk.count))
+        }
+        return result
     }
 
     // MARK: - Device enumeration

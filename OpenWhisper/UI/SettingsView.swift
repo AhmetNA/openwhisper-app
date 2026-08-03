@@ -77,6 +77,10 @@ struct SettingsView: View {
 
             Divider()
 
+            targetSpeakerSection
+
+            Divider()
+
             // LLM Cleanup
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -217,6 +221,92 @@ struct SettingsView: View {
         }
         .onAppear {
             appState.refreshInputDevices()
+        }
+    }
+
+    // MARK: - Target Speaker Section
+
+    private var targetSpeakerSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Yalnızca Benim Sesim", systemImage: "person.wave.2")
+                Spacer()
+                Toggle("", isOn: $appState.targetSpeakerEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .disabled(!appState.hasTargetSpeakerProfile && !appState.targetSpeakerEnabled)
+            }
+
+            Text("Yalnızca kayıtlı ses profiline eşleşen konuşmayı Whisper'a gönderir.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Image(systemName: appState.hasTargetSpeakerProfile
+                      ? "checkmark.circle.fill" : "info.circle")
+                    .foregroundStyle(appState.hasTargetSpeakerProfile ? .green : .orange)
+                Text(appState.targetSpeakerProfileStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer()
+            }
+
+            if appState.targetSpeakerEnrollmentActive {
+                Text(appState.targetSpeakerEnrollmentIsRecording
+                     ? "Kayıt: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
+                     : appState.targetSpeakerEnrollmentStatus)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let progress = appState.targetSpeakerPreparationProgress {
+                    ProgressView(value: progress)
+                } else if appState.targetSpeakerEnrollmentIsProcessing {
+                    ProgressView()
+                }
+                if !appState.targetSpeakerPreparationMessage.isEmpty {
+                    Text(appState.targetSpeakerPreparationMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button(appState.targetSpeakerEnrollmentIsRecording ? "Kaydı bitir" : "Sesimi kaydet") {
+                    if appState.targetSpeakerEnrollmentIsRecording {
+                        appState.stopTargetSpeakerEnrollmentRecording()
+                    } else {
+                        if !appState.targetSpeakerEnrollmentActive {
+                            appState.beginTargetSpeakerEnrollment()
+                        }
+                        appState.startTargetSpeakerEnrollmentRecording()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+
+                if appState.targetSpeakerEnrollmentActive {
+                    Button("İptal") { appState.cancelTargetSpeakerEnrollment() }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                }
+
+                if appState.hasTargetSpeakerProfile || appState.hasStoredTargetSpeakerProfile {
+                    Button("Yenile") { appState.replaceTargetSpeakerProfile() }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+                    Button("Sil") { appState.deleteTargetSpeakerProfile() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                }
+            }
         }
     }
 

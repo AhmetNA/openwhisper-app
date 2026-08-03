@@ -16,11 +16,14 @@ final class LLMCleanup: Sendable {
         2. DO NOT REWRITE: Do not improve grammar, do not shorten sentences, do not replace synonyms.
         3. DO NOT TRANSLATE: Keep Turkish in Turkish and English in English.
         4. REMOVE ONLY FILLER WORDS: Delete only speech hesitation words like "şey", "yani", "ee", "ıı", "hani".
-        5. Output ONLY the cleaned transcript, nothing else.
-
-        Example input: şey bu fonksiyonu yani async yapalım ee sonra await ekleyelim
-        Example output: Bu fonksiyonu async yapalım, sonra await ekleyelim.
+        5. Do not use an example, template, or sentence from these instructions as the output.
+        6. If there are no filler words, return the transcript's exact words unchanged.
+        7. Output ONLY the cleaned transcript, nothing else.
         """
+
+    private static let fillerWords: Set<String> = [
+        "şey", "yani", "ee", "ıı", "hani", "um", "uh", "falan", "filan", "vs"
+    ]
 
     /// Path to the user's personal glossary file (symlinked to the project's sozluk.txt in dev setups).
     private static var glossaryURL: URL {
@@ -58,6 +61,51 @@ final class LLMCleanup: Sendable {
             """
     }
 
+    private static func normalizedWords(from text: String) -> [String] {
+        text
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+    }
+
+    /// The cleanup model may remove fillers and change punctuation/capitalization, but it must
+    /// not replace the user's sentence with an unrelated sentence copied from the prompt. A
+    /// glossary term may replace one source token because technical-term spelling correction is
+    /// an intentional part of the cleanup contract.
+    private static func isFaithfulCleanup(original: String, cleaned: String) -> Bool {
+        let originalWords = normalizedWords(from: original)
+        let cleanedWords = normalizedWords(from: cleaned)
+        guard !originalWords.isEmpty, !cleanedWords.isEmpty else { return false }
+
+        let glossaryWords = Set(
+            (loadGlossaryTerms() ?? []).flatMap { normalizedWords(from: $0) }
+        )
+
+        var originalIndex = 0
+        for cleanedWord in cleanedWords {
+            while originalIndex < originalWords.count,
+                  fillerWords.contains(originalWords[originalIndex]) {
+                originalIndex += 1
+            }
+
+            guard originalIndex < originalWords.count else { return false }
+            if originalWords[originalIndex] == cleanedWord {
+                originalIndex += 1
+            } else if glossaryWords.contains(cleanedWord) {
+                // Permit one glossary-backed spelling correction for this source token.
+                originalIndex += 1
+            } else {
+                return false
+            }
+        }
+
+        while originalIndex < originalWords.count {
+            guard fillerWords.contains(originalWords[originalIndex]) else { return false }
+            originalIndex += 1
+        }
+        return true
+    }
+
     /// Check if Ollama is running and responsive
     static func checkAvailability() async -> Bool {
         guard let url = URL(string: "http://localhost:11434/api/tags") else { return false }
@@ -83,7 +131,7 @@ final class LLMCleanup: Sendable {
 
         let body: [String: Any] = [
             "model": model,
-            "prompt": "\(Self.cleanupPrompt())\n\nTranscript: \(text)\nCleaned transcript:",
+            "prompt": "\(Self.cleanupPrompt())\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
             "stream": false,
             "options": [
                 "temperature": 0.0,
@@ -110,6 +158,10 @@ final class LLMCleanup: Sendable {
                 }
 
                 if !hasChinese && !cleaned.isEmpty && cleaned.count < text.count * 3 {
+                    guard Self.isFaithfulCleanup(original: text, cleaned: cleaned) else {
+                        owLog("[LLMCleanup] Rejected unrelated cleanup output; using raw transcript")
+                        return text
+                    }
                     return cleaned
                 } else if hasChinese {
                     // Log internally if needed: print("[LLMCleanup] Detected Chinese hallucination")

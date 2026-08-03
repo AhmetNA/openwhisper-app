@@ -1,4 +1,8 @@
 import WhisperKit
+
+protocol WhisperTranscriptionService: Sendable {
+    func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String
+}
 import Foundation
 
 final class WhisperTranscriber: @unchecked Sendable {
@@ -249,6 +253,18 @@ final class WhisperTranscriber: @unchecked Sendable {
         return text
     }
 
+    /// Streaming-aware entry point. The overlap is metadata for the ordered session owner;
+    /// samples remain exactly length-preserving after speaker masking and Whisper receives the
+    /// same overlap-bearing batch it would have received on the feature-off path.
+    func transcribe(
+        audioData: [Float],
+        language: String,
+        overlapSampleCount: Int
+    ) async throws -> String {
+        owLog("[Whisper] Transcribing batch samples=\(audioData.count) overlap=\(overlapSampleCount)")
+        return try await transcribe(audioData: audioData, language: language)
+    }
+
     private static func removeTrailingSubtitleCredit(from text: String) -> String {
         let pattern = #"(?is)(?:^|\s)altyaz(?:ı|i)\s+m\.?\s*k\.?\s*[.!?…]*\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
@@ -288,7 +304,10 @@ final class WhisperTranscriber: @unchecked Sendable {
             compressionRatioThreshold: 2.4,
             logProbThreshold: -1.0,
             firstTokenLogProbThreshold: firstTokenLogProbThreshold,
-            noSpeechThreshold: 0.6
+            noSpeechThreshold: 0.6,
+            // Let WhisperKit seek through a long three-minute batch using its own timestamps.
+            // The app must not pre-split that batch into many independent decoder calls.
+            chunkingStrategy: ChunkingStrategy.none
         )
 
         let results = try await whisperKit.transcribe(
@@ -341,6 +360,8 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
     }
 }
+
+extension WhisperTranscriber: WhisperTranscriptionService {}
 
 enum TranscriberError: LocalizedError {
     case modelNotLoaded

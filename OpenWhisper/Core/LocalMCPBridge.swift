@@ -101,21 +101,27 @@ final class LocalMCPBridge: @unchecked Sendable {
 
         let fm = FileManager.default
         let mainBundlePath = Bundle.main.bundlePath
-        let possiblePaths = [
-            Bundle.main.path(forResource: "spotify_smart_mcp", ofType: "py"),
+        let possiblePaths: [String] = [
+            Bundle.main.path(forResource: "spotify_smart_mcp", ofType: "py")
+        ].compactMap { $0 } + [
+            // Installed app bundles keep loose resources under Contents/Resources.
+            // Keep this explicit fallback because Bundle.main resource lookup can
+            // differ between `swift run` and the packaged .app.
+            URL(fileURLWithPath: mainBundlePath)
+                .appendingPathComponent("Contents/Resources/spotify_smart_mcp.py").path,
             (mainBundlePath as NSString).deletingLastPathComponent + "/scripts/spotify_smart_mcp.py"
         ]
 
         var scriptPath: String?
         for path in possiblePaths {
-            if let p = path, fm.fileExists(atPath: p) {
-                scriptPath = p
+            if fm.fileExists(atPath: path) {
+                scriptPath = path
                 break
             }
         }
 
         guard let validScriptPath = scriptPath else {
-            owLog("[MCPBridge] Could not find spotify_smart_mcp.py script path.")
+            owLog("[MCPBridge] Could not find spotify_smart_mcp.py script path. Searched: \(possiblePaths.compactMap { $0 }.joined(separator: ", "))")
             return
         }
 

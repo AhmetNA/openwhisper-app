@@ -5,13 +5,21 @@ struct FlowBarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            switch appState.recordingState {
-            case .idle:
-                idleContent
-            case .recording:
-                recordingContent
-            case .transcribing:
-                transcribingContent
+            if let message = appState.flowBarMessage {
+                Text(message)
+                    .font(.custom("Bradley Hand", size: 13.5).bold())
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+            } else {
+                switch appState.recordingState {
+                case .idle:
+                    idleContent
+                case .recording:
+                    recordingContent
+                case .transcribing:
+                    transcribingContent
+                }
             }
         }
         .padding(.horizontal, 12)

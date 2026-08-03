@@ -1,16 +1,16 @@
 import Foundation
 import Accelerate
 
-/// Splits completed 16 kHz dictation audio into bounded Whisper work units.  The microphone
-/// remains one uninterrupted recording; this type only chooses decoder boundaries afterwards.
-/// Keeping the overlap in audio (rather than guessing words in text) preserves context when a
-/// boundary has to fall during speech.
+/// Joins transcript batches from one uninterrupted dictation. The microphone remains one
+/// recording; AudioEngine emits roughly three-minute batches and WhisperKit handles its own
+/// 30-second model windows inside each batch.
 struct AudioSegmentation {
     static let sampleRate = 16_000
-    /// Whisper's Core ML feature window is 30 seconds. Keep our units just below that limit so
-    /// long dictations never depend on WhisperKit's internal seek loop to recover the tail.
-    static let preferredDuration = 25
-    static let maximumDuration = 30
+    /// A batch is intentionally much longer than Whisper's model window. This lets WhisperKit
+    /// keep its own seek/timestamp context instead of making the app concatenate many short
+    /// decoder calls after recording has already ended.
+    static let preferredDuration = 180
+    static let maximumDuration = 180
     static let overlapDuration = 1
 
     struct Segment: Sendable {
@@ -19,9 +19,9 @@ struct AudioSegmentation {
         let overlapSampleCount: Int
     }
 
-    /// Uses a conservative 400 ms low-energy run around the 25-second point when one exists.
+    /// Uses a conservative 400 ms low-energy run near the three-minute point when one exists.
     /// If continuous speech/noise makes that unsafe, the hard limit is used and the following
-    /// segment includes one second of preceding audio.
+    /// batch includes one second of preceding audio.
     static func makeSegments(from samples: [Float]) -> [Segment] {
         guard !samples.isEmpty else { return [] }
 
@@ -48,9 +48,9 @@ struct AudioSegmentation {
         return segments
     }
 
-    /// Looks from 20 through 30 seconds for the quietest 400 ms run. The RMS threshold is
-    /// intentionally conservative: a questionable quiet patch is worse than using overlap at
-    /// the hard boundary.
+    /// Looks across the final five seconds before the three-minute hard boundary for the
+    /// quietest 400 ms run. The RMS threshold is intentionally conservative: a questionable
+    /// quiet patch is worse than using overlap at the hard boundary.
     private static func preferredSilenceCut(
         in samples: [Float],
         preferredCut: Int,
