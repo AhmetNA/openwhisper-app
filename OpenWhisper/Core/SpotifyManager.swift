@@ -157,23 +157,156 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Detection & LLM Intent Classification
 
+    /// The only intents allowed to cross the MCP side-effect boundary. Keeping the
+    /// recognition result structured prevents the handler from turning arbitrary residue
+    /// into a search request when no real Spotify action was recognized.
+    private enum ExplicitSpotifyIntent {
+        case pause
+        case play
+        case next
+        case previous
+        case setVolume(Int)
+        case currentTrack
+        case search(String)
+        case likeCurrentTrack
+    }
+
+    private static let musicContextWords: Set<String> = [
+        "müzik", "müziği", "müziğin", "müziğe", "muzik", "muzigi",
+        "şarkı", "şarkıyı", "şarkıya", "şarkının", "şarkısını", "şarkılar", "şarkıları",
+        "sarki", "sarkiyi", "sarkiya", "sarkisini", "sarkilar", "sarkilari",
+        "parça", "parçayı", "parçaya", "parçasını", "parçalar", "parçaları",
+        "parca", "parcayi", "parcaya", "parcasini", "parcalar", "parcalari",
+        "playlist", "albüm", "album", "beğenilenler", "beğendiklerim", "liked"
+    ]
+
+    private static let mentionOrNegationWords: Set<String> = [
+        "istemiyorum", "istemem", "istemedim", "değil", "degil", "olmasın", "olmasin",
+        "demiyorum", "demedim", "bahsediyorum", "bahsettim", "hakkında", "hakkinda",
+        "kelimesi", "kelimesini", "komutu", "komutunu", "konuşalım", "konusalim",
+        "sakın", "sakin", "gibi", "şey", "şeyler", "sey", "seyler", "dedi", "dedim", "demek"
+    ]
+
+    private static let commandTailWords: Set<String> = [
+        "lütfen", "lutfen", "şimdi", "simdi", "hemen", "artık", "artik"
+    ]
+
+    /// Tokenizes punctuation as separators, which gives exact word-boundary behavior for
+    /// cases such as `ses` versus `sesim` and `spotify'da` versus an unrelated substring.
+    private static func intentWords(_ normalized: String) -> [String] {
+        normalized
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private static func isSpotifyWord(_ word: String) -> Bool {
+        word == "spotify" || ["spotifyda", "spotifyde", "spotifydan", "spotifyden", "spotifya", "spotifye"].contains(word)
+    }
+
+    /// Without an explicit `Spotify` address, a control verb must be in command position:
+    /// at the end of the utterance, apart from harmless politeness/timing words. This keeps
+    /// phrases that merely discuss an action from becoming playback commands.
+    private static func hasCommandPositionVerb(_ verbs: Set<String>, in words: [String]) -> Bool {
+        guard let verbIndex = words.lastIndex(where: verbs.contains) else { return false }
+        return words[words.index(after: verbIndex)...].allSatisfy(commandTailWords.contains)
+    }
+
+    /// Conservative, deterministic gate that must pass before Ollama is even consulted.
+    /// A music noun by itself is never a command, and a generic word such as `sesim` cannot
+    /// become a Spotify volume operation. Ollama may veto a candidate but cannot promote
+    /// ordinary dictation into a side-effecting intent.
+    private static func explicitIntent(in text: String) -> ExplicitSpotifyIntent? {
+        let normalized = normalize(text)
+        guard !normalized.isEmpty else { return nil }
+
+        let words = intentWords(normalized)
+        guard !words.isEmpty, words.count <= maxCommandWordCount else { return nil }
+
+        let wordSet = Set(words)
+        guard mentionOrNegationWords.isDisjoint(with: wordSet) else { return nil }
+
+        let hasSpotifyContext = words.contains(where: isSpotifyWord)
+        let hasMusicContext = !musicContextWords.isDisjoint(with: wordSet)
+        let hasExplicitTarget = hasSpotifyContext || hasMusicContext
+
+        // Queries about the current track are explicit even without saying Spotify, but
+        // only these established phrases qualify. A loose `contains("şu an ne")` made
+        // ordinary questions eligible previously.
+        if hasExplicitTarget,
+           (normalized.contains("ne çalıyor") ||
+            normalized.contains("hangi şarkı çalıyor") ||
+            normalized.contains("hangi parça çalıyor") ||
+            normalized.contains("çalan şarkı ne") ||
+            normalized.contains("çalan parça ne")) {
+            return .currentTrack
+        }
+
+        // Spotify volume needs an actual Spotify/music target, an exact volume noun, a
+        // numeric value, and an adjustment verb. `sesim`, `sesimi`, and "ses kontrol"
+        // therefore remain dictation.
+        let volumeWords: Set<String> = ["ses", "sesi", "sesini", "volume"]
+        let volumeVerbs: Set<String> = ["yap", "ayarla", "getir", "çıkar", "cikar", "indir", "artır", "artir", "azalt", "set"]
+        if hasExplicitTarget,
+           !volumeWords.isDisjoint(with: wordSet),
+           !volumeVerbs.isDisjoint(with: wordSet),
+           let volume = words.compactMap(Int.init).first,
+           (0...100).contains(volume) {
+            return .setVolume(volume)
+        }
+
+        guard hasExplicitTarget else { return nil }
+
+        // Playing the whole Liked Songs collection needs a dedicated MCP operation. Do
+        // not silently reinterpret it as a text search or bypass MCP via the legacy API.
+        guard !isLikedSongsPlaybackCommand(normalized) else { return nil }
+
+        let likeVerbs: Set<String> = ["ekle", "beğen", "begen", "like"]
+        if !likeVerbs.isDisjoint(with: wordSet),
+           (normalized.contains("çalan şarkı") || normalized.contains("çalan parça") ||
+            normalized.contains("beğenilenlerime") || normalized.contains("beğendiklerime")) {
+            return .likeCurrentTrack
+        }
+
+        let nextWords: Set<String> = ["sonraki", "next"]
+        let transitionVerbs: Set<String> = ["geç", "gec", "atla", "skip"]
+        if !nextWords.isDisjoint(with: wordSet),
+           (hasSpotifyContext || hasCommandPositionVerb(transitionVerbs, in: words)) {
+            return .next
+        }
+
+        let previousWords: Set<String> = ["önceki", "onceki", "previous", "prev"]
+        if !previousWords.isDisjoint(with: wordSet),
+           (hasSpotifyContext || hasCommandPositionVerb(transitionVerbs, in: words)) {
+            return .previous
+        }
+
+        let pauseVerbs: Set<String> = ["durdur", "kapat", "duraklat", "pause"]
+        if !pauseVerbs.isDisjoint(with: wordSet),
+           (hasSpotifyContext || hasCommandPositionVerb(pauseVerbs, in: words)) {
+            return .pause
+        }
+
+        let playVerbs: Set<String> = ["çal", "cal", "aç", "ac", "oynat", "başlat", "baslat", "dinlet", "play", "resume"]
+        if !playVerbs.isDisjoint(with: wordSet),
+           (hasSpotifyContext || hasCommandPositionVerb(playVerbs, in: words)) {
+            let query = shared.extractSearchQuery(normalized)
+            return query.isEmpty ? .play : .search(query)
+        }
+
+        let searchVerbs: Set<String> = ["ara", "bul", "search"]
+        if hasSpotifyContext, hasCommandPositionVerb(searchVerbs, in: words) {
+            let query = shared.extractSearchQuery(normalized)
+            if !query.isEmpty { return .search(query) }
+        }
+
+        return nil
+    }
+
     /// Check if transcribed text is a Spotify voice command.
     /// When Ollama is available, uses local LLM intent classification to verify
     /// whether the user truly intended to trigger music playback vs regular dictation.
     static func isSpotifyCommand(_ text: String, ollamaAvailable: Bool = false) async -> Bool {
-        let normalized = normalize(text)
-        guard !normalized.isEmpty else { return false }
-
-        let wordCount = normalized.split(separator: " ").count
-        guard wordCount <= maxCommandWordCount else { return false }
-
-        // Fast candidate pre-check: must start with "spotify" or contain music-related keywords
-        let musicKeywords = ["spotify", "müzik", "muzik", "şarkı", "sarki", "parça", "playlist", "albüm", "beğenilen", "beğendik", "çal", "cal", "çalıyor", "caliyor", "oynat", "başlat", "durdur", "kapat", "sesi", "ses ", "dinlemek", "liste"]
-        let isCandidate = (normalized.split(separator: " ").first?.hasPrefix("spotify") == true) ||
-                          musicKeywords.contains(where: { normalized.contains($0) }) ||
-                          transportPrefixes.contains { hasCommandPrefix(normalized, $0.0) }
-
-        guard isCandidate else { return false }
+        guard explicitIntent(in: text) != nil else { return false }
 
         // If Ollama is available, perform LLM intent classification
         if ollamaAvailable {
@@ -183,27 +316,9 @@ final class SpotifyManager: @unchecked Sendable {
             }
         }
 
-        // Strict heuristic fallback (when Ollama is unavailable or times out)
-        return isStrictSpotifyCommand(normalized)
-    }
-
-    /// Strict heuristic matching used as a fallback when Ollama is not available.
-    /// Excludes bare ambiguous single words like "başlat", "kapat", "durdur", "sonraki", "önceki"
-    /// unless accompanied by explicit music context.
-    private static func isStrictSpotifyCommand(_ normalized: String) -> Bool {
-        let explicitKeywords = ["spotify", "müzik", "şarkı", "beğenilen", "beğendik", "parça", "playlist", "albüm", "liked songs", "sesi", "çalıyor", "liste", "dinlemek"]
-        if explicitKeywords.contains(where: { normalized.contains($0) }) {
-            return true
-        }
-
-        let ambiguousPrefixes: Set<String> = ["başlat", "kapat", "durdur", "sonraki", "önceki"]
-        if let (prefix, _) = transportPrefixes.first(where: { hasCommandPrefix(normalized, $0.0) }) {
-            if !ambiguousPrefixes.contains(prefix) {
-                return true
-            }
-        }
-
-        return false
+        // With Ollama unavailable or timed out, the deterministic explicit-intent gate is
+        // already sufficient. It is deliberately fail-closed rather than keyword-based.
+        return true
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
@@ -234,11 +349,11 @@ final class SpotifyManager: @unchecked Sendable {
             - "spotify'da tarkan çal" -> {"is_music_command": true}
             - "müziği durdur" -> {"is_music_command": true}
             - "sonraki şarkıya geç" -> {"is_music_command": true}
-            - "sesi yüzde 50 yap" -> {"is_music_command": true}
-            - "şu an ne çalıyor" -> {"is_music_command": true}
+            - "spotify sesini yüzde 50 yap" -> {"is_music_command": true}
+            - "şu an hangi şarkı çalıyor" -> {"is_music_command": true}
             - "çalan şarkıyı beğenilenlerime ekle" -> {"is_music_command": true}
             - "sporda dinlemek için hareketli bir müzik aç" -> {"is_music_command": true}
-            - "bana arkada çalacak dinlendirici bir liste aç" -> {"is_music_command": true}
+            - "spotify'da dinlendirici bir liste aç" -> {"is_music_command": true}
             - "bu projeyi bugün başlatacağız" -> {"is_music_command": false}
             - "kapıyı kapat lütfen" -> {"is_music_command": false}
             - "durdur şu işlemi" -> {"is_music_command": false}
@@ -294,113 +409,51 @@ final class SpotifyManager: @unchecked Sendable {
     /// Handles a transcript already identified as a Spotify command via LocalMCPBridge.
     func handleCommand(text: String, targetApp: NSRunningApplication? = nil) async -> Bool {
         let activeApp = targetApp ?? NSWorkspace.shared.frontmostApplication
-        let normalized = Self.normalize(text)
+        guard let intent = Self.explicitIntent(in: text) else {
+            owLog("[SpotifyManager] Refused non-explicit Spotify intent: '\(text)'")
+            return false
+        }
         owLog("[SpotifyManager] Handling command via LocalMCPBridge: '\(text)'")
 
-        var result = false
-        var notificationText = ""
-        // Set by branches (like, search & play) that already send their own notification
-        // via the verified-working `SpotifyWebAPI`/AppleScript path below, so the shared
-        // `sendNotification` call at the bottom doesn't double up on them.
-        var alreadyNotified = false
-
-        // 1. Volume commands ("sesi yüzde 50 yap", "sesi 80 yap", "ses %50")
-        if normalized.contains("sesi") || normalized.contains("volume") || normalized.contains("ses ") {
-            let digits = normalized.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-            if let vol = Int(digits), vol >= 0, vol <= 100 {
-                notificationText = await LocalMCPBridge.shared.setVolume(vol)
-                result = true
+        let mcpResult: MCPToolResult
+        switch intent {
+        case .pause:
+            mcpResult = await LocalMCPBridge.shared.pause()
+        case .play:
+            mcpResult = await LocalMCPBridge.shared.play()
+        case .next:
+            mcpResult = await LocalMCPBridge.shared.nextTrack()
+        case .previous:
+            mcpResult = await LocalMCPBridge.shared.previousTrack()
+        case .setVolume(let volume):
+            mcpResult = await LocalMCPBridge.shared.setVolume(volume)
+        case .currentTrack:
+            mcpResult = await LocalMCPBridge.shared.getCurrentTrack()
+        case .search(let query):
+            // Resolve through the app's authenticated Spotify search client, but keep the
+            // playback side effect behind the MCP boundary. If search credentials/network
+            // are unavailable, the MCP search tool provides its guarded local fallback.
+            do {
+                let track = try await SpotifyWebAPI.shared.searchTopTrack(query: query)
+                mcpResult = await LocalMCPBridge.shared.playTrack(uri: track.uri)
+            } catch {
+                owLog("[SpotifyManager] Spotify Web API lookup failed; using MCP search fallback: \(error)")
+                mcpResult = await LocalMCPBridge.shared.searchAndPlay(query: query)
             }
+        case .likeCurrentTrack:
+            mcpResult = await LocalMCPBridge.shared.likeCurrentTrack()
         }
 
-        // 2. Currently playing info ("şu an ne çalıyor", "hangi şarkı çalıyor")
-        if !result && (normalized.contains("ne çalıyor") || normalized.contains("hangi şarkı") || normalized.contains("şu an ne")) {
-            notificationText = await LocalMCPBridge.shared.getCurrentTrack()
-            result = true
-        }
+        sendNotification(title: "🎵 Spotify (MCP)", body: mcpResult.message)
 
-        // 3a. Play Liked Songs ("beğenilenleri çal", "beğenilen şarkıları aç", "beğenilerimin
-        // listesini çal", "liked songs çal"). Must be checked BEFORE the Like branch below —
-        // both branches key off "beğen..." substrings, and without this ordering "beğenilen
-        // şarkıları aç" would fall into the Like (single-track toggle) branch instead of
-        // actually playing the Liked Songs list. See `isLikedSongsPlaybackCommand` for why
-        // this is content-based rather than prefix-based matching.
-        if !result && Self.isLikedSongsPlaybackCommand(normalized) {
-            result = await playLikedSongs()
-            alreadyNotified = true
-        }
-
-        // 3b. Like current track ("beğenilerime ekle", "beğenilenlerime ekle",
-        // "beğendiklerime ekle", "şarkıyı beğen"). Sends Spotify's native ⌥⇧B "Save to Liked
-        // Songs" keyboard shortcut instead of the Web API — see `likeCurrentTrack()` below for
-        // why. Keyed off "ekle" (the verb in every real "add to Liked Songs" phrasing seen in
-        // logs) OR the literal "şarkıyı beğen" pattern, rather than a bare `contains("beğen")`,
-        // so this can't swallow the "play Liked Songs" phrasings handled by 3a above.
-        if !result && (normalized.contains("ekle") || normalized.contains("şarkıyı beğen")) {
-            result = await likeCurrentTrack(targetApp: activeApp)
-            alreadyNotified = true
-        }
-
-        // 4. Basic Transport (pause, play, next, prev)
-        if !result {
-            if normalized.contains("durdur") || normalized.contains("kapat") || normalized.contains("pause") {
-                // Native AppleScript `pause` via `runTransport(.pause)`, NOT
-                // `LocalMCPBridge.shared.playPause()` — that's a TOGGLE, so it would
-                // start playback instead of pausing whenever music is already stopped,
-                // making "şarkıyı durdur" and "şarkıyı çal" the same command depending
-                // on current state. Mirrors the resume branch below for the same reason.
-                result = await runTransport(.pause)
-                alreadyNotified = true
-            } else if normalized.contains("sonraki") || normalized.contains("next") {
-                notificationText = await LocalMCPBridge.shared.nextTrack()
-                result = true
-            } else if normalized.contains("önceki") || normalized.contains("prev") {
-                notificationText = await LocalMCPBridge.shared.previousTrack()
-                result = true
-            } else if (normalized.contains("çal") || normalized.contains("aç") ||
-                       normalized.contains("oynat") || normalized.contains("başlat") ||
-                       normalized.contains("play")) && extractSearchQuery(normalized).isEmpty {
-                // Bare resume ("şarkıyı çal", "müziği aç") — no search terms remain once
-                // junk words (incl. "şarkı" inflections, see `searchJunkWords`) are
-                // stripped. `LocalMCPBridge.shared.playPause()` is a TOGGLE, not a
-                // dedicated resume, and would make this indistinguishable from the pause
-                // branch above — so this uses the native AppleScript `play` command via
-                // `runTransport(.play)` instead (which also verifies playback actually
-                // started via `confirmPlaying()` and sends its own notification).
-                // Guarded on the residue being empty so real search+play requests like
-                // "tarkan çal" or "... hareketli bir müzik aç" (non-empty residue) are
-                // NOT swallowed here — they fall through to step 5 as before.
-                result = await runTransport(.play)
-                alreadyNotified = true
-            }
-        }
-
-        // 5. Fallback: Search & Play ("Tarkan'ın son şarkısını çal", "Sporda dinlemek için...",
-        // "Bana arkada..."). Delegates to the already-verified `playSearchQuery` (Web API
-        // search + direct AppleScript `play track` by URI) instead of the MCP Python
-        // process, which has no access to the user's Spotify token and can only fall back
-        // to opening the search screen without actually starting playback.
-        if !result {
-            let searchQuery = extractSearchQuery(normalized)
-            if searchQuery.isEmpty {
-                // No search terms AND step 4's guarded resume branch above didn't match
-                // (e.g. no çal/aç/oynat/başlat/play verb was even present) — resume
-                // playback rather than literally searching Spotify for raw junk text.
-                result = await runTransport(.play)
-            } else {
-                result = await playSearchQuery(searchQuery)
-            }
-            alreadyNotified = true
-        }
-
-        if result {
-            if !alreadyNotified {
-                sendNotification(title: "🎵 Spotify (MCP)", body: notificationText)
-            }
+        if mcpResult.succeeded {
             keepInBackground(targetApp: activeApp)
         }
 
-        return result
+        // MCP refusal, timeout, malformed output, and tool errors are not successful
+        // handling. AppState will preserve the transcript through the normal dictation
+        // fallback instead of swallowing it as though Spotify acted.
+        return mcpResult.succeeded
     }
 
     private func keepInBackground(targetApp: NSRunningApplication?) {

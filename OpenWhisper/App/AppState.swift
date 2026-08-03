@@ -1022,15 +1022,15 @@ final class AppState {
                                 targetApp: session.targetApp
                             )
                             if case .pastedUnverified = outcome {
-                                self.showFlowBarMessage("Yapıştırma gönderildi")
+                                self.dismissFlowBarMessage()
                             } else if session.hadDiarizedOverlap {
                                 self.showFlowBarMessage("Karışık konuşma ayrıştırıldı")
                             } else {
-                                self.showFlowBarMessage(
-                                    session.hadDiarizationFailure
-                                        ? "Karışık konuşma ayrıştırılamadı — hedef konuşma korundu"
-                                        : "Yapıştırıldı"
-                                )
+                                if session.hadDiarizationFailure {
+                                    self.showFlowBarMessage("Karışık konuşma ayrıştırılamadı — hedef konuşma korundu")
+                                } else {
+                                    self.dismissFlowBarMessage()
+                                }
                             }
                         case .clipboardOnly(let reason):
                             self.swapPair = nil
@@ -1093,6 +1093,15 @@ final class AppState {
             self.flowBarMessage = nil
             self.syncFlowBarVisibility()
         }
+    }
+
+    /// Removes a transient flow-bar message without leaving the bar visible after a successful
+    /// paste. Successful delivery is intentionally silent; only actionable outcomes remain.
+    private func dismissFlowBarMessage() {
+        flowBarMessageTask?.cancel()
+        flowBarMessageTask = nil
+        flowBarMessage = nil
+        syncFlowBarVisibility()
     }
 
     private func clearFlowBarMessage() {
@@ -1258,24 +1267,16 @@ final class AppState {
         }
 
         switch (pasteOutcome, appendSucceeded) {
-        case (.pastedVerified, true):
+        case (.pastedVerified, true), (.pastedUnverified, true):
             swapPair = nil
             hotkey?.setSwapAvailable(false)
             lastInjectedIsCleaned = true
             lastInjectedText = confirmationTextBeingDelivered
-            showFlowBarMessage("Yapıştırıldı — ses profiline eklendi")
-        case (.pastedUnverified, true):
-            swapPair = nil
-            hotkey?.setSwapAvailable(false)
-            lastInjectedIsCleaned = true
-            lastInjectedText = confirmationTextBeingDelivered
-            showFlowBarMessage("Yapıştırma gönderildi — ses profiline eklendi")
+            showFlowBarMessage("Ses profiline eklendi")
         case (.clipboardOnly(_), true):
             showFlowBarMessage("Metin panoda, ses profiline eklendi")
-        case (.pastedVerified, false):
-            showFlowBarMessage("Yapıştırıldı")
-        case (.pastedUnverified, false):
-            showFlowBarMessage("Yapıştırma gönderildi")
+        case (.pastedVerified, false), (.pastedUnverified, false):
+            dismissFlowBarMessage()
         case (.clipboardOnly(let reason), false):
             showFlowBarMessage(clipboardOnlyMessage(for: reason))
         }

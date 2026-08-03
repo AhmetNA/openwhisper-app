@@ -22,6 +22,24 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import os
+import re
+
+
+EXPLICIT_INTENT_KEY = "explicit_intent"
+EXPLICIT_INTENT_ERROR = (
+    "Refused: Spotify action requires a validated explicit user command "
+    f"({EXPLICIT_INTENT_KEY}=true)."
+)
+
+
+def has_explicit_intent(params: dict) -> bool:
+    """Accept only an exact JSON boolean true, never truthy strings/numbers."""
+    return isinstance(params, dict) and params.get(EXPLICIT_INTENT_KEY) is True
+
+
+def require_explicit_intent(params: dict) -> str | None:
+    """Return a refusal message unless the caller attests explicit user intent."""
+    return None if has_explicit_intent(params) else EXPLICIT_INTENT_ERROR
 
 # --- Helper Functions for Local AppleScript Control ---
 
@@ -96,13 +114,35 @@ def web_api_request(endpoint: str, method: str = "GET", data: dict = None, token
 
 def tool_play_pause(params: dict) -> str:
     """Toggles play/pause state."""
+    if refusal := require_explicit_intent(params):
+        return refusal
     ok, out = run_applescript("playpause")
     if ok:
         return "Spotify playback toggled (Local AppleScript)."
     return f"Failed to toggle playback: {out}"
 
+def tool_play(params: dict) -> str:
+    """Starts or resumes playback without toggle ambiguity."""
+    if refusal := require_explicit_intent(params):
+        return refusal
+    ok, out = run_applescript("play")
+    if ok:
+        return "Spotify playback started (Local AppleScript)."
+    return f"Failed to start playback: {out}"
+
+def tool_pause(params: dict) -> str:
+    """Pauses playback without toggle ambiguity."""
+    if refusal := require_explicit_intent(params):
+        return refusal
+    ok, out = run_applescript("pause")
+    if ok:
+        return "Spotify playback paused (Local AppleScript)."
+    return f"Failed to pause playback: {out}"
+
 def tool_next_track(params: dict) -> str:
     """Skips to the next track."""
+    if refusal := require_explicit_intent(params):
+        return refusal
     ok, out = run_applescript("next track")
     if ok:
         return "Skipped to next track (Local AppleScript)."
@@ -110,6 +150,8 @@ def tool_next_track(params: dict) -> str:
 
 def tool_previous_track(params: dict) -> str:
     """Goes to previous track."""
+    if refusal := require_explicit_intent(params):
+        return refusal
     ok, out = run_applescript("previous track")
     if ok:
         return "Returned to previous track (Local AppleScript)."
@@ -117,11 +159,14 @@ def tool_previous_track(params: dict) -> str:
 
 def tool_set_volume(params: dict) -> str:
     """Sets Spotify volume (0-100)."""
-    volume = params.get("volume", 50)
-    try:
-        vol = max(0, min(100, int(volume)))
-    except ValueError:
+    if refusal := require_explicit_intent(params):
+        return refusal
+    volume = params.get("volume")
+    if isinstance(volume, bool) or not isinstance(volume, (int, float)):
         return "Invalid volume value. Expected integer 0-100."
+    if not float(volume).is_integer() or not 0 <= volume <= 100:
+        return "Invalid volume value. Expected integer 0-100."
+    vol = int(volume)
     
     ok, out = run_applescript(f"set sound volume to {vol}")
     if ok:
@@ -130,6 +175,8 @@ def tool_set_volume(params: dict) -> str:
 
 def tool_get_current_track(params: dict) -> str:
     """Gets currently playing track info."""
+    if refusal := require_explicit_intent(params):
+        return refusal
     if not is_spotify_running():
         return "Spotify is not currently running."
     
@@ -149,7 +196,12 @@ def tool_get_current_track(params: dict) -> str:
 
 def tool_search_and_play(params: dict) -> str:
     """Searches for a track or artist and plays it."""
-    query = params.get("query", "").strip()
+    if refusal := require_explicit_intent(params):
+        return refusal
+    query_value = params.get("query")
+    if not isinstance(query_value, str):
+        return "Error: Search query must be a string."
+    query = query_value.strip()
     if not query:
         return "Error: Search query cannot be empty."
     
@@ -170,17 +222,19 @@ def tool_search_and_play(params: dict) -> str:
                 if play_ok:
                     return f"Now playing via Web API: '{track_name}' by {artist_name}"
     
-    # Offline Fallback: Open Spotify search URI locally
+    # Offline fallback: open the search screen only. Starting playback here used to
+    # play whatever happened to be queued, not the requested search result.
     spotify_uri = f"spotify:search:{urllib.parse.quote(query)}"
     try:
         subprocess.run(["open", spotify_uri], check=True)
-        run_applescript("play")
         return f"Opened Spotify search locally for: '{query}'"
     except Exception as e:
         return f"Failed to perform search: {str(e)}"
 
 def tool_like_current_track(params: dict) -> str:
     """Likes currently playing track (Web API required)."""
+    if refusal := require_explicit_intent(params):
+        return refusal
     token = params.get("access_token") or os.environ.get("SPOTIFY_ACCESS_TOKEN")
     if not token or not check_internet():
         return "Offline Mode: Liking songs requires Spotify Web API connection & internet."
@@ -195,23 +249,71 @@ def tool_like_current_track(params: dict) -> str:
     
     return "Could not save track to Liked Songs. Ensure Spotify is actively playing."
 
+def tool_play_track(params: dict) -> str:
+    """Plays an already-resolved Spotify track URI."""
+    if refusal := require_explicit_intent(params):
+        return refusal
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not re.fullmatch(r"spotify:track:[A-Za-z0-9]+", uri):
+        return "Invalid Spotify track URI."
+    ok, out = run_applescript(f'play track "{uri}"')
+    if ok:
+        return f"Spotify track playback started: {uri}"
+    return f"Failed to play Spotify track: {out}"
+
 # --- Tools Manifest for MCP ---
 
 TOOLS = [
     {
         "name": "spotify_play_pause",
         "description": "Oynatmayı duraklatır veya devam ettirir (Play/Pause).",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                EXPLICIT_INTENT_KEY: {"type": "boolean", "description": "Yalnızca doğrulanmış açık kullanıcı komutunda true"}
+            },
+            "required": [EXPLICIT_INTENT_KEY]
+        }
+    },
+    {
+        "name": "spotify_play",
+        "description": "Oynatmayı başlatır veya devam ettirir.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                EXPLICIT_INTENT_KEY: {"type": "boolean", "description": "Yalnızca doğrulanmış açık kullanıcı komutunda true"}
+            },
+            "required": [EXPLICIT_INTENT_KEY]
+        }
+    },
+    {
+        "name": "spotify_pause",
+        "description": "Oynatmayı duraklatır.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                EXPLICIT_INTENT_KEY: {"type": "boolean", "description": "Yalnızca doğrulanmış açık kullanıcı komutunda true"}
+            },
+            "required": [EXPLICIT_INTENT_KEY]
+        }
     },
     {
         "name": "spotify_next_track",
         "description": "Sonraki şarkıya geçer (Next track).",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+            "type": "object",
+            "properties": {EXPLICIT_INTENT_KEY: {"type": "boolean"}},
+            "required": [EXPLICIT_INTENT_KEY]
+        }
     },
     {
         "name": "spotify_previous_track",
         "description": "Önceki şarkıya döner (Previous track).",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+            "type": "object",
+            "properties": {EXPLICIT_INTENT_KEY: {"type": "boolean"}},
+            "required": [EXPLICIT_INTENT_KEY]
+        }
     },
     {
         "name": "spotify_set_volume",
@@ -219,15 +321,20 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "volume": {"type": "number", "description": "Ses yüzdesi (0-100)"}
+                "volume": {"type": "integer", "minimum": 0, "maximum": 100, "description": "Ses yüzdesi (0-100)"},
+                EXPLICIT_INTENT_KEY: {"type": "boolean"}
             },
-            "required": ["volume"]
+            "required": ["volume", EXPLICIT_INTENT_KEY]
         }
     },
     {
         "name": "spotify_get_current_track",
         "description": "Şu an çalan şarkı, sanatçı ve durum bilgisini döner.",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+            "type": "object",
+            "properties": {EXPLICIT_INTENT_KEY: {"type": "boolean"}},
+            "required": [EXPLICIT_INTENT_KEY]
+        }
     },
     {
         "name": "spotify_search_and_play",
@@ -235,27 +342,62 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Aranacak şarkı veya sanatçı adı"}
+                "query": {"type": "string", "minLength": 1, "description": "Aranacak şarkı veya sanatçı adı"},
+                EXPLICIT_INTENT_KEY: {"type": "boolean"}
             },
-            "required": ["query"]
+            "required": ["query", EXPLICIT_INTENT_KEY]
+        }
+    },
+    {
+        "name": "spotify_play_track",
+        "description": "Önceden çözümlenmiş Spotify track URI'sini oynatır.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "pattern": "^spotify:track:[A-Za-z0-9]+$"},
+                EXPLICIT_INTENT_KEY: {"type": "boolean"}
+            },
+            "required": ["uri", EXPLICIT_INTENT_KEY]
         }
     },
     {
         "name": "spotify_like_current_track",
         "description": "Çalan şarkıyı Beğenilen Şarkılar kütüphanesine ekler (Online mod gerektirir).",
-        "inputSchema": {"type": "object", "properties": {}}
+        "inputSchema": {
+            "type": "object",
+            "properties": {EXPLICIT_INTENT_KEY: {"type": "boolean"}},
+            "required": [EXPLICIT_INTENT_KEY]
+        }
     }
 ]
 
 HANDLERS = {
     "spotify_play_pause": tool_play_pause,
+    "spotify_play": tool_play,
+    "spotify_pause": tool_pause,
     "spotify_next_track": tool_next_track,
     "spotify_previous_track": tool_previous_track,
     "spotify_set_volume": tool_set_volume,
     "spotify_get_current_track": tool_get_current_track,
     "spotify_search_and_play": tool_search_and_play,
+    "spotify_play_track": tool_play_track,
     "spotify_like_current_track": tool_like_current_track,
 }
+
+ERROR_RESPONSE_PREFIXES = (
+    "Refused:",
+    "Error:",
+    "Invalid ",
+    "Failed ",
+    "Could not ",
+    "Offline Mode:",
+    "Spotify is not currently running.",
+)
+
+
+def is_error_response(text: str) -> bool:
+    """Map handler outcomes to MCP's typed `isError` result field."""
+    return text.startswith(ERROR_RESPONSE_PREFIXES)
 
 # --- JSON-RPC 2.0 stdio MCP Server Loop ---
 
@@ -321,6 +463,7 @@ def main():
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "result": {
+                            "isError": is_error_response(content_str),
                             "content": [{"type": "text", "text": content_str}]
                         }
                     }

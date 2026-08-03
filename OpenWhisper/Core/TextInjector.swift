@@ -125,10 +125,8 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
                 self.complete(outcome, onOutcome: onOutcome)
             case .ready(let destination):
                 self.sendPaste(
-                    cleaned,
                     context: captured,
                     destination: destination,
-                    retryCount: 0,
                     onOutcome: onOutcome
                 )
             }
@@ -201,10 +199,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         case failed(PasteOutcome)
     }
 
-    private enum Verification {
+    enum Verification: Equatable {
         case verified
-        case unchanged
-        case unverified
+        case unverifiedUnreadable
+        case unverifiedNoObservedChange
     }
 
     private let backspaceKeyCode: CGKeyCode = 51
@@ -305,10 +303,8 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     }
 
     private func sendPaste(
-        _ text: String,
         context: PasteContext,
         destination: PasteDestination,
-        retryCount: Int,
         onOutcome: ((PasteOutcome) -> Void)?
     ) {
         // The user may have switched apps during the bounded AX/focus preparation interval.
@@ -332,37 +328,29 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self else { return }
             let state = AXTextAccess.readTextState(destination.element)
-            switch self.verify(state: state, against: context, pastedText: text) {
+            switch self.verify(state: state, against: context) {
             case .verified:
                 self.complete(.pastedVerified, onOutcome: onOutcome)
-            case .unverified:
+            case .unverifiedUnreadable:
                 // AX-unreadable destinations (including terminals) are sent exactly once.
                 self.complete(.pastedUnverified, onOutcome: onOutcome)
-            case .unchanged:
-                guard retryCount == 0,
-                      AXTextAccess.focus(destination.element, matchingPID: destination.pid) else {
-                    self.complete(.pastedUnverified, onOutcome: onOutcome)
-                    return
-                }
-                owLog("[TextInjector] AX field unchanged after paste; refocusing and retrying once")
-                self.sendPaste(
-                    text,
-                    context: context,
-                    destination: destination,
-                    retryCount: retryCount + 1,
-                    onOutcome: onOutcome
-                )
+            case .unverifiedNoObservedChange:
+                // Electron/WebKit accessibility trees can lag behind a successfully consumed
+                // Cmd+V. An unchanged AX snapshot is therefore not proof that the event was
+                // ignored. Once CGEvent has been posted there is no safe acknowledgement that
+                // permits a retry without risking duplicate text, so delivery is exactly once.
+                owLog("[TextInjector] AX field unchanged after paste; treating as delivered without retry")
+                self.complete(.pastedUnverified, onOutcome: onOutcome)
             }
         }
     }
 
-    private func verify(
+    func verify(
         state: AXTextAccess.TextState,
-        against context: PasteContext,
-        pastedText: String
+        against context: PasteContext
     ) -> Verification {
         guard let beforeValue = context.valueAtCapture, let afterValue = state.value else {
-            return .unverified
+            return .unverifiedUnreadable
         }
 
         if beforeValue != afterValue {
@@ -377,18 +365,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             return .verified
         }
 
-        // If both value and readable selection are unchanged, the first event was definitively
-        // ignored.  This is the only case eligible for the single safe retry.
-        if let beforeRange = context.selectedRangeAtCapture,
-           let afterRange = state.selectedRange,
-           sameRange(beforeRange, afterRange) {
-            return .unchanged
-        }
-
-        // A readable value with an unsupported selection attribute is not definitive enough to
-        // retry: the paste may have happened in a destination that cannot expose its range.
-        _ = pastedText
-        return .unverified
+        // Even when both readable values and selection ranges match, asynchronous web editors
+        // may have consumed Cmd+V without publishing the mutation through AX yet. This state is
+        // deliberately unverified, never a signal to post the keyboard event a second time.
+        return .unverifiedNoObservedChange
     }
 
     private func sameRange(_ lhs: CFRange, _ rhs: CFRange) -> Bool {

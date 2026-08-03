@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 import os
 
+struct MCPToolResult: Sendable, Equatable {
+    let succeeded: Bool
+    let message: String
+}
+
 /// Thread-safe atomic container for state variables.
 private final class BridgeState: @unchecked Sendable {
     private var lock = os_unfair_lock()
@@ -10,7 +15,7 @@ private final class BridgeState: @unchecked Sendable {
     var stdoutPipe: Pipe?
     var stderrPipe: Pipe?
     var requestID: Int = 0
-    var pendingContinuations: [Int: CheckedContinuation<String, Never>] = [:]
+    var pendingContinuations: [Int: CheckedContinuation<MCPToolResult, Never>] = [:]
     /// Persistent byte buffer for stdout: a single `availableData` chunk from the
     /// readability handler can split a JSON-RPC line mid-way (or merge two lines into
     /// one), and can also split a multi-byte UTF-8 sequence. Buffering as `Data` and
@@ -217,13 +222,13 @@ final class LocalMCPBridge: @unchecked Sendable {
     /// them hang until `executeTool`'s 3s timeout — used when the underlying process is
     /// known to be gone (dead-process detection at start, or `terminationHandler` firing).
     private func failAllPendingContinuations(with message: String) {
-        let continuations = state.withLock { () -> [CheckedContinuation<String, Never>] in
+        let continuations = state.withLock { () -> [CheckedContinuation<MCPToolResult, Never>] in
             let values = Array(state.pendingContinuations.values)
             state.pendingContinuations.removeAll()
             return values
         }
         for continuation in continuations {
-            continuation.resume(returning: message)
+            continuation.resume(returning: MCPToolResult(succeeded: false, message: message))
         }
     }
 
@@ -242,17 +247,18 @@ final class LocalMCPBridge: @unchecked Sendable {
            let contentArr = resultDict["content"] as? [[String: Any]],
            let firstContent = contentArr.first,
            let text = firstContent["text"] as? String {
-            continuation.resume(returning: text)
+            let isError = resultDict["isError"] as? Bool ?? false
+            continuation.resume(returning: MCPToolResult(succeeded: !isError, message: text))
         } else if let errorDict = json["error"] as? [String: Any],
                   let message = errorDict["message"] as? String {
-            continuation.resume(returning: "MCP Error: \(message)")
+            continuation.resume(returning: MCPToolResult(succeeded: false, message: "MCP Error: \(message)"))
         } else {
-            continuation.resume(returning: line)
+            continuation.resume(returning: MCPToolResult(succeeded: false, message: "Malformed MCP response: \(line)"))
         }
     }
 
     /// Sends a JSON-RPC request to the MCP server with a 3-second timeout.
-    private func executeTool(name: String, arguments: [String: Any] = [:]) async -> String {
+    private func executeTool(name: String, arguments: [String: Any] = [:]) async -> MCPToolResult {
         cancelIdleShutdown()
         startServerIfNeeded()
 
@@ -262,7 +268,7 @@ final class LocalMCPBridge: @unchecked Sendable {
         }
 
         guard let stdin = currentStdin else {
-            return "MCP Server process not connected."
+            return MCPToolResult(succeeded: false, message: "MCP Server process not connected.")
         }
 
         let payload: [String: Any] = [
@@ -277,12 +283,12 @@ final class LocalMCPBridge: @unchecked Sendable {
 
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               var jsonString = String(data: data, encoding: .utf8) else {
-            return "Failed to serialize MCP request."
+            return MCPToolResult(succeeded: false, message: "Failed to serialize MCP request.")
         }
 
         jsonString += "\n"
 
-        let result = await withTaskGroup(of: String.self) { group in
+        let result = await withTaskGroup(of: MCPToolResult.self) { group in
             group.addTask {
                 await withCheckedContinuation { continuation in
                     self.state.withLock {
@@ -295,29 +301,39 @@ final class LocalMCPBridge: @unchecked Sendable {
                         self.state.withLock {
                             _ = self.state.pendingContinuations.removeValue(forKey: currentID)
                         }
-                        continuation.resume(returning: "Encoding error.")
+                        continuation.resume(returning: MCPToolResult(succeeded: false, message: "Encoding error."))
                     }
                 }
             }
 
             group.addTask {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
-                return "__MCP_TIMEOUT__"
+                return MCPToolResult(succeeded: false, message: "__MCP_TIMEOUT__")
             }
 
             if let firstResult = await group.next() {
-                if firstResult == "__MCP_TIMEOUT__" {
-                    self.state.withLock {
-                        _ = self.state.pendingContinuations.removeValue(forKey: currentID)
+                if firstResult.message == "__MCP_TIMEOUT__" {
+                    // Atomically take ownership of the pending continuation before
+                    // resuming it. Removing without resuming leaves the request child
+                    // suspended forever; `withTaskGroup` waits for that child even after
+                    // `cancelAll()`, turning the intended 3s timeout into a permanent hang.
+                    // The response handler performs the same remove-and-resume ownership
+                    // transfer, so a late response simply finds no continuation.
+                    let pending = self.state.withLock {
+                        self.state.pendingContinuations.removeValue(forKey: currentID)
                     }
+                    pending?.resume(returning: MCPToolResult(
+                        succeeded: false,
+                        message: "MCP isteği zaman aşımına uğradı (3 sn)."
+                    ))
                     group.cancelAll()
-                    return "MCP isteği zaman aşımına uğradı (3 sn)."
+                    return MCPToolResult(succeeded: false, message: "MCP isteği zaman aşımına uğradı (3 sn).")
                 } else {
                     group.cancelAll()
                     return firstResult
                 }
             }
-            return "MCP işlemi tamamlandı."
+            return MCPToolResult(succeeded: false, message: "MCP işlemi sonuç döndürmedi.")
         }
         scheduleIdleShutdown()
         return result
@@ -346,31 +362,46 @@ final class LocalMCPBridge: @unchecked Sendable {
 
     // MARK: - Swift Public API
 
-    func playPause() async -> String {
-        await executeTool(name: "spotify_play_pause")
+    /// These methods are action boundaries: callers must invoke them only after the
+    /// transcript has passed the strict explicit-intent gate. The MCP server independently
+    /// requires this exact JSON boolean before performing any subprocess or API side effect.
+    func playPause() async -> MCPToolResult {
+        await executeTool(name: "spotify_play_pause", arguments: ["explicit_intent": true])
     }
 
-    func nextTrack() async -> String {
-        await executeTool(name: "spotify_next_track")
+    func play() async -> MCPToolResult {
+        await executeTool(name: "spotify_play", arguments: ["explicit_intent": true])
     }
 
-    func previousTrack() async -> String {
-        await executeTool(name: "spotify_previous_track")
+    func pause() async -> MCPToolResult {
+        await executeTool(name: "spotify_pause", arguments: ["explicit_intent": true])
     }
 
-    func setVolume(_ vol: Int) async -> String {
-        await executeTool(name: "spotify_set_volume", arguments: ["volume": vol])
+    func nextTrack() async -> MCPToolResult {
+        await executeTool(name: "spotify_next_track", arguments: ["explicit_intent": true])
     }
 
-    func getCurrentTrack() async -> String {
-        await executeTool(name: "spotify_get_current_track")
+    func previousTrack() async -> MCPToolResult {
+        await executeTool(name: "spotify_previous_track", arguments: ["explicit_intent": true])
     }
 
-    func searchAndPlay(query: String) async -> String {
-        await executeTool(name: "spotify_search_and_play", arguments: ["query": query])
+    func setVolume(_ vol: Int) async -> MCPToolResult {
+        await executeTool(name: "spotify_set_volume", arguments: ["volume": vol, "explicit_intent": true])
     }
 
-    func likeCurrentTrack() async -> String {
-        await executeTool(name: "spotify_like_current_track")
+    func getCurrentTrack() async -> MCPToolResult {
+        await executeTool(name: "spotify_get_current_track", arguments: ["explicit_intent": true])
+    }
+
+    func searchAndPlay(query: String) async -> MCPToolResult {
+        await executeTool(name: "spotify_search_and_play", arguments: ["query": query, "explicit_intent": true])
+    }
+
+    func playTrack(uri: String) async -> MCPToolResult {
+        await executeTool(name: "spotify_play_track", arguments: ["uri": uri, "explicit_intent": true])
+    }
+
+    func likeCurrentTrack() async -> MCPToolResult {
+        await executeTool(name: "spotify_like_current_track", arguments: ["explicit_intent": true])
     }
 }

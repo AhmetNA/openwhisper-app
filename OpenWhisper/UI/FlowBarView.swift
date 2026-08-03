@@ -10,10 +10,10 @@ struct FlowBarView: View {
                     rejectedRecordingOfferContent(message: message)
                 } else {
                     Text(message)
-                        .font(.custom("Bradley Hand", size: 13.5).bold())
+                        .font(.custom("Bradley Hand", size: 15).bold())
                         .foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 6)
-                        .frame(height: 22)
+                        .padding(.horizontal, 8)
+                        .frame(height: 26)
                 }
             } else {
                 switch appState.recordingState {
@@ -26,22 +26,22 @@ struct FlowBarView: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 17)
                     .fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 17)
                     .fill(Color.black.opacity(0.35))
             }
             .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 17)
                 .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 17))
     }
 
     // MARK: - Target-speaker confirmation offer
@@ -72,7 +72,7 @@ struct FlowBarView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 6)
-        .frame(height: 22)
+        .frame(height: 26)
     }
 
     // MARK: - Idle
@@ -91,9 +91,9 @@ struct FlowBarView: View {
 
     private var transcribingContent: some View {
         Text("transcribing")
-            .font(.custom("Bradley Hand", size: 13.5).bold())
+            .font(.custom("Bradley Hand", size: 15).bold())
             .foregroundStyle(.white.opacity(0.9))
             .padding(.horizontal, 6)
-            .frame(height: 22)
+            .frame(height: 26)
     }
 }
