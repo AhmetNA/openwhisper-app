@@ -26,6 +26,8 @@ final class FlowBarController {
 
     init(appState: AppState) {
         self.appState = appState
+        // Pre-create panel at app startup for zero-latency hotkey display
+        createPanel()
     }
 
     /// Show the flow bar. Idempotent — calling it again while already shown (e.g. the
@@ -34,8 +36,8 @@ final class FlowBarController {
         owLog("[FlowBar] show() called, panel exists: \(panel != nil)")
         if panel == nil {
             createPanel()
+            centerPanelOnScreen()
         }
-        centerPanelOnScreen()
         if !isShown {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")

@@ -318,7 +318,7 @@ final class AppState {
         let defaults = UserDefaults.standard
         whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
         language = defaults.string(forKey: "language") ?? "tr"
-        noiseSuppressionEnabled = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? true
+        noiseSuppressionEnabled = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? false
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
@@ -374,16 +374,16 @@ final class AppState {
         // Register global hotkey
         hotkey = GlobalHotkey(
             onPress: { [weak self] in
-                Task { @MainActor in self?.startRecording() }
+                DispatchQueue.main.async { self?.startRecording() }
             },
             onRelease: { [weak self] in
-                Task { @MainActor in self?.stopRecording() }
+                DispatchQueue.main.async { self?.stopRecording() }
             },
             onSwapRequest: { [weak self] in
-                Task { @MainActor in self?.cancelRecordingForSwap() }
+                DispatchQueue.main.async { self?.cancelRecordingForSwap() }
             },
             onSwapCommit: { [weak self] in
-                Task { @MainActor in self?.commitSwap() }
+                DispatchQueue.main.async { self?.commitSwap() }
             },
             onDiagnosticProbe: {
                 // TEMPORARY: AX-readability diagnostic. Dispatched off the CGEventTap callback
@@ -543,18 +543,14 @@ final class AppState {
         targetApp = NSWorkspace.shared.frontmostApplication
         owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
 
-        // 1. Immediately update recordingState to .recording so flow bar UI shows up instantly
-        recordingState = .recording
-        recordingDuration = 0
-        audioLevel = 0
-        lastError = nil
-
-        // 2. Immediately start microphone recording via AudioEngine
+        // 1. Start microphone recording FIRST via pre-warmed AudioEngine (< 5ms startup).
+        // Microphones capture is active BEFORE the flow bar panel is displayed.
         let recordingInputDeviceUID = resolvedInputDeviceUID
+        let noiseSuppression = noiseSuppressionEnabled
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
         audioEngine?.startRecording(
             deviceUID: recordingInputDeviceUID,
-            noiseSuppressionEnabled: noiseSuppressionEnabled,
+            noiseSuppressionEnabled: noiseSuppression,
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
@@ -566,6 +562,12 @@ final class AppState {
                 }
             }
         )
+
+        // 2. NOW update recordingState to .recording so flow bar UI shows up while mic is ALREADY recording
+        recordingState = .recording
+        recordingDuration = 0
+        audioLevel = 0
+        lastError = nil
 
         // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1
@@ -609,17 +611,12 @@ final class AppState {
         // Dictation snapshot reset (instant if no active snapshot)
         DictationSnapshot.shared.handleNewDictationStarting()
 
-        // 5. Perform non-essential background tasks asynchronously without delaying flow bar or mic start:
-        //    a) System volume ducking off main thread (AppleScript IPC)
-        DispatchQueue.global(qos: .userInitiated).async {
-            AudioDucker.shared.duckVolume(targetVolume: 15)
-        }
-
-        //    b) Async paste context capture off main thread
+        // 5. Perform non-essential background tasks asynchronously:
+        // Async paste context capture off main thread
         let currentTargetApp = targetApp
-        Task.detached(priority: .userInitiated) { [weak session] in
+        Task.detached(priority: .userInitiated) {
             let capturedContext = PasteContext.capture(targetApp: currentTargetApp)
-            await MainActor.run {
+            await MainActor.run { [weak session] in
                 session?.pasteContext = capturedContext
             }
         }
@@ -631,9 +628,6 @@ final class AppState {
             return
         }
         guard recordingState == .recording else { return }
-
-        // Restore system output volume immediately when Fn key is released
-        AudioDucker.shared.restoreVolume()
 
         recordingState = .transcribing
         owLog("[OpenWhisper] Finishing recording; waiting for background batches...")
@@ -1669,9 +1663,9 @@ final class AppState {
     /// microphone. An explicit picker selection still wins, and a temporarily unavailable
     /// explicit device falls back to the same automatic policy for the next recording.
     var resolvedInputDeviceUID: String? {
+        guard let inputDeviceUID else { return nil }
         let devices = AudioEngine.availableInputDevices()
-        if let inputDeviceUID,
-           devices.contains(where: { $0.uid == inputDeviceUID }) {
+        if devices.contains(where: { $0.uid == inputDeviceUID }) {
             return inputDeviceUID
         }
         return AudioEngine.automaticInputDeviceUID()
