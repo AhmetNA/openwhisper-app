@@ -28,3 +28,9 @@ Package.resolved
 
 # Claude
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
