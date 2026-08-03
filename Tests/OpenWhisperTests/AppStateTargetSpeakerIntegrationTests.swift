@@ -177,6 +177,134 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertEqual(appState.lastTranscription, "")
     }
 
+    // MARK: - Audio-processing-mode mismatch (profile vs. active "Gürültü engelleme" setting)
+
+    /// "Bu benim sesimdi" is a pure paste-only action (see `confirmRetainedRecordingWasTargetSpeaker`'s
+    /// doc comment) -- a mode mismatch changes nothing about that. This proves the offer still
+    /// fires for a mismatched-mode rejection (mismatch detection doesn't accidentally gate the
+    /// general rejection-retain-offer wiring) and that confirming it still only pastes, never
+    /// touching the stored profile or the user's own `noiseSuppressionEnabled` preference -- no
+    /// pinning happens anywhere in this flow.
+    func testAudioProcessingModeMismatchRejectionStillOffersPlainPasteOnlyConfirmation() async throws {
+        let store = InMemoryTargetSpeakerProfileStore()
+        let originalProfile = try TargetSpeakerProfile(
+            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
+            embeddings: [[0, 1] + [Float](repeating: 0, count: 254)],
+            audioProcessingMode: .vpio
+        )
+        try store.save(originalProfile)
+        let injector = RecordingTextInjector()
+        let appState = AppState(
+            profileStore: store,
+            targetSpeakerModel: IntegrationSpeakerModel(voiceFrames: Array(repeating: true, count: 8)),
+            transcriptionService: RecordingWhisperService(),
+            textInjector: injector
+        )
+        appState.loadTargetSpeakerProfile()
+        appState.autoPasteEnabled = false
+        appState.llmCleanupEnabled = false
+        appState.noiseSuppressionEnabled = false // active mode is "raw"; the profile is "vpio"
+
+        let session = RecordingTranscriptionSession(
+            id: 500, targetApp: nil, targetSpeakerEnabled: true, targetSpeakerProfile: originalProfile,
+            noiseSuppressionEnabled: false
+        )
+        let segment = CompletedAudioSegment(
+            samples: Array(repeating: Float(0.2), count: 32_000), overlapSampleCount: 1
+        )
+        session.enqueue(segment)
+        await appState.transcribeStreamingSegment(segment, session: session)
+        await appState.finishTranscription(session)
+
+        // Same wording as any other below-threshold rejection -- no mode-specific promise, since
+        // confirming never mutates the profile regardless of mode.
+        XCTAssertEqual(appState.flowBarMessage, "Ses eşleşmedi (panoda)")
+        XCTAssertTrue(appState.targetSpeakerAppendOfferActive)
+
+        appState.confirmRetainedRecordingWasTargetSpeaker()
+
+        XCTAssertEqual(injector.pasteCalls.map(\.text), ["test transcript"])
+        XCTAssertNil(injector.pasteCalls.first?.targetApp)
+        XCTAssertEqual(appState.flowBarMessage, "Yapıştırıldı")
+        XCTAssertEqual(try store.load(), originalProfile, "confirming must never mutate the profile, mismatch or not")
+        XCTAssertEqual(appState.noiseSuppressionEnabled, false, "the user's global preference must never be silently changed")
+    }
+
+    /// Task requirement 4: Settings must always name which mode the profile was captured in
+    /// while the feature is on -- not only when there's a problem -- and must separately flag
+    /// whether that's currently a mismatch, so the view can style the two cases differently.
+    func testAudioProcessingModeStatusTextAlwaysNamesModeAndMismatchFlagTracksOnlyDisagreement() throws {
+        let store = InMemoryTargetSpeakerProfileStore()
+        let profile = try TargetSpeakerProfile(
+            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
+            embeddings: [[1] + [Float](repeating: 0, count: 255)],
+            audioProcessingMode: .vpio
+        )
+        try store.save(profile)
+        let appState = AppState(profileStore: store, targetSpeakerModel: IntegrationSpeakerModel())
+        appState.loadTargetSpeakerProfile()
+        appState.targetSpeakerEnabled = true
+        appState.noiseSuppressionEnabled = true
+        XCTAssertTrue(appState.targetSpeakerAudioProcessingModeStatusText?.contains("gürültü engellemeli") == true, "must name the profile's mode even when it matches")
+        XCTAssertFalse(appState.targetSpeakerAudioProcessingModeMismatched, "matching modes must not be flagged as a mismatch")
+
+        appState.noiseSuppressionEnabled = false
+        XCTAssertTrue(appState.targetSpeakerAudioProcessingModeStatusText?.contains("gürültü engellemeli") == true)
+        XCTAssertTrue(appState.targetSpeakerAudioProcessingModeMismatched)
+
+        appState.targetSpeakerEnabled = false
+        XCTAssertNil(appState.targetSpeakerAudioProcessingModeStatusText, "feature off must produce no notice")
+        XCTAssertFalse(appState.targetSpeakerAudioProcessingModeMismatched)
+    }
+
+    // MARK: - Legacy (schema 2) profile migration on load
+
+    /// End-to-end version of `TargetSpeakerFilterTests`' decode-layer migration tests: loading a
+    /// genuine legacy schema-2 profile through `AppState.loadTargetSpeakerProfile()` must not
+    /// force re-enrollment (the coordinator's correction explicitly rules this out -- users
+    /// already complained about the re-enrollment flow being onerous), must explain the raw-mode
+    /// assumption in Turkish, and must resave once so the migration doesn't repeat on every
+    /// launch. Needs a `Data`-backed store (not `InMemoryTargetSpeakerProfileStore`, which stores
+    /// the already-decoded struct and so can never produce a genuine
+    /// `migratedFromLegacySchema == true` instance) to seed real legacy JSON bytes.
+    func testLoadingLegacySchemaTwoProfileMigratesWithoutForcingReenrollmentAndResavesOnce() throws {
+        struct LegacyV2Profile: Encodable {
+            let schemaVersion: Int
+            let modelIdentifier: String
+            let embeddings: [[Float]]
+            let createdAt: Date
+            let updatedAt: Date
+        }
+        let legacy = LegacyV2Profile(
+            schemaVersion: 2,
+            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
+            embeddings: [[1] + [Float](repeating: 0, count: 255)],
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        let store = JSONBackedTargetSpeakerProfileStore(seed: try JSONEncoder().encode(legacy))
+        let appState = AppState(profileStore: store, targetSpeakerModel: IntegrationSpeakerModel())
+        // Simulate a returning user who already had the feature on -- proves the migration branch
+        // doesn't flip it off, not just that it happens to already be off.
+        appState.targetSpeakerEnabled = true
+
+        appState.loadTargetSpeakerProfile()
+
+        XCTAssertTrue(appState.hasTargetSpeakerProfile, "a migrated v2 profile must be immediately usable, not treated as incompatible")
+        XCTAssertTrue(appState.targetSpeakerEnabled, "must not be force-disabled -- no forced re-enrollment for v2 profiles")
+        XCTAssertTrue(
+            appState.targetSpeakerProfileStatus.contains("gürültü engellemesiz"),
+            "status must explain the raw-mode assumption, not just say the profile is ready"
+        )
+
+        // The resave must have upgraded the stored bytes to genuine schema 3: a second load must
+        // not report `migratedFromLegacySchema` again.
+        let reloaded = try store.load()
+        XCTAssertEqual(reloaded?.schemaVersion, TargetSpeakerProfile.currentSchemaVersion)
+        XCTAssertFalse(reloaded?.migratedFromLegacySchema ?? true)
+        XCTAssertEqual(reloaded?.audioProcessingMode, .raw)
+    }
+
     /// Requirement B (partial match): when some segments in a recording matched and others did
     /// not, the matched text must still take the normal paste path and the clipboard fallback
     /// must not fire -- only a recording where *nothing* matched triggers it.
@@ -267,20 +395,38 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertFalse(appState.lastTranscription.isEmpty)
     }
 
+    /// Genuine `.ambiguous` (as opposed to `.singleSpeakerUncertain`, a different, separately
+    /// covered decision) needs windows that are internally inconsistent with each other -- see
+    /// the identical construction and its rationale in
+    /// `TargetSpeakerFilterTests.testMixedCoherenceUncertainWindowsAreClassifiedAmbiguous`, which
+    /// verifies the raw filter decision this test builds on top of. Diarization is never prepared
+    /// in these tests, so this exercises the ambiguous-without-diarization fallback: retain the
+    /// original audio for salvage/offer instead of silently withholding it.
     func testAmbiguousTargetSpeechUsesClipboardFallbackWithoutProfileMutation() async throws {
+        func vector(_ pairs: [(Int, Float)]) -> [Float] {
+            var v = [Float](repeating: 0, count: TargetSpeakerProfile.expectedEmbeddingDimension)
+            for (index, value) in pairs { v[index] = value }
+            return v
+        }
+        let w0 = vector([(0, 1.0)])
+        let w1 = vector([(0, 0.551), (1, 0.8345)])
+        let w2 = vector([(0, 0.551), (2, 0.8345)])
+        let w3 = vector([(0, 0.549), (3, 0.8358)])
+        let w4 = vector([(0, 0.549), (4, 0.8358)])
+
         let store = InMemoryTargetSpeakerProfileStore()
         let whisper = RecordingWhisperService()
         let profile = try TargetSpeakerProfile(
             modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-            embeddings: [[1] + [Float](repeating: 0, count: 255)]
+            embeddings: [vector([(0, 0.56), (5, 0.8285)])]
         )
         try store.save(profile)
         let injector = RecordingTextInjector()
         let appState = AppState(
             profileStore: store,
             targetSpeakerModel: ScriptedWindowSpeakerModel(
-                voiceFrames: Array(repeating: true, count: 12),
-                embeddings: Array(repeating: [Float(0.56), Float(sqrt(1 - (0.56 * 0.56)))] + [Float](repeating: 0, count: 254), count: 3)
+                voiceFrames: Array(repeating: true, count: 18),
+                embeddings: [w0, w1, w2, w3, w4]
             ),
             transcriptionService: whisper,
             textInjector: injector
@@ -292,7 +438,7 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
             id: 7, targetApp: nil, targetSpeakerEnabled: true, targetSpeakerProfile: profile
         )
         let segment = CompletedAudioSegment(
-            samples: Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples),
+            samples: Array(repeating: Float(0.2), count: 18 * TargetSpeakerFilterConfiguration.vadFrameSamples),
             overlapSampleCount: 1
         )
         session.enqueue(segment)
@@ -854,7 +1000,11 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
             embeddings: [[0, 1] + [Float](repeating: 0, count: 254)]
         )
         try store.save(originalProfile)
-        let injector = RecordingTextInjector()
+        // The prior dictation below goes through the *normal* paste path
+        // (`AppState.pasteAsDictation`, via `pasteTextResult`), whose outcome callback must
+        // actually fire to populate `swapPair` -- `RecordingTextInjector` deliberately never
+        // does that, so this test needs the synchronously-firing fake instead.
+        let injector = SynchronousPasteTextInjector()
         let appState = AppState(
             profileStore: store,
             targetSpeakerModel: IntegrationSpeakerModel(voiceFrames: Array(repeating: true, count: 8)),
@@ -877,7 +1027,9 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         priorSession.enqueue(priorSegment)
         await appState.transcribeStreamingSegment(priorSegment, session: priorSession)
         await appState.finishTranscription(priorSession)
-        XCTAssertTrue(appState.hasSwappablePair, "sanity check: the earlier normal dictation must have left a swappable pair")
+        // The outcome callback runs on a nested `Task { @MainActor in ... }` hop, so poll for it
+        // rather than asserting immediately.
+        try await waitUntil { appState.hasSwappablePair }
         injector.resetRecordedCalls() // isolate the assertions below to the confirm() paste
 
         // Now the target-speaker-gated rejected recording.
@@ -1012,6 +1164,32 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
     }
 }
 
+/// A `TargetSpeakerProfileStore` backed by raw `Data`, round-tripped through
+/// `JSONEncoder`/`JSONDecoder` on every call -- unlike `InMemoryTargetSpeakerProfileStore`, which
+/// stores the already-decoded struct directly and so can never exercise `TargetSpeakerProfile`'s
+/// `init(from:)` migration path. Lets a test seed genuine legacy schema-2 JSON bytes and observe
+/// `AppState.loadTargetSpeakerProfile()`'s migration handling end-to-end.
+private final class JSONBackedTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unchecked Sendable {
+    private var data: Data?
+
+    init(seed: Data? = nil) {
+        self.data = seed
+    }
+
+    func load() throws -> TargetSpeakerProfile? {
+        guard let data else { return nil }
+        return try JSONDecoder().decode(TargetSpeakerProfile.self, from: data)
+    }
+
+    func save(_ profile: TargetSpeakerProfile) throws {
+        data = try JSONEncoder().encode(profile)
+    }
+
+    func delete() throws {
+        data = nil
+    }
+}
+
 private final class RecordingWhisperService: WhisperTranscriptionService, @unchecked Sendable {
     struct Request: Sendable {
         let samples: [Float]
@@ -1066,6 +1244,58 @@ private final class RecordingTextInjector: TextInjecting {
         pasteCalls.removeAll()
         clipboardCalls.removeAll()
         replaceCalls.removeAll()
+    }
+}
+
+/// A `TextInjecting` fake whose `pasteText`/`pasteTextResult` synchronously invoke their
+/// completion, unlike `RecordingTextInjector` above (which deliberately never fires its
+/// completion). Needed wherever a test's setup goes through the *normal* dictation paste path
+/// (`AppState.pasteAsDictation`, which uses `pasteTextResult`) and depends on its outcome
+/// callback actually running -- e.g. to populate `swapPair` -- since `RecordingTextInjector`
+/// can't do that at all. `confirmRetainedRecordingWasTargetSpeaker` itself no longer needs this:
+/// it's a plain, synchronous `pasteText` call with no outcome callback to wait for.
+private final class SynchronousPasteTextInjector: TextInjecting {
+    struct PasteCall {
+        let text: String
+        let targetApp: NSRunningApplication?
+    }
+
+    private(set) var pasteCalls: [PasteCall] = []
+    private(set) var clipboardCalls: [String] = []
+
+    func copyToClipboard(_ text: String) {
+        clipboardCalls.append(text)
+    }
+
+    func pasteText(_ text: String, targetApp: NSRunningApplication?, onPasted: (() -> Void)?) {
+        pasteCalls.append(PasteCall(text: text, targetApp: targetApp))
+        onPasted?()
+    }
+
+    func replaceInjectedText(
+        oldText: String,
+        newText: String,
+        targetApp: NSRunningApplication?,
+        onReplaced: (() -> Void)?
+    ) {
+        onReplaced?()
+    }
+
+    func pasteTextResult(
+        _ text: String,
+        targetApp: NSRunningApplication?,
+        context: PasteContext?,
+        onOutcome: ((PasteOutcome) -> Void)?
+    ) {
+        pasteCalls.append(PasteCall(text: text, targetApp: targetApp))
+        onOutcome?(.pastedUnverified)
+    }
+
+    /// Clears recorded calls so a test can isolate assertions to what happens *after* some
+    /// earlier, unrelated setup step (e.g. a prior dictation's paste).
+    func resetRecordedCalls() {
+        pasteCalls.removeAll()
+        clipboardCalls.removeAll()
     }
 }
 

@@ -201,13 +201,35 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .disabled(appState.recordingState != .idle)
+            // Also disabled for the whole enrollment flow, not just while a recording is
+            // literally in progress: the wizard's two recordings briefly return
+            // `recordingState` to `.idle` between them, and switching modes there would capture
+            // the two recordings in different audio-processing modes while the resulting profile
+            // is only ever labeled with one -- exactly the mismatch this feature exists to avoid.
+            .disabled(appState.recordingState != .idle || appState.targetSpeakerEnrollmentActive)
 
-            Text(appState.recordingState == .idle
-                 ? "Seçim bir sonraki kayıtta uygulanır."
-                 : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır.")
+            Text(
+                appState.targetSpeakerEnrollmentActive
+                    ? "Ses profili kaydı sürerken değiştirilemez; iki kayıt aynı modda olmalı."
+                    : appState.recordingState == .idle
+                        ? "Seçim bir sonraki kayıtta uygulanır."
+                        : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır."
+            )
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+            if let notice = appState.targetSpeakerAudioProcessingModeStatusText {
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: appState.targetSpeakerAudioProcessingModeMismatched
+                          ? "exclamationmark.triangle" : "info.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(appState.targetSpeakerAudioProcessingModeMismatched ? .orange : .secondary)
+                    Text(notice)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -281,14 +303,6 @@ struct SettingsView: View {
                 Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                if appState.canUndoTargetSpeakerAppend {
-                    Button("Son eklemeyi geri al") {
-                        appState.undoLastConfirmedTargetSpeakerAppend()
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                }
                 if let coherence = appState.targetSpeakerProfileCoherence {
                     Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
                         .font(.caption2)

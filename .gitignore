@@ -23,6 +23,9 @@ Package.resolved
 # Logs
 *.log
 
+# Generated test audio
+scripts/noise-test/*.wav
+
 # Models & Local cache
 .whisperkit-models/
 

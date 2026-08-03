@@ -2,19 +2,61 @@ import Foundation
 import Security
 
 struct TargetSpeakerProfile: Codable, Equatable, Sendable {
-    // Version 2 profiles are enrolled from multiple speaking conditions (for example
-    // sitting and lying down), so an older one-condition profile must be re-enrolled.
-    static let currentSchemaVersion = 2
+    // Version 3 adds `audioProcessingMode`: Apple's Voice Processing I/O (echo/noise
+    // suppression + AGC, toggled by the "Gürültü engelleme" setting) measurably changes the
+    // signal's spectral character, so an embedding captured with it on is not directly
+    // comparable to one captured with it off. Recording which mode produced a profile lets the
+    // app warn the user (and offer a fix) instead of silently degrading match accuracy -- see
+    // `AppState`'s audio-processing-mode-mismatch handling.
+    //
+    // Version 2 profiles (enrolled from multiple speaking conditions) predate VPIO entirely --
+    // every one of them was necessarily captured with processing off. `init(from:)` migrates
+    // them forward on load by assuming `.raw` rather than forcing re-enrollment (see there).
+    static let currentSchemaVersion = 3
     static let expectedEmbeddingDimension = 256
+
+    /// Which Apple audio processing path was active while this profile's embeddings were
+    /// captured.
+    enum AudioProcessingMode: String, Codable, Sendable, Equatable {
+        /// Apple Voice Processing I/O active: echo/noise suppression + AGC.
+        case vpio
+        /// Unprocessed microphone signal.
+        case raw
+
+        static func resolved(fromNoiseSuppressionEnabled enabled: Bool) -> AudioProcessingMode {
+            enabled ? .vpio : .raw
+        }
+
+        /// True when a recording made right now (given the user's current "Gürültü engelleme"
+        /// preference) would use a different processing path than this profile was captured
+        /// with. Pure/testable on purpose -- see `TargetSpeakerFilterTests`.
+        func differsFromActive(noiseSuppressionEnabled: Bool) -> Bool {
+            self != .resolved(fromNoiseSuppressionEnabled: noiseSuppressionEnabled)
+        }
+
+        var turkishLabel: String {
+            switch self {
+            case .vpio: "gürültü engellemeli"
+            case .raw: "gürültü engellemesiz"
+            }
+        }
+    }
 
     let schemaVersion: Int
     let modelIdentifier: String
     let embeddings: [[Float]]
     let createdAt: Date
     let updatedAt: Date
+    let audioProcessingMode: AudioProcessingMode
+    /// True only for the single in-memory instance produced by migrating a legacy schema-2
+    /// profile during `init(from:)`. Deliberately NOT persisted (excluded from `CodingKeys`/
+    /// `encode(to:)`): it exists only so the caller that just loaded the profile can show a
+    /// one-time "your old profile was assumed raw-mode" notice and then resave, after which the
+    /// stored JSON is genuinely schema 3 and this flag reads false again on the next load.
+    let migratedFromLegacySchema: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, modelIdentifier, embeddings, createdAt, updatedAt
+        case schemaVersion, modelIdentifier, embeddings, createdAt, updatedAt, audioProcessingMode
     }
 
     init(
@@ -22,7 +64,8 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         embeddings: [[Float]],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        schemaVersion: Int = TargetSpeakerProfile.currentSchemaVersion
+        schemaVersion: Int = TargetSpeakerProfile.currentSchemaVersion,
+        audioProcessingMode: AudioProcessingMode = .vpio
     ) throws {
         guard schemaVersion == Self.currentSchemaVersion else {
             throw TargetSpeakerProfileError.schemaMismatch
@@ -38,22 +81,68 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         self.embeddings = embeddings
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.audioProcessingMode = audioProcessingMode
+        self.migratedFromLegacySchema = false
+    }
+
+    /// Internal, non-throwing constructor for the schema-2 -> schema-3 migration path in
+    /// `init(from:)`: the embeddings/model-identifier were already validated by the caller, so
+    /// this skips re-running the public initializer's checks (which would also reject
+    /// `schemaVersion: 2` outright).
+    private init(
+        migratedToCurrentSchemaFrom modelIdentifier: String,
+        embeddings: [[Float]],
+        createdAt: Date,
+        updatedAt: Date
+    ) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.modelIdentifier = modelIdentifier
+        self.embeddings = embeddings
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.audioProcessingMode = .raw
+        self.migratedFromLegacySchema = true
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        let storedSchemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         let modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
         let embeddings = try container.decode([[Float]].self, forKey: .embeddings)
         let createdAt = try container.decode(Date.self, forKey: .createdAt)
         let updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+
+        if storedSchemaVersion == 2 {
+            guard !modelIdentifier.isEmpty, !embeddings.isEmpty,
+                  embeddings.allSatisfy({ $0.count == Self.expectedEmbeddingDimension }),
+                  embeddings.allSatisfy({ $0.allSatisfy { $0.isFinite } }) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .schemaVersion,
+                    in: container,
+                    debugDescription: TargetSpeakerProfileError.invalidProfile.localizedDescription
+                )
+            }
+            self = TargetSpeakerProfile(
+                migratedToCurrentSchemaFrom: modelIdentifier,
+                embeddings: embeddings,
+                createdAt: createdAt,
+                updatedAt: updatedAt
+            )
+            return
+        }
+
+        // Schema 3 (or later, which will also fail the throwing init's version check below):
+        // the mode field is mandatory. A blob claiming schema 3 without it is corrupt, not a
+        // migration case -- decode it strictly rather than guessing a default.
+        let audioProcessingMode = try container.decode(AudioProcessingMode.self, forKey: .audioProcessingMode)
         do {
             self = try TargetSpeakerProfile(
                 modelIdentifier: modelIdentifier,
                 embeddings: embeddings,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
-                schemaVersion: schemaVersion
+                schemaVersion: storedSchemaVersion,
+                audioProcessingMode: audioProcessingMode
             )
         } catch let error as TargetSpeakerProfileError {
             throw DecodingError.dataCorruptedError(
@@ -62,6 +151,31 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
                 debugDescription: error.localizedDescription
             )
         }
+    }
+
+    /// Explicit -- not auto-synthesizable once `migratedFromLegacySchema` exists without a
+    /// matching `CodingKeys` case. Persists exactly the schema-3 fields; the transient migration
+    /// flag never round-trips, by design (see its doc comment).
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(modelIdentifier, forKey: .modelIdentifier)
+        try container.encode(embeddings, forKey: .embeddings)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encode(audioProcessingMode, forKey: .audioProcessingMode)
+    }
+
+    /// Explicit (not synthesized) so `migratedFromLegacySchema` -- a transient, non-persisted
+    /// load-time flag -- never causes two profiles with identical stored data to compare
+    /// unequal.
+    static func == (lhs: TargetSpeakerProfile, rhs: TargetSpeakerProfile) -> Bool {
+        lhs.schemaVersion == rhs.schemaVersion
+            && lhs.modelIdentifier == rhs.modelIdentifier
+            && lhs.embeddings == rhs.embeddings
+            && lhs.createdAt == rhs.createdAt
+            && lhs.updatedAt == rhs.updatedAt
+            && lhs.audioProcessingMode == rhs.audioProcessingMode
     }
 
     func isCompatible(with modelIdentifier: String) -> Bool {

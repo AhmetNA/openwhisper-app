@@ -55,6 +55,13 @@ final class AudioEngine: @unchecked Sendable {
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 8.0
     private var didLogInputChannelSelection = false
+    /// Gain applied by `AudioSignalProcessor.process` for this recording. Resolved once at
+    /// `startRecording` from the *effective* (read-back) voice-processing state, not the
+    /// requested one, so it always matches what the microphone is actually doing.
+    private var activeInputGain: Float = AudioSignalProcessor.inputGain
+    /// One-shot flag for the `[Perf] engineStart=...` log; flipped on the first buffer that
+    /// reaches the tap after `startRecording` is called.
+    private var didLogEngineStartPerf = false
 
     /// Request microphone permission (call before first recording)
     func requestPermission() async -> Bool {
@@ -74,6 +81,12 @@ final class AudioEngine: @unchecked Sendable {
         noiseSuppressionEnabled: Bool,
         levelCallback: @escaping (Float) -> Void
     ) {
+        // [Perf] Measured from the very first instruction of this call to the first real audio
+        // buffer reaching the tap below (see the `didLogEngineStartPerf` block). A plain
+        // timestamp comparison, no allocation.
+        let recordingRequestedAt = DispatchTime.now()
+        didLogEngineStartPerf = false
+
         // A previous stop waits for this queue, but keep start safe if a caller reuses the
         // engine after an interrupted setup.
         segmentPreparationQueue.sync {}
@@ -95,34 +108,93 @@ final class AudioEngine: @unchecked Sendable {
 
         let inputNode = engine.inputNode
 
-        if let uid = deviceUID, let deviceID = Self.audioDeviceID(forUID: uid) {
-            do {
-                try inputNode.auAudioUnit.setDeviceID(deviceID)
-                owLog("[AudioEngine] Using input device UID=\(uid) id=\(deviceID)")
-            } catch {
-                owLog("[AudioEngine] Failed to set input device \(uid): \(error). Falling back to default.")
-            }
-        } else {
-            owLog("[AudioEngine] Using system default input")
-        }
-
-        // Apple voice processing is the system-provided real-time noise suppression. On some
-        // macOS microphone routes it changes the input to a multichannel 48 kHz stream, so the
-        // capture path below explicitly selects the loudest input channel before resampling to
-        // Whisper's mono 16 kHz format. The setting is captured at recording start so a mode
-        // change cannot alter an already-running recording.
+        // Voice processing is toggled BEFORE the device is selected. Apple's own header doc
+        // (AVAudioIONode.h) only says the toggle rebuilds the input/output format and that this
+        // can only happen while the engine is stopped -- it does not document what happens to a
+        // device selection made beforehand. Community reports of the same underlying mechanism
+        // (Apple Developer Forums threads 810129 and 771530; AudioKit issue #2130, which
+        // documents that the previous "set deviceID, then flip voice processing" trick stopped
+        // working once the aggregate device gets constructed) describe voice processing
+        // constructing a brand-new AUVoiceProcessingIO aggregate device on access, which is
+        // exactly the kind of operation that can silently discard an earlier setDeviceID call.
+        // Doing the toggle first, then selecting the device, is the safe order either way -- and
+        // the effective-device readback a few lines down is the real proof, not this comment.
         do {
             try inputNode.setVoiceProcessingEnabled(noiseSuppressionEnabled)
             owLog(
                 "[AudioEngine] Apple voice processing "
-                    + (noiseSuppressionEnabled ? "enabled" : "disabled")
+                    + (noiseSuppressionEnabled ? "requested=enabled" : "requested=disabled")
             )
         } catch {
             owLog("[AudioEngine] Apple voice processing unavailable: \(error). Continuing without it.")
         }
 
+        let requestedDeviceID = deviceUID.flatMap { Self.audioDeviceID(forUID: $0) }
+        if let uid = deviceUID {
+            if let deviceID = requestedDeviceID {
+                let requestedName = Self.stringProperty(
+                    deviceID: deviceID,
+                    selector: kAudioDevicePropertyDeviceNameCFString
+                ) ?? "unknown"
+                do {
+                    try inputNode.auAudioUnit.setDeviceID(deviceID)
+                    owLog(
+                        "[AudioEngine] Requested input device name=\(requestedName) uid=\(uid) "
+                            + "id=\(deviceID) -> setDeviceID succeeded"
+                    )
+                } catch {
+                    owLog(
+                        "[AudioEngine] Requested input device name=\(requestedName) uid=\(uid) "
+                            + "id=\(deviceID) -> setDeviceID FAILED: \(error). Falling back to default."
+                    )
+                }
+            } else {
+                owLog("[AudioEngine] Requested input device uid=\(uid) not found among current devices. Falling back to default.")
+            }
+        } else {
+            owLog("[AudioEngine] Requested input: system default")
+        }
+
+        // Read back what the AU property accepted, instead of trusting that setDeviceID/
+        // setVoiceProcessingEnabled succeeding means they took effect. NOTE: on macOS the
+        // AUVoiceProcessingIO aggregate device is actually constructed when the engine starts
+        // rendering (`engine.start()` below), not at property-set time -- so this read is only a
+        // sanity check that the write stuck on *this* AU instance. It cannot see anything the
+        // aggregate construction at start might still change. The authoritative reading, and the
+        // one that should be trusted/compared against what was requested, is the "effective
+        // input=" line logged after `engine.start()` succeeds, further down.
+        let preStartDeviceID: AudioDeviceID = inputNode.auAudioUnit.deviceID
+        let preStartDeviceName = Self.stringProperty(
+            deviceID: preStartDeviceID,
+            selector: kAudioDevicePropertyDeviceNameCFString
+        ) ?? "unknown"
+        let preStartDeviceUID = Self.stringProperty(
+            deviceID: preStartDeviceID,
+            selector: kAudioDevicePropertyDeviceUID
+        ) ?? "unknown"
+        let preStartVoiceProcessing = inputNode.isVoiceProcessingEnabled
+        owLog(
+            "[AudioEngine] pre-start input=\(preStartDeviceName) uid=\(preStartDeviceUID) "
+                + "vp=\(preStartVoiceProcessing)"
+        )
+
+        // Resolve AudioSignalProcessor's gain from this pre-start reading and write it NOW,
+        // strictly before `engine.start()` is called below. This must not wait until after
+        // `engine.start()` returns: that call only kicks off rendering, it does not block until
+        // the render thread is idle again. The tap closure below runs on a separate, real-time
+        // audio IO thread that AVAudioEngine spins up as part of starting; that thread can call
+        // back with the first buffers while this (calling) thread is still executing the lines
+        // immediately after `engine.start()` returns. Writing here, before the call, is the only
+        // ordering that guarantees no buffer is ever processed with a stale value from a
+        // previous recording. If the authoritative post-start reading further down disagrees,
+        // it corrects these same two values and logs a WARNING -- accepting that a few early
+        // buffers (and the `[Perf]` line's `ns=` label) may have used the pre-start guess.
+        AudioSignalProcessor.captureUsedVoiceProcessing = preStartVoiceProcessing
+        activeInputGain = preStartVoiceProcessing
+            ? AudioSignalProcessor.voiceProcessingInputGain
+            : AudioSignalProcessor.inputGain
+
         let format = inputNode.outputFormat(forBus: 0)
-        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
 
         guard let monoInputFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
@@ -167,6 +239,24 @@ final class AudioEngine: @unchecked Sendable {
             let frameLength = Int(buffer.frameLength)
             guard frameLength > 0, let selection = self.loudestInputChannel(in: buffer) else { return }
 
+            if !self.didLogEngineStartPerf {
+                self.didLogEngineStartPerf = true
+                let elapsedMs = Double(
+                    DispatchTime.now().uptimeNanoseconds - recordingRequestedAt.uptimeNanoseconds
+                ) / 1_000_000
+                // Reads the shared static rather than capturing a local: it was written above,
+                // before this tap was even installed (let alone before `engine.start()` was
+                // called), so no buffer -- including this first one -- can ever see a stale
+                // value left over from a *previous* recording. It can still reflect the
+                // pre-start guess rather than the post-start correction if this fires before
+                // that correction runs; see the WARNING logged after `engine.start()` for when
+                // that happened and this `ns=` label should be treated as suspect.
+                owLog(
+                    "[Perf] engineStart=" + String(format: "%.1f", elapsedMs)
+                        + " ns=" + (AudioSignalProcessor.captureUsedVoiceProcessing ? "on" : "off")
+                )
+            }
+
             if !self.didLogInputChannelSelection {
                 self.didLogInputChannelSelection = true
                 owLog(
@@ -192,6 +282,72 @@ final class AudioEngine: @unchecked Sendable {
         do {
             try engine.start()
             owLog("[AudioEngine] Engine started")
+
+            // This is the readback that actually matters. The AUVoiceProcessingIO aggregate
+            // device (when voice processing is on) is built when the engine starts rendering,
+            // not when setDeviceID/setVoiceProcessingEnabled were called above -- so only a
+            // reading taken after a successful `engine.start()` can see what that construction
+            // did to routing/format. Compare this line's uid against the "Requested input
+            // device" line above, and its format against the "pre-start" line: a mismatch on
+            // either is the real, empirical answer to whether the reorder in this change
+            // actually fixed anything, independent of what any doc or comment claims.
+            let effectiveDeviceID: AudioDeviceID = inputNode.auAudioUnit.deviceID
+            let effectiveDeviceName = Self.stringProperty(
+                deviceID: effectiveDeviceID,
+                selector: kAudioDevicePropertyDeviceNameCFString
+            ) ?? "unknown"
+            let effectiveDeviceUID = Self.stringProperty(
+                deviceID: effectiveDeviceID,
+                selector: kAudioDevicePropertyDeviceUID
+            ) ?? "unknown"
+            let effectiveVoiceProcessing = inputNode.isVoiceProcessingEnabled
+            let effectiveFormat = inputNode.outputFormat(forBus: 0)
+
+            owLog(
+                "[AudioEngine] effective input=\(effectiveDeviceName) uid=\(effectiveDeviceUID) "
+                    + "vp=\(effectiveVoiceProcessing) format=\(Int(effectiveFormat.sampleRate))/\(effectiveFormat.channelCount)"
+            )
+
+            if let uid = deviceUID, let requestedDeviceID, effectiveDeviceID != requestedDeviceID {
+                owLog(
+                    "[AudioEngine] WARNING requested input device did not take effect: "
+                        + "requested uid=\(uid) id=\(requestedDeviceID), "
+                        + "effective uid=\(effectiveDeviceUID) id=\(effectiveDeviceID) name=\(effectiveDeviceName)"
+                )
+            }
+            if effectiveFormat.sampleRate != format.sampleRate || effectiveFormat.channelCount != format.channelCount {
+                // The tap a few lines up was installed with `format` (the pre-start reading).
+                // If the post-start format differs, the converter/tap are primed for the wrong
+                // stream shape and the recording may come out silent, garbled, or wrong-speed.
+                owLog(
+                    "[AudioEngine] WARNING input format changed after engine start: tap installed "
+                        + "with \(Int(format.sampleRate))/\(format.channelCount), engine now reports "
+                        + "\(Int(effectiveFormat.sampleRate))/\(effectiveFormat.channelCount)"
+                )
+            }
+
+            // AudioSignalProcessor.captureUsedVoiceProcessing and activeInputGain were already
+            // set from `preStartVoiceProcessing` BEFORE `engine.start()` was called above (see
+            // that comment for why: the tap's real-time audio IO thread can start delivering
+            // buffers while this calling thread is still running these post-start lines, so
+            // waiting until here to write them for the first time would race actual audio
+            // against the assignment). If the post-start reading disagrees with the pre-start
+            // one, correct both values now for the rest of the recording, and say so: it means
+            // some number of buffers at the start of this recording -- and possibly the
+            // `[Perf] engineStart=...` line's `ns=` label, if it fired before this correction --
+            // used the wrong gain / wrong mode label.
+            if effectiveVoiceProcessing != preStartVoiceProcessing {
+                owLog(
+                    "[AudioEngine] WARNING voice processing state changed after engine start: "
+                        + "pre-start vp=\(preStartVoiceProcessing), effective vp=\(effectiveVoiceProcessing). "
+                        + "Early buffers in this recording, and the ns= label on the [Perf] line "
+                        + "above, may reflect the pre-start value instead."
+                )
+                AudioSignalProcessor.captureUsedVoiceProcessing = effectiveVoiceProcessing
+                activeInputGain = effectiveVoiceProcessing
+                    ? AudioSignalProcessor.voiceProcessingInputGain
+                    : AudioSignalProcessor.inputGain
+            }
         } catch {
             owLog("[AudioEngine] Failed to start: \(error)")
         }
@@ -297,7 +453,10 @@ final class AudioEngine: @unchecked Sendable {
         // Preserve quiet speech before storing the Whisper input. There is deliberately no
         // noise gate here: a gate would erase exactly the low-volume syllables this path is
         // intended to recover. The compressor prevents the modest gain from clipping.
-        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
+        // `activeInputGain` was resolved once at startRecording from the effective (read-back)
+        // voice-processing state: full gain when voice processing is off, a reduced gain when
+        // Apple's own AGC has already normalized the signal.
+        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength), gain: activeInputGain)
         appendSamples(output, count: Int(convertedBuffer.frameLength))
         emitCompletedSegmentIfNeeded()
     }
@@ -461,13 +620,22 @@ final class AudioEngine: @unchecked Sendable {
     /// duplex device is preferred because it represents a headset or USB audio device;
     /// Bluetooth input is also accepted when the device exposes no output stream. If no
     /// external headset is present, fall back to the Mac's built-in microphone.
+    ///
+    /// Ranking among external devices is quality-first, NOT connection-first: wired/USB
+    /// headsets before Bluetooth. A Bluetooth microphone forces macOS to drop the link into
+    /// HFP/SCO (narrowband, ~16 kHz mono, telephone-quality) for the duration of the recording
+    /// -- this app's own Settings screen already warns the user about exactly this ("Bluetooth
+    /// headsets drop into low-quality call mode while dictating"). A wired or USB headset has no
+    /// such penalty, so it is always the better choice when both are available. Bluetooth still
+    /// beats the built-in Mac mic, matching the "kulaklık varsa kulaklık" requirement -- it is
+    /// only demoted below a wired/USB alternative, never below the built-in mic.
     static func automaticInputDeviceUID() -> String? {
         let devices = availableInputDevices()
         let externalHeadset = devices
             .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
             .sorted { lhs, rhs in
                 if lhs.isBluetooth != rhs.isBluetooth {
-                    return lhs.isBluetooth
+                    return !lhs.isBluetooth
                 }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
