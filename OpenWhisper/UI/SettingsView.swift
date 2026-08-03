@@ -255,6 +255,25 @@ struct SettingsView: View {
                 Spacer()
             }
 
+            if appState.hasStoredTargetSpeakerProfile {
+                Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if appState.canUndoTargetSpeakerAppend {
+                    Button("Son eklemeyi geri al") {
+                        appState.undoLastConfirmedTargetSpeakerAppend()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                }
+                if let coherence = appState.targetSpeakerProfileCoherence {
+                    Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             if appState.targetSpeakerEnrollmentActive {
                 Text(appState.targetSpeakerEnrollmentIsRecording
                      ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
@@ -306,6 +325,7 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                         .font(.caption)
                 }
+
             }
         }
     }

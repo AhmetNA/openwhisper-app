@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+/// `NSView.acceptsFirstMouse(for:)` defaults to `false`, which means the very first click on a
+/// non-key window is, by default, consumed just to bring the window forward/key and never
+/// reaches the view underneath -- the click would silently do nothing. Overriding it to `true`
+/// on the panel's content-hosting view lets a tap on "Bu benim sesimdi" (see
+/// `FlowBarView.rejectedRecordingOfferContent`) fire on the first click. Combined with
+/// `.nonactivatingPanel` (set in `createPanel`), this still never activates the owning app or
+/// steals keyboard focus from whatever the user is dictating into.
+private final class ClickableHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 @MainActor
 final class FlowBarController {
     private var panel: NSPanel?
@@ -120,7 +131,7 @@ final class FlowBarController {
             let flowBarView = FlowBarView()
                 .environment(appState)
                 .fixedSize()
-            let hostingView = NSHostingView(rootView: flowBarView)
+            let hostingView = ClickableHostingView(rootView: flowBarView)
             panel.contentView = hostingView
         }
 

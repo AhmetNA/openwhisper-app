@@ -1,15 +1,70 @@
+import Foundation
 import WhisperKit
+
+/// A source-compatible timed representation of one Whisper word. Keeping this type separate
+/// from WhisperKit's `WordTiming` means the rest of OpenWhisper does not depend on WhisperKit's
+/// result model and can pass words to the speaker gate without importing WhisperKit.
+struct WhisperTimedWord: Sendable, Equatable {
+    let word: String
+    let start: Float
+    let end: Float
+    let probability: Float
+
+    init(word: String, start: Float, end: Float, probability: Float) {
+        self.word = word
+        self.start = start
+        self.end = end
+        self.probability = probability
+    }
+}
+
+/// Word-level transcription output used by the optional speaker-aware path.
+struct TimedTranscriptionResult: Sendable, Equatable {
+    let text: String
+    let words: [WhisperTimedWord]
+
+    init(text: String, words: [WhisperTimedWord] = []) {
+        self.text = text
+        self.words = words
+    }
+
+    static func textOnly(_ text: String) -> TimedTranscriptionResult {
+        TimedTranscriptionResult(text: text)
+    }
+}
 
 protocol WhisperTranscriptionService: Sendable {
     func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String
+    /// Timed output is an additive requirement with a default implementation. Existing test
+    /// fakes and integrations that only implement the long-standing String API therefore remain
+    /// source-compatible; only a producer that can provide word timestamps needs to override it.
+    func transcribeTimed(
+        audioData: [Float],
+        language: String,
+        overlapSampleCount: Int
+    ) async throws -> TimedTranscriptionResult
 }
-import Foundation
+
+extension WhisperTranscriptionService {
+    func transcribeTimed(
+        audioData: [Float],
+        language: String,
+        overlapSampleCount: Int
+    ) async throws -> TimedTranscriptionResult {
+        .textOnly(try await transcribe(
+            audioData: audioData,
+            language: language,
+            overlapSampleCount: overlapSampleCount
+        ))
+    }
+}
 
 final class WhisperTranscriber: @unchecked Sendable {
     private var whisperKit: WhisperKit?
 
     private struct DecodePass: Sendable {
         let text: String
+        let words: [WhisperTimedWord]
         let averageLogprob: Float?
         let needsRecovery: Bool
 
@@ -297,6 +352,62 @@ final class WhisperTranscriber: @unchecked Sendable {
         return try await transcribe(audioData: audioData, language: language)
     }
 
+    /// Produces Whisper word timestamps for the optional speaker-aware integration path. This
+    /// deliberately shares the normal decode/recovery logic, but enables WhisperKit's alignment
+    /// pass with `DecodingOptions.wordTimestamps`. The existing String API remains the fast,
+    /// source-compatible default for callers that do not need timed filtering.
+    func transcribeTimed(
+        audioData: [Float],
+        language: String,
+        overlapSampleCount: Int
+    ) async throws -> TimedTranscriptionResult {
+        guard let whisperKit else {
+            throw TranscriberError.modelNotLoaded
+        }
+
+        owLog("[Whisper] Timed transcription samples=\(audioData.count) overlap=\(overlapSampleCount)")
+        var selectedPass = try await runDecode(
+            whisperKit: whisperKit,
+            audioData: audioData,
+            language: language,
+            promptTokens: nil,
+            wordTimestamps: true
+        )
+
+        if selectedPass.needsRecovery {
+            owLog("[Whisper] Low-confidence timed decode; retrying with quiet-speech recovery gain")
+            let recoveryPass = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+                language: language,
+                promptTokens: nil,
+                wordTimestamps: true
+            )
+            if Self.isBetter(recoveryPass, than: selectedPass) {
+                selectedPass = recoveryPass
+            }
+        }
+
+        var text = selectedPass.text
+        let filteredText = Self.removeTrailingSubtitleCredit(from: text)
+        if filteredText != text {
+            owLog("[Whisper] Removed hallucinated trailing subtitle credit from timed result")
+            text = filteredText
+        }
+
+        let hallucinations: Set<String> = [
+            "Thank you.", "Thanks for watching.", "Subscribe.",
+            "you", "You", ".", "", "...", "Thank you for watching.",
+            "Bye.", "Bye bye.", "Bye-bye.", "The end.",
+            "Thanks.", "Thank you so much.", "See you next time.",
+        ]
+        if hallucinations.contains(text) || text.hasPrefix("[") || text.hasPrefix("(") || text.count < 3 {
+            return .textOnly("")
+        }
+
+        return TimedTranscriptionResult(text: text, words: selectedPass.words)
+    }
+
     private static func removeTrailingSubtitleCredit(from text: String) -> String {
         let pattern = #"(?is)(?:^|\s)altyaz(?:ı|i)\s+m\.?\s*k\.?\s*[.!?…]*\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
@@ -310,7 +421,8 @@ final class WhisperTranscriber: @unchecked Sendable {
         whisperKit: WhisperKit,
         audioData: [Float],
         language: String,
-        promptTokens: [Int]?
+        promptTokens: [Int]?,
+        wordTimestamps: Bool = false
     ) async throws -> DecodePass {
         // `firstTokenLogProbThreshold` (WhisperKit default: -1.5) is meant to abort a segment
         // when the FIRST REAL sampled token is low-confidence. It only makes sense when there's
@@ -330,6 +442,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             temperature: 0.0,
             temperatureFallbackCount: 3,
             sampleLength: 224,
+            wordTimestamps: wordTimestamps,
             promptTokens: promptTokens,
             suppressBlank: true,
             supressTokens: nil,
@@ -366,6 +479,18 @@ final class WhisperTranscriber: @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let segments = results.flatMap(\.segments)
+        let words = wordTimestamps
+            ? segments.flatMap { segment in
+                (segment.words ?? []).map {
+                    WhisperTimedWord(
+                        word: $0.word,
+                        start: $0.start,
+                        end: $0.end,
+                        probability: $0.probability
+                    )
+                }
+            }
+            : []
         let averageLogprob = segments.isEmpty
             ? nil
             : segments.map(\.avgLogprob).reduce(0, +) / Float(segments.count)
@@ -374,6 +499,7 @@ final class WhisperTranscriber: @unchecked Sendable {
 
         return DecodePass(
             text: text,
+            words: words,
             averageLogprob: averageLogprob,
             needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression
         )
