@@ -17,7 +17,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         let base = try JSONSerialization.jsonObject(with: encoder.encode(profile)) as! [String: Any]
 
         var unsupportedSchema = base
-        unsupportedSchema["schemaVersion"] = 2
+        unsupportedSchema["schemaVersion"] = 3
         XCTAssertThrowsError(try JSONDecoder().decode(
             TargetSpeakerProfile.self,
             from: JSONSerialization.data(withJSONObject: unsupportedSchema)
@@ -175,22 +175,22 @@ final class TargetSpeakerFilterTests: XCTestCase {
         XCTAssertNotNil(result.errorDescription)
     }
 
-    func testEnrollmentRequiresExactlyOneSampleWithThirtySecondMaximum() async throws {
-        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 24)
+    func testEnrollmentRequiresTwoSamplesWithThirtySecondMaximum() async throws {
+        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 48)
         let filter = TargetSpeakerFilter(model: model)
-        let recording = Array(repeating: Float(0.2), count: 24 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        let recording = Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
         let store = InMemoryTargetSpeakerProfileStore()
 
         do {
             _ = try await filter.createProfile(from: [], store: store)
-            XCTFail("zero recordings must be rejected")
+            XCTFail("fewer than two recordings must be rejected")
         } catch {
-            XCTAssertEqual(error as? TargetSpeakerEnrollmentError, .requiresExactlyOneSample)
+            XCTAssertEqual(error as? TargetSpeakerEnrollmentError, .requiresMultipleSamples)
         }
         let profile = try await filter.createProfile(
-            from: [recording], store: store
+            from: [recording, recording], store: store
         )
-        XCTAssertEqual(profile.embeddings.count, 7)
+        XCTAssertEqual(profile.embeddings.count, 30)
         XCTAssertEqual(TargetSpeakerFilterConfiguration.maximumEnrollmentDuration, 30)
     }
 
@@ -208,13 +208,13 @@ final class TargetSpeakerFilterTests: XCTestCase {
     }
 
     func testPreparationProgressTransitionsAreObservable() async throws {
-        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 24)
+        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 48)
         let filter = TargetSpeakerFilter(model: model)
-        let recording = Array(repeating: Float(0.2), count: 24 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        let recording = Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
         let collector = ProgressCollector()
         let handler: TargetSpeakerProgressHandler = { progress in collector.append(progress.phase) }
         _ = try await filter.createProfile(
-            from: [recording],
+            from: [recording, recording],
             store: InMemoryTargetSpeakerProfileStore(),
             progressHandler: handler
         )

@@ -174,6 +174,7 @@ final class AppState {
     private var targetSpeakerProfile: TargetSpeakerProfile?
     private var targetSpeakerEnrollmentTask: Task<Void, Never>?
     private var targetSpeakerEnrollmentGeneration: UInt64 = 0
+    private var targetSpeakerEnrollmentRecordings: [[Float]] = []
     private var flowBarMessageTask: Task<Void, Never>?
     private var activeTranscriptionSession: RecordingTranscriptionSession?
     /// Sessions are transcribed in order, while the microphone can start the next session as
@@ -244,7 +245,12 @@ final class AppState {
     }
 
     private static let targetSpeakerEnrollmentPromptText =
-        "Doğal biçimde konuş; kayıt en fazla 30 saniye sürecek."
+        "Oturur pozisyonda doğal biçimde konuş."
+
+    private static let targetSpeakerEnrollmentConditionPrompts = [
+        "Oturur pozisyonda doğal biçimde konuş.",
+        "Şimdi pozisyonunu değiştirip, mümkünse yatarak doğal biçimde konuş."
+    ]
 
     // MARK: - Setup
 
@@ -780,14 +786,15 @@ final class AppState {
         targetSpeakerPreparationProgress = nil
         targetSpeakerPreparationMessage = ""
         targetSpeakerEnrollmentStep = 0
-        targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
-        targetSpeakerEnrollmentStatus = "Tek kayıt gerekli; en az 6 saniye net konuşma, maksimum 30 saniye."
+        targetSpeakerEnrollmentRecordings = []
+        targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[0]
+        targetSpeakerEnrollmentStatus = "İki farklı pozisyonda kayıt gerekli; ideal süre her kayıt için 10–15 saniye, maksimum 30 saniye."
     }
 
     func startTargetSpeakerEnrollmentRecording() {
         guard recordingState == .idle,
               !targetSpeakerEnrollmentIsProcessing,
-              targetSpeakerEnrollmentStep == 0,
+              targetSpeakerEnrollmentStep < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount,
               let audioEngine else { return }
 
         clearFlowBarMessage()
@@ -842,6 +849,7 @@ final class AppState {
     func processTargetSpeakerEnrollmentSamples(_ samples: [Float]) {
         guard targetSpeakerEnrollmentActive,
               !targetSpeakerEnrollmentIsProcessing,
+              targetSpeakerEnrollmentStep < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount,
               !samples.isEmpty else { return }
 
         targetSpeakerEnrollmentIsProcessing = true
@@ -859,6 +867,7 @@ final class AppState {
                 * Double(TargetSpeakerFilterConfiguration.sampleRate)
         )
         let recording = Array(samples.prefix(maximumSamples))
+        let sampleIndex = targetSpeakerEnrollmentStep
         targetSpeakerEnrollmentTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
@@ -876,32 +885,44 @@ final class AppState {
                 )
                 guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                 guard result.isValid else {
-                    self.targetSpeakerEnrollmentStatus = "Bu kayıt en az 6 saniye net konuşma içermiyor veya çok kırpılmış; aynı adımı yeniden kaydedin."
+                    self.targetSpeakerEnrollmentStatus = "Bu kayıt en az 10 saniye net konuşma içermiyor veya çok kırpılmış; aynı pozisyonda yeniden kaydedin."
                     return
                 }
 
-                self.targetSpeakerEnrollmentStep = 1
-                self.targetSpeakerEnrollmentStatus = "Kayıt doğrulandı; profil çıkarılıyor…"
+                guard sampleIndex == self.targetSpeakerEnrollmentRecordings.count else {
+                    self.targetSpeakerEnrollmentStatus = "Kayıt sırası değişti; lütfen yeniden başlayın."
+                    return
+                }
+                self.targetSpeakerEnrollmentRecordings.append(recording)
+
+                if self.targetSpeakerEnrollmentRecordings.count < TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount {
+                    self.targetSpeakerEnrollmentStep += 1
+                    self.targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[1]
+                    self.targetSpeakerEnrollmentStatus = "İlk kayıt tamamlandı. Duruşunu değiştir ve ikinci kaydı başlat."
+                    return
+                }
+
+                self.targetSpeakerEnrollmentStep = TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount
+                self.targetSpeakerEnrollmentStatus = "İki kayıt doğrulandı; profil çıkarılıyor…"
                 do {
                     let profile = try await self.targetSpeakerFilter.createProfile(
-                        from: [recording],
+                        from: self.targetSpeakerEnrollmentRecordings,
                         store: self.targetSpeakerProfileStore,
                         progressHandler: progressHandler
                     )
-                    guard self.isCurrentTargetSpeakerEnrollment(generation) else {
-                        return
-                    }
+                    guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                     self.targetSpeakerProfile = profile
                     self.hasStoredTargetSpeakerProfile = true
                     self.targetSpeakerEnabled = true
                     self.targetSpeakerProfileStatus = "Kayıtlı profil hazır"
-                    self.targetSpeakerEnrollmentStatus = "Profil hazır; yalnızca eşleşen ses işlenecek."
+                    self.targetSpeakerEnrollmentStatus = "Profil hazır; farklı pozisyonlardaki sesin de işlenecek."
                     self.targetSpeakerEnrollmentActive = false
                     self.targetSpeakerPreparationProgress = nil
                 } catch {
                     guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
-                    self.targetSpeakerEnrollmentStep = 0
-                    self.targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
+                    self.targetSpeakerEnrollmentStep = sampleIndex
+                    self.targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[sampleIndex]
+                    self.targetSpeakerEnrollmentRecordings.removeLast()
                     self.targetSpeakerEnrollmentStatus = error.localizedDescription
                     self.lastError = error.localizedDescription
                 }
@@ -918,6 +939,7 @@ final class AppState {
         targetSpeakerEnrollmentActive = false
         targetSpeakerEnrollmentIsProcessing = false
         targetSpeakerEnrollmentStep = 0
+        targetSpeakerEnrollmentRecordings = []
         targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
         targetSpeakerPreparationProgress = nil
         targetSpeakerPreparationMessage = ""
@@ -937,6 +959,7 @@ final class AppState {
             targetSpeakerEnrollmentActive = false
             targetSpeakerEnrollmentIsProcessing = false
             targetSpeakerEnrollmentStep = 0
+            targetSpeakerEnrollmentRecordings = []
             targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
             targetSpeakerPreparationProgress = nil
             targetSpeakerPreparationMessage = ""

@@ -15,9 +15,11 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     /// still compares against every enrolled embedding and the utterance decision uses the
     /// median, so this moderate relaxation preserves protection against one-window outliers.
     static let cosineThreshold: Float = 0.62
-    static let requiredEnrollmentSampleCount = 1
+    /// A single microphone position is not enough: posture changes the acoustic path to
+    /// the microphone. Keep two recordings from different conditions in the profile.
+    static let requiredEnrollmentSampleCount = 2
     static let maximumEnrollmentDuration: TimeInterval = 30
-    static let minimumPerRecordingSpeechSeconds: TimeInterval = 6
+    static let minimumPerRecordingSpeechSeconds: TimeInterval = 10
 }
 
 struct TargetSpeakerVADFrame: Sendable {
@@ -187,14 +189,14 @@ struct TargetSpeakerEnrollmentResult: Sendable {
 }
 
 enum TargetSpeakerEnrollmentError: Error, LocalizedError, Equatable {
-    case requiresExactlyOneSample
+    case requiresMultipleSamples
     case invalidSample(index: Int)
     case sampleExceedsMaximumDuration
     case profileSaveFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .requiresExactlyOneSample: "Tam olarak bir ses kaydı gerekli"
+        case .requiresMultipleSamples: "İki farklı pozisyondan ses kaydı gerekli"
         case .invalidSample(let index): "Ses kaydı \(index + 1) yeterli konuşma veya kalite koşulunu karşılamıyor"
         case .sampleExceedsMaximumDuration: "Ses kaydı en fazla 30 saniye olabilir"
         case .profileSaveFailed(let message): "Ses profili kaydedilemedi: \(message)"
@@ -216,22 +218,25 @@ extension TargetSpeakerFilter {
         progressHandler: TargetSpeakerProgressHandler? = nil
     ) async throws -> TargetSpeakerProfile {
         guard recordings.count == TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount else {
-            throw TargetSpeakerEnrollmentError.requiresExactlyOneSample
+            throw TargetSpeakerEnrollmentError.requiresMultipleSamples
         }
 
         try Task.checkCancellation()
-        progressHandler?(TargetSpeakerPreparationProgress(
-            phase: .preparing,
-            fractionCompleted: 0,
-            message: "Tek ses kaydı analiz ediliyor…"
-        ))
-        let result = try await enroll(samples: recordings[0], progressHandler: progressHandler)
-        try Task.checkCancellation()
-        guard result.isValid else {
-            throw TargetSpeakerEnrollmentError.invalidSample(index: 0)
+        var embeddings: [[Float]] = []
+        for (index, recording) in recordings.enumerated() {
+            progressHandler?(TargetSpeakerPreparationProgress(
+                phase: .preparing,
+                fractionCompleted: Double(index) / Double(recordings.count),
+                message: "\(index + 1)/\(recordings.count) ses kaydı analiz ediliyor…"
+            ))
+            let result = try await enroll(samples: recording, progressHandler: progressHandler)
+            try Task.checkCancellation()
+            guard result.isValid else {
+                throw TargetSpeakerEnrollmentError.invalidSample(index: index)
+            }
+            embeddings.append(contentsOf: result.embeddings)
         }
 
-        let embeddings = result.embeddings
         let profile = try TargetSpeakerProfile(
             modelIdentifier: model.modelIdentifier,
             embeddings: embeddings

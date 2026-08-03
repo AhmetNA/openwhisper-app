@@ -8,6 +8,16 @@ import Foundation
 final class WhisperTranscriber: @unchecked Sendable {
     private var whisperKit: WhisperKit?
 
+    private struct DecodePass: Sendable {
+        let text: String
+        let averageLogprob: Float?
+        let needsRecovery: Bool
+
+        var confidenceScore: Float {
+            averageLogprob ?? -Float.greatestFiniteMagnitude
+        }
+    }
+
     /// Maximum number of glossary prompt tokens to condition the decoder with, IF glossary
     /// conditioning is ever re-enabled (see the `promptTokens: [Int]? = nil` line in
     /// `transcribe(audioData:language:)` — it currently is not).
@@ -210,7 +220,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         // (pass `glossaryPromptTokens()` instead of `nil` here) if that's ever worth revisiting.
         let promptTokens: [Int]? = nil
 
-        var text = try await runDecode(
+        var selectedPass = try await runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
@@ -219,15 +229,37 @@ final class WhisperTranscriber: @unchecked Sendable {
 
         // Safety net: if a prompted decode ever comes back empty (relevant again the moment
         // `promptTokens` above is switched back on), retry once without the glossary prompt.
-        if text.isEmpty, promptTokens != nil {
+        if selectedPass.text.isEmpty, promptTokens != nil {
             owLog("[Whisper] Prompted decode returned empty transcript — retrying without glossary prompt")
-            text = try await runDecode(
+            selectedPass = try await runDecode(
                 whisperKit: whisperKit,
                 audioData: audioData,
                 language: language,
                 promptTokens: nil
             )
         }
+
+        // A quiet recording can produce a plausible-looking but low-confidence transcript.
+        // Decode only those cases again with a stronger speech-preserving gain. The normal path
+        // remains one decode; the second pass is deliberately bounded to avoid doubling the
+        // cost of every dictation.
+        if selectedPass.needsRecovery {
+            owLog("[Whisper] Low-confidence decode; retrying with quiet-speech recovery gain")
+            let recoveryPass = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+                language: language,
+                promptTokens: nil
+            )
+            if Self.isBetter(recoveryPass, than: selectedPass) {
+                owLog("[Whisper] Recovery decode selected text=\(recoveryPass.text)")
+                selectedPass = recoveryPass
+            } else {
+                owLog("[Whisper] Primary decode retained text=\(selectedPass.text)")
+            }
+        }
+
+        var text = selectedPass.text
 
         // Whisper can hallucinate the Turkish subtitle-credit phrase "Altyazı M.K."
         // at the end of a recording, especially when the recording ends in silence.
@@ -279,7 +311,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         audioData: [Float],
         language: String,
         promptTokens: [Int]?
-    ) async throws -> String {
+    ) async throws -> DecodePass {
         // `firstTokenLogProbThreshold` (WhisperKit default: -1.5) is meant to abort a segment
         // when the FIRST REAL sampled token is low-confidence. It only makes sense when there's
         // no prompt: with `promptTokens` set, WhisperKit skips the prefill KV-cache (see
@@ -304,7 +336,9 @@ final class WhisperTranscriber: @unchecked Sendable {
             compressionRatioThreshold: 2.4,
             logProbThreshold: -1.0,
             firstTokenLogProbThreshold: firstTokenLogProbThreshold,
-            noSpeechThreshold: 0.6,
+            // A distant/quiet speaker can otherwise be classified as non-speech before the
+            // decoder gets a chance to recover the words. No noise gate is applied upstream.
+            noSpeechThreshold: 0.45,
             // Let WhisperKit seek through a long three-minute batch using its own timestamps.
             // The app must not pre-split that batch into many independent decoder calls.
             chunkingStrategy: ChunkingStrategy.none
@@ -315,15 +349,48 @@ final class WhisperTranscriber: @unchecked Sendable {
             decodeOptions: options
         )
 
-        // Log detected language from results
+        // Log detected language and confidence metrics from results. The metrics let the caller
+        // retry only weak passes instead of blindly decoding every recording twice.
         for (i, result) in results.enumerated() {
-            owLog("[Whisper] Result[\(i)] language=\(result.language) text=\(result.text)")
+            let avgLogprob = result.segments.isEmpty
+                ? nil
+                : result.segments.map(\.avgLogprob).reduce(0, +) / Float(result.segments.count)
+            let maxNoSpeech = result.segments.map(\.noSpeechProb).max() ?? 0
+            let maxCompression = result.segments.map(\.compressionRatio).max() ?? 0
+            owLog("[Whisper] Result[\(i)] language=\(result.language) avgLogprob=\(String(describing: avgLogprob)) noSpeech=\(maxNoSpeech) compression=\(maxCompression) text=\(result.text)")
         }
 
-        return results
+        let text = results
             .compactMap { $0.text }
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let segments = results.flatMap(\.segments)
+        let averageLogprob = segments.isEmpty
+            ? nil
+            : segments.map(\.avgLogprob).reduce(0, +) / Float(segments.count)
+        let weakLogprob = averageLogprob.map { $0 < -0.72 } ?? true
+        let suspiciousCompression = segments.contains { $0.compressionRatio > 2.2 }
+
+        return DecodePass(
+            text: text,
+            averageLogprob: averageLogprob,
+            needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression
+        )
+    }
+
+    private static func isBetter(_ candidate: DecodePass, than current: DecodePass) -> Bool {
+        guard !candidate.text.isEmpty else { return false }
+        guard current.text.isEmpty else {
+            if candidate.confidenceScore >= current.confidenceScore + 0.08 {
+                return true
+            }
+            // If confidence is effectively tied, prefer the recovery result only when it
+            // recovered a meaningful amount of text rather than adding random words.
+            return candidate.text.count >= current.text.count + 4
+                && candidate.confidenceScore >= current.confidenceScore - 0.10
+        }
+        return true
     }
 
     /// Keep only the 2 most recent models on disk, delete the rest

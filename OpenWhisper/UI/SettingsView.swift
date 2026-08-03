@@ -239,7 +239,7 @@ struct SettingsView: View {
                     .disabled(!appState.hasTargetSpeakerProfile && !appState.targetSpeakerEnabled)
             }
 
-            Text("Yalnızca kayıtlı ses profiline eşleşen konuşmayı Whisper'a gönderir.")
+            Text("Yalnızca kayıtlı ses profiline eşleşen konuşmayı Whisper'a gönderir. Profil, oturma ve yatma gibi farklı pozisyonları kapsayacak şekilde kaydedilir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -257,7 +257,7 @@ struct SettingsView: View {
 
             if appState.targetSpeakerEnrollmentActive {
                 Text(appState.targetSpeakerEnrollmentIsRecording
-                     ? "Kayıt: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
+                     ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
                      : appState.targetSpeakerEnrollmentStatus)
                     .font(.caption)
                     .foregroundStyle(.primary)

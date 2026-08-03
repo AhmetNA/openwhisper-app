@@ -226,6 +226,10 @@ final class AudioEngine: @unchecked Sendable {
         guard error == nil,
               let output = convertedBuffer.floatChannelData?[0],
               convertedBuffer.frameLength > 0 else { return }
+        // Preserve quiet speech before storing the Whisper input. There is deliberately no
+        // noise gate here: a gate would erase exactly the low-volume syllables this path is
+        // intended to recover. The compressor prevents the modest gain from clipping.
+        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
         appendSamples(output, count: Int(convertedBuffer.frameLength))
         emitCompletedSegmentIfNeeded()
     }

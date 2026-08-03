@@ -109,6 +109,34 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertNil(try store.load())
     }
 
+    func testEnrollmentBuildsProfileFromTwoSpeakingConditions() async throws {
+        let store = InMemoryTargetSpeakerProfileStore()
+        let appState = AppState(
+            profileStore: store,
+            targetSpeakerModel: IntegrationSpeakerModel(
+                voiceFrames: Array(repeating: true, count: 48)
+            )
+        )
+        let recording = validEnrollmentSamples()
+
+        appState.beginTargetSpeakerEnrollment()
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil {
+            !appState.targetSpeakerEnrollmentIsProcessing
+                && appState.targetSpeakerEnrollmentStep == 1
+        }
+        XCTAssertTrue(appState.targetSpeakerEnrollmentActive)
+
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil {
+            !appState.targetSpeakerEnrollmentIsProcessing
+                && !appState.targetSpeakerEnrollmentActive
+        }
+
+        XCTAssertTrue(appState.hasTargetSpeakerProfile)
+        XCTAssertEqual(try store.load()?.embeddings.count, 30)
+    }
+
     func testDeleteDuringEnrollmentRecordingResetsAudioTeardownState() throws {
         let store = InMemoryTargetSpeakerProfileStore()
         let appState = AppState(profileStore: store, targetSpeakerModel: IntegrationSpeakerModel())
@@ -143,7 +171,7 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
     }
 
     private func validEnrollmentSamples() -> [Float] {
-        Array(repeating: Float(0.2), count: 24 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
     }
 
     private func waitUntil(

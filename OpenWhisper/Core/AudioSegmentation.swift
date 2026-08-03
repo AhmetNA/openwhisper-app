@@ -19,7 +19,7 @@ struct AudioSegmentation {
         let overlapSampleCount: Int
     }
 
-    /// Uses a conservative 400 ms low-energy run near the three-minute point when one exists.
+    /// Uses a conservative 500 ms low-energy run near the three-minute point when one exists.
     /// If continuous speech/noise makes that unsafe, the hard limit is used and the following
     /// batch includes one second of preceding audio.
     static func makeSegments(from samples: [Float]) -> [Segment] {
@@ -49,7 +49,7 @@ struct AudioSegmentation {
     }
 
     /// Looks across the final five seconds before the three-minute hard boundary for the
-    /// quietest 400 ms run. The RMS threshold is intentionally conservative: a questionable
+    /// quietest 500 ms run. The RMS threshold is intentionally conservative: a questionable
     /// quiet patch is worse than using overlap at the hard boundary.
     private static func preferredSilenceCut(
         in samples: [Float],
@@ -57,7 +57,7 @@ struct AudioSegmentation {
         hardCut: Int
     ) -> Int? {
         let frame = sampleRate / 50 // 20 ms
-        let requiredFrames = 20 // 400 ms
+        let requiredFrames = 25 // 500 ms
         let searchStart = max(0, preferredCut - 5 * sampleRate)
         let searchEnd = hardCut
         guard searchEnd - searchStart >= requiredFrames * frame else { return nil }
@@ -73,8 +73,9 @@ struct AudioSegmentation {
                 samples.withUnsafeBufferPointer { buffer in
                     vDSP_rmsqv(buffer.baseAddress!.advanced(by: offset), 1, &rms, vDSP_Length(frame))
                 }
-                // -38 dBFS: catches genuine pauses while rejecting most low-level speech.
-                if rms > 0.0126 { silent = false; break }
+                // -44 dBFS: only a genuinely quiet run is considered a safe cut. This avoids
+                // treating distant/soft speech as silence at the batch boundary.
+                if rms > 0.0063 { silent = false; break }
                 total += rms
             }
             if silent && (best == nil || total < best!.rms) {

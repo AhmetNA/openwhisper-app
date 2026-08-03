@@ -2,7 +2,9 @@ import Foundation
 import Security
 
 struct TargetSpeakerProfile: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    // Version 2 profiles are enrolled from multiple speaking conditions (for example
+    // sitting and lying down), so an older one-condition profile must be re-enrolled.
+    static let currentSchemaVersion = 2
     static let expectedEmbeddingDimension = 256
 
     let schemaVersion: Int
