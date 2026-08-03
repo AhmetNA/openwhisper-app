@@ -611,37 +611,15 @@ final class AudioEngine: @unchecked Sendable {
         return isBluetoothTransport(deviceID: id)
     }
 
+    /// UID of the input device macOS currently exposes as the system default.
+    static func systemDefaultInputDeviceUID() -> String? {
+        guard let id = defaultInputDeviceID() else { return nil }
+        return availableInputDevices().first(where: { $0.id == id })?.uid
+    }
+
     /// Look up an AudioDeviceID by its persistent UID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         return availableInputDevices().first(where: { $0.uid == uid })?.id
-    }
-
-    /// Select a headset-like input when automatic routing is enabled. A non-built-in
-    /// duplex device is preferred because it represents a headset or USB audio device;
-    /// Bluetooth input is also accepted when the device exposes no output stream. If no
-    /// external headset is present, fall back to the Mac's built-in microphone.
-    ///
-    /// Ranking among external devices is quality-first, NOT connection-first: wired/USB
-    /// headsets before Bluetooth. A Bluetooth microphone forces macOS to drop the link into
-    /// HFP/SCO (narrowband, ~16 kHz mono, telephone-quality) for the duration of the recording
-    /// -- this app's own Settings screen already warns the user about exactly this ("Bluetooth
-    /// headsets drop into low-quality call mode while dictating"). A wired or USB headset has no
-    /// such penalty, so it is always the better choice when both are available. Bluetooth still
-    /// beats the built-in Mac mic, matching the "kulaklık varsa kulaklık" requirement -- it is
-    /// only demoted below a wired/USB alternative, never below the built-in mic.
-    static func automaticInputDeviceUID() -> String? {
-        let devices = availableInputDevices()
-        let externalHeadset = devices
-            .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
-            .sorted { lhs, rhs in
-                if lhs.isBluetooth != rhs.isBluetooth {
-                    return !lhs.isBluetooth
-                }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-            .first
-
-        return externalHeadset?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
     }
 
     // MARK: - Core Audio property helpers

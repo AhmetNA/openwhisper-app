@@ -1704,6 +1704,15 @@ final class AppState {
     func refreshInputDevices() {
         availableInputDevices = AudioEngine.availableInputDevices()
         systemDefaultInputIsBluetooth = AudioEngine.systemDefaultInputIsBluetooth()
+        let defaultUID = AudioEngine.systemDefaultInputDeviceUID()
+        for device in availableInputDevices {
+            owLog(
+                "[OpenWhisper] Input device name=\(device.name) uid=\(device.uid) "
+                    + "default=\(device.uid == defaultUID) bluetooth=\(device.isBluetooth) "
+                    + "builtIn=\(device.isBuiltIn) output=\(device.hasOutputStream)"
+            )
+        }
+        owLog("[OpenWhisper] System default input UID: \(defaultUID ?? "none")")
         // If the previously selected device is no longer present, automatic mode resolves the
         // next recording to a connected headset or the built-in Mac microphone.
         if let uid = inputDeviceUID, !availableInputDevices.contains(where: { $0.uid == uid }) {
@@ -1711,21 +1720,24 @@ final class AppState {
         }
     }
 
-    /// Automatic mode prefers a connected headset and falls back to the built-in Mac
-    /// microphone. An explicit picker selection still wins, and a temporarily unavailable
-    /// explicit device falls back to the same automatic policy for the next recording.
+    /// An explicit picker selection is passed to AVAudioEngine. Automatic mode deliberately
+    /// returns nil so AVAudioEngine follows macOS's live default input route; forcing the
+    /// enumerated microphone UID can make VoiceProcessingIO rebuild against the paired output
+    /// device (for example MacBook Air Speakers) and deliver no input buffers.
     var resolvedInputDeviceUID: String? {
         let devices = AudioEngine.availableInputDevices()
         if let inputDeviceUID,
            devices.contains(where: { $0.uid == inputDeviceUID }) {
             return inputDeviceUID
         }
-        return AudioEngine.automaticInputDeviceUID()
+        return nil
     }
 
     /// Returns true when the resolved dictation input is a Bluetooth device.
     var resolvedInputIsBluetooth: Bool {
-        guard let uid = resolvedInputDeviceUID else { return false }
+        guard let uid = resolvedInputDeviceUID else {
+            return AudioEngine.systemDefaultInputIsBluetooth()
+        }
         return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false
     }
 
