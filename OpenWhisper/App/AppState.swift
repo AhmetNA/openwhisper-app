@@ -629,9 +629,6 @@ final class AppState {
         }
         guard recordingState == .recording else { return }
 
-        recordingState = .transcribing
-        owLog("[OpenWhisper] Finishing recording; waiting for background batches...")
-
         recordingTimer?.invalidate()
         recordingTimer = nil
 
@@ -649,6 +646,18 @@ final class AppState {
         }
         session.continuation.finish()
         activeTranscriptionSession = nil
+
+        // If total audio duration is under 0.4 seconds (6400 samples at 16kHz),
+        // skip entering the .transcribing state completely and return to idle.
+        if session.queuedSampleCount < 6400 {
+            owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s); skipping transcribing UI")
+            session.isCancelled = true
+            recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
+            return
+        }
+
+        recordingState = .transcribing
+        owLog("[OpenWhisper] Finishing recording; waiting for background batches...")
     }
 
     // MARK: - Streaming transcription
@@ -966,8 +975,8 @@ final class AppState {
             }
             return
         }
-        guard session.queuedSampleCount > 4800 else {
-            owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples)")
+        guard session.queuedSampleCount >= 6400 else {
+            owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)")
             return
         }
 

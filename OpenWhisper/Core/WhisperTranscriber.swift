@@ -279,14 +279,16 @@ final class WhisperTranscriber: @unchecked Sendable {
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
-            promptTokens: promptTokens
+            promptTokens: promptTokens,
+            isRecovery: false
         )
 
         async let recoveryTask = runDecode(
             whisperKit: whisperKit,
             audioData: AudioSignalProcessor.recoverySamples(from: audioData),
             language: language,
-            promptTokens: nil
+            promptTokens: nil,
+            isRecovery: true
         )
 
         var selectedPass = try await primaryTask
@@ -434,19 +436,12 @@ final class WhisperTranscriber: @unchecked Sendable {
         audioData: [Float],
         language: String,
         promptTokens: [Int]?,
-        wordTimestamps: Bool = false
+        wordTimestamps: Bool = false,
+        isRecovery: Bool = false
     ) async throws -> DecodePass {
-        // `firstTokenLogProbThreshold` (WhisperKit default: -1.5) is meant to abort a segment
-        // when the FIRST REAL sampled token is low-confidence. It only makes sense when there's
-        // no prompt: with `promptTokens` set, WhisperKit skips the prefill KV-cache (see
-        // `TextDecoder.prefillDecoderInputs`'s `options?.promptTokens == nil` guard), so
-        // `prefilledIndex` stays 0 and `isFirstToken` fires on `tokenIndex == 0` — the position
-        // right after `<|startofprev|>`, still inside the forced prompt prefill. The sampled
-        // "prediction" there is discarded and overwritten by the forced prompt token one line
-        // later, but its log-probability is still checked against the threshold, and a low
-        // score there kills the whole segment (empty transcript) for no good reason. Disable
-        // the check when we're conditioning on a prompt; leave the default in place otherwise.
-        let firstTokenLogProbThreshold: Float? = promptTokens == nil ? -1.5 : nil
+        // Disabling `firstTokenLogProbThreshold` (setting to `nil`) prevents WhisperKit from aborting
+        // token generation when initial quiet frames or room noise precede speech.
+        let firstTokenLogProbThreshold: Float? = nil
 
         let options = DecodingOptions(
             task: .transcribe,  // Transcribe in original language, NOT translate to English
@@ -458,12 +453,12 @@ final class WhisperTranscriber: @unchecked Sendable {
             promptTokens: promptTokens,
             suppressBlank: true,
             supressTokens: nil,
-            compressionRatioThreshold: 1.8,
-            logProbThreshold: -1.0,
+            compressionRatioThreshold: 2.0,
+            logProbThreshold: isRecovery ? -1.8 : -1.2,
             firstTokenLogProbThreshold: firstTokenLogProbThreshold,
-            // A distant/quiet speaker can otherwise be classified as non-speech before the
-            // decoder gets a chance to recover the words. No noise gate is applied upstream.
-            noSpeechThreshold: 0.45,
+            // Relax non-speech threshold (0.65 on primary, 0.85 on recovery) so quiet or delayed speech
+            // is not prematurely discarded before decoding completes.
+            noSpeechThreshold: isRecovery ? 0.85 : 0.65,
             // Let WhisperKit seek through a long three-minute batch using its own timestamps.
             // The app must not pre-split that batch into many independent decoder calls.
             chunkingStrategy: ChunkingStrategy.none

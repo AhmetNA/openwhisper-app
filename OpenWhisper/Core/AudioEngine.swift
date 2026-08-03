@@ -55,6 +55,7 @@ final class AudioEngine: @unchecked Sendable {
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 25.0
     private var didLogInputChannelSelection = false
+    private var pinnedInputChannelIndex: Int? = nil
 
     /// Request microphone permission (call before first recording)
     func requestPermission() async -> Bool {
@@ -90,6 +91,7 @@ final class AudioEngine: @unchecked Sendable {
         completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
         didLogInputChannelSelection = false
+        pinnedInputChannelIndex = nil
         lock.unlock()
 
         // Only rebuild the AudioEngine graph if device/noiseSuppression changed or engine is unconfigured
@@ -170,27 +172,41 @@ final class AudioEngine: @unchecked Sendable {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             let frameLength = Int(buffer.frameLength)
-            guard frameLength > 0, let selection = self.loudestInputChannel(in: buffer) else { return }
+            guard frameLength > 0 else { return }
 
-            if !self.didLogInputChannelSelection {
-                self.didLogInputChannelSelection = true
-                owLog(
-                    "[AudioEngine] Input downmix: "
-                        + "selectedChannel=\(selection.index + 1)/\(buffer.format.channelCount) "
-                        + String(format: "rms=%.5f", selection.rms)
-                )
+            self.lock.lock()
+            let channelIndex: Int
+            let rms: Float
+            if let pinned = self.pinnedInputChannelIndex {
+                channelIndex = pinned
+                rms = self.channelRMS(in: buffer, channelIndex: pinned)
+            } else {
+                let selection = self.loudestInputChannel(in: buffer)
+                let index = selection?.index ?? 0
+                self.pinnedInputChannelIndex = index
+                channelIndex = index
+                rms = selection?.rms ?? 0.0
+                if !self.didLogInputChannelSelection {
+                    self.didLogInputChannelSelection = true
+                    owLog(
+                        "[AudioEngine] Input downmix (pinned): "
+                            + "selectedChannel=\(index + 1)/\(buffer.format.channelCount) "
+                            + String(format: "rms=%.5f", rms)
+                    )
+                }
             }
+            self.lock.unlock()
 
             // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
             // microphone sample for transcription.
             let now = Date()
             if now.timeIntervalSince(self.lastLevelUpdate) >= self.levelUpdateInterval {
                 self.lastLevelUpdate = now
-                self.levelCallback?(selection.rms)
+                self.levelCallback?(rms)
             }
 
             self.lock.lock()
-            self.convert(buffer, channelIndex: selection.index)
+            self.convert(buffer, channelIndex: channelIndex)
             self.lock.unlock()
         }
 
@@ -256,6 +272,15 @@ final class AudioEngine: @unchecked Sendable {
     /// Runs the one converter instance throughout a recording so resampling filter state is
     /// continuous across input buffers. This work stays inside the audio callback, but only
     /// copies the already-required 16kHz output into fixed-size storage.
+    private func channelRMS(in buffer: AVAudioPCMBuffer, channelIndex: Int) -> Float {
+        guard let channels = buffer.floatChannelData,
+              buffer.frameLength > 0,
+              channelIndex >= 0 && channelIndex < Int(buffer.format.channelCount) else { return 0.0 }
+        var rms: Float = 0
+        vDSP_rmsqv(channels[channelIndex], 1, &rms, vDSP_Length(buffer.frameLength))
+        return rms
+    }
+
     private func loudestInputChannel(in buffer: AVAudioPCMBuffer) -> (index: Int, rms: Float)? {
         guard let channels = buffer.floatChannelData,
               buffer.frameLength > 0,
