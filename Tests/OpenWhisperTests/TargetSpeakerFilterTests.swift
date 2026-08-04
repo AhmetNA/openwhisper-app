@@ -464,7 +464,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         XCTAssertEqual(defaultTuning.uncertainSimilarityFloor, 0.40, accuracy: 0.0001)
         XCTAssertEqual(defaultTuning.uncertainContinuityThreshold, 0.47, accuracy: 0.0001)
         XCTAssertEqual(defaultTuning.minRecordingCoherence, 0.47, accuracy: 0.0001)
-        XCTAssertEqual(defaultTuning.minCrossRecordingSimilarity, 0.40, accuracy: 0.0001)
+        XCTAssertEqual(defaultTuning.minCrossRecordingSimilarity, 0.0, accuracy: 0.0001)
 
         defaults.set(0.51, forKey: TargetSpeakerTuning.uncertainSimilarityFloorKey)
         defaults.set(0.58, forKey: TargetSpeakerTuning.uncertainContinuityThresholdKey)
@@ -488,7 +488,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defaults.set(Double.nan, forKey: TargetSpeakerTuning.minCrossRecordingSimilarityKey)
         let invalid = TargetSpeakerTuning.resolved(from: defaults)
         XCTAssertEqual(invalid.minRecordingCoherence, 0.47, accuracy: 0.0001, "out-of-range must fall back")
-        XCTAssertEqual(invalid.minCrossRecordingSimilarity, 0.40, accuracy: 0.0001, "non-finite must fall back")
+        XCTAssertEqual(invalid.minCrossRecordingSimilarity, 0.0, accuracy: 0.0001, "non-finite must fall back")
     }
 
     /// Case (a) part 1: a recording whose windows all agree with each other (one speaker) sails

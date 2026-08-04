@@ -76,8 +76,8 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     /// like different people", never "these aren't similar enough"; a floor set too high makes
     /// enrollment impossible, which is a worse bug than the one this check fixes. Default only --
     /// overridable at runtime via the `targetSpeakerMinCrossRecordingSimilarity` UserDefaults key
-    /// (see `TargetSpeakerTuning`). Setting it to 0 disables the check.
-    static let minCrossRecordingSimilarity: Double = 0.40
+    /// Setting it to 0 disables the check so both enrollment recordings are unconditionally accepted and embedded into the profile.
+    static let minCrossRecordingSimilarity: Double = 0.0
 }
 
 /// Resolved runtime tuning for the target-speaker gate. Values default to
