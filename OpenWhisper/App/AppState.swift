@@ -4,6 +4,7 @@ import AVFoundation
 import ApplicationServices
 import ServiceManagement
 import UserNotifications
+import QuartzCore
 
 /// Owns the audio/transcript state for one dictation. A new recording gets a new session so a
 /// later Fn press cannot reset or append to a dictation that is still being transcribed.
@@ -378,7 +379,15 @@ final class AppState {
         // Register global hotkey
         hotkey = GlobalHotkey(
             onPress: { [weak self] in
-                DispatchQueue.main.async { self?.startRecording() }
+                let now = CACurrentMediaTime()
+                let delayMs = (now - GlobalHotkey.lastFnPressUptime) * 1000
+                owLog("[Perf] [HotkeyCallback] onPress callback triggered (+\(String(format: "%.2f", delayMs))ms from Fn press)")
+                DispatchQueue.main.async {
+                    let mainNow = CACurrentMediaTime()
+                    let mainDelayMs = (mainNow - GlobalHotkey.lastFnPressUptime) * 1000
+                    owLog("[Perf] [StartRecordingDispatch] startRecording scheduled on Main thread (+\(String(format: "%.2f", mainDelayMs))ms from Fn press)")
+                    self?.startRecording()
+                }
             },
             onRelease: { [weak self] in
                 DispatchQueue.main.async { self?.stopRecording() }
@@ -538,6 +547,10 @@ final class AppState {
     // MARK: - Recording Flow
 
     func startRecording() {
+        let tStart = CACurrentMediaTime()
+        let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
+        owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
+
         if targetSpeakerEnrollmentActive {
             if targetSpeakerEnrollmentIsRecording {
                 stopTargetSpeakerEnrollmentRecording()
@@ -578,6 +591,10 @@ final class AppState {
                 }
             }
         )
+
+        let tAudioDone = CACurrentMediaTime()
+        let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
+        owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
 
         // 2. NOW update recordingState to .recording so flow bar UI shows up while mic is ALREADY recording
         recordingState = .recording

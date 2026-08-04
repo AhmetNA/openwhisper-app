@@ -25,8 +25,15 @@ enum OpenWhisperNotification {
     }
 }
 
+private let owLogDateFormatter: DateFormatter = {
+    let df = DateFormatter()
+    df.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+    return df
+}()
+
 func owLog(_ msg: String) {
-    let line = "\(Date()): \(msg)\n"
+    let timestamp = owLogDateFormatter.string(from: Date())
+    let line = "[\(timestamp)] \(msg)\n"
     let path = "/tmp/openwhisper.log"
     if let fh = FileHandle(forWritingAtPath: path) {
         fh.seekToEndOfFile()

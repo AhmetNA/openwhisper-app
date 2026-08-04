@@ -1,8 +1,10 @@
 import Cocoa
 import ApplicationServices
 import CoreGraphics
+import QuartzCore
 
 final class GlobalHotkey {
+    static var lastFnPressUptime: CFTimeInterval = 0
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
@@ -138,6 +140,9 @@ final class GlobalHotkey {
         switch mode {
         case .idle:
             if isPressed {
+                let now = CACurrentMediaTime()
+                GlobalHotkey.lastFnPressUptime = now
+                owLog("[Perf] [FnKeyDown] Fn key pressed down at t=\(String(format: "%.3f", now))")
                 mode = .holding
                 fnPressTime = Date()
                 onPress()
