@@ -640,9 +640,12 @@ final class AppState {
             }
             return
         }
-        // Cancel any pending tail-stop work item if a new recording starts immediately
-        delayedStopWorkItem?.cancel()
-        delayedStopWorkItem = nil
+        // Cancel any pending tail-stop work item and finish previous recording if a new recording starts immediately
+        if delayedStopWorkItem != nil {
+            delayedStopWorkItem?.cancel()
+            delayedStopWorkItem = nil
+            stopRecording()
+        }
 
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
@@ -758,11 +761,13 @@ final class AppState {
     }
 
     /// Schedules stopRecording() after a short tail delay (default 0.40s / 400ms) so that speech spoken
-    /// right as the hotkey/Fn key is released is not truncated from the audio buffer.
+    /// right as the hotkey/Fn key is released is not truncated from the audio buffer. Visually,
+    /// the UI transitions to `.transcribing` immediately on key release so the user feels an instant response.
     func stopRecordingWithTail(delay: TimeInterval = 0.40) {
         guard recordingState == .recording else { return }
         delayedStopWorkItem?.cancel()
-        owLog("[OpenWhisper] Hotkey released; keeping mic open for \(Int(delay * 1000))ms tail buffer...")
+        recordingState = .transcribing
+        owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
         let workItem = DispatchWorkItem { [weak self] in
             self?.stopRecording()
         }
@@ -779,7 +784,7 @@ final class AppState {
             stopTargetSpeakerEnrollmentRecording()
             return
         }
-        guard recordingState == .recording else { return }
+        guard recordingState == .recording || (recordingState == .transcribing && activeTranscriptionSession != nil) else { return }
 
         recordingTimer?.invalidate()
         recordingTimer = nil
