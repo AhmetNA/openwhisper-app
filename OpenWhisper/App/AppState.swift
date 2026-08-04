@@ -297,8 +297,10 @@ final class AppState {
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
 
-    /// Whether any background transcription task is currently running.
-    var isTranscribing: Bool { pendingTranscriptionCount > 0 }
+    /// Whether any background transcription task (other than the currently recording session) is running.
+    var isTranscribing: Bool {
+        activeTranscriptionSession != nil ? pendingTranscriptionCount > 1 : pendingTranscriptionCount > 0
+    }
 
     // MARK: - Output Swap State
 
