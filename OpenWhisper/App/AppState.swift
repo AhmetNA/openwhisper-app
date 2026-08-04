@@ -610,7 +610,7 @@ final class AppState {
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            audioEngineRef?.startRecording(
+            let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
                 audioProcessingMode: processingMode,
                 levelCallback: { rawLevel in
@@ -623,11 +623,19 @@ final class AppState {
                         self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
                     }
                 }
-            )
+            ) ?? false
 
             let tAudioDone = CACurrentMediaTime()
             let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
             owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
+
+            // Non-blocking: this recording is already under way by the time this lands, so it
+            // can never delay the Fn->audio path -- it only informs the user after the fact.
+            if didFallBackFromDeepFilter {
+                Task { @MainActor in
+                    self?.showFlowBarMessage("Gürültü engelleme henüz hazır değildi, bu kayıt engelsiz işlendi")
+                }
+            }
         }
 
         // 2. Update recordingState so flow bar UI appears
