@@ -261,6 +261,7 @@ final class AudioEngine: @unchecked Sendable {
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
 
         lock.lock()
         let loadedDeepFilter = deepFilterProcessor
@@ -613,10 +614,7 @@ final class AudioEngine: @unchecked Sendable {
         // Preserve quiet speech before storing the Whisper input. There is deliberately no
         // noise gate here: a gate would erase exactly the low-volume syllables this path is
         // intended to recover. The compressor prevents the modest gain from clipping.
-        // `activeInputGain` was resolved once at startRecording from the effective (read-back)
-        // voice-processing state: full gain when voice processing is off, a reduced gain when
-        // Apple's own AGC has already normalized the signal.
-        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength), gain: activeInputGain)
+        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
         appendSamples(output, count: Int(convertedBuffer.frameLength))
         emitCompletedSegmentIfNeeded()
     }
@@ -771,15 +769,28 @@ final class AudioEngine: @unchecked Sendable {
         return isBluetoothTransport(deviceID: id)
     }
 
-    /// UID of the input device macOS currently exposes as the system default.
-    static func systemDefaultInputDeviceUID() -> String? {
-        guard let id = defaultInputDeviceID() else { return nil }
-        return availableInputDevices().first(where: { $0.id == id })?.uid
-    }
-
     /// Look up an AudioDeviceID by its persistent UID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         return availableInputDevices().first(where: { $0.uid == uid })?.id
+    }
+
+    /// Select a headset-like input when automatic routing is enabled. A non-built-in
+    /// duplex device is preferred because it represents a headset or USB audio device;
+    /// Bluetooth input is also accepted when the device exposes no output stream. If no
+    /// external headset is present, fall back to the Mac's built-in microphone.
+    static func automaticInputDeviceUID() -> String? {
+        let devices = availableInputDevices()
+        let externalHeadset = devices
+            .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
+            .sorted { lhs, rhs in
+                if lhs.isBluetooth != rhs.isBluetooth {
+                    return lhs.isBluetooth
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            .first
+
+        return externalHeadset?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
     }
 
     // MARK: - Core Audio property helpers

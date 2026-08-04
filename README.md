@@ -140,28 +140,10 @@ The menu-bar settings panel includes:
 - language selection, including Turkish and auto-detect;
 - Whisper model selection and download status;
 - Ollama cleanup toggle and model selection;
-- audio processing mode (noise suppression on/off, see below);
 - microphone/input-device selection;
 - launch-at-login and flow-bar preferences;
 - learned correction management;
 - Spotify Client ID/Secret and account connection.
-
-## Noise suppression
-
-Settings includes an audio processing mode with two options: noise
-suppression on (Apple's voice-processing input, VPIO) or off (raw
-microphone). It applies to a recording as it's captured, so it targets
-background noise such as a noisy cafe before it ever reaches the
-transcription model.
-
-Because voice processing is a capture-time hardware/HAL feature, it cannot
-be applied after the fact to an already-recorded file — comparing the two
-modes only works with a live microphone A/B test. For a step-by-step
-protocol (synthetic cafe-noise generator, fixed test sentences, manual
-word-error scoring, and how to read the `[Perf]` log lines), see
-[`GURULTU-TEST-PROTOKOLU.md`](GURULTU-TEST-PROTOKOLU.md) (Turkish) and the
-helper scripts under [`scripts/noise-test/`](scripts/noise-test/) and
-[`scripts/perf-report.sh`](scripts/perf-report.sh).
 
 ## Optional Spotify setup
 

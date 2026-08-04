@@ -16,8 +16,6 @@ final class TargetSpeakerFilterTests: XCTestCase {
         let encoder = JSONEncoder()
         let base = try JSONSerialization.jsonObject(with: encoder.encode(profile)) as! [String: Any]
 
-        // 4 is neither the current schema (3) nor the migratable legacy one (2) -- must still be
-        // rejected as unsupported.
         var unsupportedSchema = base
         unsupportedSchema["schemaVersion"] = 999
         XCTAssertThrowsError(try JSONDecoder().decode(
@@ -91,47 +89,15 @@ final class TargetSpeakerFilterTests: XCTestCase {
         XCTAssertGreaterThan(result.samples[31_000], 0, "a continuous moderate-score window must not be cut")
     }
 
-    /// A single coherent-but-uncertain voice (every window identically scored, so they're
-    /// mutually near-identical) is correctly `.singleSpeakerUncertain`, not `.ambiguous` -- that
-    /// is a *different*, already-covered decision with its own confirmation-candidate path (see
-    /// `AppStateTargetSpeakerIntegrationTests`'s single-speaker-uncertain tests). Genuine
-    /// `.ambiguous` needs windows that are internally inconsistent with each other: this
-    /// recording is engineered so the anchor-relative reclassification finds some windows just
-    /// above its "target" line and some just below ("uncertain" relative to the anchor, not
-    /// "other" -- so no clean two-cluster split either), never separated enough to auto-accept
-    /// but never coherent enough to collapse into one confirmable voice.
-    func testMixedCoherenceUncertainWindowsAreClassifiedAmbiguous() async throws {
-        func vector(_ pairs: [(Int, Float)]) -> [Float] {
-            var v = [Float](repeating: 0, count: TargetSpeakerProfile.expectedEmbeddingDimension)
-            for (index, value) in pairs { v[index] = value }
-            return v
-        }
-        // w0 is the anchor: highest profile score of the five (0.3), but still well under the
-        // 0.62 absolute "strong" threshold, so this stays on the relative-classification path.
-        // w1/w2 sit just above the anchor-relative 0.55 "target" line (0.551); w3/w4 sit just
-        // below it (0.549, "uncertain" relative to the anchor) -- the target/uncertain gap
-        // (~0.15) never clears the 0.25 auto-split floor, but each window's own orthogonal
-        // component keeps overall pairwise coherence (median ~0.30) well under the 0.55
-        // single-cluster floor.
-        let w0 = vector([(0, 1.0)])
-        let w1 = vector([(0, 0.551), (1, 0.8345)])
-        let w2 = vector([(0, 0.551), (2, 0.8345)])
-        let w3 = vector([(0, 0.549), (3, 0.8358)])
-        let w4 = vector([(0, 0.549), (4, 0.8358)])
-        // The anchor's own absolute profile score must also clear `relativeAnchorMinimum`
-        // (0.50) or the relative reclassification bails out to a flat `.rejected` before ever
-        // looking at the other windows -- 0.56 clears that floor and still stays under the 0.62
-        // "strong" threshold.
-        let profile = try TargetSpeakerProfile(
-            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-            embeddings: [vector([(0, 0.56), (5, 0.8285)])]
+    func testOnlyUncertainWindowsRemainAmbiguousInsteadOfBeingAutoAccepted() async throws {
+        let samples = Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        let model = MockTargetSpeakerModel(
+            embeddings: Array(repeating: vector(withCosine: 0.56), count: 3),
+            frameCount: 12
         )
-        let model = MockTargetSpeakerModel(embeddings: [w0, w1, w2, w3, w4], frameCount: 18)
-        let samples = Array(repeating: Float(0.2), count: 18 * TargetSpeakerFilterConfiguration.vadFrameSamples)
-
         let result = await TargetSpeakerFilter(model: model).filter(
             samples: samples,
-            profile: profile,
+            profile: try makeProfile(),
             enabled: true
         )
 
@@ -637,146 +603,6 @@ final class TargetSpeakerFilterTests: XCTestCase {
         XCTAssertTrue(TargetSpeakerOutputGate.shouldSkipPostProcessing(featureEnabled: true, acceptedSampleCount: 0))
         XCTAssertFalse(TargetSpeakerOutputGate.shouldSkipPostProcessing(featureEnabled: true, acceptedSampleCount: 1))
         XCTAssertFalse(TargetSpeakerOutputGate.shouldSkipPostProcessing(featureEnabled: false, acceptedSampleCount: 0))
-    }
-
-    // MARK: - Schema 3: audio-processing-mode field + legacy-schema migration
-
-    /// Schema-2 profiles predate VPIO entirely, so every one of them was necessarily captured
-    /// with audio processing off. Decoding one must silently upgrade it to schema 3 with
-    /// `audioProcessingMode == .raw` -- never throw/force re-enrollment (the whole point is
-    /// avoiding the "ses eşleşmedi" re-enrollment friction users already complained about).
-    func testLegacySchemaTwoProfileMigratesToRawModeOnDecode() throws {
-        // Mirrors the pre-schema-3 on-disk shape exactly (same `CodingKeys` names as
-        // `TargetSpeakerProfile` minus `audioProcessingMode`), so this is a faithful stand-in for
-        // JSON written by the app before this change, not a synthetic shortcut.
-        struct LegacyV2Profile: Encodable {
-            let schemaVersion: Int
-            let modelIdentifier: String
-            let embeddings: [[Float]]
-            let createdAt: Date
-            let updatedAt: Date
-        }
-        let legacy = LegacyV2Profile(
-            schemaVersion: 2,
-            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-            embeddings: [unitVector()],
-            createdAt: Date(),
-            updatedAt: Date()
-        )
-        let data = try JSONEncoder().encode(legacy)
-
-        let migrated = try JSONDecoder().decode(TargetSpeakerProfile.self, from: data)
-
-        XCTAssertEqual(migrated.schemaVersion, TargetSpeakerProfile.currentSchemaVersion)
-        XCTAssertEqual(migrated.audioProcessingMode, .raw, "pre-VPIO profiles must be assumed raw, not defaulted to vpio")
-        XCTAssertTrue(migrated.migratedFromLegacySchema)
-        XCTAssertTrue(migrated.isCompatible(with: FluidAudioTargetSpeakerModel.identifier), "must remain usable, not be force-invalidated")
-    }
-
-    /// The migration flag is deliberately transient: once the caller resaves the migrated
-    /// profile (see `AppState.loadTargetSpeakerProfile`), the JSON on disk is genuine schema 3
-    /// and a later load must not think it's still mid-migration.
-    func testMigratedProfileResavesAsNativeSchemaThreeWithoutRepeatingMigrationFlag() throws {
-        struct LegacyV2Profile: Encodable {
-            let schemaVersion: Int
-            let modelIdentifier: String
-            let embeddings: [[Float]]
-            let createdAt: Date
-            let updatedAt: Date
-        }
-        let legacy = LegacyV2Profile(
-            schemaVersion: 2,
-            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-            embeddings: [unitVector()],
-            createdAt: Date(),
-            updatedAt: Date()
-        )
-        let migrated = try JSONDecoder().decode(TargetSpeakerProfile.self, from: JSONEncoder().encode(legacy))
-
-        let reloaded = try JSONDecoder().decode(TargetSpeakerProfile.self, from: JSONEncoder().encode(migrated))
-
-        XCTAssertFalse(reloaded.migratedFromLegacySchema)
-        XCTAssertEqual(reloaded.audioProcessingMode, .raw)
-        XCTAssertEqual(reloaded, migrated, "the transient flag must not affect equality")
-    }
-
-    /// A schema-3 blob is expected to always carry `audioProcessingMode` -- unlike the schema-2
-    /// migration, a missing field here is corruption, not something to default away.
-    func testSchemaThreeProfileMissingAudioProcessingModeFieldFailsToDecode() throws {
-        let profile = try makeProfile()
-        var payload = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
-        payload.removeValue(forKey: "audioProcessingMode")
-
-        XCTAssertThrowsError(try JSONDecoder().decode(
-            TargetSpeakerProfile.self,
-            from: JSONSerialization.data(withJSONObject: payload)
-        ))
-    }
-
-    func testAudioProcessingModeRoundTripsThroughEncodeDecode() throws {
-        for mode: TargetSpeakerProfile.AudioProcessingMode in [.vpio, .raw] {
-            let profile = try TargetSpeakerProfile(
-                modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-                embeddings: [unitVector()],
-                audioProcessingMode: mode
-            )
-            let decoded = try JSONDecoder().decode(TargetSpeakerProfile.self, from: JSONEncoder().encode(profile))
-            XCTAssertEqual(decoded.audioProcessingMode, mode)
-            XCTAssertEqual(decoded, profile)
-            XCTAssertFalse(decoded.migratedFromLegacySchema)
-        }
-    }
-
-    func testCreateProfileStampsRequestedAudioProcessingModeDefaultingToVPIO() async throws {
-        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 48)
-        let filter = TargetSpeakerFilter(model: model)
-        let recording = Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
-
-        let defaultModeProfile = try await filter.createProfile(
-            from: [recording, recording], store: InMemoryTargetSpeakerProfileStore()
-        )
-        XCTAssertEqual(
-            defaultModeProfile.audioProcessingMode, .vpio,
-            "omitting the parameter must default to vpio, matching noiseSuppressionEnabled's own default of true"
-        )
-
-        let rawModeProfile = try await filter.createProfile(
-            from: [recording, recording], store: InMemoryTargetSpeakerProfileStore(), audioProcessingMode: .raw
-        )
-        XCTAssertEqual(rawModeProfile.audioProcessingMode, .raw)
-    }
-
-    /// Regression guard: the append path must never silently relabel a profile's own recorded
-    /// mode with the default (`.vpio`) just because it doesn't take an explicit mode parameter --
-    /// it must inherit whatever the profile being appended to already has.
-    func testAppendConfirmedCandidatePreservesExistingProfileAudioProcessingMode() async throws {
-        let model = MockTargetSpeakerModel(embedding: unitVector(), frameCount: 48)
-        let filter = TargetSpeakerFilter(model: model)
-        let existingProfile = try TargetSpeakerProfile(
-            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
-            embeddings: [unitVector()],
-            audioProcessingMode: .raw
-        )
-        let recording = Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
-
-        let receipt = try await filter.appendConfirmedCandidateWithReceipt(
-            recording, to: existingProfile, store: InMemoryTargetSpeakerProfileStore()
-        )
-
-        XCTAssertEqual(
-            receipt.appendedProfile.audioProcessingMode, .raw,
-            "appending must not reset the profile's recorded mode to the default"
-        )
-        XCTAssertGreaterThan(receipt.appendedProfile.embeddings.count, existingProfile.embeddings.count)
-    }
-
-    func testAudioProcessingModeDiffersFromActiveIsPure() {
-        XCTAssertFalse(TargetSpeakerProfile.AudioProcessingMode.vpio.differsFromActive(noiseSuppressionEnabled: true))
-        XCTAssertTrue(TargetSpeakerProfile.AudioProcessingMode.vpio.differsFromActive(noiseSuppressionEnabled: false))
-        XCTAssertFalse(TargetSpeakerProfile.AudioProcessingMode.raw.differsFromActive(noiseSuppressionEnabled: false))
-        XCTAssertTrue(TargetSpeakerProfile.AudioProcessingMode.raw.differsFromActive(noiseSuppressionEnabled: true))
-        XCTAssertEqual(TargetSpeakerProfile.AudioProcessingMode.resolved(fromNoiseSuppressionEnabled: true), .vpio)
-        XCTAssertEqual(TargetSpeakerProfile.AudioProcessingMode.resolved(fromNoiseSuppressionEnabled: false), .raw)
     }
 
     private func unitVector() -> [Float] { [1] + [Float](repeating: 0, count: 255) }

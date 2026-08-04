@@ -661,12 +661,6 @@ extension TargetSpeakerFilter {
             throw TargetSpeakerEnrollmentError.profileCapacityExceeded
         }
 
-        // The appended embeddings may come from a *different* audio-processing mode than the
-        // profile was originally captured in -- that is exactly the point of the mode-mismatch
-        // "extend the profile" offer in AppState. Preserve the existing profile's own recorded
-        // mode here rather than defaulting: window scores are MAX'd across every embedding in
-        // the profile regardless of which mode produced it, so a mixed-mode profile still works,
-        // and relabeling it would just make the mismatch notice wrong afterward.
         let profile = try TargetSpeakerProfile(
             modelIdentifier: existingProfile.modelIdentifier,
             embeddings: existingProfile.embeddings + embeddingsToAppend,

@@ -209,19 +209,6 @@ struct SettingsView: View {
                  : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-
-            if let notice = appState.targetSpeakerAudioProcessingModeStatusText {
-                HStack(alignment: .top, spacing: 4) {
-                    Image(systemName: appState.targetSpeakerAudioProcessingModeMismatched
-                          ? "exclamationmark.triangle" : "info.circle")
-                        .font(.system(size: 10))
-                        .foregroundStyle(appState.targetSpeakerAudioProcessingModeMismatched ? .orange : .secondary)
-                    Text(notice)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
         }
     }
 

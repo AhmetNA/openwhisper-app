@@ -10,33 +10,6 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 3
     static let expectedEmbeddingDimension = 256
 
-    /// Which Apple audio processing path was active while this profile's embeddings were
-    /// captured.
-    enum AudioProcessingMode: String, Codable, Sendable, Equatable {
-        /// Apple Voice Processing I/O active: echo/noise suppression + AGC.
-        case vpio
-        /// Unprocessed microphone signal.
-        case raw
-
-        static func resolved(fromNoiseSuppressionEnabled enabled: Bool) -> AudioProcessingMode {
-            enabled ? .vpio : .raw
-        }
-
-        /// True when a recording made right now (given the user's current "Gürültü engelleme"
-        /// preference) would use a different processing path than this profile was captured
-        /// with. Pure/testable on purpose -- see `TargetSpeakerFilterTests`.
-        func differsFromActive(noiseSuppressionEnabled: Bool) -> Bool {
-            self != .resolved(fromNoiseSuppressionEnabled: noiseSuppressionEnabled)
-        }
-
-        var turkishLabel: String {
-            switch self {
-            case .vpio: "gürültü engellemeli"
-            case .raw: "gürültü engellemesiz"
-            }
-        }
-    }
-
     let schemaVersion: Int
     let modelIdentifier: String
     let embeddings: [[Float]]
@@ -75,7 +48,7 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let storedSchemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
         let modelIdentifier = try container.decode(String.self, forKey: .modelIdentifier)
         let embeddings = try container.decode([[Float]].self, forKey: .embeddings)
         let createdAt = try container.decode(Date.self, forKey: .createdAt)
