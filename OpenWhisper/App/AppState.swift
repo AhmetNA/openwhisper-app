@@ -372,6 +372,15 @@ final class AppState {
         refreshInputDevices()
         owLog("[OpenWhisper] Input devices: \(availableInputDevices.count), default-is-BT: \(systemDefaultInputIsBluetooth)")
 
+        // Pre-warm audio engine in background for instant Fn key start
+        let initDeviceUID = resolvedInputDeviceUID
+        let initNoiseSuppression = noiseSuppressionEnabled
+        if let engine = audioEngine {
+            DispatchQueue.global(qos: .userInitiated).async {
+                engine.prewarm(deviceUID: initDeviceUID, noiseSuppressionEnabled: initNoiseSuppression)
+            }
+        }
+
         // Check accessibility
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)
         owLog("[OpenWhisper] Accessibility: \(accessibilityGranted)")
@@ -568,12 +577,17 @@ final class AppState {
             return
         }
 
-        // Save the currently focused app BEFORE we start recording (instant NSWorkspace query)
+        // 1. Update recordingState FIRST so flow bar UI appears INSTANTLY (< 1ms from Fn press)
+        recordingState = .recording
+        recordingDuration = 0
+        audioLevel = 0
+        lastError = nil
+
+        // Save the currently focused app (instant NSWorkspace query)
         targetApp = NSWorkspace.shared.frontmostApplication
         owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
 
-        // 1. Start microphone recording FIRST via pre-warmed AudioEngine (< 5ms startup).
-        // Microphones capture is active BEFORE the flow bar panel is displayed.
+        // 2. Start microphone recording via pre-warmed AudioEngine (< 2ms hardware start).
         let recordingInputDeviceUID = resolvedInputDeviceUID
         let noiseSuppression = noiseSuppressionEnabled
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
@@ -595,12 +609,6 @@ final class AppState {
         let tAudioDone = CACurrentMediaTime()
         let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
         owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
-
-        // 2. NOW update recordingState to .recording so flow bar UI shows up while mic is ALREADY recording
-        recordingState = .recording
-        recordingDuration = 0
-        audioLevel = 0
-        lastError = nil
 
         // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1

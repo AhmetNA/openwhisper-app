@@ -72,6 +72,48 @@ final class AudioEngine: @unchecked Sendable {
     private var configuredNoiseSuppression: Bool? = nil
     private var isEnginePrepared = false
 
+    /// Pre-warm the audio engine graph in the background so startRecording() takes < 2ms.
+    func prewarm(deviceUID: String?, noiseSuppressionEnabled: Bool) {
+        lock.lock()
+        let needsConfig = !isEnginePrepared || configuredDeviceUID != deviceUID || configuredNoiseSuppression != noiseSuppressionEnabled
+        lock.unlock()
+        guard needsConfig else { return }
+        owLog("[AudioEngine] Pre-warming audio engine graph in background...")
+        configureEngine(deviceUID: deviceUID, noiseSuppressionEnabled: noiseSuppressionEnabled)
+    }
+
+    private func configureEngine(deviceUID: String?, noiseSuppressionEnabled: Bool) {
+        engine.stop()
+        engine.reset()
+        engine = AVAudioEngine()
+
+        let inputNode = engine.inputNode
+        if let uid = deviceUID, let deviceID = Self.audioDeviceID(forUID: uid) {
+            do {
+                try inputNode.auAudioUnit.setDeviceID(deviceID)
+                owLog("[AudioEngine] Set input device UID=\(uid) id=\(deviceID)")
+            } catch {
+                owLog("[AudioEngine] Failed to set input device \(uid): \(error)")
+            }
+        } else {
+            owLog("[AudioEngine] Using system default input")
+        }
+
+        if noiseSuppressionEnabled {
+            do {
+                try inputNode.setVoiceProcessingEnabled(true)
+                owLog("[AudioEngine] Apple voice processing enabled")
+            } catch {
+                owLog("[AudioEngine] Voice processing unavailable: \(error)")
+            }
+        }
+
+        configuredDeviceUID = deviceUID
+        configuredNoiseSuppression = noiseSuppressionEnabled
+        isEnginePrepared = true
+        engine.prepare()
+    }
+
     /// Start recording. If `deviceUID` is non-nil, route AUHAL to that input device;
     /// otherwise the system default input is used. Reuses the already-configured AVAudioEngine
     /// graph for instant ~1ms hardware recording start with zero background CPU overhead.
@@ -96,36 +138,8 @@ final class AudioEngine: @unchecked Sendable {
 
         // Only rebuild the AudioEngine graph if device/noiseSuppression changed or engine is unconfigured
         if !isEnginePrepared || configuredDeviceUID != deviceUID || configuredNoiseSuppression != noiseSuppressionEnabled {
-            owLog("[AudioEngine] Configuring audio engine graph (deviceUID=\(deviceUID ?? "default"), noiseSuppression=\(noiseSuppressionEnabled))...")
-            engine.stop()
-            engine.reset()
-            engine = AVAudioEngine()
-
-            let inputNode = engine.inputNode
-            if let uid = deviceUID, let deviceID = Self.audioDeviceID(forUID: uid) {
-                do {
-                    try inputNode.auAudioUnit.setDeviceID(deviceID)
-                    owLog("[AudioEngine] Set input device UID=\(uid) id=\(deviceID)")
-                } catch {
-                    owLog("[AudioEngine] Failed to set input device \(uid): \(error)")
-                }
-            } else {
-                owLog("[AudioEngine] Using system default input")
-            }
-
-            if noiseSuppressionEnabled {
-                do {
-                    try inputNode.setVoiceProcessingEnabled(true)
-                    owLog("[AudioEngine] Apple voice processing enabled")
-                } catch {
-                    owLog("[AudioEngine] Voice processing unavailable: \(error)")
-                }
-            }
-
-            configuredDeviceUID = deviceUID
-            configuredNoiseSuppression = noiseSuppressionEnabled
-            isEnginePrepared = true
-            engine.prepare()
+            owLog("[AudioEngine] Configuring audio engine graph inline (deviceUID=\(deviceUID ?? "default"), noiseSuppression=\(noiseSuppressionEnabled))...")
+            configureEngine(deviceUID: deviceUID, noiseSuppressionEnabled: noiseSuppressionEnabled)
         }
 
         let inputNode = engine.inputNode
@@ -220,6 +234,9 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     func stopRecording() -> [CompletedAudioSegment] {
+        let lastUID = configuredDeviceUID
+        let lastNoise = configuredNoiseSuppression ?? false
+
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         // Reset and release the AUAudioUnit / CoreAudio HAL claim so system output volume
@@ -251,6 +268,11 @@ final class AudioEngine: @unchecked Sendable {
         completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
         lock.unlock()
+
+        // Pre-warm background task right after stop so next press starts instantly
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.prewarm(deviceUID: lastUID, noiseSuppressionEnabled: lastNoise)
+        }
 
         return segments
     }
