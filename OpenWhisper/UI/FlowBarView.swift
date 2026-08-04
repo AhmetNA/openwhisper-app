@@ -62,6 +62,9 @@ struct FlowBarView: View {
                 .strokeBorder(.white.opacity(0.1), lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 17))
+        .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
+        .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
+        .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
     }
 
     // MARK: - Target-speaker confirmation offer
