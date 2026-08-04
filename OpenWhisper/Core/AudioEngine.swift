@@ -71,6 +71,8 @@ final class AudioEngine: @unchecked Sendable {
     private var configuredDeviceUID: String? = nil
     private var configuredNoiseSuppression: Bool? = nil
     private var isEnginePrepared = false
+    private var hasLoggedFirstBuffer = false
+    private var hasLoggedFirstAudibleBuffer = false
 
     /// Pre-warm the audio engine graph in the background so startRecording() takes < 2ms.
     func prewarm(deviceUID: String?, noiseSuppressionEnabled: Bool) {
@@ -122,6 +124,12 @@ final class AudioEngine: @unchecked Sendable {
         noiseSuppressionEnabled: Bool,
         levelCallback: @escaping (Float) -> Void
     ) {
+        hasLoggedFirstBuffer = false
+        hasLoggedFirstAudibleBuffer = false
+        let tStartCall = CACurrentMediaTime()
+        let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
+        owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
+
         // A previous stop waits for this queue, but keep start safe if a caller reuses the
         // engine after an interrupted setup.
         segmentPreparationQueue.sync {}
@@ -211,6 +219,17 @@ final class AudioEngine: @unchecked Sendable {
             }
             self.lock.unlock()
 
+            let tNow = CACurrentMediaTime()
+            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
+            if !self.hasLoggedFirstBuffer {
+                self.hasLoggedFirstBuffer = true
+                owLog(String(format: "[Perf] [AudioEngineFirstBufferArrived] CoreAudio delivered 1st audio buffer (%.2f ms / %.3f s from Fn press, frames=%d, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, frameLength, rms))
+            }
+            if !self.hasLoggedFirstAudibleBuffer && rms > 0.001 {
+                self.hasLoggedFirstAudibleBuffer = true
+                owLog(String(format: "[Perf] [AudioEngineFirstAudibleSpeechArrived] First non-silent voice buffer detected (%.2f ms / %.3f s from Fn press, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, rms))
+            }
+
             // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
             // microphone sample for transcription.
             let now = Date()
@@ -226,7 +245,9 @@ final class AudioEngine: @unchecked Sendable {
 
         do {
             try engine.start()
-            owLog("[AudioEngine] Engine started (instant)")
+            let tEngineStarted = CACurrentMediaTime()
+            let elapsedEngineStarted = (tEngineStarted - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog(String(format: "[Perf] [AudioEngineEngineStarted] engine.start() completed (%.2f ms / %.3f s from Fn press)", elapsedEngineStarted, elapsedEngineStarted / 1000.0))
         } catch {
             owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
             isEnginePrepared = false
