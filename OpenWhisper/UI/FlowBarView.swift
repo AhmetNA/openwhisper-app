@@ -4,10 +4,22 @@ struct FlowBarView: View {
     @Environment(AppState.self) var appState
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             if let message = appState.flowBarMessage {
                 if appState.targetSpeakerAppendOfferActive {
                     rejectedRecordingOfferContent(message: message)
+
+                    if appState.recordingState == .recording {
+                        Divider()
+                            .frame(height: 14)
+                            .opacity(0.3)
+                        recordingContent
+                    } else if appState.recordingState == .transcribing {
+                        Divider()
+                            .frame(height: 14)
+                            .opacity(0.3)
+                        transcribingContent
+                    }
                 } else {
                     Text(message)
                         .font(.custom("Bradley Hand", size: 16).weight(.medium))
