@@ -908,6 +908,32 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 confirmationCandidate = relative.confirmationCandidate
             }
 
+            if confirmationCandidate == nil && !allScoredWindows.isEmpty {
+                let candidateWindows = allScoredWindows.map {
+                    TargetSpeakerConfirmationWindow(
+                        startSample: $0.range.start,
+                        endSample: $0.range.end,
+                        profileScore: $0.score,
+                        anchorSimilarity: $0.score,
+                        classification: $0.classification == .reject ? .other : .target
+                    )
+                }
+                let anchorScore = allScoredWindows.map(\.score).max() ?? 0
+                let candidateSamples = Self.mask(
+                    samples: samples,
+                    accepted: allScoredWindows.map { (start: $0.range.start, end: $0.range.end) }
+                )
+                let candidateAudio = candidateSamples.isEmpty ? samples : candidateSamples
+                confirmationCandidate = TargetSpeakerConfirmationCandidate(
+                    samples: candidateAudio,
+                    windows: candidateWindows,
+                    internalCoherence: Self.recordingCoherence(allScoredWindows.map(\.embedding)),
+                    anchorProfileScore: anchorScore,
+                    separation: nil,
+                    separationReason: "single-utterance candidate fallback"
+                )
+            }
+
             for run in scoredRuns {
                 Self.logScoredRun(index: run.index, windows: run.windows, threshold: tuning.cosineThreshold)
             }

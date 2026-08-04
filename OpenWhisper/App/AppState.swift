@@ -971,62 +971,52 @@ final class AppState {
         }
 
         guard !session.isCancelled else { return }
-        if !session.hadFailClosedPassthrough,
-           session.hadSingleSpeakerUncertain,
-           session.segmentTexts.isEmpty,
-           let candidate = session.confirmationCandidate {
-            let confirmationText = AudioSegmentation.joinTranscripts(session.confirmationTranscriptTexts)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !confirmationText.isEmpty,
-                  !confirmationText.hasPrefix("[BLANK"),
-                  !confirmationText.hasPrefix("(BLANK") else {
-                showFlowBarMessage("Ses kesinleşmedi")
-                return
-            }
-            retainConfirmation(
-                candidate: candidate,
-                text: confirmationText,
-                pasteContext: session.pasteContext,
-                targetApp: session.targetApp
-            )
-            textInjector?.copyToClipboard(confirmationText)
-            showTargetSpeakerAppendOffer(message: "Ses kesinleşmedi (panoda)")
-            owLog("[OpenWhisper] Single-speaker uncertain candidate retained for explicit confirmation")
-            return
-        }
-        if session.hadDiarizationAttempt && session.segmentTexts.isEmpty {
-            showFlowBarMessage(
-                session.hadDiarizationFailure
-                    ? "Karışık konuşma ayrıştırılamadı — hedef konuşma korundu"
-                    : "Hedef konuşma bulunamadı"
-            )
-            return
-        }
-        // `hadFailClosedPassthrough` takes priority over the gate: a fail-closed segment's text
-        // lives in `segmentTexts` (the normal-dictation path) but never contributes accepted
-        // samples, so without this check a recording that only ever failed closed would look
-        // identical to "nothing matched" and its text would be discarded instead of pasted.
-        if !session.hadFailClosedPassthrough,
-           TargetSpeakerOutputGate.shouldSkipPostProcessing(
-               featureEnabled: session.targetSpeakerEnabled,
-               acceptedSampleCount: session.acceptedTargetSpeechSamples
-           ) {
-            let unmatchedText = AudioSegmentation.joinTranscripts(session.unmatchedSegmentTexts)
-            let trimmedUnmatched = unmatchedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hasSalvageableText = !trimmedUnmatched.isEmpty
-                && !trimmedUnmatched.hasPrefix("[BLANK")
-                && !trimmedUnmatched.hasPrefix("(BLANK")
-            if hasSalvageableText {
-                owLog("[OpenWhisper] No accepted target speech in recording; unmatched transcript copied to clipboard")
-                textInjector?.copyToClipboard(trimmedUnmatched)
-                // Update the early message to include "(panoda)" now that clipboard text is ready
-                showFlowBarMessage("Ses eşleşmedi (panoda)")
-            } else if !session.earlyRejectionShown {
-                // Only show if we didn't already show it early during streaming
-                owLog("[OpenWhisper] No accepted target speech in recording; all post-processing skipped")
-                showFlowBarMessage("Ses eşleşmedi")
+        if !session.hadFailClosedPassthrough &&
+            (session.hadSingleSpeakerUncertain ||
+             (session.hadDiarizationAttempt && session.segmentTexts.isEmpty) ||
+             TargetSpeakerOutputGate.shouldSkipPostProcessing(
+                 featureEnabled: session.targetSpeakerEnabled,
+                 acceptedSampleCount: session.acceptedTargetSpeechSamples
+             )) {
+            let rawCandidateText: String = {
+                let confirmationText = AudioSegmentation.joinTranscripts(session.confirmationTranscriptTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !confirmationText.isEmpty && !confirmationText.hasPrefix("[BLANK") && !confirmationText.hasPrefix("(BLANK") {
+                    return confirmationText
+                }
+                let unmatchedText = AudioSegmentation.joinTranscripts(session.unmatchedSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !unmatchedText.isEmpty && !unmatchedText.hasPrefix("[BLANK") && !unmatchedText.hasPrefix("(BLANK") {
+                    return unmatchedText
+                }
+                let allText = AudioSegmentation.joinTranscripts(session.allSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !allText.isEmpty && !allText.hasPrefix("[BLANK") && !allText.hasPrefix("(BLANK") {
+                    return allText
+                }
+                return ""
+            }()
+
+            if !rawCandidateText.isEmpty {
+                let candidateSamples = !session.ambiguousTargetSamples.isEmpty
+                    ? session.ambiguousTargetSamples
+                    : session.belowThresholdRejectedSamples
+                let candidate = session.confirmationCandidate ?? TargetSpeakerConfirmationCandidate(
+                    samples: candidateSamples,
+                    windows: [],
+                    internalCoherence: 0.5,
+                    anchorProfileScore: 0.5,
+                    separation: nil,
+                    separationReason: "fallback candidate"
+                )
+                retainConfirmation(
+                    candidate: candidate,
+                    text: rawCandidateText,
+                    pasteContext: session.pasteContext,
+                    targetApp: session.targetApp
+                )
+                textInjector?.copyToClipboard(rawCandidateText)
+                showTargetSpeakerAppendOffer(message: "")
+                owLog("[OpenWhisper] Near-threshold candidate retained for 'Bu benim sesimdi' confirmation without showing error warning")
             } else {
-                owLog("[OpenWhisper] No accepted target speech in recording; early rejection already shown")
+                dismissFlowBarMessage()
             }
             return
         }

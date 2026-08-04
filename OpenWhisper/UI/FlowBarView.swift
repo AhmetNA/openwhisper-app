@@ -54,9 +54,11 @@ struct FlowBarView: View {
     /// retained text and explicitly teaches the retained coherent candidate.
     private func rejectedRecordingOfferContent(message: String) -> some View {
         HStack(spacing: 8) {
-            Text(message)
-                .font(.custom("Bradley Hand", size: 13.5).bold())
-                .foregroundStyle(.white.opacity(0.9))
+            if !message.isEmpty {
+                Text(message)
+                    .font(.custom("Bradley Hand", size: 13.5).bold())
+                    .foregroundStyle(.white.opacity(0.9))
+            }
 
             Button {
                 owLog("[TargetSpeaker] User tapped 'Bu benim sesimdi' chip in FlowBarView")
