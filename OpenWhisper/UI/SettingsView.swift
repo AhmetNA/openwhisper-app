@@ -290,22 +290,27 @@ struct SettingsView: View {
             }
 
             if appState.hasStoredTargetSpeakerProfile {
-                Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                if appState.canUndoTargetSpeakerAppend {
-                    Button("Son eklemeyi geri al") {
-                        owLog("[TargetSpeaker] User clicked 'Son eklemeyi geri al' in SettingsView")
-                        appState.undoLastConfirmedTargetSpeakerAppend()
-                    }
-                    .buttonStyle(.plain)
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                }
-                if let coherence = appState.targetSpeakerProfileCoherence {
-                    Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
+                HStack(spacing: 12) {
+                    Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    if let coherence = appState.targetSpeakerProfileCoherence {
+                        Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if appState.canUndoTargetSpeakerAppend {
+                        Spacer()
+                        Button("Son eklemeyi geri al") {
+                            owLog("[TargetSpeaker] User clicked 'Son eklemeyi geri al' in SettingsView")
+                            appState.undoLastConfirmedTargetSpeakerAppend()
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    }
                 }
             }
 
