@@ -321,16 +321,29 @@ final class AppState {
             self.textInjector = textInjector
         }
         let defaults = UserDefaults.standard
+        // Captured before this initializer's own reads/writes touch UserDefaults (in particular
+        // before the `whisperModel` line below, whose didSet immediately persists a value even
+        // on a first-ever launch) -- true only when nothing has ever been saved for this app,
+        // used below to pick DeepFilterNet as the fresh-install default.
+        let isFreshInstall = defaults.object(forKey: "whisperModel") == nil
         whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
         language = defaults.string(forKey: "language") ?? "tr"
         if defaults.object(forKey: "voiceProcessingMigrationV1") == nil {
             // Ölçüm: setVoiceProcessingEnabled(true) tek başına ~900-1080ms gecikme ekliyor
             // (Fn->ilk ses buffer'ı 1072-1286ms -> 162-207ms). Depolanmış eski `true` değeri
             // kod varsayılanını (false) eziyor, bu yüzden bir kereye mahsus zorla kapatılıyor.
-            audioProcessingMode = .off
-            defaults.set(AudioProcessingMode.off.rawValue, forKey: "audioProcessingMode")
+            // A genuinely fresh install has no such stored VP setting to migrate away from, and
+            // DeepFilterNet is now free at Fn-press time once prewarmed, so a new user gets it by
+            // default; an existing user hitting this migration for the first time keeps the
+            // forced-off behavior above unchanged -- never silently switched to a mode they never
+            // chose themselves.
+            let migratedMode: AudioProcessingMode = isFreshInstall ? .deepFilterNet : .off
+            audioProcessingMode = migratedMode
+            defaults.set(migratedMode.rawValue, forKey: "audioProcessingMode")
             defaults.set(true, forKey: "voiceProcessingMigrationV1")
-            owLog("[AppState] Voice processing migration: gürültü engelleme kalıcı olarak kapatıldı (ölçülen gecikme ~1sn)")
+            owLog(isFreshInstall
+                ? "[AppState] Voice processing migration: yeni kurulum, varsayılan DeepFilterNet"
+                : "[AppState] Voice processing migration: gürültü engelleme kalıcı olarak kapatıldı (ölçülen gecikme ~1sn)")
         } else if let rawMode = defaults.string(forKey: "audioProcessingMode"),
                   let mode = AudioProcessingMode(rawValue: rawMode) {
             audioProcessingMode = mode
