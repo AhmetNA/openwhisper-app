@@ -850,8 +850,7 @@ final class AppState {
             // Transcription still continues in the background for clipboard salvage.
             if !session.earlyRejectionShown {
                 session.earlyRejectionShown = true
-                owLog("[TargetSpeaker] Batch \(segmentNumber) early rejection — showing 'Ses eşleşmedi' immediately")
-                showFlowBarMessage("Ses eşleşmedi")
+                owLog("[TargetSpeaker] Batch \(segmentNumber) below threshold — processing for confirmation/salvage")
                 if recordingState == .transcribing {
                     recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
                 }
@@ -1081,17 +1080,7 @@ final class AppState {
                                 targetApp: targetApp
                             )
 
-                            if case .pastedUnverified = outcome {
-                                self.dismissFlowBarMessage()
-                            } else if session.hadDiarizedOverlap {
-                                self.showFlowBarMessage("Karışık konuşma ayrıştırıldı")
-                            } else {
-                                if session.hadDiarizationFailure {
-                                    self.showFlowBarMessage("Karışık konuşma ayrıştırılamadı — hedef konuşma korundu")
-                                } else {
-                                    self.dismissFlowBarMessage()
-                                }
-                            }
+                            self.dismissFlowBarMessage()
 
                             // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
                             // Once Ollama finishes, replace the initially pasted text in-place.
