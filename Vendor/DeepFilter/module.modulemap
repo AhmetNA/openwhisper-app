@@ -1,0 +1,4 @@
+module CDeepFilter {
+    header "include/deep_filter.h"
+    export *
+}

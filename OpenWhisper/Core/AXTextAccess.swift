@@ -13,6 +13,20 @@ struct PasteContext: @unchecked Sendable {
     let selectedRangeAtCapture: CFRange?
     let selectedTextAtCapture: String?
 
+    /// Fast, non-blocking initial context that captures app identity without IPC AX calls.
+    static func initial(targetApp: NSRunningApplication? = nil) -> PasteContext {
+        let app = targetApp ?? NSWorkspace.shared.frontmostApplication
+        return PasteContext(
+            targetPID: app?.processIdentifier,
+            bundleIdentifier: app?.bundleIdentifier,
+            applicationName: app?.localizedName,
+            focusedElement: nil,
+            valueAtCapture: nil,
+            selectedRangeAtCapture: nil,
+            selectedTextAtCapture: nil
+        )
+    }
+
     /// Capture this before transcription starts, while the user's intended target is still
     /// frontmost.  AX calls can block against an unresponsive application; callers should use
     /// a background queue when capturing from an event-tap callback.

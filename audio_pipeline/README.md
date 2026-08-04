@@ -1,27 +1,70 @@
-# Audio preprocessing pipeline
+# Audio Pre-Processing Pipeline (Whisper / Large-Turbo Target)
 
-The package implements the roadmap as an independently testable Python path:
+High-performance modular Python audio pre-processing pipeline for macOS (Apple Silicon).
 
-```text
-sounddevice 48 kHz mono
-  -> PeakRMSNormalizer
-  -> DeepFilterNet3Cleaner (500 ms chunks)
-  -> SileroVADGate (16 kHz scoring, 0.5 threshold)
-  -> OutputValidator (SoXR HQ, 16 kHz mono float32)
+## Architecture
+
+```
+[Mic Input @ 48kHz]
+        │
+        ▼
+[Subagent 1: Audio Ingestion & AGC Normalizer]  (audio_ingest.py)
+        │ - Peak/RMS Normalization to -6 dB FS
+        │
+        ▼
+[Subagent 2: DeepFilterNet 3 Engine]           (df_cleaner.py)
+        │ - Deep noise suppression (attenuation_limit = -100 dB)
+        │
+        ▼
+[Subagent 3: Silero VAD Gate]                  (vad_gate.py)
+        │ - Evaluates speech probability
+        │ - Zeroes out non-speech (<0.5 prob)
+        │
+        ▼
+[Subagent 4: Resampler & Output Validator]     (output_validator.py)
+        │ - High quality resampling (48 kHz -> 16 kHz Mono)
+        │ - STT Handshake assertions (16kHz, Mono, float32, NaN-free)
+        ▼
+[ Downstream Whisper-Large-V3-Turbo STT Model ]
 ```
 
-Install the optional runtime dependencies with `python3 -m pip install -r requirements-audio.txt`.
-The model backends are lazy: importing and unit-testing the package does not load or download
-DeepFilterNet/Silero models. For production, pass a local Silero ONNX model path:
+## Quick Start
 
+### 1. Run Unit Tests
+```bash
+python3 audio_pipeline/test_pipeline.py
+```
+
+### 2. Basic Usage in Python
 ```python
-from audio_pipeline import AudioPreprocessingPipeline, SileroVADGate
+from audio_pipeline.pipeline import AudioPipeline
+import numpy as np
 
-pipeline = AudioPreprocessingPipeline(
-    gate=SileroVADGate(model_path="/path/to/silero_vad.onnx")
+# Initialize pipeline
+pipeline = AudioPipeline(
+    input_sample_rate=48000,
+    target_sample_rate=16000,
+    attenuation_limit=-100.0,
+    vad_threshold=0.5
 )
+
+# Process 500 ms audio chunk (24,000 samples @ 48 kHz)
+raw_chunk = np.random.randn(24000).astype(np.float32)
+stt_payload, metrics = pipeline.process_chunk(raw_chunk)
+
+print("STT Payload:", stt_payload)
+# Output: {"audio": np.ndarray(8000,), "sample_rate": 16000, "duration_ms": 500.0}
+
+print("Latency & Metrics:", metrics)
+# Output: {"total_latency_ms": ..., "is_speech_active": True, ...}
 ```
 
-The current OpenWhisper app remains Swift/WhisperKit and already converts its capture path to
-16 kHz mono. This package is therefore not automatically inserted into the Swift callback.
-Benchmark DFN3 latency and model accuracy on the target Mac before replacing that path.
+## Output Payload Specification
+
+The output dictionary returned by `pipeline.process_chunk()` strictly satisfies downstream STT requirements:
+
+| Parameter | Type | Value / Constraint |
+|---|---|---|
+| `audio` | `np.ndarray` | `dtype=np.float32`, Single channel (1D array) |
+| `sample_rate` | `int` | Strictly `16000` Hz |
+| `duration_ms` | `float` | Duration of audio chunk in milliseconds |

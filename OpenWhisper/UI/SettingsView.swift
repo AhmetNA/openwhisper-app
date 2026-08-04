@@ -195,26 +195,18 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: 7) {
             Label("Ses işleme", systemImage: "waveform.and.mic")
 
-            Picker("Ses işleme modu", selection: $appState.noiseSuppressionEnabled) {
-                Text("Gürültü engelleme").tag(true)
-                Text("Engellemesiz").tag(false)
+            Picker("Ses işleme modu", selection: $appState.audioProcessingMode) {
+                Text("Engelsiz").tag(AudioProcessingMode.off)
+                Text("DeepFilter").tag(AudioProcessingMode.deepFilterNet)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            // Also disabled for the whole enrollment flow, not just while a recording is
-            // literally in progress: the wizard's two recordings briefly return
-            // `recordingState` to `.idle` between them, and switching modes there would capture
-            // the two recordings in different audio-processing modes while the resulting profile
-            // is only ever labeled with one -- exactly the mismatch this feature exists to avoid.
-            .disabled(appState.recordingState != .idle || appState.targetSpeakerEnrollmentActive)
+            .controlSize(.small)
+            .disabled(appState.recordingState != .idle)
 
-            Text(
-                appState.targetSpeakerEnrollmentActive
-                    ? "Ses profili kaydı sürerken değiştirilemez; iki kayıt aynı modda olmalı."
-                    : appState.recordingState == .idle
-                        ? "Seçim bir sonraki kayıtta uygulanır."
-                        : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır."
-            )
+            Text(appState.recordingState == .idle
+                 ? audioProcessingModeDescription
+                 : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
@@ -230,6 +222,17 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    private var audioProcessingModeDescription: String {
+        switch appState.audioProcessingMode {
+        case .off:
+            return "Gürültü engelleme yok, en hızlı başlangıç. Seçim bir sonraki kayıtta uygulanır."
+        case .deepFilterNet:
+            return "Yerel bir sinir ağı (DeepFilterNet 3) gürültüyü temizler; başlangıç gecikmesi eklemez. Seçim bir sonraki kayıtta uygulanır."
+        case .appleVoiceProcessing:
+            return "Apple'ın gürültü engelleme + otomatik kazanç sistemi. Fn'e basıldıktan sonra mikrofonun açılmasını ~1 saniye geciktirir (ölçülen: ~900ms-1.1sn). Seçim bir sonraki kayıtta uygulanır."
         }
     }
 
@@ -303,6 +306,15 @@ struct SettingsView: View {
                 Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                if appState.canUndoTargetSpeakerAppend {
+                    Button("Son eklemeyi geri al") {
+                        owLog("[TargetSpeaker] User clicked 'Son eklemeyi geri al' in SettingsView")
+                        appState.undoLastConfirmedTargetSpeakerAppend()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                }
                 if let coherence = appState.targetSpeakerProfileCoherence {
                     Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
                         .font(.caption2)
@@ -333,8 +345,10 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Button(appState.targetSpeakerEnrollmentIsRecording ? "Kaydı bitir" : "Sesimi kaydet") {
                     if appState.targetSpeakerEnrollmentIsRecording {
+                        owLog("[TargetSpeaker] User clicked 'Kaydı bitir' in SettingsView")
                         appState.stopTargetSpeakerEnrollmentRecording()
                     } else {
+                        owLog("[TargetSpeaker] User clicked 'Sesimi kaydet' in SettingsView")
                         if !appState.targetSpeakerEnrollmentActive {
                             appState.beginTargetSpeakerEnrollment()
                         }
@@ -346,20 +360,29 @@ struct SettingsView: View {
                 .disabled(appState.targetSpeakerEnrollmentIsProcessing)
 
                 if appState.targetSpeakerEnrollmentActive {
-                    Button("İptal") { appState.cancelTargetSpeakerEnrollment() }
-                        .buttonStyle(.plain)
-                        .font(.caption)
+                    Button("İptal") {
+                        owLog("[TargetSpeaker] User clicked 'İptal' enrollment in SettingsView")
+                        appState.cancelTargetSpeakerEnrollment()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
                 }
 
                 if appState.hasTargetSpeakerProfile || appState.hasStoredTargetSpeakerProfile {
-                    Button("Yenile") { appState.replaceTargetSpeakerProfile() }
-                        .buttonStyle(.plain)
-                        .font(.caption)
-                        .disabled(appState.targetSpeakerEnrollmentIsProcessing)
-                    Button("Sil") { appState.deleteTargetSpeakerProfile() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.red)
-                        .font(.caption)
+                    Button("Yenile") {
+                        owLog("[TargetSpeaker] User clicked 'Yenile' profile in SettingsView")
+                        appState.replaceTargetSpeakerProfile()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+                    Button("Sil") {
+                        owLog("[TargetSpeaker] User clicked 'Sil' profile in SettingsView")
+                        appState.deleteTargetSpeakerProfile()
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red)
+                    .font(.caption)
                 }
 
             }

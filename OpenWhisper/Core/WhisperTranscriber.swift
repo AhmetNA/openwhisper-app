@@ -275,37 +275,28 @@ final class WhisperTranscriber: @unchecked Sendable {
         // (pass `glossaryPromptTokens()` instead of `nil` here) if that's ever worth revisiting.
         let promptTokens: [Int]? = nil
 
-        var selectedPass = try await runDecode(
+        async let primaryTask = runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
-            promptTokens: promptTokens
+            promptTokens: promptTokens,
+            isRecovery: false
         )
 
-        // Safety net: if a prompted decode ever comes back empty (relevant again the moment
-        // `promptTokens` above is switched back on), retry once without the glossary prompt.
-        if selectedPass.text.isEmpty, promptTokens != nil {
-            owLog("[Whisper] Prompted decode returned empty transcript — retrying without glossary prompt")
-            selectedPass = try await runDecode(
-                whisperKit: whisperKit,
-                audioData: audioData,
-                language: language,
-                promptTokens: nil
-            )
-        }
+        async let recoveryTask = runDecode(
+            whisperKit: whisperKit,
+            audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+            language: language,
+            promptTokens: nil,
+            isRecovery: true
+        )
 
-        // A quiet recording can produce a plausible-looking but low-confidence transcript.
-        // Decode only those cases again with a stronger speech-preserving gain. The normal path
-        // remains one decode; the second pass is deliberately bounded to avoid doubling the
-        // cost of every dictation.
+        var selectedPass = try await primaryTask
+
+        // If primary decode is low confidence, check the parallel recovery decode pass.
         if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence decode; retrying with quiet-speech recovery gain")
-            let recoveryPass = try await runDecode(
-                whisperKit: whisperKit,
-                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-                language: language,
-                promptTokens: nil
-            )
+            owLog("[Whisper] Low-confidence decode; evaluating parallel recovery pass")
+            let recoveryPass = try await recoveryTask
             if Self.isBetter(recoveryPass, than: selectedPass) {
                 owLog("[Whisper] Recovery decode selected text=\(recoveryPass.text)")
                 selectedPass = recoveryPass
@@ -326,6 +317,9 @@ final class WhisperTranscriber: @unchecked Sendable {
             text = filteredText
         }
 
+        // Remove adjacent repetitive hallucinated sentence loops (e.g. "x. x. x.")
+        text = Self.deduplicateRepetitivePhrases(in: text)
+
         // Filter out Whisper hallucinations on silence/noise
         let hallucinations: Set<String> = [
             "Thank you.", "Thanks for watching.", "Subscribe.",
@@ -338,6 +332,22 @@ final class WhisperTranscriber: @unchecked Sendable {
         if text.count < 3 { return "" }  // Too short to be meaningful
 
         return text
+    }
+
+    private static func deduplicateRepetitivePhrases(in text: String) -> String {
+        let parts = text.components(separatedBy: CharacterSet(charactersIn: ".!?"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard parts.count > 1 else { return text }
+
+        var unique: [String] = []
+        for part in parts {
+            if unique.last?.lowercased() != part.lowercased() {
+                unique.append(part)
+            }
+        }
+        let joined = unique.joined(separator: ". ")
+        return joined.isEmpty ? text : (joined + ".")
     }
 
     /// Streaming-aware entry point. The overlap is metadata for the ordered session owner;
@@ -366,7 +376,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
 
         owLog("[Whisper] Timed transcription samples=\(audioData.count) overlap=\(overlapSampleCount)")
-        var selectedPass = try await runDecode(
+        async let primaryTimedTask = runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
@@ -374,15 +384,19 @@ final class WhisperTranscriber: @unchecked Sendable {
             wordTimestamps: true
         )
 
+        async let recoveryTimedTask = runDecode(
+            whisperKit: whisperKit,
+            audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+            language: language,
+            promptTokens: nil,
+            wordTimestamps: true
+        )
+
+        var selectedPass = try await primaryTimedTask
+
         if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence timed decode; retrying with quiet-speech recovery gain")
-            let recoveryPass = try await runDecode(
-                whisperKit: whisperKit,
-                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-                language: language,
-                promptTokens: nil,
-                wordTimestamps: true
-            )
+            owLog("[Whisper] Low-confidence timed decode; evaluating parallel recovery pass")
+            let recoveryPass = try await recoveryTimedTask
             if Self.isBetter(recoveryPass, than: selectedPass) {
                 selectedPass = recoveryPass
             }
@@ -422,36 +436,29 @@ final class WhisperTranscriber: @unchecked Sendable {
         audioData: [Float],
         language: String,
         promptTokens: [Int]?,
-        wordTimestamps: Bool = false
+        wordTimestamps: Bool = false,
+        isRecovery: Bool = false
     ) async throws -> DecodePass {
-        // `firstTokenLogProbThreshold` (WhisperKit default: -1.5) is meant to abort a segment
-        // when the FIRST REAL sampled token is low-confidence. It only makes sense when there's
-        // no prompt: with `promptTokens` set, WhisperKit skips the prefill KV-cache (see
-        // `TextDecoder.prefillDecoderInputs`'s `options?.promptTokens == nil` guard), so
-        // `prefilledIndex` stays 0 and `isFirstToken` fires on `tokenIndex == 0` — the position
-        // right after `<|startofprev|>`, still inside the forced prompt prefill. The sampled
-        // "prediction" there is discarded and overwritten by the forced prompt token one line
-        // later, but its log-probability is still checked against the threshold, and a low
-        // score there kills the whole segment (empty transcript) for no good reason. Disable
-        // the check when we're conditioning on a prompt; leave the default in place otherwise.
-        let firstTokenLogProbThreshold: Float? = promptTokens == nil ? -1.5 : nil
+        // Disabling `firstTokenLogProbThreshold` (setting to `nil`) prevents WhisperKit from aborting
+        // token generation when initial quiet frames or room noise precede speech.
+        let firstTokenLogProbThreshold: Float? = nil
 
         let options = DecodingOptions(
             task: .transcribe,  // Transcribe in original language, NOT translate to English
             language: language.isEmpty ? nil : language,
             temperature: 0.0,
-            temperatureFallbackCount: 3,
+            temperatureFallbackCount: 0,
             sampleLength: 224,
             wordTimestamps: wordTimestamps,
             promptTokens: promptTokens,
             suppressBlank: true,
             supressTokens: nil,
-            compressionRatioThreshold: 2.4,
-            logProbThreshold: -1.0,
+            compressionRatioThreshold: 2.0,
+            logProbThreshold: isRecovery ? -1.8 : -1.2,
             firstTokenLogProbThreshold: firstTokenLogProbThreshold,
-            // A distant/quiet speaker can otherwise be classified as non-speech before the
-            // decoder gets a chance to recover the words. No noise gate is applied upstream.
-            noSpeechThreshold: 0.45,
+            // Relax non-speech threshold (0.65 on primary, 0.85 on recovery) so quiet or delayed speech
+            // is not prematurely discarded before decoding completes.
+            noSpeechThreshold: isRecovery ? 0.85 : 0.65,
             // Let WhisperKit seek through a long three-minute batch using its own timestamps.
             // The app must not pre-split that batch into many independent decoder calls.
             chunkingStrategy: ChunkingStrategy.none

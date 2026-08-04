@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import QuartzCore
 
 /// `NSView.acceptsFirstMouse(for:)` defaults to `false`, which means the very first click on a
 /// non-key window is, by default, consumed just to bring the window forward/key and never
@@ -26,29 +27,33 @@ final class FlowBarController {
 
     init(appState: AppState) {
         self.appState = appState
+        // Pre-create panel at app startup for zero-latency hotkey display
+        createPanel()
     }
 
     /// Show the flow bar. Idempotent — calling it again while already shown (e.g. the
     /// recording → transcribing transition) is a no-op so it doesn't refade in and flicker.
     func show() {
-        owLog("[FlowBar] show() called, panel exists: \(panel != nil)")
+        let tShowStart = CACurrentMediaTime()
+        let elapsedFromFn = (tShowStart - GlobalHotkey.lastFnPressUptime) * 1000
+        owLog("[Perf] [FlowBarShowStart] FlowBar show() called (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press), panel exists: \(panel != nil)")
+
         if panel == nil {
             createPanel()
+            centerPanelOnScreen()
         }
-        centerPanelOnScreen()
         if !isShown {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
-            panel?.alphaValue = 0
+            panel?.alphaValue = 1
             panel?.orderFront(nil)
-
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.3
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                self.panel?.animator().alphaValue = 1
-            }
         }
         recenterAfterContentLayout()
+
+        let tShowEnd = CACurrentMediaTime()
+        let totalElapsed = (tShowEnd - GlobalHotkey.lastFnPressUptime) * 1000
+        let showFnDuration = (tShowEnd - tShowStart) * 1000
+        owLog("[Perf] [FlowBarShowEnd] FlowBar show() completed: execution duration = \(String(format: "%.2f", showFnDuration))ms (+\(String(format: "%.2f", totalElapsed))ms after Fn press)")
     }
 
     /// Hide the flow bar. Idempotent, and safe to race with a subsequent `show()` — the
@@ -99,6 +104,9 @@ final class FlowBarController {
             self.recenterScheduled = false
             guard self.isShown else { return }
             self.centerPanelOnScreen()
+            let tLayout = CACurrentMediaTime()
+            let layoutElapsed = (tLayout - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog("[Perf] [FlowBarLayoutDone] FlowBar recenter/layout completed (+\(String(format: "%.2f", layoutElapsed))ms after Fn press)")
         }
     }
 

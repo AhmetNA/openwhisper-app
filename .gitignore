@@ -31,3 +31,9 @@ scripts/noise-test/*.wav
 
 # Claude
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
