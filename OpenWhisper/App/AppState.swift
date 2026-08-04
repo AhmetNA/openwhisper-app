@@ -297,6 +297,9 @@ final class AppState {
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
 
+    /// Whether any background transcription task is currently running.
+    var isTranscribing: Bool { pendingTranscriptionCount > 0 }
+
     // MARK: - Output Swap State
 
     /// The raw Whisper transcript and LLM-cleaned text from the most recently completed

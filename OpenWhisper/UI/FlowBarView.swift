@@ -32,7 +32,15 @@ struct FlowBarView: View {
                 case .idle:
                     idleContent
                 case .recording:
-                    recordingContent
+                    if appState.isTranscribing {
+                        transcribingContent
+                        Divider()
+                            .frame(height: 14)
+                            .opacity(0.3)
+                        recordingContent
+                    } else {
+                        recordingContent
+                    }
                 case .transcribing:
                     transcribingContent
                 }
