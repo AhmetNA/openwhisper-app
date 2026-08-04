@@ -338,7 +338,7 @@ enum CorrectionEngine {
     /// - ALL CAPS original → all-caps replacement
     /// - Capitalized (first letter upper, rest whatever) → capitalize replacement's first letter
     /// - otherwise → replacement used as-is (its stored/learned casing)
-    private static func matchCase(of original: String, applyTo replacement: String) -> String {
+    static func matchCase(of original: String, applyTo replacement: String) -> String {
         guard let firstOriginal = original.first, let firstReplacement = replacement.first else {
             return replacement
         }

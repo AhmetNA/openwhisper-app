@@ -68,10 +68,15 @@ final class LLMCleanup: Sendable {
             .map(String.init)
     }
 
+    /// STT frequently splits a compound technical name across several words (e.g. "Cloudflare"
+    /// heard as "Claude Flare", "TypeScript" as "Type Script"). A glossary correction is allowed
+    /// to collapse up to this many source words into the single glossary term.
+    private static let maxGlossaryMergeSpan = 4
+
     /// The cleanup model may remove fillers and change punctuation/capitalization, but it must
     /// not replace the user's sentence with an unrelated sentence copied from the prompt. A
-    /// glossary term may replace one source token because technical-term spelling correction is
-    /// an intentional part of the cleanup contract.
+    /// glossary term may replace a short run of source tokens because technical-term spelling
+    /// correction is an intentional part of the cleanup contract.
     private static func isFaithfulCleanup(original: String, cleaned: String) -> Bool {
         let originalWords = normalizedWords(from: original)
         let cleanedWords = normalizedWords(from: cleaned)
@@ -82,7 +87,7 @@ final class LLMCleanup: Sendable {
         )
 
         var originalIndex = 0
-        for cleanedWord in cleanedWords {
+        for (cleanedIndex, cleanedWord) in cleanedWords.enumerated() {
             while originalIndex < originalWords.count,
                   fillerWords.contains(originalWords[originalIndex]) {
                 originalIndex += 1
@@ -92,8 +97,26 @@ final class LLMCleanup: Sendable {
             if originalWords[originalIndex] == cleanedWord {
                 originalIndex += 1
             } else if glossaryWords.contains(cleanedWord) {
-                // Permit one glossary-backed spelling correction for this source token.
-                originalIndex += 1
+                // Find the smallest run of source words this glossary term can stand in for.
+                // With a following cleaned word, resync against it; at the end of the
+                // transcript, consume whatever source words remain (bounded by the span cap).
+                let nextCleanedWord = cleanedIndex + 1 < cleanedWords.count ? cleanedWords[cleanedIndex + 1] : nil
+                var span = 1
+                if let nextCleanedWord {
+                    while span <= maxGlossaryMergeSpan,
+                          originalIndex + span < originalWords.count,
+                          originalWords[originalIndex + span] != nextCleanedWord {
+                        span += 1
+                    }
+                    guard span <= maxGlossaryMergeSpan,
+                          originalIndex + span < originalWords.count,
+                          originalWords[originalIndex + span] == nextCleanedWord
+                    else { return false }
+                } else {
+                    span = originalWords.count - originalIndex
+                    guard span <= maxGlossaryMergeSpan else { return false }
+                }
+                originalIndex += span
             } else {
                 return false
             }

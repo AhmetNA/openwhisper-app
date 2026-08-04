@@ -1189,6 +1189,14 @@ final class AppState {
                 }
             }
 
+            let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
+            if !phoneticApplied.isEmpty {
+                initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                for (wrong, right) in phoneticApplied {
+                    owLog("[PhoneticGlossary] Corrected: \(wrong) -> \(right)")
+                }
+            }
+
             self.lastTranscription = initialText
 
             if self.autoPasteEnabled {
@@ -1222,7 +1230,7 @@ final class AppState {
                             if self.llmCleanupEnabled && self.ollamaAvailable {
                                 Task { @MainActor [weak self] in
                                     guard let self else { return }
-                                    let cleaned = await self.llmCleanup?.cleanup(text: rawText) ?? rawText
+                                    let cleaned = await self.llmCleanup?.cleanup(text: initialText) ?? initialText
                                     let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                     guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
