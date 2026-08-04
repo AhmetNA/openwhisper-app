@@ -1,19 +1,20 @@
 import SwiftUI
+import Combine
 
 struct AudioWaveformView: View {
     let level: Float
     private let barWidth: CGFloat = 2.5
     private let barSpacing: CGFloat = 2.5
-    private let barCount = 14
+    private let barCount = 14 // 14 bars * (1/14s per bar) = exact 1.0s window in original horizontal width
     private let grayColor = Color.white.opacity(0.75)
 
-    // Minimal flat baseline height when quiet/silent (level = 0)
-    private let baseHeight: CGFloat = 4.0
+    private let baseHeight: CGFloat = 3.5
     private let maxHeight: CGFloat = 22.0
-    // Reduced visual gain so normal speaking voice does not hit max height prematurely
-    private let visualGain: CGFloat = 1.1
 
     @State private var samples: [CGFloat] = Array(repeating: 0.0, count: 14)
+
+    // Continuous 20 Hz timer (1/20s = 50ms) guaranteeing continuous 20 Hz flow (1/20s per bar).
+    private let timer = Timer.publish(every: 1.0 / 20.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: barSpacing) {
@@ -24,9 +25,9 @@ struct AudioWaveformView: View {
             }
         }
         .frame(height: 26, alignment: .center)
-        .animation(.linear(duration: 0.04), value: samples)
-        .onChange(of: level) { _, newLevel in
-            pushSample(newLevel)
+        .animation(.linear(duration: 1.0 / 20.0), value: samples)
+        .onReceive(timer) { _ in
+            pushSample(level)
         }
         .onAppear {
             pushSample(level)
@@ -35,8 +36,8 @@ struct AudioWaveformView: View {
 
     private func pushSample(_ level: Float) {
         let clamped = min(max(CGFloat(level), 0), 1.0)
-        let norm = pow(clamped, 1.2) * 0.85
-        let addedHeight = norm * (maxHeight - baseHeight)
+        let boosted = min(pow(clamped, 0.7) * 1.35, 1.0)
+        let addedHeight = boosted * (maxHeight - baseHeight)
 
         var updated = samples
         if updated.count >= barCount {

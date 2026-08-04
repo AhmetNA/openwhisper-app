@@ -77,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        owLog("[OpenWhisper] applicationWillTerminate called — restoring audio volume immediately")
+        AudioDucker.shared.restoreImmediatelyForTermination()
+    }
+
     // Show notifications as banners even when the app is active/foreground
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,

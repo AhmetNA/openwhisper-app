@@ -171,6 +171,31 @@ final class AppState {
             }
         }
     }
+    var audioDuckingEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(audioDuckingEnabled, forKey: "audioDuckingEnabled")
+            syncAudioDuckerConfiguration()
+        }
+    }
+    var audioDuckingTargetVolume: Float {
+        didSet {
+            UserDefaults.standard.set(audioDuckingTargetVolume, forKey: "audioDuckingTargetVolume")
+            syncAudioDuckerConfiguration()
+        }
+    }
+    var audioDuckingRestoreDuration: TimeInterval {
+        didSet {
+            UserDefaults.standard.set(audioDuckingRestoreDuration, forKey: "audioDuckingRestoreDuration")
+            syncAudioDuckerConfiguration()
+        }
+    }
+
+    private func syncAudioDuckerConfiguration() {
+        AudioDucker.shared.updateConfiguration(
+            targetVolume: audioDuckingTargetVolume,
+            restoreDuration: audioDuckingRestoreDuration
+        )
+    }
 
     // MARK: - Runtime State
 
@@ -361,12 +386,16 @@ final class AppState {
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID")
+        audioDuckingEnabled = defaults.object(forKey: "audioDuckingEnabled") as? Bool ?? true
+        audioDuckingTargetVolume = defaults.object(forKey: "audioDuckingTargetVolume") as? Float ?? 0.20
+        audioDuckingRestoreDuration = defaults.object(forKey: "audioDuckingRestoreDuration") as? Double ?? 1.5
         targetSpeakerProfileStore = profileStore
         self.targetSpeakerModel = targetSpeakerModel
         targetSpeakerFilter = TargetSpeakerFilter(model: targetSpeakerModel)
         self.targetSpeakerDiarization = targetSpeakerDiarization
         injectedTranscriptionService = transcriptionService
         targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
+        syncAudioDuckerConfiguration()
     }
 
     private static let targetSpeakerEnrollmentPromptText =
@@ -399,6 +428,7 @@ final class AppState {
 
         loadTargetSpeakerProfile()
         startTargetSpeakerDiarizationPreparation()
+        AudioDucker.shared.prewarmOutputDeviceCapability()
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -613,6 +643,10 @@ final class AppState {
             return
         }
 
+        if audioDuckingEnabled {
+            AudioDucker.shared.duck()
+        }
+
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
         // and delay this dispatch. Read everything the background block needs up front so the
@@ -629,11 +663,10 @@ final class AppState {
                 levelCallback: { rawLevel in
                     let rms = max(rawLevel, 0.0001)
                     let dB = 20 * log10(rms)
-                    let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
+                    let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
                     Task { @MainActor in
                         guard let self else { return }
-                        let factor: Float = target > self.audioLevel ? 0.85 : 0.45
-                        self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
+                        self.audioLevel = target
                     }
                 }
             ) ?? false
@@ -715,6 +748,7 @@ final class AppState {
     }
 
     func stopRecording() {
+        AudioDucker.shared.restore()
         if targetSpeakerEnrollmentIsRecording {
             stopTargetSpeakerEnrollmentRecording()
             return
@@ -1471,6 +1505,7 @@ final class AppState {
     /// this Fn-down is discarded here: no transcription, no injection from it, and the UI
     /// returns to the previous background-transcription state, if any.
     private func cancelRecordingForSwap() {
+        AudioDucker.shared.restore()
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         recordingTimer?.invalidate()
         recordingTimer = nil
@@ -1545,6 +1580,10 @@ final class AppState {
 
         clearFlowBarMessage()
 
+        if audioDuckingEnabled {
+            AudioDucker.shared.duck()
+        }
+
         targetSpeakerEnrollmentIsRecording = true
         recordingState = .recording
         recordingDuration = 0
@@ -1558,11 +1597,10 @@ final class AppState {
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
+                let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
                 Task { @MainActor in
                     guard let self else { return }
-                    let factor: Float = target > self.audioLevel ? 0.85 : 0.45
-                    self.audioLevel += (target - self.audioLevel) * factor
+                    self.audioLevel = target
                 }
             }
         )
@@ -1584,6 +1622,7 @@ final class AppState {
 
     func stopTargetSpeakerEnrollmentRecording() {
         owLog("[TargetSpeaker] stopTargetSpeakerEnrollmentRecording called")
+        AudioDucker.shared.restore()
         guard targetSpeakerEnrollmentIsRecording else { return }
         let samples = teardownTargetSpeakerEnrollmentRecording()
 
