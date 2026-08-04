@@ -296,6 +296,7 @@ final class AppState {
     private var transcriptionQueueTailID: UInt64?
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
+    private var delayedStopWorkItem: DispatchWorkItem?
 
     /// Whether any background transcription task (other than the currently recording session) is running.
     var isTranscribing: Bool {
@@ -461,7 +462,7 @@ final class AppState {
                 }
             },
             onRelease: { [weak self] in
-                DispatchQueue.main.async { self?.stopRecording() }
+                DispatchQueue.main.async { self?.stopRecordingWithTail() }
             },
             onSwapRequest: { [weak self] in
                 DispatchQueue.main.async { self?.cancelRecordingForSwap() }
@@ -639,6 +640,10 @@ final class AppState {
             }
             return
         }
+        // Cancel any pending tail-stop work item if a new recording starts immediately
+        delayedStopWorkItem?.cancel()
+        delayedStopWorkItem = nil
+
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
         guard recordingState != .recording else { return }
@@ -752,7 +757,23 @@ final class AppState {
         }
     }
 
+    /// Schedules stopRecording() after a short tail delay (default 0.40s / 400ms) so that speech spoken
+    /// right as the hotkey/Fn key is released is not truncated from the audio buffer.
+    func stopRecordingWithTail(delay: TimeInterval = 0.40) {
+        guard recordingState == .recording else { return }
+        delayedStopWorkItem?.cancel()
+        owLog("[OpenWhisper] Hotkey released; keeping mic open for \(Int(delay * 1000))ms tail buffer...")
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.stopRecording()
+        }
+        delayedStopWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
     func stopRecording() {
+        delayedStopWorkItem?.cancel()
+        delayedStopWorkItem = nil
+
         AudioDucker.shared.restore()
         if targetSpeakerEnrollmentIsRecording {
             stopTargetSpeakerEnrollmentRecording()
