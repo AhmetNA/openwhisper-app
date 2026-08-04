@@ -36,6 +36,10 @@ struct SettingsView: View {
 
             Divider()
 
+            whisperModelSection
+
+            Divider()
+
             // Language
             HStack {
                 Label("Language", systemImage: "globe")
@@ -223,6 +227,59 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Whisper Model Section
+
+    /// Known variant names paired with a friendly Turkish label. Entries not yet downloaded stay
+    /// selectable so the picker doubles as the way to kick off a first-time download of a new
+    /// model; a cloud glyph marks which ones that applies to.
+    private static let whisperModelCatalog: [(name: String, label: String)] = [
+        ("large-v3-v20240930_turbo", "Turbo (Hızlı)"),
+        ("large-v3_turbo", "Large v3 Turbo (Argmax)"),
+        ("large-v3", "Large v3 (Tam, en yavaş)"),
+    ]
+
+    private var whisperModelSection: some View {
+        @Bindable var appState = appState
+        let switching = appState.modelLoading || appState.recordingState != .idle
+        let downloaded = Set(appState.downloadedWhisperModelNames())
+        let catalog = Self.whisperModelCatalog
+        let extraDownloaded = downloaded
+            .subtracting(catalog.map(\.name))
+            .sorted()
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Whisper modeli", systemImage: "waveform")
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { appState.whisperModel },
+                    set: { newValue in
+                        guard newValue != appState.whisperModel else { return }
+                        appState.whisperModel = newValue
+                        Task { await appState.loadModel() }
+                    }
+                )) {
+                    ForEach(catalog, id: \.name) { entry in
+                        Text(downloaded.contains(entry.name) ? entry.label : "☁️ \(entry.label)")
+                            .tag(entry.name)
+                    }
+                    ForEach(extraDownloaded, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 210)
+                .disabled(switching)
+            }
+
+            Text(downloaded.isEmpty
+                 ? "☁️ = henüz inmedi, seçince indirilir."
+                 : "İnmiş modeller: \(downloaded.sorted().joined(separator: ", ")). ☁️ = henüz inmedi, seçince indirilir.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     // MARK: - Input Device Section
 
     private var inputDeviceSection: some View {
@@ -235,14 +292,16 @@ struct SettingsView: View {
                     get: { appState.inputDeviceUID ?? "" },
                     set: { appState.inputDeviceUID = $0.isEmpty ? nil : $0 }
                 )) {
-                    Text("Automatic: headset → Mac mic").tag("")
-                    ForEach(appState.availableInputDevices) { device in
-                        Text(device.isBluetooth ? "🔵 \(device.name)" : device.name)
-                            .tag(device.uid)
+                    Text("Otomatik (Kulaklık → Mac)").tag("")
+                    if let builtIn = appState.builtInInputDevice {
+                        Text("Mac Mikrofonu").tag(builtIn.uid)
+                    }
+                    if let headset = appState.externalHeadsetDevice {
+                        Text(headset.isBluetooth ? "🔵 \(headset.name)" : headset.name).tag(headset.uid)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: 170)
             }
 
             if appState.resolvedInputIsBluetooth {
@@ -250,7 +309,7 @@ struct SettingsView: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 10))
                         .foregroundStyle(.orange)
-                    Text("Bluetooth headsets drop into low-quality call mode while dictating, which makes music sound distorted. Pick the built-in mic for best audio.")
+                    Text("Bluetooth kulaklıklar dikte sırasında düşük kaliteli görüşme moduna geçer; en iyi ses kalitesi için Mac mikrofonunu seçebilirsiniz.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

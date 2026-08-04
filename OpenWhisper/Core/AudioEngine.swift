@@ -774,13 +774,9 @@ final class AudioEngine: @unchecked Sendable {
         return availableInputDevices().first(where: { $0.uid == uid })?.id
     }
 
-    /// Select a headset-like input when automatic routing is enabled. A non-built-in
-    /// duplex device is preferred because it represents a headset or USB audio device;
-    /// Bluetooth input is also accepted when the device exposes no output stream. If no
-    /// external headset is present, fall back to the Mac's built-in microphone.
-    static func automaticInputDeviceUID() -> String? {
-        let devices = availableInputDevices()
-        let externalHeadset = devices
+    /// Returns the currently connected headset-like external input device, if any.
+    static func connectedExternalHeadsetDevice() -> AudioInputDevice? {
+        return availableInputDevices()
             .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
             .sorted { lhs, rhs in
                 if lhs.isBluetooth != rhs.isBluetooth {
@@ -789,8 +785,15 @@ final class AudioEngine: @unchecked Sendable {
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
             .first
+    }
 
-        return externalHeadset?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
+    /// Select a headset-like input when automatic routing is enabled. A non-built-in
+    /// duplex device is preferred because it represents a headset or USB audio device;
+    /// Bluetooth input is also accepted when the device exposes no output stream. If no
+    /// external headset is present, fall back to the Mac's built-in microphone.
+    static func automaticInputDeviceUID() -> String? {
+        let devices = availableInputDevices()
+        return connectedExternalHeadsetDevice()?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
     }
 
     // MARK: - Core Audio property helpers

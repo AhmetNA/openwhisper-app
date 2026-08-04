@@ -201,6 +201,20 @@ final class WhisperTranscriber: @unchecked Sendable {
         return FileManager.default.fileExists(atPath: localModel.path)
     }
 
+    /// Lists the Whisper model variant names currently present on disk (e.g. ["large-v3", "large-v3_turbo"]).
+    func downloadedModelNames() -> [String] {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let variantsDir = appSupport.appendingPathComponent("OpenWhisper/Models/models/argmaxinc/whisperkit-coreml")
+        guard let items = try? FileManager.default.contentsOfDirectory(at: variantsDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+        let prefix = "openai_whisper-"
+        return items
+            .filter { $0.hasDirectoryPath && $0.lastPathComponent.hasPrefix(prefix) }
+            .map { String($0.lastPathComponent.dropFirst(prefix.count)) }
+            .sorted()
+    }
+
     /// Load a Whisper model by name (e.g., "tiny", "base", "small", "small.en")
     func loadModel(name: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         // Store models in Application Support (persistent) instead of Caches (macOS purges Caches)

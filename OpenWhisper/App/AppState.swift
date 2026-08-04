@@ -202,6 +202,14 @@ final class AppState {
     var availableInputDevices: [AudioInputDevice] = []
     var systemDefaultInputIsBluetooth: Bool = false
 
+    var builtInInputDevice: AudioInputDevice? {
+        availableInputDevices.first(where: { $0.isBuiltIn })
+    }
+
+    var externalHeadsetDevice: AudioInputDevice? {
+        AudioEngine.connectedExternalHeadsetDevice()
+    }
+
     var audioLevel: Float = 0.0
     var recordingDuration: TimeInterval = 0.0
     var ollamaAvailable: Bool = false
@@ -601,6 +609,10 @@ final class AppState {
                 owLog("[TargetSpeaker] Diarization preparation failed: \(error)")
             }
         }
+    }
+
+    func downloadedWhisperModelNames() -> [String] {
+        transcriber?.downloadedModelNames() ?? []
     }
 
     func loadModel() async {
