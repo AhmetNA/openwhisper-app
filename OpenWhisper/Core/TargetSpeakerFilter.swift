@@ -16,16 +16,16 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     /// speaker window, so this moderate relaxation preserves protection against one-window outliers.
     /// This is now the *default* value only -- it can be overridden at runtime via the
     /// `targetSpeakerCosineThreshold` UserDefaults key without a rebuild (see `TargetSpeakerTuning`).
-    static let cosineThreshold: Float = 0.62
+    static let cosineThreshold: Float = 0.47
     /// Scores in this band are not safe enough for an automatic identity decision, but can be
     /// rescued when they are acoustically continuous with a strong target-speaker window. If a
     /// recording contains only uncertain windows, it remains a user-confirmed fallback instead of
     /// being silently accepted as the target speaker.
-    static let uncertainSimilarityFloor: Float = 0.50
+    static let uncertainSimilarityFloor: Float = 0.40
     /// Minimum embedding similarity between an uncertain window and a nearby strong target window
     /// before it can be included. This protects the pitch-variation bridge from absorbing a second
     /// speaker merely because that speaker happened to be adjacent in time.
-    static let uncertainContinuityThreshold: Float = 0.55
+    static let uncertainContinuityThreshold: Float = 0.47
     /// At a 0.75 s hop, two windows span at most one 1.5 s speaker window on either side. Keeping
     /// the bridge bounded prevents a long run of ambiguous audio from being promoted wholesale.
     static let maximumUncertainBridgeWindows = 2
@@ -53,10 +53,10 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     /// Relative classification is deliberately stricter than merely finding the best profile
     /// score: the anchor must be plausible, and the target/outside clusters must be visibly
     /// separated before any audio is accepted automatically.
-    static let relativeAnchorMinimum: Float = 0.50
-    static let relativeTargetSimilarity: Float = 0.55
-    static let relativeUncertainSimilarity: Float = 0.40
-    static let relativeClusterSeparation: Float = 0.25
+    static let relativeAnchorMinimum: Float = 0.40
+    static let relativeTargetSimilarity: Float = 0.47
+    static let relativeUncertainSimilarity: Float = 0.35
+    static let relativeClusterSeparation: Float = 0.20
     /// Within-recording coherence floor: the median of all pairwise cosine similarities among a
     /// single recording's speaker-window embeddings (see `TargetSpeakerFilter.recordingCoherence`).
     /// A recording contaminated by a second speaker, a TV, or heavy noise produces windows that
@@ -67,7 +67,7 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     /// value has never been validated against this user's real voice/hardware; watch the
     /// `[TargetSpeaker] enroll coherence:` log lines and retune with
     /// `defaults write` if it misfires. Setting it to 0 disables the check.
-    static let minRecordingCoherence: Double = 0.55
+    static let minRecordingCoherence: Double = 0.47
     /// Cross-recording consistency floor comparing the two enrollment recordings' embedding sets
     /// against each other (see `TargetSpeakerFilter.crossRecordingSimilarity`). Deliberately
     /// conservative -- default 0.40, well below the 0.62 cosine gate threshold -- because the two

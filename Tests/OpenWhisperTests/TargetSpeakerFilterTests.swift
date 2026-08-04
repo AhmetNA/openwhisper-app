@@ -43,13 +43,13 @@ final class TargetSpeakerFilterTests: XCTestCase {
         let profile = try makeProfile(embedding: unitVector())
 
         let rejected = await TargetSpeakerFilter(model: MockTargetSpeakerModel(
-            embedding: vector(withCosine: 0.61), frameCount: 8
+            embedding: vector(withCosine: 0.46), frameCount: 8
         )).filter(samples: samples, profile: profile, enabled: true)
         XCTAssertEqual(rejected.acceptedSampleCount, 0)
         XCTAssertTrue(rejected.samples.allSatisfy { $0 == 0 })
 
         let accepted = await TargetSpeakerFilter(model: MockTargetSpeakerModel(
-            embedding: vector(withCosine: 0.62), frameCount: 8
+            embedding: vector(withCosine: 0.47), frameCount: 8
         )).filter(samples: samples, profile: profile, enabled: true)
         XCTAssertGreaterThan(accepted.acceptedSampleCount, 0)
     }
@@ -92,7 +92,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
     func testOnlyUncertainWindowsRemainAmbiguousInsteadOfBeingAutoAccepted() async throws {
         let samples = Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples)
         let model = MockTargetSpeakerModel(
-            embeddings: Array(repeating: vector(withCosine: 0.56), count: 3),
+            embeddings: Array(repeating: vector(withCosine: 0.43), count: 3),
             frameCount: 12
         )
         let result = await TargetSpeakerFilter(model: model).filter(
@@ -352,7 +352,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let tuning = TargetSpeakerTuning.resolved(from: defaults)
-        XCTAssertEqual(tuning.cosineThreshold, 0.62, accuracy: 0.0001)
+        XCTAssertEqual(tuning.cosineThreshold, 0.47, accuracy: 0.0001)
         XCTAssertEqual(tuning.vadThreshold, 0.70, accuracy: 0.0001)
         XCTAssertEqual(tuning.shortUtteranceMaxSeconds, 2.0, accuracy: 0.0001)
     }
@@ -392,7 +392,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defaults.set(-0.1, forKey: TargetSpeakerTuning.vadThresholdKey)
         defaults.set(-1.0, forKey: TargetSpeakerTuning.shortUtteranceMaxSecondsKey)
         var tuning = TargetSpeakerTuning.resolved(from: defaults)
-        XCTAssertEqual(tuning.cosineThreshold, 0.62, accuracy: 0.0001, "out-of-range cosine value must fall back")
+        XCTAssertEqual(tuning.cosineThreshold, 0.47, accuracy: 0.0001, "out-of-range cosine value must fall back")
         XCTAssertEqual(tuning.vadThreshold, 0.70, accuracy: 0.0001, "out-of-range vad value must fall back")
         XCTAssertEqual(tuning.shortUtteranceMaxSeconds, 2.0, accuracy: 0.0001, "negative ceiling value must fall back")
 
@@ -400,7 +400,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defaults.set(Double.infinity, forKey: TargetSpeakerTuning.vadThresholdKey)
         defaults.set(Double.nan, forKey: TargetSpeakerTuning.shortUtteranceMaxSecondsKey)
         tuning = TargetSpeakerTuning.resolved(from: defaults)
-        XCTAssertEqual(tuning.cosineThreshold, 0.62, accuracy: 0.0001, "non-finite cosine value must fall back")
+        XCTAssertEqual(tuning.cosineThreshold, 0.47, accuracy: 0.0001, "non-finite cosine value must fall back")
         XCTAssertEqual(tuning.vadThreshold, 0.70, accuracy: 0.0001, "non-finite vad value must fall back")
         XCTAssertEqual(tuning.shortUtteranceMaxSeconds, 2.0, accuracy: 0.0001, "non-finite ceiling value must fall back")
 
@@ -461,9 +461,9 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let defaultTuning = TargetSpeakerTuning.resolved(from: defaults)
-        XCTAssertEqual(defaultTuning.uncertainSimilarityFloor, 0.50, accuracy: 0.0001)
-        XCTAssertEqual(defaultTuning.uncertainContinuityThreshold, 0.55, accuracy: 0.0001)
-        XCTAssertEqual(defaultTuning.minRecordingCoherence, 0.55, accuracy: 0.0001)
+        XCTAssertEqual(defaultTuning.uncertainSimilarityFloor, 0.40, accuracy: 0.0001)
+        XCTAssertEqual(defaultTuning.uncertainContinuityThreshold, 0.47, accuracy: 0.0001)
+        XCTAssertEqual(defaultTuning.minRecordingCoherence, 0.47, accuracy: 0.0001)
         XCTAssertEqual(defaultTuning.minCrossRecordingSimilarity, 0.40, accuracy: 0.0001)
 
         defaults.set(0.51, forKey: TargetSpeakerTuning.uncertainSimilarityFloorKey)
@@ -487,7 +487,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         defaults.set(1.5, forKey: TargetSpeakerTuning.minRecordingCoherenceKey)
         defaults.set(Double.nan, forKey: TargetSpeakerTuning.minCrossRecordingSimilarityKey)
         let invalid = TargetSpeakerTuning.resolved(from: defaults)
-        XCTAssertEqual(invalid.minRecordingCoherence, 0.55, accuracy: 0.0001, "out-of-range must fall back")
+        XCTAssertEqual(invalid.minRecordingCoherence, 0.47, accuracy: 0.0001, "out-of-range must fall back")
         XCTAssertEqual(invalid.minCrossRecordingSimilarity, 0.40, accuracy: 0.0001, "non-finite must fall back")
     }
 
@@ -525,7 +525,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
             }
             XCTAssertEqual(index, 0, "the first recording processed by createProfile's loop is the one that failed")
             XCTAssertLessThan(measured, floor)
-            XCTAssertEqual(floor, 0.55, accuracy: 0.001)
+            XCTAssertEqual(floor, 0.47, accuracy: 0.001)
         }
     }
 
