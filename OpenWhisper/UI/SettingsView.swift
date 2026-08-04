@@ -195,19 +195,31 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: 7) {
             Label("Ses işleme", systemImage: "waveform.and.mic")
 
-            Picker("Ses işleme modu", selection: $appState.noiseSuppressionEnabled) {
-                Text("Gürültü engelleme").tag(true)
-                Text("Engellemesiz").tag(false)
+            Picker("Ses işleme modu", selection: $appState.audioProcessingMode) {
+                Text("Engelsiz").tag(AudioProcessingMode.off)
+                Text("DeepFilter").tag(AudioProcessingMode.deepFilterNet)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .controlSize(.small)
             .disabled(appState.recordingState != .idle)
 
             Text(appState.recordingState == .idle
-                 ? "Seçim bir sonraki kayıtta uygulanır."
+                 ? audioProcessingModeDescription
                  : "Kayıt sürerken değiştirilemez; sonraki kayda uygulanır.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var audioProcessingModeDescription: String {
+        switch appState.audioProcessingMode {
+        case .off:
+            return "Gürültü engelleme yok, en hızlı başlangıç. Seçim bir sonraki kayıtta uygulanır."
+        case .deepFilterNet:
+            return "Yerel bir sinir ağı (DeepFilterNet 3) gürültüyü temizler; başlangıç gecikmesi eklemez. Seçim bir sonraki kayıtta uygulanır."
+        case .appleVoiceProcessing:
+            return "Apple'ın gürültü engelleme + otomatik kazanç sistemi. Fn'e basıldıktan sonra mikrofonun açılmasını ~1 saniye geciktirir (ölçülen: ~900ms-1.1sn). Seçim bir sonraki kayıtta uygulanır."
         }
     }
 

@@ -140,7 +140,8 @@ protocol TargetSpeakerDiarizationService: Sendable {
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
-        profile: TargetSpeakerProfile
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode
     ) async throws -> TargetSpeakerDiarizationResult
 }
 
@@ -149,12 +150,14 @@ extension TargetSpeakerDiarizationService {
     func filter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
-        profile: TargetSpeakerProfile
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode = .off
     ) async throws -> TargetSpeakerDiarizationResult {
         try await diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
-            profile: profile
+            profile: profile,
+            audioProcessingMode: audioProcessingMode
         )
     }
 }
@@ -188,12 +191,14 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
-        profile: TargetSpeakerProfile
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode
     ) async throws -> TargetSpeakerDiarizationResult {
         try await runtime.diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
-            profile: profile
+            profile: profile,
+            audioProcessingMode: audioProcessingMode
         )
     }
 }
@@ -345,14 +350,15 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
-        profile: TargetSpeakerProfile
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode
     ) async throws -> TargetSpeakerDiarizationResult {
         owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count)")
         guard !audioData.isEmpty, audioData.allSatisfy({ $0.isFinite }) else {
             owLog("[TargetSpeakerDiarization] Error: invalidAudio (empty or non-finite samples)")
             throw TargetSpeakerDiarizationError.invalidAudio
         }
-        guard profile.isCompatible(with: FluidAudioTargetSpeakerDiarizationService.modelIdentifier) else {
+        guard profile.isCompatible(with: FluidAudioTargetSpeakerDiarizationService.modelIdentifier, audioProcessingMode: audioProcessingMode) else {
             owLog("[TargetSpeakerDiarization] Error: incompatibleProfile (expected \(FluidAudioTargetSpeakerDiarizationService.modelIdentifier), found \(profile.modelIdentifier))")
             throw TargetSpeakerDiarizationError.incompatibleProfile(
                 expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,

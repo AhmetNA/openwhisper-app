@@ -18,6 +18,17 @@ struct CompletedAudioSegment: Sendable {
     let overlapSampleCount: Int
 }
 
+/// How microphone audio is cleaned up before transcription.
+/// `.appleVoiceProcessing` costs ~900ms-1.1s at recording start (VPIO hardware setup);
+/// `.deepFilterNet` runs a local neural denoiser (DeepFilterNet 3) with negligible startup cost
+/// once its model is preloaded; `.off` does no noise suppression beyond AudioSignalProcessor's
+/// fixed gain/compressor.
+enum AudioProcessingMode: String, Codable, Sendable {
+    case off
+    case deepFilterNet
+    case appleVoiceProcessing
+}
+
 final class AudioEngine: @unchecked Sendable {
     /// Fixed-size storage avoids allocating a Swift Array for every input callback. Completed
     /// batches are detached from this storage and flattened on a utility queue.
@@ -32,6 +43,52 @@ final class AudioEngine: @unchecked Sendable {
 
     private static let targetSampleRate: Double = 16_000
     private static let chunkCapacity = 16_384
+    /// Upper bound on frames CoreAudio may deliver per input callback. `installTap(bufferSize:)`
+    /// is only a hint — the driver can and does deliver more (e.g. 4410 or 4800 frames when a
+    /// 4096-frame hint was given, at 44.1kHz/48kHz respectively). All downstream buffer
+    /// capacities derive from this single constant so they stay consistent with each other.
+    private static let maxInputFrameCount: AVAudioFrameCount = 16_384
+
+    /// Frame capacities for every buffer in the recording chain, derived from
+    /// `maxInputFrameCount` so they can never fall out of sync with each other. Exposed as a
+    /// static pure function so the derivation can be unit-tested without spinning up audio I/O.
+    struct BufferCapacities: Equatable {
+        let monoInput: AVAudioFrameCount
+        let df3Resampled: AVAudioFrameCount?
+        let df3Output: AVAudioFrameCount?
+        let converted: AVAudioFrameCount
+    }
+
+    static func bufferCapacities(nativeSampleRate: Double, deepFilterActive: Bool) -> BufferCapacities {
+        let mono = maxInputFrameCount
+
+        guard deepFilterActive else {
+            let convertedCapacity = AVAudioFrameCount(
+                ceil(Double(mono) * targetSampleRate / nativeSampleRate) + 256
+            )
+            return BufferCapacities(monoInput: mono, df3Resampled: nil, df3Output: nil, converted: convertedCapacity)
+        }
+
+        let df3SampleRate = DeepFilterProcessor.sampleRate
+        // No resampler is needed when the mic is already delivering DF3's native rate; the
+        // mono downmix buffer then serves directly as the 48kHz source.
+        let df3Resampled: AVAudioFrameCount? = nativeSampleRate == df3SampleRate
+            ? nil
+            : AVAudioFrameCount(ceil(Double(mono) * df3SampleRate / nativeSampleRate) + 256)
+        let df3InputCapacityAt48k = df3Resampled ?? mono
+        // +512 covers DF3's internal ring buffer, which can carry over up to frameLength-1
+        // (479) samples from a partially-filled 480-sample frame into the next callback.
+        let df3Output = df3InputCapacityAt48k + 512
+        let convertedCapacity = AVAudioFrameCount(
+            ceil(Double(df3Output) * targetSampleRate / df3SampleRate) + 256
+        )
+        return BufferCapacities(
+            monoInput: mono,
+            df3Resampled: df3Resampled,
+            df3Output: df3Output,
+            converted: convertedCapacity
+        )
+    }
 
     private var engine = AVAudioEngine()
     private let lock = NSLock()
@@ -43,6 +100,22 @@ final class AudioEngine: @unchecked Sendable {
     /// AVAudioConverter infer a multichannel-to-mono mix can select an empty channel.
     private var monoInputBuffer: AVAudioPCMBuffer?
     private var convertedBuffer: AVAudioPCMBuffer?
+    /// Loaded once via prewarmDeepFilter() and kept for the app's lifetime; ~170ms model load
+    /// only needs to happen once, never on the Fn-press path.
+    private var deepFilterProcessor: DeepFilterProcessor?
+    /// Non-nil only while a recording with `.deepFilterNet` mode is active; nil the rest of the
+    /// time even though `deepFilterProcessor` itself stays loaded. This is the per-recording gate.
+    private var activeDeepFilter: DeepFilterProcessor?
+    /// Resamples the native-rate downmix to DeepFilterNet's fixed 48kHz, skipped (left nil) when
+    /// the mic is already 48kHz (e.g. would only happen if VP were also on, which this mode never does).
+    private var df3NativeTo48kConverter: AVAudioConverter?
+    private var df3ResampledBuffer: AVAudioPCMBuffer?
+    /// Holds DeepFilterNet's denoised 48kHz output, which then feeds the existing 16kHz converter.
+    private var df3OutputBuffer: AVAudioPCMBuffer?
+    /// Reused across every callback's `DeepFilterProcessor.process(...)` call instead of
+    /// allocating a fresh `[Float]` each time on the real-time audio thread. Capacity is
+    /// reserved once in `startRecording()`; each callback only `removeAll(keepingCapacity:)`s it.
+    private var deepFilterDenoiseScratch: [Float] = []
     /// Completed units are owned by AudioEngine until stopRecording takes them atomically.
     /// Keeping them here avoids a second asynchronous delivery queue racing the stop path.
     private var completedSegments: [CompletedAudioSegment] = []
@@ -69,27 +142,54 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     private var configuredDeviceUID: String? = nil
-    private var configuredNoiseSuppression: Bool? = nil
+    private var configuredAudioProcessingMode: AudioProcessingMode? = nil
     private var isEnginePrepared = false
     private var hasLoggedFirstBuffer = false
     private var hasLoggedFirstAudibleBuffer = false
+    private var hasLoggedInputTruncation = false
+    private var hasLoggedDeepFilterFirstFrame = false
 
     /// Pre-warm the audio engine graph in the background so startRecording() takes < 2ms.
-    func prewarm(deviceUID: String?, noiseSuppressionEnabled: Bool) {
+    func prewarm(deviceUID: String?, audioProcessingMode: AudioProcessingMode) {
         lock.lock()
-        let needsConfig = !isEnginePrepared || configuredDeviceUID != deviceUID || configuredNoiseSuppression != noiseSuppressionEnabled
+        let needsConfig = !isEnginePrepared || configuredDeviceUID != deviceUID || configuredAudioProcessingMode != audioProcessingMode
         lock.unlock()
         guard needsConfig else { return }
         owLog("[AudioEngine] Pre-warming audio engine graph in background...")
-        configureEngine(deviceUID: deviceUID, noiseSuppressionEnabled: noiseSuppressionEnabled)
+        configureEngine(deviceUID: deviceUID, audioProcessingMode: audioProcessingMode)
     }
 
-    private func configureEngine(deviceUID: String?, noiseSuppressionEnabled: Bool) {
+    /// Loads the DeepFilterNet model once, off the Fn-press path (call from app startup).
+    /// Safe to call more than once; only the first call does anything.
+    func prewarmDeepFilter() {
+        lock.lock()
+        let alreadyLoaded = deepFilterProcessor != nil
+        lock.unlock()
+        guard !alreadyLoaded else { return }
+        let processor = DeepFilterProcessor()
+        lock.lock()
+        deepFilterProcessor = processor
+        lock.unlock()
+    }
+
+    private func configureEngine(deviceUID: String?, audioProcessingMode: AudioProcessingMode) {
+        var tStep = CACurrentMediaTime()
+        func logStep(_ label: String) {
+            let tNow = CACurrentMediaTime()
+            let stepMs = (tNow - tStep) * 1000
+            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog(String(format: "[Perf] [\(label)] step=%.2f ms, total=%.2f ms / %.3f s from Fn press", stepMs, elapsedMs, elapsedMs / 1000.0))
+            tStep = tNow
+        }
+
         engine.stop()
         engine.reset()
         engine = AVAudioEngine()
+        logStep("CfgEngineAlloc")
 
         let inputNode = engine.inputNode
+        logStep("CfgInputNodeAccess")
+
         if let uid = deviceUID, let deviceID = Self.audioDeviceID(forUID: uid) {
             do {
                 try inputNode.auAudioUnit.setDeviceID(deviceID)
@@ -100,8 +200,9 @@ final class AudioEngine: @unchecked Sendable {
         } else {
             owLog("[AudioEngine] Using system default input")
         }
+        logStep("CfgSetDeviceID")
 
-        if noiseSuppressionEnabled {
+        if audioProcessingMode == .appleVoiceProcessing {
             do {
                 try inputNode.setVoiceProcessingEnabled(true)
                 owLog("[AudioEngine] Apple voice processing enabled")
@@ -109,23 +210,31 @@ final class AudioEngine: @unchecked Sendable {
                 owLog("[AudioEngine] Voice processing unavailable: \(error)")
             }
         }
+        logStep("CfgVoiceProcessing")
 
         configuredDeviceUID = deviceUID
-        configuredNoiseSuppression = noiseSuppressionEnabled
+        configuredAudioProcessingMode = audioProcessingMode
         isEnginePrepared = true
         engine.prepare()
+        logStep("CfgPrepare")
     }
 
     /// Start recording. If `deviceUID` is non-nil, route AUHAL to that input device;
     /// otherwise the system default input is used. Reuses the already-configured AVAudioEngine
     /// graph for instant ~1ms hardware recording start with zero background CPU overhead.
+    /// Returns `true` when `.deepFilterNet` was requested but the model wasn't loaded in time
+    /// (still within its ~230ms startup window), so this recording ran without denoising --
+    /// callers can surface that to the user instead of it being silent.
+    @discardableResult
     func startRecording(
         deviceUID: String?,
-        noiseSuppressionEnabled: Bool,
+        audioProcessingMode: AudioProcessingMode,
         levelCallback: @escaping (Float) -> Void
-    ) {
+    ) -> Bool {
         hasLoggedFirstBuffer = false
         hasLoggedFirstAudibleBuffer = false
+        hasLoggedInputTruncation = false
+        hasLoggedDeepFilterFirstFrame = false
         let tStartCall = CACurrentMediaTime()
         let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
         owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
@@ -144,17 +253,29 @@ final class AudioEngine: @unchecked Sendable {
         pinnedInputChannelIndex = nil
         lock.unlock()
 
-        // Only rebuild the AudioEngine graph if device/noiseSuppression changed or engine is unconfigured
-        if !isEnginePrepared || configuredDeviceUID != deviceUID || configuredNoiseSuppression != noiseSuppressionEnabled {
-            owLog("[AudioEngine] Configuring audio engine graph inline (deviceUID=\(deviceUID ?? "default"), noiseSuppression=\(noiseSuppressionEnabled))...")
-            configureEngine(deviceUID: deviceUID, noiseSuppressionEnabled: noiseSuppressionEnabled)
+        // Only rebuild the AudioEngine graph if device/mode changed or engine is unconfigured
+        if !isEnginePrepared || configuredDeviceUID != deviceUID || configuredAudioProcessingMode != audioProcessingMode {
+            owLog("[AudioEngine] Configuring audio engine graph inline (deviceUID=\(deviceUID ?? "default"), audioProcessingMode=\(audioProcessingMode))...")
+            configureEngine(deviceUID: deviceUID, audioProcessingMode: audioProcessingMode)
         }
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
 
-        guard let monoInputFormat = AVAudioFormat(
+        lock.lock()
+        let loadedDeepFilter = deepFilterProcessor
+        lock.unlock()
+        let useDeepFilter = audioProcessingMode == .deepFilterNet && loadedDeepFilter != nil
+        let didFallBackFromDeepFilter = audioProcessingMode == .deepFilterNet && loadedDeepFilter == nil
+        if didFallBackFromDeepFilter {
+            owLog("[AudioEngine] DeepFilterNet selected but not loaded (prewarm failed or still loading); recording without it")
+        }
+        loadedDeepFilter?.resetStream()
+
+        let capacities = Self.bufferCapacities(nativeSampleRate: format.sampleRate, deepFilterActive: useDeepFilter)
+
+        guard let downmixFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: format.sampleRate,
             channels: 1,
@@ -164,34 +285,65 @@ final class AudioEngine: @unchecked Sendable {
             sampleRate: Self.targetSampleRate,
             channels: 1,
             interleaved: false
-        ), let converter = AVAudioConverter(from: monoInputFormat, to: targetFormat),
-        let monoInputBuffer = AVAudioPCMBuffer(
-            pcmFormat: monoInputFormat,
-            frameCapacity: 4096
+        ), let monoInputBuffer = AVAudioPCMBuffer(
+            pcmFormat: downmixFormat,
+            frameCapacity: capacities.monoInput
         ) else {
-            owLog("[AudioEngine] Failed to create 16kHz recording converter")
-            return
+            owLog("[AudioEngine] Failed to create recording buffers")
+            return false
         }
 
-        let outputCapacity = AVAudioFrameCount(
-            ceil(Double(4096) * Self.targetSampleRate / format.sampleRate) + 256
-        )
+        // When DeepFilterNet is active, the 16kHz converter reads from DF3's fixed-48kHz output
+        // instead of directly from the mic's native rate; DF3 may need its own native->48kHz
+        // converter first (skipped if the mic already delivers 48kHz).
+        var newDf3NativeTo48kConverter: AVAudioConverter?
+        var newDf3ResampledBuffer: AVAudioPCMBuffer?
+        var newDf3OutputBuffer: AVAudioPCMBuffer?
+        let converterSourceFormat: AVAudioFormat
+        if useDeepFilter, let df3Format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: DeepFilterProcessor.sampleRate,
+            channels: 1,
+            interleaved: false
+        ) {
+            converterSourceFormat = df3Format
+            if let resampledCapacity = capacities.df3Resampled {
+                newDf3NativeTo48kConverter = AVAudioConverter(from: downmixFormat, to: df3Format)
+                newDf3ResampledBuffer = AVAudioPCMBuffer(pcmFormat: df3Format, frameCapacity: resampledCapacity)
+            }
+            newDf3OutputBuffer = AVAudioPCMBuffer(pcmFormat: df3Format, frameCapacity: capacities.df3Output ?? capacities.monoInput)
+        } else {
+            converterSourceFormat = downmixFormat
+        }
+
+        guard let converter = AVAudioConverter(from: converterSourceFormat, to: targetFormat) else {
+            owLog("[AudioEngine] Failed to create 16kHz recording converter")
+            return false
+        }
+
         guard let convertedBuffer = AVAudioPCMBuffer(
             pcmFormat: targetFormat,
-            frameCapacity: max(outputCapacity, 1)
+            frameCapacity: max(capacities.converted, 1)
         ) else {
             owLog("[AudioEngine] Failed to allocate 16kHz recording buffer")
-            return
+            return false
         }
 
         lock.lock()
         self.converter = converter
         self.monoInputBuffer = monoInputBuffer
         self.convertedBuffer = convertedBuffer
+        self.activeDeepFilter = useDeepFilter ? loadedDeepFilter : nil
+        self.df3NativeTo48kConverter = newDf3NativeTo48kConverter
+        self.df3ResampledBuffer = newDf3ResampledBuffer
+        self.df3OutputBuffer = newDf3OutputBuffer
+        // Sized to this recording's actual worst-case denoised-frame count so the real-time
+        // callback never needs to grow this array; harmless no-op if already large enough.
+        deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
         lock.unlock()
 
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format) { [weak self] buffer, _ in
             guard let self else { return }
             let frameLength = Int(buffer.frameLength)
             guard frameLength > 0 else { return }
@@ -251,7 +403,9 @@ final class AudioEngine: @unchecked Sendable {
         } catch {
             owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
             isEnginePrepared = false
+            return false
         }
+        return didFallBackFromDeepFilter
     }
 
     func stopRecording() -> [CompletedAudioSegment] {
@@ -263,12 +417,28 @@ final class AudioEngine: @unchecked Sendable {
         engine = AVAudioEngine()
         isEnginePrepared = false
         configuredDeviceUID = nil
-        configuredNoiseSuppression = nil
+        configuredAudioProcessingMode = nil
         levelCallback = nil
 
         lock.lock()
         flushConverter()
+        let stoppedDeepFilter = activeDeepFilter
+        activeDeepFilter = nil
+        df3NativeTo48kConverter = nil
+        df3ResampledBuffer = nil
+        df3OutputBuffer = nil
         lock.unlock()
+
+        // Tap is already removed and the engine stopped above, so no audio-thread call into
+        // `process()` can still be in flight — reading these counters here is safe.
+        if let stoppedDeepFilter, stoppedDeepFilter.processedFrameCount > 0 {
+            owLog(String(
+                format: "[DeepFilter] Recording summary: frames=%d processedMs=%.1f avgSNR=%.2fdB",
+                stoppedDeepFilter.processedFrameCount,
+                stoppedDeepFilter.processedDurationMs,
+                stoppedDeepFilter.averageSNR
+            ))
+        }
 
         // A completed three-minute batch may still be flattening off the audio callback.
         // Wait for that work before taking the final tail, preserving batch order.
@@ -336,16 +506,94 @@ final class AudioEngine: @unchecked Sendable {
         return (selectedIndex, selectedRMS)
     }
 
+    /// Resamples `nativeMonoBuffer` to 48kHz if needed, runs it through DeepFilterNet, and
+    /// writes any fully-denoised frames into `outputBuffer`. Returns nil when DF3's internal
+    /// 480-sample ring buffer hasn't accumulated a full frame yet this callback (normal at the
+    /// start of a recording) or on a conversion failure.
+    private func deepFilterDenoisedBuffer(
+        from nativeMonoBuffer: AVAudioPCMBuffer,
+        processor: DeepFilterProcessor,
+        outputBuffer: AVAudioPCMBuffer
+    ) -> AVAudioPCMBuffer? {
+        let source: AVAudioPCMBuffer
+        if let df3NativeTo48kConverter, let df3ResampledBuffer {
+            df3ResampledBuffer.frameLength = 0
+            var suppliedInput = false
+            var error: NSError?
+            df3NativeTo48kConverter.convert(to: df3ResampledBuffer, error: &error) { _, status in
+                if suppliedInput {
+                    status.pointee = .noDataNow
+                    return nil
+                }
+                suppliedInput = true
+                status.pointee = .haveData
+                return nativeMonoBuffer
+            }
+            guard error == nil, df3ResampledBuffer.frameLength > 0 else { return nil }
+            source = df3ResampledBuffer
+        } else {
+            source = nativeMonoBuffer
+        }
+
+        guard let sourceChannel = source.floatChannelData?[0], source.frameLength > 0 else { return nil }
+
+        deepFilterDenoiseScratch.removeAll(keepingCapacity: true)
+        processor.process(sourceChannel, count: Int(source.frameLength), into: &deepFilterDenoiseScratch)
+        guard !deepFilterDenoiseScratch.isEmpty else { return nil }
+
+        if !hasLoggedDeepFilterFirstFrame {
+            hasLoggedDeepFilterFirstFrame = true
+            let tNow = CACurrentMediaTime()
+            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog(String(format: "[Perf] [DeepFilterFirstFrame] First denoised frame produced (%.2f ms / %.3f s from Fn press)", elapsedMs, elapsedMs / 1000.0))
+        }
+
+        let capacity = Int(outputBuffer.frameCapacity)
+        let count = min(deepFilterDenoiseScratch.count, capacity)
+        if count < deepFilterDenoiseScratch.count {
+            owLog("[DeepFilter] Denoised frame count \(deepFilterDenoiseScratch.count) exceeds output buffer capacity \(capacity); truncating.")
+        }
+        guard let outputChannel = outputBuffer.floatChannelData?[0] else { return nil }
+        deepFilterDenoiseScratch.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            outputChannel.update(from: baseAddress, count: count)
+        }
+        outputBuffer.frameLength = AVAudioFrameCount(count)
+        return outputBuffer
+    }
+
     private func convert(_ inputBuffer: AVAudioPCMBuffer, channelIndex: Int) {
         guard let converter, let monoInputBuffer, let convertedBuffer,
               let sourceChannels = inputBuffer.floatChannelData,
               let monoChannel = monoInputBuffer.floatChannelData?[0] else { return }
 
-        let frameLength = min(Int(inputBuffer.frameLength), Int(monoInputBuffer.frameCapacity))
+        let delivered = Int(inputBuffer.frameLength)
+        let capacity = Int(monoInputBuffer.frameCapacity)
+        let frameLength = min(delivered, capacity)
         guard frameLength > 0 else { return }
+        if delivered > capacity && !hasLoggedInputTruncation {
+            hasLoggedInputTruncation = true
+            owLog("[AudioEngine] Input buffer truncated: delivered=\(delivered) capacity=\(capacity) — ses kaybı var.")
+        }
         let safeChannelIndex = min(max(channelIndex, 0), Int(inputBuffer.format.channelCount) - 1)
         monoChannel.update(from: sourceChannels[safeChannelIndex], count: frameLength)
         monoInputBuffer.frameLength = AVAudioFrameCount(frameLength)
+
+        // DeepFilterNet, when active for this recording, denoises between the native-rate
+        // downmix and the 16kHz converter below. It buffers internally in 480-sample/10ms
+        // frames, so a given tap callback may yield fewer (or zero) denoised samples than it
+        // was fed; zero is normal on the first callback or two of a recording.
+        let converterSource: AVAudioPCMBuffer
+        if let activeDeepFilter, let df3OutputBuffer {
+            guard let denoised = deepFilterDenoisedBuffer(
+                from: monoInputBuffer,
+                processor: activeDeepFilter,
+                outputBuffer: df3OutputBuffer
+            ) else { return }
+            converterSource = denoised
+        } else {
+            converterSource = monoInputBuffer
+        }
 
         convertedBuffer.frameLength = 0
         var suppliedInput = false
@@ -357,7 +605,7 @@ final class AudioEngine: @unchecked Sendable {
             }
             suppliedInput = true
             status.pointee = .haveData
-            return monoInputBuffer
+            return converterSource
         }
 
         guard error == nil,

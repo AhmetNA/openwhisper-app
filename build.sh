@@ -31,8 +31,20 @@ if [ ! -f "$MCP_SCRIPT_SRC" ]; then
 fi
 cp "$MCP_SCRIPT_SRC" "$APP_DIR/Resources/spotify_smart_mcp.py"
 
+# DeepFilterNet 3 (libdf.dylib, capi build) — vendored native library + model. The dylib's
+# install name is @rpath/libdf.dylib and the executable already carries an @loader_path rpath
+# (set by SwiftPM), so placing it next to the executable is enough for it to be found.
+DF_LIB_SRC="Vendor/DeepFilter/lib/libdf.dylib"
+DF_MODEL_SRC="Vendor/DeepFilter/model/DeepFilterNet3_onnx.tar.gz"
+if [ ! -f "$DF_LIB_SRC" ] || [ ! -f "$DF_MODEL_SRC" ]; then
+    echo "ERROR: Missing DeepFilterNet vendor files ($DF_LIB_SRC / $DF_MODEL_SRC)"
+    exit 1
+fi
+cp "$DF_MODEL_SRC" "$APP_DIR/Resources/DeepFilterNet3_onnx.tar.gz"
+
 # Copy executable
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
+cp "$DF_LIB_SRC" "$APP_DIR/MacOS/libdf.dylib"
 
 # Copy resource bundle if exists
 if [ -d "$BUNDLE_SRC" ]; then

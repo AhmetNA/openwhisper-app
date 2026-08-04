@@ -17,7 +17,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         let base = try JSONSerialization.jsonObject(with: encoder.encode(profile)) as! [String: Any]
 
         var unsupportedSchema = base
-        unsupportedSchema["schemaVersion"] = 3
+        unsupportedSchema["schemaVersion"] = 999
         XCTAssertThrowsError(try JSONDecoder().decode(
             TargetSpeakerProfile.self,
             from: JSONSerialization.data(withJSONObject: unsupportedSchema)
@@ -102,7 +102,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
         )
 
         XCTAssertEqual(result.acceptedSampleCount, 0)
-        XCTAssertEqual(result.decision, .ambiguous)
+        XCTAssertEqual(result.decision, .singleSpeakerUncertain)
         XCTAssertTrue(result.samples.allSatisfy { $0 == 0 })
     }
 
@@ -596,7 +596,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
 
         let loaded = try store.load()
         XCTAssertEqual(loaded, legacyProfile)
-        XCTAssertTrue(loaded?.isCompatible(with: FluidAudioTargetSpeakerModel.identifier) == true)
+        XCTAssertTrue(loaded?.isCompatible(with: FluidAudioTargetSpeakerModel.identifier, audioProcessingMode: .off) == true)
     }
 
     func testNoMatchSkipsAllPostProcessing() {

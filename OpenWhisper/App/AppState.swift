@@ -117,8 +117,8 @@ final class AppState {
     var language: String {
         didSet { UserDefaults.standard.set(language, forKey: "language") }
     }
-    var noiseSuppressionEnabled: Bool {
-        didSet { UserDefaults.standard.set(noiseSuppressionEnabled, forKey: "noiseSuppressionEnabled") }
+    var audioProcessingMode: AudioProcessingMode {
+        didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
     }
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
@@ -208,7 +208,7 @@ final class AppState {
     /// `hasStoredTargetSpeakerProfile` remains true for an incompatible profile so the user
     /// can still replace or delete it.
     var hasTargetSpeakerProfile: Bool {
-        targetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier) == true
+        targetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
     }
     var hasStoredTargetSpeakerProfile = false
     /// Current embedding count of the active profile, surfaced in Settings next to
@@ -323,7 +323,24 @@ final class AppState {
         let defaults = UserDefaults.standard
         whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
         language = defaults.string(forKey: "language") ?? "tr"
-        noiseSuppressionEnabled = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? false
+        if defaults.object(forKey: "voiceProcessingMigrationV1") == nil {
+            // Ölçüm: setVoiceProcessingEnabled(true) tek başına ~900-1080ms gecikme ekliyor
+            // (Fn->ilk ses buffer'ı 1072-1286ms -> 162-207ms). Depolanmış eski `true` değeri
+            // kod varsayılanını (false) eziyor, bu yüzden bir kereye mahsus zorla kapatılıyor.
+            audioProcessingMode = .off
+            defaults.set(AudioProcessingMode.off.rawValue, forKey: "audioProcessingMode")
+            defaults.set(true, forKey: "voiceProcessingMigrationV1")
+            owLog("[AppState] Voice processing migration: gürültü engelleme kalıcı olarak kapatıldı (ölçülen gecikme ~1sn)")
+        } else if let rawMode = defaults.string(forKey: "audioProcessingMode"),
+                  let mode = AudioProcessingMode(rawValue: rawMode) {
+            audioProcessingMode = mode
+        } else {
+            // Migration already ran once under the old Bool-only setting, but the new enum key
+            // doesn't exist yet on this machine — translate the legacy value instead of
+            // silently reintroducing VP's latency.
+            let legacyVoiceProcessing = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? false
+            audioProcessingMode = legacyVoiceProcessing ? .appleVoiceProcessing : .off
+        }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
@@ -355,6 +372,12 @@ final class AppState {
             try? SMAppService.mainApp.register()
         }
         audioEngine = AudioEngine()
+        // Off the Fn-press path: DeepFilterNet's ~170ms model load happens once here instead of
+        // on first use of that mode.
+        let audioEngineForPrewarm = audioEngine
+        DispatchQueue.global(qos: .utility).async {
+            audioEngineForPrewarm?.prewarmDeepFilter()
+        }
         transcriber = WhisperTranscriber()
         llmCleanup = LLMCleanup(model: ollamaModel)
         textInjector = TextInjector()
@@ -442,14 +465,23 @@ final class AppState {
             targetSpeakerProfile = try targetSpeakerProfileStore.load()
             hasStoredTargetSpeakerProfile = targetSpeakerProfile != nil
             if let profile = targetSpeakerProfile {
-                if profile.isCompatible(with: targetSpeakerModel.modelIdentifier) {
+                if profile.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) {
                     targetSpeakerProfileStatus = "Kayıtlı profil hazır"
                     owLog("[TargetSpeaker] loadTargetSpeakerProfile: loaded valid profile (embeddings=\(profile.embeddings.count), schema=\(profile.schemaVersion), model=\(profile.modelIdentifier))")
                 } else {
                     targetSpeakerProfile = nil
                     targetSpeakerEnabled = false
-                    targetSpeakerProfileStatus = "Model sürümü değişti — yeniden kayıt gerekli"
-                    owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile incompatible with model '\(targetSpeakerModel.modelIdentifier)'")
+                    // Same schema/model, only the audio pipeline changed -- give the user the
+                    // specific reason instead of the generic model-version message.
+                    let modelAndSchemaMatch = profile.schemaVersion == TargetSpeakerProfile.currentSchemaVersion
+                        && profile.modelIdentifier == targetSpeakerModel.modelIdentifier
+                    if modelAndSchemaMatch && profile.audioProcessingMode != audioProcessingMode {
+                        targetSpeakerProfileStatus = "Ses işleme modu değişti — yeniden kayıt gerekli"
+                        owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile audio processing mode mismatch (profile=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
+                    } else {
+                        targetSpeakerProfileStatus = "Model sürümü değişti — yeniden kayıt gerekli"
+                        owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile incompatible with model '\(targetSpeakerModel.modelIdentifier)'")
+                    }
                 }
             } else {
                 targetSpeakerEnabled = false
@@ -568,26 +600,19 @@ final class AppState {
             return
         }
 
-        // 1. Update recordingState FIRST so flow bar UI appears INSTANTLY (< 1ms from Fn press)
-        recordingState = .recording
-        recordingDuration = 0
-        audioLevel = 0
-        lastError = nil
-
-        // Save the currently focused app (instant NSWorkspace query)
-        targetApp = NSWorkspace.shared.frontmostApplication
-        owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
-
-        // 2. Start microphone recording asynchronously off main thread so main thread UI is never blocked
+        // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
+        // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
+        // and delay this dispatch. Read everything the background block needs up front so the
+        // dispatch itself has zero main-thread work between it and the guards above.
         let recordingInputDeviceUID = resolvedInputDeviceUID
-        let noiseSuppression = noiseSuppressionEnabled
+        let processingMode = audioProcessingMode
         let audioEngineRef = audioEngine
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
-                noiseSuppressionEnabled: noiseSuppression,
+                audioProcessingMode: processingMode,
                 levelCallback: { rawLevel in
                     let rms = max(rawLevel, 0.0001)
                     let dB = 20 * log10(rms)
@@ -604,6 +629,16 @@ final class AppState {
             let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
             owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
         }
+
+        // 2. Update recordingState so flow bar UI appears
+        recordingState = .recording
+        recordingDuration = 0
+        audioLevel = 0
+        lastError = nil
+
+        // Save the currently focused app (instant NSWorkspace query)
+        targetApp = NSWorkspace.shared.frontmostApplication
+        owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
 
         // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1
@@ -728,7 +763,8 @@ final class AppState {
             filtered = await targetSpeakerFilter.filter(
                 samples: segment.samples,
                 profile: session.targetSpeakerProfile,
-                enabled: true
+                enabled: true,
+                audioProcessingMode: audioProcessingMode
             )
             owLog("[TargetSpeaker] Batch \(segmentNumber) filter result: decision=\(filtered.decision), acceptedSamples=\(filtered.acceptedSampleCount)/\(segment.samples.count), hadVoice=\(filtered.hadVoiceActivity), wasFailClosed=\(filtered.wasFailClosed)")
             if filtered.wasFailClosed, let error = filtered.errorDescription {
@@ -883,7 +919,8 @@ final class AppState {
                     let diarized = try await targetSpeakerDiarization.diarizeAndFilter(
                         audioData: segment.samples,
                         transcription: timedTranscription,
-                        profile: profile
+                        profile: profile,
+                        audioProcessingMode: audioProcessingMode
                     )
                     let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if diarized.acceptedWordCount > 0,
@@ -1319,7 +1356,8 @@ final class AppState {
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     candidate,
                     to: profile,
-                    store: self.targetSpeakerProfileStore
+                    store: self.targetSpeakerProfileStore,
+                    audioProcessingMode: self.audioProcessingMode
                 )
                 guard self.confirmationOperationID == operationID else { return }
                 self.targetSpeakerProfile = receipt.appendedProfile
@@ -1495,7 +1533,7 @@ final class AppState {
         lastError = nil
         audioEngine.startRecording(
             deviceUID: resolvedInputDeviceUID,
-            noiseSuppressionEnabled: noiseSuppressionEnabled,
+            audioProcessingMode: audioProcessingMode,
             levelCallback: { [weak self] rawLevel in
                 let rms = max(rawLevel, 0.0001)
                 let dB = 20 * log10(rms)
@@ -1611,7 +1649,8 @@ final class AppState {
                     let profile = try await self.targetSpeakerFilter.createProfile(
                         from: self.targetSpeakerEnrollmentRecordings,
                         store: self.targetSpeakerProfileStore,
-                        progressHandler: progressHandler
+                        progressHandler: progressHandler,
+                        audioProcessingMode: self.audioProcessingMode
                     )
                     guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                     self.targetSpeakerProfile = profile

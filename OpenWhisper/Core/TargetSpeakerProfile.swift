@@ -2,9 +2,12 @@ import Foundation
 import Security
 
 struct TargetSpeakerProfile: Codable, Equatable, Sendable {
-    // Version 2 profiles are enrolled from multiple speaking conditions (for example
-    // sitting and lying down), so an older one-condition profile must be re-enrolled.
-    static let currentSchemaVersion = 2
+    // Version 3 profiles also record the audio processing mode (`.off` / `.deepFilterNet` /
+    // `.appleVoiceProcessing`) active during enrollment. Switching modes changes the acoustic
+    // path feeding the embedding model, so a profile enrolled under one mode is not guaranteed
+    // to match audio captured under another; an older profile predates this field entirely and
+    // must be re-enrolled, just like the version-2 multi-condition bump before it.
+    static let currentSchemaVersion = 3
     static let expectedEmbeddingDimension = 256
 
     let schemaVersion: Int
@@ -12,9 +15,10 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
     let embeddings: [[Float]]
     let createdAt: Date
     let updatedAt: Date
+    let audioProcessingMode: AudioProcessingMode
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, modelIdentifier, embeddings, createdAt, updatedAt
+        case schemaVersion, modelIdentifier, embeddings, createdAt, updatedAt, audioProcessingMode
     }
 
     init(
@@ -22,6 +26,7 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         embeddings: [[Float]],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
+        audioProcessingMode: AudioProcessingMode = .off,
         schemaVersion: Int = TargetSpeakerProfile.currentSchemaVersion
     ) throws {
         guard schemaVersion == Self.currentSchemaVersion else {
@@ -38,6 +43,7 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         self.embeddings = embeddings
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.audioProcessingMode = audioProcessingMode
     }
 
     init(from decoder: Decoder) throws {
@@ -47,12 +53,17 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         let embeddings = try container.decode([[Float]].self, forKey: .embeddings)
         let createdAt = try container.decode(Date.self, forKey: .createdAt)
         let updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        // A pre-v3 profile has no `audioProcessingMode` key at all, so this throws
+        // `DecodingError.keyNotFound` for it -- caught by the store's generic decode catch
+        // (never a crash) and surfaced as "yeniden kayıt gerekli", same as any other corrupt profile.
+        let audioProcessingMode = try container.decode(AudioProcessingMode.self, forKey: .audioProcessingMode)
         do {
             self = try TargetSpeakerProfile(
                 modelIdentifier: modelIdentifier,
                 embeddings: embeddings,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
+                audioProcessingMode: audioProcessingMode,
                 schemaVersion: schemaVersion
             )
         } catch let error as TargetSpeakerProfileError {
@@ -64,8 +75,10 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         }
     }
 
-    func isCompatible(with modelIdentifier: String) -> Bool {
-        schemaVersion == Self.currentSchemaVersion && self.modelIdentifier == modelIdentifier
+    func isCompatible(with modelIdentifier: String, audioProcessingMode: AudioProcessingMode) -> Bool {
+        schemaVersion == Self.currentSchemaVersion
+            && self.modelIdentifier == modelIdentifier
+            && self.audioProcessingMode == audioProcessingMode
     }
 }
 
