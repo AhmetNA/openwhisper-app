@@ -234,9 +234,6 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     func stopRecording() -> [CompletedAudioSegment] {
-        let lastUID = configuredDeviceUID
-        let lastNoise = configuredNoiseSuppression ?? false
-
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         // Reset and release the AUAudioUnit / CoreAudio HAL claim so system output volume
@@ -244,6 +241,8 @@ final class AudioEngine: @unchecked Sendable {
         engine.reset()
         engine = AVAudioEngine()
         isEnginePrepared = false
+        configuredDeviceUID = nil
+        configuredNoiseSuppression = nil
         levelCallback = nil
 
         lock.lock()
@@ -268,11 +267,6 @@ final class AudioEngine: @unchecked Sendable {
         completedSegments.removeAll(keepingCapacity: false)
         leadingOverlapSampleCount = 0
         lock.unlock()
-
-        // Pre-warm background task right after stop so next press starts instantly
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.prewarm(deviceUID: lastUID, noiseSuppressionEnabled: lastNoise)
-        }
 
         return segments
     }

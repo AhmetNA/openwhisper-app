@@ -372,15 +372,6 @@ final class AppState {
         refreshInputDevices()
         owLog("[OpenWhisper] Input devices: \(availableInputDevices.count), default-is-BT: \(systemDefaultInputIsBluetooth)")
 
-        // Pre-warm audio engine in background for instant Fn key start
-        let initDeviceUID = resolvedInputDeviceUID
-        let initNoiseSuppression = noiseSuppressionEnabled
-        if let engine = audioEngine {
-            DispatchQueue.global(qos: .userInitiated).async {
-                engine.prewarm(deviceUID: initDeviceUID, noiseSuppressionEnabled: initNoiseSuppression)
-            }
-        }
-
         // Check accessibility
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)
         owLog("[OpenWhisper] Accessibility: \(accessibilityGranted)")
@@ -587,28 +578,32 @@ final class AppState {
         targetApp = NSWorkspace.shared.frontmostApplication
         owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
 
-        // 2. Start microphone recording via pre-warmed AudioEngine (< 2ms hardware start).
+        // 2. Start microphone recording asynchronously off main thread so main thread UI is never blocked
         let recordingInputDeviceUID = resolvedInputDeviceUID
         let noiseSuppression = noiseSuppressionEnabled
+        let audioEngineRef = audioEngine
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
-        audioEngine?.startRecording(
-            deviceUID: recordingInputDeviceUID,
-            noiseSuppressionEnabled: noiseSuppression,
-            levelCallback: { [weak self] rawLevel in
-                let rms = max(rawLevel, 0.0001)
-                let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
-                Task { @MainActor in
-                    guard let self else { return }
-                    let factor: Float = target > self.audioLevel ? 0.85 : 0.45
-                    self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
-                }
-            }
-        )
 
-        let tAudioDone = CACurrentMediaTime()
-        let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
-        owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            audioEngineRef?.startRecording(
+                deviceUID: recordingInputDeviceUID,
+                noiseSuppressionEnabled: noiseSuppression,
+                levelCallback: { rawLevel in
+                    let rms = max(rawLevel, 0.0001)
+                    let dB = 20 * log10(rms)
+                    let target = Float(min(max((dB + 48) / 48, 0.0), 1.0))
+                    Task { @MainActor in
+                        guard let self else { return }
+                        let factor: Float = target > self.audioLevel ? 0.85 : 0.45
+                        self.audioLevel = self.audioLevel + (target - self.audioLevel) * factor
+                    }
+                }
+            )
+
+            let tAudioDone = CACurrentMediaTime()
+            let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
+        }
 
         // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1
