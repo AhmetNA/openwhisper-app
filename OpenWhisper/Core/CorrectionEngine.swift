@@ -95,6 +95,88 @@ enum CorrectionEngine {
         tokenize(text).filter(\.isWord).map(\.text)
     }
 
+    // MARK: - Manual review: soft-anchored trim (Option+Shift+C, active-snapshot path)
+
+    /// The automatic path's diff guard requires the field's current text to match the ORIGINAL
+    /// prefix/suffix around the pasted span EXACTLY, bailing the instant anything around it also
+    /// changed (see `DictationSnapshot.diffAndLearn`'s `manual == false` branch). Manual review
+    /// relaxes exactly that guard — nothing else — by finding how much of `originalPrefix` still
+    /// matches the START of `currentText` and how much of `originalSuffix` still matches its END,
+    /// then returning the UTF-16 range of whatever's left in between: the actual candidate span
+    /// to diff the originally-pasted text against. `originalPrefix`/`originalSuffix` come from
+    /// the field's OWN state at paste time (`boxed.fieldTextAtPaste` sliced at `boxed.pastedRange`
+    /// in the caller) — this is a soft version of the same anchor the strict path already uses,
+    /// not a fallback to diffing the whole field blind.
+    ///
+    /// A cut is never allowed to land inside a word: `wordBoundaryBackoff`/`wordBoundaryAdvance`
+    /// pull it out to the nearest whole-word boundary first, so a partially-matched word can
+    /// never be sliced in half and manufacture a bogus substitution candidate out of nothing.
+    ///
+    /// If the two trims would overlap (nothing sensible left in between — e.g. the prefix and
+    /// suffix trims eat the whole string), returns the full range of `currentText` instead of a
+    /// corrupt one; callers should treat that the same as "no anchor found."
+    static func softAnchorRange(currentText: String, originalPrefix: String, originalSuffix: String) -> Range<Int> {
+        let fullRange = 0..<currentText.utf16.count
+
+        let commonPrefixLen = commonPrefixUTF16Length(currentText, originalPrefix)
+        let commonSuffixLen = commonSuffixUTF16Length(currentText, originalSuffix)
+
+        let start = wordBoundaryBackoff(commonPrefixLen, in: currentText)
+        let end = wordBoundaryAdvance(currentText.utf16.count - commonSuffixLen, in: currentText)
+
+        guard start <= end else { return fullRange }
+        return start..<end
+    }
+
+    /// UTF-16 length of the longest common prefix of `a` and `b`.
+    static func commonPrefixUTF16Length(_ a: String, _ b: String) -> Int {
+        let au = Array(a.utf16), bu = Array(b.utf16)
+        var i = 0
+        let limit = min(au.count, bu.count)
+        while i < limit, au[i] == bu[i] { i += 1 }
+        return i
+    }
+
+    /// UTF-16 length of the longest common suffix of `a` and `b`.
+    static func commonSuffixUTF16Length(_ a: String, _ b: String) -> Int {
+        let au = Array(a.utf16), bu = Array(b.utf16)
+        var i = 0
+        let limit = min(au.count, bu.count)
+        while i < limit, au[au.count - 1 - i] == bu[bu.count - 1 - i] { i += 1 }
+        return i
+    }
+
+    /// If UTF-16 offset `offset` in `text` falls strictly inside a word token (per `isWordChar`)
+    /// rather than at a token boundary, moves it back to the start of that word. Offsets at 0,
+    /// at `text.utf16.count`, or already sitting on a token boundary are returned unchanged.
+    static func wordBoundaryBackoff(_ offset: Int, in text: String) -> Int {
+        guard offset > 0, offset < text.utf16.count else { return offset }
+        let charIdx = String.Index(utf16Offset: offset, in: text)
+        guard charIdx > text.startIndex, charIdx < text.endIndex else { return offset }
+        let prevIdx = text.index(before: charIdx)
+        guard isWordChar(text[prevIdx]), isWordChar(text[charIdx]) else { return offset }
+        var wordStart = charIdx
+        while wordStart > text.startIndex, isWordChar(text[text.index(before: wordStart)]) {
+            wordStart = text.index(before: wordStart)
+        }
+        return wordStart.utf16Offset(in: text)
+    }
+
+    /// Mirror of `wordBoundaryBackoff` for the trailing cut: moves forward to the end of the
+    /// word instead of back to its start.
+    static func wordBoundaryAdvance(_ offset: Int, in text: String) -> Int {
+        guard offset > 0, offset < text.utf16.count else { return offset }
+        let charIdx = String.Index(utf16Offset: offset, in: text)
+        guard charIdx > text.startIndex, charIdx < text.endIndex else { return offset }
+        let prevIdx = text.index(before: charIdx)
+        guard isWordChar(text[prevIdx]), isWordChar(text[charIdx]) else { return offset }
+        var wordEnd = charIdx
+        while wordEnd < text.endIndex, isWordChar(text[wordEnd]) {
+            wordEnd = text.index(after: wordEnd)
+        }
+        return wordEnd.utf16Offset(in: text)
+    }
+
     // MARK: - Levenshtein similarity
 
     static func levenshtein(_ a: String, _ b: String) -> Int {
@@ -170,9 +252,12 @@ enum CorrectionEngine {
         let right: String
     }
 
-    /// Walk the LCS alignment and collect true substitutions plus the supported compound-word
-    /// merge shape (two old words becoming one new word). Insertions/deletions, split words,
-    /// and longer rewrites are NOT candidates at all (discarded here, not later).
+    /// Walk the LCS alignment and collect true substitutions plus the two supported compound
+    /// reshaping shapes: a merge (two old words becoming one new word, e.g. "her şey" ->
+    /// "herşey") and its mirror, a split (one old word becoming two new words, e.g. "Komitat"
+    /// -> "commit at" — Whisper mishearing an English term as one word glued to a Turkish
+    /// suffix). Insertions/deletions and longer rewrites are NOT candidates at all (discarded
+    /// here, not later).
     static func substitutionCandidates(oldWords: [String], newWords: [String]) -> [RawSubstitution] {
         let matches = lcsMatches(oldWords, newWords)
         var candidates: [RawSubstitution] = []
@@ -182,7 +267,8 @@ enum CorrectionEngine {
             let newLen = newEnd - newStart
             let isSameWordCount = oldLen == newLen && oldLen >= 1 && oldLen <= 3
             let isCompoundMerge = oldLen == 2 && newLen == 1
-            guard isSameWordCount || isCompoundMerge else { return }
+            let isCompoundSplit = oldLen == 1 && newLen == 2
+            guard isSameWordCount || isCompoundMerge || isCompoundSplit else { return }
             let wrong = oldWords[oldStart..<oldEnd].joined(separator: " ")
             let right = newWords[newStart..<newEnd].joined(separator: " ")
             guard wrong != right else { return }
@@ -205,19 +291,87 @@ enum CorrectionEngine {
     /// correction — without this, one careless edit (e.g. "bir" → "bin" while fixing an
     /// unrelated typo nearby) would silently corrupt every future transcript that contains
     /// the word "bir".
+    ///
+    /// Also doubles as the "protected real word" list for `applyCorrections`'s suffix-symmetric
+    /// matching (see `isProtectedWrongSide`): a learned pair whose root is a common real
+    /// Turkish/English word must never fire on that word's own inflected forms (e.g. a stray
+    /// "kafes" -> "kafe" pair must not rewrite "kafeste"), even if `allowSuffixMatching` is set.
+    /// Expanded well beyond short function words to cover common everyday vocabulary (verb
+    /// roots, everyday nouns, pronouns, conjunctions, numbers) precisely so that surface. This
+    /// intentionally makes `accept` more selective for anything that touches these words.
     static let blacklist: Set<String> = [
-        // Turkish
-        "bir", "bin", "ve", "de", "da", "ile", "için", "bu", "şu", "o", "ben", "sen", "biz",
-        "siz", "onlar", "ne", "mi", "mı", "mu", "mü", "ki", "ya", "ama", "fakat", "çok", "az",
-        "var", "yok", "gibi", "kadar", "ise", "her", "hiç", "daha", "en", "ki", "ise", "hem",
-        "ben", "sana", "bana", "onu", "ona", "beni", "seni", "diye", "olan", "olarak",
+        // Turkish — pronouns / determiners
+        "bir", "bin", "bu", "şu", "o", "ben", "sen", "biz", "siz", "onlar", "bunu", "şunu",
+        "onu", "buna", "şuna", "ona", "bunda", "şunda", "onda", "bundan", "şundan", "ondan",
+        "kendi", "kendim", "kendin", "kendisi", "kendimiz", "kendiniz", "kendileri",
+        "hangi", "kim", "kime", "kimi", "kimin", "kimden", "ne", "neyi", "neye", "neyden",
+        "nerede", "nereye", "nereden", "biri", "birisi", "birileri", "herkes", "hiçkimse",
+        "hiçbiri", "çoğu", "bazı", "bazısı", "tümü", "hepsi", "böyle", "şöyle", "öyle",
+        "beni", "seni", "bizi", "sizi", "onları", "bana", "sana", "bize", "size", "onlara",
+        // Turkish — conjunctions / particles / question words
+        "ve", "veya", "ya", "ama", "fakat", "ancak", "lakin", "çünkü", "zira", "ki", "de", "da",
+        "ile", "veyahut", "oysa", "halbuki", "üstelik", "ayrıca", "yine", "hem", "gerek",
+        "ister", "meğer", "işte", "tabii", "sanki", "güya", "mademki", "madem", "eğer", "şayet",
+        "için", "mi", "mı", "mu", "mü", "diye", "olan", "olarak", "kadar", "gibi", "ise",
+        // Turkish — adverbs / common function-ish words
+        "çok", "az", "var", "yok", "hiç", "daha", "en", "her", "bütün", "tüm", "birçok",
+        "birkaç", "hemen", "şimdi", "sonra", "önce", "artık", "hâlâ", "hala", "belki", "mutlaka",
+        "kesinlikle", "galiba", "sadece", "yalnız", "yalnızca", "bile", "dahi", "üzere",
+        // Turkish — numbers
+        "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz", "on", "yirmi", "otuz",
+        "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan", "yüz", "milyon", "milyar",
+        "sıfır", "birinci", "ikinci", "üçüncü", "dördüncü", "beşinci", "altıncı", "yedinci",
+        "sekizinci", "dokuzuncu", "onuncu",
+        // Turkish — common verb roots / everyday verbs (incl. forms mentioned in the bug report)
+        "git", "gel", "yap", "et", "ol", "al", "ver", "gör", "bil", "iste", "söyle", "konuş",
+        "anla", "dur", "kalk", "otur", "yürü", "koş", "bak", "dinle", "oku", "yaz", "çalış",
+        "uyu", "başla", "bitir", "aç", "kapat", "gir", "çık", "düş", "kaldır", "koy", "bırak",
+        "tut", "çek", "it", "dön", "geç", "kaç", "sakla", "bul", "kaybet", "sev", "sevin",
+        "üzül", "kır", "kırıl", "yıkıl", "yık", "kur", "kurul", "gönder", "getir", "götür",
+        "düşün", "unut", "hatırla", "izle", "seyret", "oyna", "kazan", "kaybet", "sat", "satın",
+        "öde", "harca", "biriktir", "temizle", "kirlet", "yıka", "kurut", "pişir", "ye", "iç",
+        "uyan", "yat", "kalk", "koş", "atla", "düzelt", "düzeldi", "düzelmek", "düzeltmek",
+        "bozul", "bozuldu", "bozmak", "kırıldı", "yandı", "söndü", "yak", "söndür",
+        // Turkish — everyday nouns
+        "ev", "araba", "yol", "gün", "gece", "sabah", "akşam", "öğle", "hafta", "ay", "yıl",
+        "saat", "dakika", "saniye", "zaman", "yer", "şehir", "ülke", "dünya", "insan", "adam",
+        "kadın", "çocuk", "anne", "baba", "kardeş", "arkadaş", "aile", "iş", "okul", "ders",
+        "kitap", "kalem", "masa", "sandalye", "kapı", "pencere", "oda", "mutfak", "banyo",
+        "bahçe", "park", "market", "dükkan", "mağaza", "hastane", "doktor", "öğretmen",
+        "öğrenci", "para", "kart", "telefon", "bilgisayar", "internet", "su", "ekmek", "yemek",
+        "çay", "kahve", "süt", "et", "sebze", "meyve", "elma", "armut", "kafe", "kafes", "çete",
+        "komite", "host", "misafir", "ziyaretçi", "patron", "müdür", "şirket", "ofis", "toplantı",
+        "proje", "rapor", "sorun", "problem", "çözüm", "fikir", "plan", "hedef", "başarı",
+        "hata", "yanlış", "doğru", "güzel", "kötü", "büyük", "küçük", "uzun", "kısa", "yeni",
+        "eski", "genç", "yaşlı", "sıcak", "soğuk", "hızlı", "yavaş", "kolay", "zor", "ucuz",
+        "pahalı", "temiz", "kirli", "açık", "kapalı", "dolu", "boş", "sağ", "sol", "yukarı",
+        "aşağı", "içeri", "dışarı", "üst", "alt", "ön", "arka", "yan", "orta", "köşe", "kenar",
+        "sokak", "cadde", "meydan", "köy", "mahalle", "il", "ilçe", "deniz", "göl", "nehir",
+        "dağ", "orman", "hava", "yağmur", "kar", "rüzgar", "güneş", "ay", "yıldız", "gökyüzü",
+        "renk", "kırmızı", "mavi", "yeşil", "sarı", "siyah", "beyaz", "mor", "pembe", "gri",
+        "para", "banka", "hesap", "kredi", "borç", "gelir", "gider", "fiyat", "indirim",
         // English
         "the", "a", "an", "is", "to", "of", "in", "on", "at", "it", "and", "or", "but", "so",
-        "for", "with", "as", "by", "be", "am", "are", "was", "were", "this", "that", "i", "you"
+        "for", "with", "as", "by", "be", "am", "are", "was", "were", "this", "that", "i", "you",
+        "he", "she", "we", "they", "them", "his", "her", "its", "our", "your", "their", "not",
+        "no", "yes", "if", "then", "than", "when", "where", "what", "who", "why", "how",
+        "there", "here", "up", "down", "out", "over", "under", "again", "just", "only", "very",
+        "can", "will", "would", "could", "should", "do", "does", "did", "have", "has", "had",
+        "go", "goes", "went", "get", "gets", "got", "make", "makes", "made", "take", "takes",
+        "took", "come", "comes", "came", "see", "sees", "saw", "know", "knows", "knew",
+        "day", "time", "year", "week", "month", "people", "man", "woman", "child", "work",
+        "life", "world", "school", "house", "car", "food", "water", "money", "book", "phone",
     ]
 
     static func containsBlacklistedWrongWord(_ phrase: String) -> Bool {
         phrase.split(separator: " ").contains { blacklist.contains(trLower(String($0))) }
+    }
+
+    /// Public gate used by `CorrectionStore` (and by `applyCorrections`'s suffix-symmetric
+    /// matching below) to check whether a single word is a protected real word that a learned
+    /// correction's "wrong" side must never be allowed to shadow.
+    static func isProtectedWrongSide(_ word: String) -> Bool {
+        blacklist.contains(trLower(word))
     }
 
     // MARK: - Acceptance filters
@@ -229,43 +383,169 @@ enum CorrectionEngine {
 
     /// Runs every acceptance filter from the spec. Returns nil if the candidate should be
     /// discarded (never learned); otherwise returns the (still full-inflected) accepted pair.
+    /// Thin wrapper over `acceptWithReason` — kept so no existing call site or test needs to
+    /// change when a rejection reason is needed for diagnostics (see `acceptWithReason`).
     static func accept(_ raw: RawSubstitution) -> Candidate? {
+        acceptWithReason(raw).candidate
+    }
+
+    /// Same acceptance logic as `accept`, but also reports WHY a candidate was rejected —
+    /// purely for diagnostics/logging (`DictationSnapshot.diffAndLearn`), so a "0 accepted"
+    /// log line can say which filter fired instead of leaving the operator to guess.
+    /// Reasons: "ok", "caseOrPunctuationOnly", "wordShorterThan2", "blacklistedWrongSide",
+    /// "phraseTooLong", "lowSimilarity(0.42)".
+    static func acceptWithReason(_ raw: RawSubstitution) -> (candidate: Candidate?, reason: String) {
         let wrong = raw.wrong
         let right = raw.right
 
         let wrongWords = wrong.split(separator: " ").map(String.init)
         let rightWords = right.split(separator: " ").map(String.init)
         let isCompoundMerge = wrongWords.count == 2 && rightWords.count == 1
+        let isCompoundSplit = wrongWords.count == 1 && rightWords.count == 2
 
         // Case-only or punctuation-only difference — LLM cleanup already handles that.
-        if trLower(wrong) == trLower(right) { return nil }
+        if trLower(wrong) == trLower(right) { return (nil, "caseOrPunctuationOnly") }
         let stripPunct: (String) -> String = { s in
             String(s.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) })
         }
-        // For a compound merge, whitespace is the actual semantic difference, so it must not
-        // be mistaken for punctuation-only noise by the normalized comparison below.
-        if !isCompoundMerge, trLower(stripPunct(wrong)) == trLower(stripPunct(right)) { return nil }
+        // For a compound merge/split, whitespace is the actual semantic difference (e.g.
+        // "Komitat" vs "commit at" strip-punct-equal to "komitat"/"commitat" only if you ignore
+        // the space, which IS the correction), so it must not be mistaken for punctuation-only
+        // noise by the normalized comparison below.
+        if !isCompoundMerge, !isCompoundSplit, trLower(stripPunct(wrong)) == trLower(stripPunct(right)) {
+            return (nil, "caseOrPunctuationOnly")
+        }
 
         // Word-length floor: any individual word under 2 chars kills the whole candidate.
         guard wrongWords.allSatisfy({ $0.count >= 2 }), rightWords.allSatisfy({ $0.count >= 2 }) else {
-            return nil
+            return (nil, "wordShorterThan2")
         }
 
         // Blacklist: common short words may never sit on the "wrong" side.
-        // A compound phrase is not a standalone occurrence of any one word, so allow common
-        // components such as "her şey" or "bir çok" to be learned as a single compound.
+        // A compound MERGE's wrong side is not a standalone occurrence of any one word, so
+        // allow common components such as "her şey" or "bir çok" to be learned as a single
+        // compound. A compound SPLIT's wrong side, in contrast, IS a single standalone word
+        // (e.g. "Komitat"), so the ordinary blacklist protection must stay in force — otherwise
+        // a stray edit near a common word (e.g. "et" -> "e t") could corrupt every future
+        // occurrence of that word.
         if !isCompoundMerge {
-            guard !wrongWords.contains(where: { blacklist.contains(trLower($0)) }) else { return nil }
+            guard !wrongWords.contains(where: { blacklist.contains(trLower($0)) }) else {
+                return (nil, "blacklistedWrongSide")
+            }
         }
 
-        // 1-3 word phrase cap for ordinary substitutions; compound merges are exactly 2 -> 1.
-        guard (wrongWords.count >= 1 && wrongWords.count <= 3) || isCompoundMerge else { return nil }
+        // 1-3 word phrase cap for ordinary substitutions; compound merges are exactly 2 -> 1
+        // and compound splits are exactly 1 -> 2 (both already satisfy wrongWords.count <= 3,
+        // spelled out explicitly here for clarity/symmetry with isCompoundMerge).
+        guard (wrongWords.count >= 1 && wrongWords.count <= 3) || isCompoundMerge || isCompoundSplit else {
+            return (nil, "phraseTooLong")
+        }
 
-        // Similarity floor: normalized Levenshtein distance <= 0.4 (similarity >= 0.6).
-        // A full rewrite of the phrase (different wording, not a mishearing) fails this.
-        guard normalizedSimilarity(wrong, right) >= 0.6 else { return nil }
+        // Similarity floor: normally 0.6 (normalized Levenshtein distance <= 0.4). A full
+        // rewrite of the phrase (different wording, not a mishearing) fails this.
+        //
+        // The floor drops to `relaxedSimilarityFloor` when the two sides share a real leading
+        // stretch — see `sharedOnsetLength`. Whisper decodes left to right, so a misheard
+        // technical term usually keeps the START of the word and mangles the tail; the plain
+        // normalized distance punishes exactly that shape on short words. Live case that forced
+        // this: "gitap" -> "github" scores 0.50 and was refused even though the user had
+        // explicitly typed the fix and pressed Option+Shift+C twice ("git ha" -> "github" is the
+        // same 0.50). Every harmful substitution this project has recorded fails the onset test
+        // and is therefore untouched by the relaxation: "kitaba"/"GitLab'a" and "kışla"/"pushla"
+        // share nothing, "tekrardan"/"Terra'dan" shares only 2.
+        let similarity = normalizedSimilarity(wrong, right)
+        let onset = sharedOnsetLength(wrong, right)
+        let lengthGap = abs(wrong.count - right.count)
+        // A mishearing is roughly as long as what was actually said. Without this second gate
+        // the onset rule alone lets a genuine rewrite through on nothing but a shared stem:
+        // "kitaplar" -> "kitapçıklarımızdan" shares a 5-character onset and scores 0.44, which
+        // clears the relaxed floor while being obviously not a mishearing. Caught by a test that
+        // was written expecting a rejection and initially failed.
+        let relaxed = onset >= minSharedOnsetForRelaxedSimilarity
+            && lengthGap <= maxLengthGapForRelaxedSimilarity
+        let floor = relaxed ? relaxedSimilarityFloor : defaultSimilarityFloor
+        guard similarity >= floor else {
+            return (nil, "lowSimilarity(\(String(format: "%.2f", similarity)), floor \(String(format: "%.2f", floor)), onset \(onset), lengthGap \(lengthGap))")
+        }
 
-        return Candidate(wrong: wrong, right: right)
+        return (Candidate(wrong: wrong, right: right), "ok")
+    }
+
+    static let defaultSimilarityFloor = 0.6
+    static let relaxedSimilarityFloor = 0.4
+    static let minSharedOnsetForRelaxedSimilarity = 3
+    static let maxLengthGapForRelaxedSimilarity = 3
+
+    /// Length of the common leading run of `a` and `b` (Turkish-aware lowercase), but **0
+    /// whenever one side is a pure prefix of the other**.
+    ///
+    /// That exclusion is the whole safety of the relaxed floor. "git" -> "github" shares a
+    /// 3-character onset, yet it is an EXTENSION, not a mishearing: learning it would rewrite
+    /// every future occurrence of the standalone word. Only pairs that share an onset and then
+    /// genuinely diverge ("gitap" / "github" — common "git", then "ap" vs "hub") describe the
+    /// left-to-right decoding error the relaxation exists for.
+    static func sharedOnsetLength(_ a: String, _ b: String) -> Int {
+        let la = Array(trLower(a))
+        let lb = Array(trLower(b))
+        var n = 0
+        while n < la.count, n < lb.count, la[n] == lb[n] { n += 1 }
+        if n == la.count || n == lb.count { return 0 }
+        return n
+    }
+
+    // MARK: - Shared Turkish suffix list
+
+    /// Turkish inflectional suffixes, longest first so a longer real suffix isn't shadowed by
+    /// a shorter one that happens to be a substring. Single source of truth shared by
+    /// `PhoneticGlossaryCorrector` (one-shot single-suffix stripping — see its
+    /// `candidateSuffixes` alias, behavior there is unchanged by this move) and by
+    /// `applyCorrections`'s suffix-symmetric matching below.
+    static let turkishSuffixes: [String] = [
+        "lamak", "lemek", "ladım", "ledim", "ladık", "ledik", "ladı", "ledi",
+        "luyorum", "lüyorum", "luyor", "lüyor", "ları", "leri",
+        "dan", "den", "tan", "ten", "nın", "nin", "nun", "nün",
+        "da", "de", "ta", "te", "la", "le", "a", "e", "ı", "i", "u", "ü",
+    ].sorted { $0.count > $1.count }
+
+    /// Extra morphemes needed ONLY to decompose a CHAIN of several suffixes stacked on one
+    /// root (e.g. "komitindeki" = komit + in/nde + ki), which `turkishSuffixes` alone can't
+    /// do because it only strips a single suffix. Kept separate — never folded into
+    /// `turkishSuffixes` — so `PhoneticGlossaryCorrector`'s one-shot matching is provably
+    /// unaffected by this addition; only `matchSuffixChain` below sees it.
+    private static let chainOnlyExtraSuffixes: [String] = [
+        "ki", "nde", "nda", "in", "ın", "un", "ün", "ler", "lar", "si", "sı", "su", "sü",
+    ]
+
+    private static let suffixChainCandidates: [String] =
+        (turkishSuffixes + chainOnlyExtraSuffixes).sorted { $0.count > $1.count }
+
+    /// Minimum learned-root length to trust suffix-symmetric matching in `applyCorrections`.
+    /// Mirrors `PhoneticGlossaryCorrector.minRootLengthForBareMatch` (also 4) — same rationale:
+    /// below this, a bare-letter/short-suffix strip collides too easily with unrelated real
+    /// Turkish words (e.g. "çet" -> "çete" must NOT be treated as "çet" + "e").
+    static let minRootLengthForSuffixMatch = 4
+
+    /// Attempts to reduce `token` down to `root` by repeatedly stripping known Turkish
+    /// suffixes off its end (longest match first, case-insensitive), so a learned root
+    /// correction fires on any inflected form ("komitindeki", "komiti", ...) and not just the
+    /// one exact form the user happened to correct. Returns the ORIGINAL-cased tail (the part
+    /// of `token` after the root) if a chain of at most `maxStrips` suffixes fully reduces the
+    /// token to `root`; nil otherwise (including when `token` doesn't even start with `root`).
+    static func matchSuffixChain(token: String, root: String, maxStrips: Int = 3) -> String? {
+        guard token.count > root.count, trLower(token).hasPrefix(root) else { return nil }
+        var remaining = trLower(token)
+        var strips = 0
+        while remaining.count > root.count, strips < maxStrips {
+            guard let suffix = suffixChainCandidates.first(where: {
+                remaining.hasSuffix($0) && remaining.count - $0.count >= root.count
+            }) else {
+                return nil
+            }
+            remaining.removeLast(suffix.count)
+            strips += 1
+        }
+        guard remaining == root else { return nil }
+        return String(token.suffix(token.count - root.count))
     }
 
     // MARK: - Turkish agglutination: root extraction
@@ -332,6 +612,13 @@ enum CorrectionEngine {
     struct LearnedPair {
         let wrong: String   // root, stored lowercase (tr)
         let right: String   // root, stored with its "canonical" casing as first learned
+        /// Opt-in: when true, `applyCorrections` may match this pair against ANY Turkish-
+        /// suffixed form of `wrong` via `matchSuffixChain` (e.g. "komitindeki", "komiti"), not
+        /// just an exact or apostrophe-suffixed token. Defaults to false so existing call sites
+        /// that only supply wrong/right keep compiling and stay on the safe, exact-match-only
+        /// behavior. Intended to be set true by `CorrectionStore` once a pair has accumulated
+        /// enough confirmed occurrences to trust the looser match.
+        var allowSuffixMatching: Bool = false
     }
 
     /// Reproduce the case pattern of `original` onto `replacement`:
@@ -410,6 +697,38 @@ enum CorrectionEngine {
                 applied.append((pair.wrong, pair.right))
                 didApply = true
                 break
+            }
+
+            // Second, strictly-lower-priority pass: suffix-symmetric (chain) matching for
+            // pairs opted into it, tried ONLY when no exact/apostrophe/phrase match fired
+            // above. Kept as a separate pass (not interleaved into the loop above) so a long
+            // suffix-matching pair can never preempt a shorter exact match. Restricted to
+            // tokens with no apostrophe — the apostrophe path above already owns those.
+            if !didApply, lastApostropheIndex(tokens[i].text) == nil {
+                let token = tokens[i].text
+                for pair in sortedPairs {
+                    guard pair.allowSuffixMatching,
+                          words(pair.wrong).count == 1,
+                          // A learned compound SPLIT (wrong: one word, right: multiple words,
+                          // e.g. "komitat" -> "commit at") must NOT go through suffix-chain
+                          // matching: the stripped tail would get glued onto only the LAST word
+                          // of the replacement phrase (e.g. "Komitatı" -> "Commit atı"), which
+                          // is not a valid inflection of anything — the suffix belongs to the
+                          // whole original word, not to one word of its multi-word replacement.
+                          // Exact/apostrophe matching above already handles split pairs fine;
+                          // only this looser opt-in chain path needs the extra restriction.
+                          words(pair.right).count == 1,
+                          pair.wrong.count >= minRootLengthForSuffixMatch,
+                          !isProtectedWrongSide(pair.wrong),
+                          let tail = matchSuffixChain(token: token, root: pair.wrong)
+                    else { continue }
+                    let rootPortion = String(token.prefix(token.count - tail.count))
+                    let replacedRoot = matchCase(of: rootPortion, applyTo: pair.right)
+                    tokens[i] = Token(text: replacedRoot + tail, isWord: true)
+                    applied.append((pair.wrong, pair.right))
+                    didApply = true
+                    break
+                }
             }
 
             // Move beyond a replacement so a learned result cannot be immediately reprocessed

@@ -456,6 +456,18 @@ final class AppState {
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)
         owLog("[OpenWhisper] Accessibility: \(accessibilityGranted)")
 
+        // Manual correction review (Option+Shift+C) feedback: DictationSnapshot deliberately
+        // has no AppState/AppKit dependency, so it reports outcomes through a plain closure
+        // instead. Duration varies by message — the "nothing happened" messages are shorter
+        // than the ones confirming something was actually learned or explicitly rejected.
+        DictationSnapshot.shared.onManualReviewResult = { [weak self] message in
+            let shortMessages: Set<String> = [
+                "karşılaştırılacak dikte yok", "değişiklik yok", "uygun düzeltme bulunamadı", "metin okunamadı"
+            ]
+            let durationMs = shortMessages.contains(message) ? 2000 : 2500
+            self?.showFlowBarMessage(message, durationMs: durationMs)
+        }
+
         // Register global hotkey
         hotkey = GlobalHotkey(
             onPress: { [weak self] in
@@ -1178,6 +1190,12 @@ final class AppState {
             let rawText = trimmed
             var initialText = rawText
 
+            // Tracks which learned pairs actually fired for THIS dictation, so the paste
+            // callback below can hand them to DictationSnapshot.capture for reversal detection.
+            // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
+            // below) — that corrector has no corresponding CorrectionStore record to penalize.
+            var appliedCorrectionPairs: [(wrong: String, right: String)] = []
+
             let activePairs = CorrectionStore.shared.activePairs
             if !activePairs.isEmpty {
                 let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
@@ -1186,6 +1204,8 @@ final class AppState {
                     for (wrong, right) in applied {
                         owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
                     }
+                    CorrectionStore.shared.recordApplied(pairs: applied)
+                    appliedCorrectionPairs = applied
                 }
             }
 
@@ -1220,7 +1240,8 @@ final class AppState {
                             self.hotkey?.setSwapAvailable(true)
                             DictationSnapshot.shared.capture(
                                 pastedText: initialText,
-                                targetApp: targetApp
+                                targetApp: targetApp,
+                                appliedPairs: appliedCorrectionPairs
                             )
 
                             self.dismissFlowBarMessage()
@@ -1249,6 +1270,20 @@ final class AppState {
                                             self.lastInjectedText = trimmedCleaned
                                             self.textInjector?.copyToClipboard(rawText)
                                             self.showFlowBarMessage("fixed", durationMs: 1000)
+                                            // The field now holds the LLM-cleaned text, not what
+                                            // was captured at the raw paste above — without this,
+                                            // every later diff compares raw-vs-cleaned and can
+                                            // learn the LLM's own edits as if the user made them.
+                                            // `capture` re-runs the same suppressNextCapture check
+                                            // as the original call (see `install`), so an
+                                            // intervening Option+Z swap still correctly discards
+                                            // this recapture instead of resurrecting a snapshot
+                                            // for text the user already threw away.
+                                            DictationSnapshot.shared.capture(
+                                                pastedText: trimmedCleaned,
+                                                targetApp: targetApp,
+                                                appliedPairs: appliedCorrectionPairs
+                                            )
                                             owLog("[OpenWhisper] Async LLM replacement finished.")
                                         }
                                     }

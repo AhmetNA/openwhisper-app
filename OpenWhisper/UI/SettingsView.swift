@@ -974,6 +974,10 @@ struct CorrectionsManagementView: View {
     @ViewBuilder
     private func correctionRow(_ record: CorrectionStore.Record) -> some View {
         let store = CorrectionStore.shared
+        // An active record that has never actually fired is effectively dead weight — flag it
+        // with the same orange accent already used for "needs attention" elsewhere in this
+        // section (see the pending-approvals badge above) so it's easy to spot in the list.
+        let neverApplied = record.status == .active && record.appliedCount == 0
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
@@ -988,9 +992,12 @@ struct CorrectionsManagementView: View {
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.primary)
                 }
-                Text("\(record.count)x gözlemlendi • \(statusText(record.status))")
+                Text("\(record.count) kez görüldü • \(record.appliedCount) kez uygulandı • \(statusText(record.status))")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    // `.orange` is a Color and `.tertiary` is a HierarchicalShapeStyle — the two
+                    // ternary branches don't unify under plain `some ShapeStyle` inference, so
+                    // both sides must be type-erased to the same AnyShapeStyle.
+                    .foregroundStyle(neverApplied ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tertiary))
             }
 
             Spacer()

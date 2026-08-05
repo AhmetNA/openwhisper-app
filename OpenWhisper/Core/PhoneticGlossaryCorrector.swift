@@ -7,18 +7,16 @@ import Foundation
 /// Pure string matching, no model call — runs on the fast path in `initialText` alongside
 /// `CorrectionEngine.applyCorrections`, independent of Ollama. Deliberately conservative:
 /// unlike the learned-correction store, nothing here is user-confirmed, so a match is only
-/// applied when it's either exact (after phonetic normalization) or long+unambiguous enough
-/// that a false positive is unlikely.
+/// applied when it's exact (after phonetic normalization). A fuzzy fallback used to run here
+/// too; it was measured and removed — see the comment on `disabledFuzzyMatch(for:in:)` below.
 enum PhoneticGlossaryCorrector {
 
     /// Candidate Turkish suffixes to try stripping from a word's end, longest first so a
     /// longer real suffix isn't shadowed by a shorter one that happens to be a substring.
-    private static let candidateSuffixes: [String] = [
-        "lamak", "lemek", "ladım", "ledim", "ladık", "ledik", "ladı", "ledi",
-        "luyorum", "lüyorum", "luyor", "lüyor", "ları", "leri",
-        "dan", "den", "tan", "ten", "nın", "nin", "nun", "nün",
-        "da", "de", "ta", "te", "la", "le", "a", "e", "ı", "i", "u", "ü",
-    ].sorted { $0.count > $1.count }
+    /// Shared with `CorrectionEngine.applyCorrections`'s suffix-symmetric matching (see
+    /// `CorrectionEngine.turkishSuffixes`) so both sides agree on what counts as a Turkish
+    /// inflectional ending — this is a plain alias, behavior here is unchanged.
+    private static let candidateSuffixes: [String] = CorrectionEngine.turkishSuffixes
 
     /// Turkish-orthography approximations of English sounds that have no direct Latin
     /// letter, mapped back toward English spelling. Applied only to the candidate word —
@@ -35,9 +33,10 @@ enum PhoneticGlossaryCorrector {
         return result
     }
 
-    /// Below this stripped-root length, only an exact (post-normalization) match is trusted —
-    /// short roots collide too easily with unrelated Turkish words for an unconfirmed fuzzy
-    /// automatic rewrite to be safe.
+    /// No longer read by the live matching path (the fuzzy fallback that used them was
+    /// disabled — see `disabledFuzzyMatch(for:in:)`). Left in place, still referenced by that
+    /// function's dead code, so re-enabling is a one-line change if ever revisited; removing
+    /// them would mean reconstructing these values from scratch instead.
     private static let minFuzzyRootLength = 5
     private static let fuzzySimilarityThreshold = 0.65
     /// Minimum root length to trust an exact (post-normalization) match when no ş/ç/ğ/ı
@@ -63,6 +62,13 @@ enum PhoneticGlossaryCorrector {
     /// `.ambiguous` is distinct from `.none`: it means the root DID connect to the glossary,
     /// just not to a single term confidently. Callers must treat that as a stop signal, not
     /// fall through to a less precise root guess (see `correctWord`).
+    ///
+    /// `.ambiguous` was only ever produced by the fuzzy-fallback branch, now disabled (see
+    /// `disabledFuzzyMatch(for:in:)`) — `bestMatch` itself no longer returns it. The case, and
+    /// `correctWord`'s handling of it, are kept rather than removed: `disabledFuzzyMatch` still
+    /// returns it in its dead code, and the early-exit in `correctWord` is cheap insurance if
+    /// the fuzzy path is ever reinstated (dropping it now would just mean re-deriving the same
+    /// "don't fall through past ambiguous" protection later).
     private enum MatchResult {
         case found(String)
         case ambiguous
@@ -73,22 +79,75 @@ enum PhoneticGlossaryCorrector {
         let normalizedRoot = phoneticNormalize(root)
         let hadPhoneticSubstitution = normalizedRoot != root.lowercased()
 
-        // 1. Exact match after phonetic normalization. Trusted at any length when a real
-        // ş/ç/ğ/ı substitution fired (a strong signal this is a Turkish transliteration, not
-        // an ordinary short Turkish word) — otherwise only at minRootLengthForBareMatch, since
-        // several glossary terms happen to collide with common Turkish word stems verbatim
-        // (e.g. "Bun" the JS runtime vs. "bun" in "bunu"/"buna"; "Git" vs. the verb "git").
+        // Exact match after phonetic normalization is the ONLY matching strategy now — this
+        // used to be step 1 of 2, with a fuzzy-distance fallback as step 2. The fallback was
+        // measured against real logged corrections and removed; see `disabledFuzzyMatch(for:in:)`
+        // immediately below for the data and reasoning.
+        //
+        // Trusted at any length when a real ş/ç/ğ/ı substitution fired (a strong signal this is
+        // a Turkish transliteration, not an ordinary short Turkish word) — otherwise only at
+        // minRootLengthForBareMatch, since several glossary terms happen to collide with common
+        // Turkish word stems verbatim (e.g. "Bun" the JS runtime vs. "bun" in "bunu"/"buna";
+        // "Git" vs. the verb "git").
         if let exact = terms.first(where: { $0.lowercased() == normalizedRoot }) {
             return (hadPhoneticSubstitution || root.count >= minRootLengthForBareMatch) ? .found(exact) : .none
         }
+        return .none
+    }
 
-        // 2. Fuzzy fallback — gated by root length, to catch cases phonetic substitution
-        // alone can't (e.g. a dropped mid-word letter, "gitab" for "GitHub"). Rejected outright
-        // if MORE THAN ONE glossary term clears the threshold: with sibling terms present
-        // (GitHub/GitLab, push/pull), edit distance alone can't tell which one is right, and a
-        // confident wrong guess (silently rewriting GitHub as GitLab) is worse than no
-        // correction at all.
+    /// DISABLED. Not called from `bestMatch` or anywhere else — kept, uncalled, as a record of
+    /// what was tried and why it was rejected, following the same pattern as
+    /// `WhisperTranscriber.maxGlossaryPromptTokens`'s glossary-prompt-conditioning writeup
+    /// (WhisperTranscriber.swift:76-132) and its disabled call site (WhisperTranscriber.swift
+    /// ~269-290): empirical verdict first, mechanism preserved for anyone tempted to re-add it.
+    ///
+    /// EMPIRICAL VERDICT: this fuzzy fallback did more harm than good. Extracted from live usage
+    /// logs (`/tmp/openwhisper.log`), every one of the 22 corrections this corrector fired broke
+    /// down as follows.
+    ///
+    /// Harmful (7 cases, ALL via this fuzzy branch — none were exact matches):
+    ///   - "kitaba" -> "GitLab'a" (x3) — "kitaba" is an ordinary Turkish word (root/term
+    ///     distance 2, similarity 0.67, no phonetic substitution involved)
+    ///   - "tekrardan" -> "Terra'dan" — ordinary Turkish word (distance 2, similarity 0.67)
+    ///   - "basınca" -> "async'a" — ordinary Turkish word (distance 2, similarity 0.67, DID
+    ///     involve a phonetic substitution — that alone isn't a reliable enough signal)
+    ///   - "kışla" -> "pushla" — ordinary Turkish word (distance 2, similarity 0.67, phonetic
+    ///     substitution fired)
+    ///   - "Shift" -> "Swift" — ordinary word, a keyboard key name (distance 1, similarity 0.80)
+    ///
+    /// Helpful (15 cases): all but one were EXACT matches (distance 0) — i.e. already covered
+    /// by the exact-match branch above and unaffected by removing this fallback: "pushla" ->
+    /// "push'la" (x5), "puşla" -> "push'la" (x3, via the ş->sh phonetic substitution, still
+    /// exact after normalization), "commitle" -> "commit'le", "Commiti" -> "Commit'i", "Codexi"
+    /// -> "Codex'i".
+    ///
+    /// The ONE helpful case that actually depended on this fuzzy branch: "komitle" ->
+    /// "commit'le" (x5), root/term distance 2, similarity 0.67.
+    ///
+    /// WHY TUNING THE THRESHOLD DOESN'T WORK: the one helpful case and the two worst harmful
+    /// cases ("kitaba"->"GitLab", "tekrardan"->"Terra") sit at the EXACT SAME similarity, 0.67.
+    /// No threshold value separates them — they are indistinguishable on this metric. Tightening
+    /// to distance <=1 kills "komitle" (distance 2) while leaving "Shift"->"Swift" (distance 1)
+    /// alive. This was measured, not assumed; there is no knob here that fixes it.
+    ///
+    /// WHERE THE ONE HELPFUL CASE IS HANDLED NOW: "komitle"->"commit'le" is covered by the
+    /// learned-correction store plus `CorrectionEngine.applyCorrections`'s Turkish
+    /// suffix-chain matching, with a confirmed `komit -> commit` entry already active there.
+    /// That path only fires on corrections a user has actually confirmed, which is exactly the
+    /// confidence bar this unconfirmed, automatic corrector cannot offer for a fuzzy (non-exact)
+    /// match. Verified directly: with this fallback disabled, "komitle" is no longer touched by
+    /// `PhoneticGlossaryCorrector` (as expected — the learned store now owns it), while all 7
+    /// harmful cases above are also no longer touched, and all 15 helpful cases still fire via
+    /// the exact-match branch.
+    private static func disabledFuzzyMatch(for root: String, in terms: [String]) -> MatchResult {
+        // Gated by root length, to catch cases phonetic substitution alone can't (e.g. a dropped
+        // mid-word letter, "gitab" for "GitHub"). Rejected outright if MORE THAN ONE glossary
+        // term clears the threshold: with sibling terms present (GitHub/GitLab, push/pull), edit
+        // distance alone can't tell which one is right, and a confident wrong guess (silently
+        // rewriting GitHub as GitLab) is worse than no correction at all. None of this saves it
+        // from the 0.67 collision documented above.
         guard root.count >= minFuzzyRootLength else { return .none }
+        let normalizedRoot = phoneticNormalize(root)
         let qualifiers = terms
             .map { (term: $0, score: CorrectionEngine.normalizedSimilarity(normalizedRoot, $0)) }
             .filter { $0.score >= fuzzySimilarityThreshold }
