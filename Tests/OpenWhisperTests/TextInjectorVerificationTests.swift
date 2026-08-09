@@ -38,6 +38,34 @@ final class TextInjectorVerificationTests: XCTestCase {
         XCTAssertEqual(verification, .unverifiedUnreadable)
     }
 
+    func testBackgroundContextTracksInjectedUTF16Span() {
+        let context = makeContext(
+            value: "a😀b",
+            range: CFRange(location: 1, length: 2)
+        )
+
+        let injected = context.contextForInjectedText("x")
+
+        XCTAssertEqual(injected?.valueAtCapture, "axb")
+        XCTAssertEqual(injected?.selectedRangeAtCapture?.location, 1)
+        XCTAssertEqual(injected?.selectedRangeAtCapture?.length, 1)
+        XCTAssertEqual(injected?.selectedTextAtCapture, "x")
+    }
+
+    func testBackgroundContextAdvancesReplacementSpan() {
+        let context = makeContext(
+            value: "before text after",
+            range: CFRange(location: 7, length: 4)
+        ).contextForInjectedText("text")!
+
+        let replaced = context.contextAfterReplacingInjectedText(with: "clean")
+
+        XCTAssertEqual(replaced?.valueAtCapture, "before clean after")
+        XCTAssertEqual(replaced?.selectedRangeAtCapture?.location, 7)
+        XCTAssertEqual(replaced?.selectedRangeAtCapture?.length, 5)
+        XCTAssertEqual(replaced?.selectedTextAtCapture, "clean")
+    }
+
     private func makeContext(value: String?, range: CFRange?) -> PasteContext {
         PasteContext(
             targetPID: nil,

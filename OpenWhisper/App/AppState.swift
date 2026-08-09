@@ -333,6 +333,9 @@ final class AppState {
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     private var swapTargetApp: NSRunningApplication?
+    /// AX baseline for the latest injected span, retained so cleanup/swap can update a
+    /// background target without reactivating it.
+    private var swapPasteContext: PasteContext?
 
     // MARK: - Computed
 
@@ -1272,6 +1275,7 @@ final class AppState {
                         case .pastedVerified, .pastedUnverified:
                             self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
                             self.swapTargetApp = targetApp
+                            self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
                             self.lastInjectedIsCleaned = false
                             self.lastInjectedText = initialText
                             self.hotkey?.setSwapAvailable(true)
@@ -1299,11 +1303,13 @@ final class AppState {
                                     self.textInjector?.replaceInjectedText(
                                         oldText: initialText,
                                         newText: trimmedCleaned,
-                                        targetApp: targetApp
+                                        targetApp: targetApp,
+                                        context: self.swapPasteContext
                                     ) { [weak self] in
                                         Task { @MainActor in
                                             guard let self else { return }
                                             self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
+                                            self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: trimmedCleaned)
                                             self.lastTranscription = trimmedCleaned
                                             self.lastInjectedIsCleaned = true
                                             self.lastInjectedText = trimmedCleaned
@@ -1330,6 +1336,7 @@ final class AppState {
                             }
                         case .clipboardOnly(let reason):
                             self.swapPair = nil
+                            self.swapPasteContext = nil
                             self.hotkey?.setSwapAvailable(false)
                             self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
                         }
@@ -1580,6 +1587,7 @@ final class AppState {
         switch (pasteOutcome, appendSucceeded) {
         case (.pastedVerified, true), (.pastedUnverified, true):
             swapPair = nil
+            swapPasteContext = nil
             hotkey?.setSwapAvailable(false)
             lastInjectedIsCleaned = true
             lastInjectedText = confirmationTextBeingDelivered
@@ -1609,6 +1617,8 @@ final class AppState {
             return "Yapıştırılamadı — hedef uygulama kullanılamıyor (metin panoda)"
         case .noSafeEditableDestination:
             return "Yapıştırılamadı — düzenlenebilir alan bulunamadı (metin panoda)"
+        case .targetFieldChanged:
+            return "Yapıştırılamadı — hedef alan değişmiş (metin panoda)"
         case .activationTimedOut:
             return "Yapıştırılamadı — hedef uygulama etkinleştirilemedi (metin panoda)"
         case .clipboardWriteFailed:
@@ -1963,10 +1973,17 @@ final class AppState {
         let oldText = lastInjectedText
         let backupText = newIsCleaned ? pair.raw : pair.cleaned
 
-        textInjector?.replaceInjectedText(oldText: oldText, newText: newText, targetApp: swapTargetApp) { [weak self] in
+        textInjector?.replaceInjectedText(
+            oldText: oldText,
+            newText: newText,
+            targetApp: swapTargetApp,
+            context: swapPasteContext
+        ) { [weak self] in
             Task { @MainActor in
-                self?.textInjector?.copyToClipboard(backupText)
-                self?.isSwapping = false
+                guard let self else { return }
+                self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: newText)
+                self.textInjector?.copyToClipboard(backupText)
+                self.isSwapping = false
             }
         }
 

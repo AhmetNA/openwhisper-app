@@ -11,6 +11,7 @@ enum ClipboardOnlyReason: Equatable {
     case accessibilityUnavailable
     case activationTimedOut
     case noSafeEditableDestination
+    case targetFieldChanged
     case pasteEventUnavailable
 }
 
@@ -31,6 +32,7 @@ protocol TextInjecting: AnyObject {
         oldText: String,
         newText: String,
         targetApp: NSRunningApplication?,
+        context: PasteContext?,
         onReplaced: (() -> Void)?
     )
 
@@ -124,11 +126,20 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             case .failed(let outcome):
                 self.complete(outcome, onOutcome: onOutcome)
             case .ready(let destination):
-                self.sendPaste(
-                    context: captured,
-                    destination: destination,
-                    onOutcome: onOutcome
-                )
+                if destination.isBackground {
+                    self.sendBackgroundPaste(
+                        text: cleaned,
+                        context: captured,
+                        destination: destination,
+                        onOutcome: onOutcome
+                    )
+                } else {
+                    self.sendPaste(
+                        context: captured,
+                        destination: destination,
+                        onOutcome: onOutcome
+                    )
+                }
             }
         }
     }
@@ -141,6 +152,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         oldText: String,
         newText: String,
         targetApp: NSRunningApplication?,
+        context: PasteContext? = nil,
         onReplaced: (() -> Void)? = nil
     ) {
         let cleaned = cleanedText(newText)
@@ -149,8 +161,8 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             return
         }
 
-        let context = PasteContext.capture(targetApp: targetApp)
-        resolveDestination(context) { [weak self] resolution in
+        let capturedContext = context ?? PasteContext.capture(targetApp: targetApp)
+        resolveDestination(capturedContext) { [weak self] resolution in
             guard let self else { return }
             switch resolution {
             case .failed:
@@ -158,7 +170,18 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
                 // process.  The legacy callback still fires so swap state cannot remain stuck.
                 self.copyToClipboard(cleaned)
                 onReplaced?()
-            case .ready:
+            case .ready(let destination):
+                if destination.isBackground {
+                    self.replaceInBackground(
+                        oldText: oldText,
+                        newText: cleaned,
+                        context: capturedContext,
+                        destination: destination,
+                        onReplaced: onReplaced
+                    )
+                    return
+                }
+
                 let charCount = oldText.count
                 owLog("[TextInjector] Swap: deleting \(charCount) chars, injecting \(cleaned.count) chars")
 
@@ -192,6 +215,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     private struct PasteDestination {
         let element: AXUIElement
         let pid: pid_t
+        let isBackground: Bool
     }
 
     private enum DestinationResolution {
@@ -245,11 +269,22 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
 
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if frontmostPID != pid {
-            owLog("[TextInjector] Activating captured target: \(context.applicationName ?? "?") (pid \(pid))")
-            app.activate(options: [.activateIgnoringOtherApps])
+            // Do not steal focus from the app the user chose after starting dictation. A
+            // background AX write is safe only when the original editable element and its
+            // baseline are still available; otherwise leave the exact text on the clipboard.
+            guard let element = context.focusedElement,
+                  AXTextAccess.isSafeEditableElement(element, matchingPID: pid),
+                  context.valueAtCapture != nil,
+                  context.selectedRangeAtCapture != nil,
+                  AXTextAccess.isValueSettable(element) else {
+                completion(.failed(.clipboardOnly(.noSafeEditableDestination)))
+                return
+            }
+            owLog("[TextInjector] Delivering to background target without activation: \(context.applicationName ?? "?") (pid \(pid))")
+            completion(.ready(PasteDestination(element: element, pid: pid, isBackground: true)))
+            return
         }
-        waitForFrontmost(pid: pid, app: app, deadline: Date().addingTimeInterval(0.5)) { [weak self] ready in
-            guard let self else { return }
+        waitForFrontmost(pid: pid, app: app, deadline: Date().addingTimeInterval(0.5)) { ready in
             guard ready else {
                 let reason: ClipboardOnlyReason = app.isTerminated
                     ? .targetApplicationTerminated
@@ -261,7 +296,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             if let capturedElement = context.focusedElement,
                AXTextAccess.isSafeEditableElement(capturedElement, matchingPID: pid),
                AXTextAccess.focus(capturedElement, matchingPID: pid) {
-                completion(.ready(PasteDestination(element: capturedElement, pid: pid)))
+                completion(.ready(PasteDestination(element: capturedElement, pid: pid, isBackground: false)))
                 return
             }
 
@@ -275,7 +310,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
                 completion(.failed(.clipboardOnly(.noSafeEditableDestination)))
                 return
             }
-            completion(.ready(PasteDestination(element: currentElement, pid: pid)))
+            completion(.ready(PasteDestination(element: currentElement, pid: pid, isBackground: false)))
         }
     }
 
@@ -345,6 +380,95 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         }
     }
 
+    private func sendBackgroundPaste(
+        text: String,
+        context: PasteContext,
+        destination: PasteDestination,
+        onOutcome: ((PasteOutcome) -> Void)?
+    ) {
+        guard let beforeValue = context.valueAtCapture,
+              let selectedRange = context.selectedRangeAtCapture,
+              let afterValue = replacingUTF16Range(
+                in: beforeValue,
+                range: selectedRange,
+                with: text
+              ) else {
+            complete(.clipboardOnly(.noSafeEditableDestination), onOutcome: onOutcome)
+            return
+        }
+
+        let currentState = AXTextAccess.readTextState(destination.element)
+        guard currentState.value == beforeValue else {
+            owLog("[TextInjector] Background paste skipped because the target field changed")
+            complete(.clipboardOnly(.targetFieldChanged), onOutcome: onOutcome)
+            return
+        }
+
+        guard AXUIElementSetAttributeValue(
+            destination.element,
+            kAXValueAttribute as CFString,
+            afterValue as CFTypeRef
+        ) == .success else {
+            complete(.clipboardOnly(.noSafeEditableDestination), onOutcome: onOutcome)
+            return
+        }
+
+        let caretRange = CFRange(
+            location: selectedRange.location + text.utf16.count,
+            length: 0
+        )
+        setSelectedRange(caretRange, on: destination.element)
+        owLog("[TextInjector] Background paste applied without activation")
+        complete(.pastedVerified, onOutcome: onOutcome)
+    }
+
+    private func replaceInBackground(
+        oldText: String,
+        newText: String,
+        context: PasteContext,
+        destination: PasteDestination,
+        onReplaced: (() -> Void)?
+    ) {
+        guard let beforeValue = context.valueAtCapture,
+              let injectedRange = context.selectedRangeAtCapture,
+              context.selectedTextAtCapture == oldText,
+              let replacedValue = replacingUTF16Range(
+                in: beforeValue,
+                range: injectedRange,
+                with: newText
+              ) else {
+            copyToClipboard(newText)
+            onReplaced?()
+            return
+        }
+
+        let currentState = AXTextAccess.readTextState(destination.element)
+        guard currentState.value == beforeValue else {
+            owLog("[TextInjector] Background replacement skipped because the target field changed")
+            copyToClipboard(newText)
+            onReplaced?()
+            return
+        }
+
+        guard AXUIElementSetAttributeValue(
+            destination.element,
+            kAXValueAttribute as CFString,
+            replacedValue as CFTypeRef
+        ) == .success else {
+            copyToClipboard(newText)
+            onReplaced?()
+            return
+        }
+
+        let caretRange = CFRange(
+            location: injectedRange.location + newText.utf16.count,
+            length: 0
+        )
+        setSelectedRange(caretRange, on: destination.element)
+        owLog("[TextInjector] Background replacement applied without activation")
+        onReplaced?()
+    }
+
     func verify(
         state: AXTextAccess.TextState,
         against context: PasteContext
@@ -377,6 +501,28 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
 
     private func complete(_ outcome: PasteOutcome, onOutcome: ((PasteOutcome) -> Void)?) {
         onOutcome?(outcome)
+    }
+
+    private func replacingUTF16Range(in value: String, range: CFRange, with replacement: String) -> String? {
+        guard range.location >= 0,
+              range.length >= 0,
+              range.location <= value.utf16.count,
+              range.length <= value.utf16.count - range.location else {
+            return nil
+        }
+        let start = String.Index(utf16Offset: range.location, in: value)
+        let end = String.Index(utf16Offset: range.location + range.length, in: value)
+        return String(value[..<start]) + replacement + String(value[end...])
+    }
+
+    private func setSelectedRange(_ range: CFRange, on element: AXUIElement) {
+        var mutableRange = range
+        guard let axRange = AXValueCreate(.cfRange, &mutableRange) else { return }
+        _ = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextRangeAttribute as CFString,
+            axRange
+        )
     }
 
     private func sendBackspaces(count: Int) {

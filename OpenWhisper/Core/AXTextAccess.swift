@@ -33,6 +33,57 @@ struct PasteContext: @unchecked Sendable {
     static func capture(targetApp: NSRunningApplication? = nil) -> PasteContext {
         AXTextAccess.capturePasteContext(targetApp: targetApp)
     }
+
+    /// Returns a context whose value/range describe the text just injected. This is retained
+    /// for later background replacements when the target app is no longer frontmost.
+    func contextForInjectedText(_ text: String) -> PasteContext? {
+        guard let value = valueAtCapture,
+              let selectedRange = selectedRangeAtCapture,
+              let afterValue = replacingUTF16Range(in: value, range: selectedRange, with: text) else {
+            return nil
+        }
+        let insertedRange = CFRange(location: selectedRange.location, length: text.utf16.count)
+        return PasteContext(
+            targetPID: targetPID,
+            bundleIdentifier: bundleIdentifier,
+            applicationName: applicationName,
+            focusedElement: focusedElement,
+            valueAtCapture: afterValue,
+            selectedRangeAtCapture: insertedRange,
+            selectedTextAtCapture: text
+        )
+    }
+
+    /// Advances a retained injected-text context after a background replacement.
+    func contextAfterReplacingInjectedText(with text: String) -> PasteContext? {
+        guard let value = valueAtCapture,
+              let injectedRange = selectedRangeAtCapture,
+              let afterValue = replacingUTF16Range(in: value, range: injectedRange, with: text) else {
+            return nil
+        }
+        let replacementRange = CFRange(location: injectedRange.location, length: text.utf16.count)
+        return PasteContext(
+            targetPID: targetPID,
+            bundleIdentifier: bundleIdentifier,
+            applicationName: applicationName,
+            focusedElement: focusedElement,
+            valueAtCapture: afterValue,
+            selectedRangeAtCapture: replacementRange,
+            selectedTextAtCapture: text
+        )
+    }
+
+    private func replacingUTF16Range(in value: String, range: CFRange, with replacement: String) -> String? {
+        guard range.location >= 0,
+              range.length >= 0,
+              range.location <= value.utf16.count,
+              range.length <= value.utf16.count - range.location else {
+            return nil
+        }
+        let start = String.Index(utf16Offset: range.location, in: value)
+        let end = String.Index(utf16Offset: range.location + range.length, in: value)
+        return String(value[..<start]) + replacement + String(value[end...])
+    }
 }
 
 /// Shared Accessibility (AX) read helpers, extracted from AXProbe so both the diagnostic
@@ -177,6 +228,15 @@ enum AXTextAccess {
             element, kAXSelectedTextAttribute as CFString, &selectedTextSettable
         )
         return selectedTextSettableError == .success && selectedTextSettable.boolValue
+    }
+
+    static func isValueSettable(_ element: AXUIElement) -> Bool {
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(
+            element,
+            kAXValueAttribute as CFString,
+            &settable
+        ) == .success && settable.boolValue
     }
 
     /// Refocuses a previously captured element without ever crossing into another process.

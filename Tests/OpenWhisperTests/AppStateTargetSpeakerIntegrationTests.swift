@@ -1055,6 +1055,7 @@ private final class RecordingTextInjector: TextInjecting {
         oldText: String,
         newText: String,
         targetApp: NSRunningApplication?,
+        context: PasteContext?,
         onReplaced: (() -> Void)?
     ) {
         replaceCalls.append((old: oldText, new: newText))
