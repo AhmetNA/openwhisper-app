@@ -46,7 +46,10 @@ final class FlowBarController {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
             panel?.alphaValue = 1
-            panel?.orderFront(nil)
+            // The menu-bar app is normally inactive while the user dictates into another app.
+            // orderFrontRegardless keeps the nonactivating overlay visible without stealing
+            // keyboard focus from that target app, including while it owns a fullscreen Space.
+            panel?.orderFrontRegardless()
         }
         recenterAfterContentLayout()
 
@@ -130,7 +133,10 @@ final class FlowBarController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        // `.fullScreenAuxiliary` only makes a window auxiliary to a fullscreen window in the
+        // same app. FlowBar belongs to an accessory app, so use the system-overlay behavior
+        // that explicitly permits joining another app's fullscreen Space as well.
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .stationary]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = false

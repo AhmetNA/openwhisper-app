@@ -122,6 +122,20 @@ struct SettingsView: View {
                 }
             }
 
+            HStack(alignment: .top, spacing: 8) {
+                Label("Gülmeyi random'a çevir", systemImage: "face.smiling")
+                Spacer()
+                Toggle("", isOn: $appState.laughterToRandomEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .controlSize(.small)
+            }
+
+            Text("Ha ha ha, haha ve kahkaha gibi ifadeleri klavye satırından üretilen 8–10 harflik random'a dönüştürür.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Divider()
 
             // Spotify
@@ -537,6 +551,7 @@ struct SettingsView: View {
                     spotifyConnectStatusView
                 }
             }
+
         }
         .onAppear {
             spotifyClientID = SpotifyCredentialsStore.loadClientID()

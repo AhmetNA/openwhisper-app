@@ -125,6 +125,9 @@ final class AppState {
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
+    var laughterToRandomEnabled: Bool {
+        didSet { UserDefaults.standard.set(laughterToRandomEnabled, forKey: "laughterToRandomEnabled") }
+    }
     var ollamaModel: String {
         didSet {
             UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel")
@@ -396,6 +399,7 @@ final class AppState {
             audioProcessingMode = legacyVoiceProcessing ? .appleVoiceProcessing : .off
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
+        laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
         ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
@@ -1240,6 +1244,16 @@ final class AppState {
                 }
             }
 
+            var laughterWasRandomized = false
+            if self.laughterToRandomEnabled {
+                let result = LaughterRandomizer.transform(initialText)
+                if result.didTransform {
+                    initialText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    laughterWasRandomized = true
+                    owLog("[LaughterRandomizer] Laughter converted to keyboard random")
+                }
+            }
+
             self.lastTranscription = initialText
 
             if self.autoPasteEnabled {
@@ -1271,7 +1285,9 @@ final class AppState {
 
                             // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
                             // Once Ollama finishes, replace the initially pasted text in-place.
-                            if self.llmCleanupEnabled && self.ollamaAvailable {
+                            // Keep the generated keyboard random exact. LLM cleanup can rewrite
+                            // or remove a random-looking token, which would defeat this setting.
+                            if self.llmCleanupEnabled && self.ollamaAvailable && !laughterWasRandomized {
                                 Task { @MainActor [weak self] in
                                     guard let self else { return }
                                     let cleaned = await self.llmCleanup?.cleanup(text: initialText) ?? initialText
