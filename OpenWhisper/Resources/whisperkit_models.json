@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    { "id": "large-v3-v20240930_turbo", "displayName": "Turbo (Hızlı)" },
+    { "id": "large-v3_turbo", "displayName": "Large v3 Turbo (Argmax)" },
+    { "id": "large-v3", "displayName": "Large v3 (Tam, en yavaş)" }
+  ]
+}

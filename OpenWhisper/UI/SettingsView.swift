@@ -36,7 +36,7 @@ struct SettingsView: View {
 
             Divider()
 
-            whisperModelSection
+            transcriptionModelSection
 
             Divider()
 
@@ -141,9 +141,9 @@ struct SettingsView: View {
                         .controlSize(.small)
                     Text(appState.modelLoadProgress > 0
                          ? (appState.modelIsDownloading
-                            ? "Downloading \(appState.whisperModel) model — \(Int(appState.modelLoadProgress * 100))%"
-                            : "Switching to \(appState.whisperModel) model...")
-                         : "Loading \(appState.whisperModel) model...")
+                         ? "Downloading \(appState.transcriptionModel) model — \(Int(appState.modelLoadProgress * 100))%"
+                         : "Switching to \(appState.transcriptionModel) model...")
+                         : "Loading \(appState.transcriptionModel) model...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -229,33 +229,24 @@ struct SettingsView: View {
 
     // MARK: - Whisper Model Section
 
-    /// Known variant names paired with a friendly Turkish label. Entries not yet downloaded stay
-    /// selectable so the picker doubles as the way to kick off a first-time download of a new
-    /// model; a cloud glyph marks which ones that applies to.
-    private static let whisperModelCatalog: [(name: String, label: String)] = [
-        ("large-v3-v20240930_turbo", "Turbo (Hızlı)"),
-        ("large-v3_turbo", "Large v3 Turbo (Argmax)"),
-        ("large-v3", "Large v3 (Tam, en yavaş)"),
-    ]
-
-    private var whisperModelSection: some View {
+    private var transcriptionModelSection: some View {
         @Bindable var appState = appState
         let switching = appState.modelLoading || appState.recordingState != .idle
-        let downloaded = Set(appState.downloadedWhisperModelNames())
-        let catalog = Self.whisperModelCatalog
+        let downloaded = Set(appState.downloadedTranscriptionModelNames())
+        let catalog = appState.transcriptionModelCatalog()
         let extraDownloaded = downloaded
             .subtracting(catalog.map(\.name))
             .sorted()
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("Whisper modeli", systemImage: "waveform")
+                Label("Konuşma modeli", systemImage: "waveform")
                 Spacer()
                 Picker("", selection: Binding(
-                    get: { appState.whisperModel },
+                    get: { appState.transcriptionModel },
                     set: { newValue in
-                        guard newValue != appState.whisperModel else { return }
-                        appState.whisperModel = newValue
+                        guard newValue != appState.transcriptionModel else { return }
+                        appState.transcriptionModel = newValue
                         Task { await appState.loadModel() }
                     }
                 )) {

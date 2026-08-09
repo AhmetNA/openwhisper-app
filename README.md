@@ -20,6 +20,10 @@ Your microphone audio and transcript stay on your Mac during normal dictation. S
 ## Highlights
 
 - **Local transcription:** Whisper runs on-device through Core ML and the Neural Engine.
+- **Extensible local STT providers:** providers are discovered from bundled JSON manifests and
+  `~/Library/Application Support/OpenWhisper/STTProviders`. A provider bridge only needs to accept
+  `--check` / `--transcribe <wav>` and return JSON, so adding a compatible ASR does not require a
+  Swift model-specific integration.
 - **Natural dictation:** hold `Fn` / `Globe`, speak, and release to paste text at the cursor.
 - **Hands-free mode:** press `Space` or `Enter` while holding `Fn` to lock recording.
 - **Turkish-friendly cleanup:** local Ollama models can fix punctuation, filler words, and phrasing.
@@ -138,12 +142,33 @@ When cleanup is enabled, OpenWhisper keeps the raw Whisper result and the cleane
 The menu-bar settings panel includes:
 
 - language selection, including Turkish and auto-detect;
-- Whisper model selection and download status;
+- konuşma modeli seçimi (WhisperKit veya keşfedilen yerel STT sağlayıcıları) ve indirme durumu;
 - Ollama cleanup toggle and model selection;
 - microphone/input-device selection;
 - launch-at-login and flow-bar preferences;
 - learned correction management;
 - Spotify Client ID/Secret and account connection.
+
+### Adding an external local STT provider
+
+Place a provider manifest and its bridge script in:
+
+```text
+~/Library/Application Support/OpenWhisper/STTProviders/
+```
+
+The manifest must contain `schemaVersion`, `id`, `displayName`, `bridge`, `supportedLanguages`,
+and an optional `python` executable path. The bridge contract is deliberately small:
+
+```text
+python bridge.py --check
+python bridge.py --transcribe /path/to/16k-mono.wav
+```
+
+`--check` must exit with status 0 when the model can be prepared. `--transcribe` must print
+`{"text":"..."}` as its final JSON result. OpenWhisper discovers the provider on the next
+launch and adds it to the model picker; no Swift model-specific code is required. The bridge is
+responsible for model format, quantization, downloads, and its own local runtime.
 
 ## Optional Spotify setup
 

@@ -111,8 +111,10 @@ final class AppState {
 
     // MARK: - Settings (persisted via UserDefaults)
 
-    var whisperModel: String {
-        didSet { UserDefaults.standard.set(whisperModel, forKey: "whisperModel") }
+    /// Selected transcription-provider ID. The persisted key remains `whisperModel` for
+    /// backwards compatibility with existing installations.
+    var transcriptionModel: String {
+        didSet { UserDefaults.standard.set(transcriptionModel, forKey: "whisperModel") }
     }
     var language: String {
         didSet { UserDefaults.standard.set(language, forKey: "language") }
@@ -260,7 +262,7 @@ final class AppState {
     // MARK: - Components
 
     private var audioEngine: AudioEngine?
-    private var transcriber: WhisperTranscriber?
+    private let transcriptionModelRegistry = TranscriptionModelRegistry()
     private var llmCleanup: LLMCleanup?
     private var textInjector: TextInjecting? = TextInjector()
     private var hotkey: GlobalHotkey?
@@ -341,7 +343,7 @@ final class AppState {
 
     var menuBarIconColor: Color {
         switch recordingState {
-        case .idle: .gray
+        case .idle: .white
         case .recording: .red
         case .transcribing: .orange
         }
@@ -365,7 +367,7 @@ final class AppState {
         // on a first-ever launch) -- true only when nothing has ever been saved for this app,
         // used below to pick DeepFilterNet as the fresh-install default.
         let isFreshInstall = defaults.object(forKey: "whisperModel") == nil
-        whisperModel = defaults.string(forKey: "whisperModel") ?? "large-v3-v20240930_turbo"
+        transcriptionModel = defaults.string(forKey: "whisperModel") ?? TranscriptionModelRegistry.defaultModelID
         language = defaults.string(forKey: "language") ?? "tr"
         if defaults.object(forKey: "voiceProcessingMigrationV1") == nil {
             // Ölçüm: setVoiceProcessingEnabled(true) tek başına ~900-1080ms gecikme ekliyor
@@ -434,7 +436,6 @@ final class AppState {
         DispatchQueue.global(qos: .utility).async {
             audioEngineForPrewarm?.prewarmDeepFilter()
         }
-        transcriber = WhisperTranscriber()
         llmCleanup = LLMCleanup(model: ollamaModel)
         textInjector = TextInjector()
         flowBarController = FlowBarController(appState: self)
@@ -512,7 +513,7 @@ final class AppState {
         owLog("[OpenWhisper] Hotkey registered (Fn/Globe)")
 
         // Load Whisper model
-        owLog("[OpenWhisper] Loading model: \(whisperModel)...")
+        owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
         await loadModel()
         owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
 
@@ -623,18 +624,33 @@ final class AppState {
         }
     }
 
-    func downloadedWhisperModelNames() -> [String] {
-        transcriber?.downloadedModelNames() ?? []
+    func downloadedTranscriptionModelNames() -> [String] {
+        transcriptionModelRegistry.providers.values
+            .filter(\.isDownloaded)
+            .map { $0.descriptor.id }
+            .sorted()
+    }
+
+    func transcriptionModelCatalog() -> [(name: String, label: String)] {
+        transcriptionModelRegistry.availableProviders.map {
+            (name: $0.descriptor.id, label: $0.descriptor.displayName)
+        }
     }
 
     func loadModel() async {
         modelLoaded = false
         modelLoading = true
         modelLoadProgress = 0
-        modelIsDownloading = !(transcriber?.isModelDownloaded(name: whisperModel) ?? false)
-        owLog("[OpenWhisper] Loading model: \(whisperModel) (download needed: \(modelIsDownloading))...")
+        guard let provider = transcriptionModelRegistry.provider(for: transcriptionModel) else {
+            modelLoading = false
+            lastError = "Seçili konuşma modeli bulunamadı: \(transcriptionModel)"
+            owLog("[OpenWhisper] Model provider not found: \(transcriptionModel)")
+            return
+        }
+        modelIsDownloading = !provider.isDownloaded
+        owLog("[OpenWhisper] Loading model: \(provider.descriptor.id) (download needed: \(modelIsDownloading))...")
         do {
-            try await transcriber?.loadModel(name: whisperModel) { [weak self] progress in
+            try await provider.loadModel { [weak self] progress in
                 Task { @MainActor in
                     self?.modelLoadProgress = progress
                 }
@@ -647,6 +663,13 @@ final class AppState {
             lastError = "Failed to load model: \(error.localizedDescription)"
             owLog("[OpenWhisper] Model load failed: \(error)")
         }
+    }
+
+    private var activeTranscriptionService: WhisperTranscriptionService? {
+        if let injectedTranscriptionService {
+            return injectedTranscriptionService
+        }
+        return transcriptionModelRegistry.provider(for: transcriptionModel)
     }
 
     // MARK: - Recording Flow
@@ -862,7 +885,7 @@ final class AppState {
         session.nextSegmentNumber += 1
         let segmentNumber = session.nextSegmentNumber
 
-        guard let transcriber = injectedTranscriptionService ?? transcriber else {
+        guard let transcriber = activeTranscriptionService else {
             owLog("[OpenWhisper] No transcriber for background batch \(segmentNumber)")
             return
         }
