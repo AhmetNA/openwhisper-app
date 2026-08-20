@@ -149,6 +149,15 @@ final class AudioEngine: @unchecked Sendable {
     private var hasLoggedInputTruncation = false
     private var hasLoggedDeepFilterFirstFrame = false
 
+    /// Whole-recording input level accumulators. These describe the RAW microphone downmix,
+    /// before `AudioSignalProcessor`'s gain stage, because that is the level that actually
+    /// needs diagnosing. The existing `[Perf] ... rms=` lines only report the first buffer to
+    /// cross a silence threshold, which is an onset measurement and not representative of the
+    /// recording. Written on the audio callback under `lock`, summarised once in stopRecording().
+    private var inputLevelSumOfSquares: Double = 0
+    private var inputLevelSampleCount: Int = 0
+    private var inputLevelPeak: Float = 0
+
     /// Pre-warm the audio engine graph in the background so startRecording() takes < 2ms.
     func prewarm(deviceUID: String?, audioProcessingMode: AudioProcessingMode) {
         lock.lock()
@@ -235,6 +244,9 @@ final class AudioEngine: @unchecked Sendable {
         hasLoggedFirstAudibleBuffer = false
         hasLoggedInputTruncation = false
         hasLoggedDeepFilterFirstFrame = false
+        inputLevelSumOfSquares = 0
+        inputLevelSampleCount = 0
+        inputLevelPeak = 0
         let tStartCall = CACurrentMediaTime()
         let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
         owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
@@ -369,6 +381,15 @@ final class AudioEngine: @unchecked Sendable {
                     )
                 }
             }
+            // rms is this buffer's root-mean-square, so rms^2 * frames is its sum of squares.
+            // Accumulating that (rather than averaging per-buffer RMS values) keeps the final
+            // mean correct even when CoreAudio delivers uneven buffer sizes.
+            self.inputLevelSumOfSquares += Double(rms) * Double(rms) * Double(frameLength)
+            self.inputLevelSampleCount += frameLength
+            let bufferPeak = self.channelPeak(in: buffer, channelIndex: channelIndex)
+            if bufferPeak > self.inputLevelPeak {
+                self.inputLevelPeak = bufferPeak
+            }
             self.lock.unlock()
 
             let tNow = CACurrentMediaTime()
@@ -431,6 +452,19 @@ final class AudioEngine: @unchecked Sendable {
 
         // Tap is already removed and the engine stopped above, so no audio-thread call into
         // `process()` can still be in flight — reading these counters here is safe.
+        if inputLevelSampleCount > 0 {
+            let meanRMS = (inputLevelSumOfSquares / Double(inputLevelSampleCount)).squareRoot()
+            // Guard the log10 against a digitally silent recording, which would be -inf.
+            let rmsDBFS = meanRMS > 0 ? 20 * log10(meanRMS) : -Double.infinity
+            let peak = Double(inputLevelPeak)
+            let peakDBFS = peak > 0 ? 20 * log10(peak) : -Double.infinity
+            owLog(String(
+                format: "[AudioEngine] Input level summary (raw, pre-gain): "
+                    + "meanRMS=%.5f (%.1f dBFS) peak=%.5f (%.1f dBFS) samples=%d",
+                meanRMS, rmsDBFS, peak, peakDBFS, inputLevelSampleCount
+            ))
+        }
+
         if let stoppedDeepFilter, stoppedDeepFilter.processedFrameCount > 0 {
             owLog(String(
                 format: "[DeepFilter] Recording summary: frames=%d processedMs=%.1f avgSNR=%.2fdB",
@@ -486,6 +520,15 @@ final class AudioEngine: @unchecked Sendable {
         var rms: Float = 0
         vDSP_rmsqv(channels[channelIndex], 1, &rms, vDSP_Length(buffer.frameLength))
         return rms
+    }
+
+    private func channelPeak(in buffer: AVAudioPCMBuffer, channelIndex: Int) -> Float {
+        guard let channels = buffer.floatChannelData,
+              buffer.frameLength > 0,
+              channelIndex >= 0 && channelIndex < Int(buffer.format.channelCount) else { return 0.0 }
+        var peak: Float = 0
+        vDSP_maxmgv(channels[channelIndex], 1, &peak, vDSP_Length(buffer.frameLength))
+        return peak
     }
 
     private func loudestInputChannel(in buffer: AVAudioPCMBuffer) -> (index: Int, rms: Float)? {
