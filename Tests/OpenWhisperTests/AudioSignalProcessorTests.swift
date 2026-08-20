@@ -33,6 +33,30 @@ final class AudioSignalProcessorTests: XCTestCase {
         XCTAssertGreaterThan(samples[0], minusFortySevenDBFS)
     }
 
+    /// The waveform was reported as barely moving during ordinary speech. These are real
+    /// per-buffer RMS values from this microphone: the meter has to show visible movement across
+    /// them, and silence has to stay at the bottom.
+    func testWaveformMovesAcrossThisMicrophonesActualSpeechRange() {
+        let silence: Float = 0.0004       // about -68 dBFS, room tone
+        let quietSpeech: Float = 0.0032   // about -50 dBFS
+        let normalSpeech: Float = 0.0089  // about -41 dBFS
+        let loudSpeech: Float = 0.0198    // about -34 dBFS
+
+        let silenceLevel = AudioSignalProcessor.displayLevel(forRawRMS: silence)
+        let quietLevel = AudioSignalProcessor.displayLevel(forRawRMS: quietSpeech)
+        let normalLevel = AudioSignalProcessor.displayLevel(forRawRMS: normalSpeech)
+        let loudLevel = AudioSignalProcessor.displayLevel(forRawRMS: loudSpeech)
+
+        // Quiet speech must be clearly off the floor -- the old mapping put it at 0.00.
+        XCTAssertGreaterThan(quietLevel, 0.15)
+        XCTAssertGreaterThan(silenceLevel, -0.001)
+        XCTAssertLessThan(silenceLevel, quietLevel)
+        // And the range has to stay ordered and in bounds rather than saturating at the top.
+        XCTAssertLessThan(quietLevel, normalLevel)
+        XCTAssertLessThan(normalLevel, loudLevel)
+        XCTAssertLessThanOrEqual(loudLevel, 1.0)
+    }
+
     func testCompressorKeepsBoostedPeakBelowLimiterCeiling() {
         var samples: [Float] = [0.8, -0.8]
 

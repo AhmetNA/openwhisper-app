@@ -24,6 +24,22 @@ enum AudioSignalProcessor {
     private static let compressionRatio: Float = 3.0
     private static let limiterCeiling: Float = 0.98
 
+    /// Maps a raw microphone RMS to the 0...1 the waveform draws.
+    ///
+    /// The meter has to reflect the signal recognition actually receives, not the bare
+    /// microphone level — with `inputGain` at 8.0 those differ by 18 dB. Showing the raw value
+    /// pinned the waveform near zero for ordinary speech on this microphone: a -45 dBFS buffer
+    /// mapped to 0.02, and anything at or below -46 dBFS clamped to a flat 0, so speaking
+    /// normally from across a room moved nothing at all.
+    ///
+    /// Deriving it from `inputGain` rather than a second hand-tuned window also means retuning
+    /// the gain retunes the meter with it, instead of leaving two constants to drift apart.
+    static func displayLevel(forRawRMS rawLevel: Float) -> Float {
+        let boosted = max(rawLevel * inputGain, 0.0001)
+        let dB = 20 * log10(boosted)
+        return min(max((dB + 46) / 46, 0), 1)
+    }
+
     /// Applies a fixed gain followed by a gentle soft-knee-like compressor in place. This is
     /// allocation-free because it runs on the audio callback path.
     static func process(_ samples: UnsafeMutablePointer<Float>, count: Int, gain: Float = inputGain) {

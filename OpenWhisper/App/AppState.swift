@@ -744,9 +744,7 @@ final class AppState {
                 deviceUID: recordingInputDeviceUID,
                 audioProcessingMode: processingMode,
                 levelCallback: { rawLevel in
-                    let rms = max(rawLevel, 0.0001)
-                    let dB = 20 * log10(rms)
-                    let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
+                    let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                     Task { @MainActor in
                         guard let self else { return }
                         self.audioLevel = target
@@ -1730,9 +1728,7 @@ final class AppState {
             deviceUID: resolvedInputDeviceUID,
             audioProcessingMode: audioProcessingMode,
             levelCallback: { [weak self] rawLevel in
-                let rms = max(rawLevel, 0.0001)
-                let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
+                let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                 Task { @MainActor in
                     guard let self else { return }
                     self.audioLevel = target
@@ -1872,9 +1868,7 @@ final class AppState {
             deviceUID: resolvedInputDeviceUID,
             audioProcessingMode: audioProcessingMode,
             levelCallback: { [weak self] rawLevel in
-                let rms = max(rawLevel, 0.0001)
-                let dB = 20 * log10(rms)
-                let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
+                let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                 Task { @MainActor in
                     guard let self else { return }
                     self.audioLevel = target
