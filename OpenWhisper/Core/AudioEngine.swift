@@ -677,6 +677,10 @@ final class AudioEngine: @unchecked Sendable {
             guard error == nil,
                   let output = convertedBuffer.floatChannelData?[0],
                   convertedBuffer.frameLength > 0 else { break }
+            // The live path gains every buffer before storing it; this drain has to match or the
+            // converter tail lands at a different level than the body of the same recording.
+            // That tail is exactly where trailing words sit.
+            AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
             appendSamples(output, count: Int(convertedBuffer.frameLength))
 
             if status == .endOfStream { break }
