@@ -252,6 +252,22 @@ final class AppState {
     /// Current embedding count of the active profile, surfaced in Settings next to
     /// `targetSpeakerProfileStatus` so the user can inspect the controlled enrollment profile.
     var targetSpeakerEmbeddingCount: Int { targetSpeakerProfile?.embeddings.count ?? 0 }
+
+    /// On-demand voice sample capture. Separate from enrollment: enrollment builds a profile
+    /// from exactly two recordings, while this appends a single extra sample to an existing
+    /// profile at any time — so a speaking condition that gets misrecognised (speaking quietly,
+    /// a louder person nearby, a different posture) can be taught the moment it happens instead
+    /// of only through the 8-second offer that follows a rejected dictation.
+    var targetSpeakerSampleIsRecording = false
+    var targetSpeakerSampleIsProcessing = false
+    var targetSpeakerSampleStatus: String = ""
+
+    var canCaptureTargetSpeakerSample: Bool {
+        hasStoredTargetSpeakerProfile
+            && !targetSpeakerEnrollmentActive
+            && !targetSpeakerEnrollmentIsProcessing
+            && !targetSpeakerSampleIsProcessing
+    }
     var canUndoTargetSpeakerAppend: Bool { lastConfirmedAppendReceipt != nil }
     /// Cached (not computed-on-read) coherence of the currently active profile's pooled
     /// embeddings, surfaced in Settings next to the embedding count. Computing this is O(n^2)
@@ -1684,6 +1700,132 @@ final class AppState {
 
     private func isCurrentTargetSpeakerEnrollment(_ generation: UInt64) -> Bool {
         generation == targetSpeakerEnrollmentGeneration && !Task.isCancelled
+    }
+
+    // MARK: - On-demand target speaker sample capture
+
+    func startTargetSpeakerSampleRecording() {
+        owLog("[TargetSpeaker] startTargetSpeakerSampleRecording called")
+        guard recordingState == .idle,
+              canCaptureTargetSpeakerSample,
+              targetSpeakerProfile != nil,
+              let audioEngine else {
+            owLog("[TargetSpeaker] startTargetSpeakerSampleRecording skipped (state=\(recordingState), canCapture=\(canCaptureTargetSpeakerSample), hasProfile=\(targetSpeakerProfile != nil))")
+            return
+        }
+
+        clearFlowBarMessage()
+
+        if audioDuckingEnabled {
+            AudioDucker.shared.duck()
+        }
+
+        targetSpeakerSampleIsRecording = true
+        targetSpeakerSampleStatus = "Kaydediliyor — tanınmadığın koşulda konuş (en fazla 30 sn)."
+        recordingState = .recording
+        recordingDuration = 0
+        audioLevel = 0
+        lastError = nil
+        audioEngine.startRecording(
+            deviceUID: resolvedInputDeviceUID,
+            audioProcessingMode: audioProcessingMode,
+            levelCallback: { [weak self] rawLevel in
+                let rms = max(rawLevel, 0.0001)
+                let dB = 20 * log10(rms)
+                let target = Float(min(max((dB + 46) / 46, 0.0), 1.0))
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.audioLevel = target
+                }
+            }
+        )
+        recordingTimer?.invalidate()
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.targetSpeakerSampleIsRecording else { return }
+                self.recordingDuration = min(
+                    self.recordingDuration + 0.25,
+                    TargetSpeakerFilterConfiguration.maximumEnrollmentDuration
+                )
+                if self.recordingDuration >= TargetSpeakerFilterConfiguration.maximumEnrollmentDuration {
+                    owLog("[TargetSpeaker] Sample recording reached max duration 30s")
+                    self.stopTargetSpeakerSampleRecording()
+                }
+            }
+        }
+    }
+
+    func stopTargetSpeakerSampleRecording() {
+        owLog("[TargetSpeaker] stopTargetSpeakerSampleRecording called")
+        AudioDucker.shared.restore()
+        guard targetSpeakerSampleIsRecording else { return }
+        let samples = teardownTargetSpeakerSampleRecording()
+
+        guard !samples.isEmpty else {
+            targetSpeakerSampleStatus = "Kayıt alınamadı; tekrar deneyin."
+            owLog("[TargetSpeaker] Sample recording returned 0 samples")
+            return
+        }
+        guard let profile = targetSpeakerProfile else {
+            targetSpeakerSampleStatus = "Önce \"Sesimi kaydet\" ile profil oluşturmalısın."
+            return
+        }
+
+        owLog("[TargetSpeaker] Sample recording stopped: \(samples.count) samples (\(String(format: "%.2f", Double(samples.count)/16000.0))s)")
+        appendTargetSpeakerSample(samples, to: profile)
+    }
+
+    /// Shared append boundary so the capture path and deterministic state tests agree.
+    func appendTargetSpeakerSample(_ samples: [Float], to profile: TargetSpeakerProfile) {
+        targetSpeakerSampleIsProcessing = true
+        targetSpeakerSampleStatus = "Örnek doğrulanıyor…"
+        // The profile records the processing chain it was built under and `appendConfirmedCandidate`
+        // rejects a mismatch outright, so pass the mode actually in use rather than the parameter
+        // default — otherwise every append fails with a confusing incompatibility error.
+        let mode = audioProcessingMode
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.targetSpeakerSampleIsProcessing = false }
+            do {
+                let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
+                    samples,
+                    to: profile,
+                    store: self.targetSpeakerProfileStore,
+                    audioProcessingMode: mode
+                )
+                let added = receipt.appendedProfile.embeddings.count - receipt.previousProfile.embeddings.count
+                self.targetSpeakerProfile = receipt.appendedProfile
+                self.refreshTargetSpeakerProfileCoherence()
+                self.hasStoredTargetSpeakerProfile = true
+                self.targetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                self.lastConfirmedAppendReceipt = receipt
+                self.targetSpeakerSampleStatus =
+                    "\(added) örnek eklendi — profilde toplam \(receipt.appendedProfile.embeddings.count)."
+                owLog("[TargetSpeaker] On-demand sample appended: +\(added), new count=\(receipt.appendedProfile.embeddings.count)")
+            } catch {
+                self.targetSpeakerSampleStatus = error.localizedDescription
+                self.lastError = error.localizedDescription
+                owLog("[TargetSpeaker] On-demand sample append failed: \(error)")
+            }
+        }
+    }
+
+    private func teardownTargetSpeakerSampleRecording() -> [Float] {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        let samples: [Float]
+        if targetSpeakerSampleIsRecording {
+            samples = (audioEngine?.stopRecording() ?? []).flatMap(\.samples)
+        } else {
+            samples = []
+        }
+        targetSpeakerSampleIsRecording = false
+        if recordingState == .recording {
+            recordingState = .idle
+        }
+        recordingDuration = 0
+        audioLevel = 0
+        return samples
     }
 
     func beginTargetSpeakerEnrollment() {

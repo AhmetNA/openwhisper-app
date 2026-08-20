@@ -138,7 +138,7 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
                 owLog("[TargetSpeaker] Keychain profile load failed: schema mismatch (found \(profile.schemaVersion), expected \(TargetSpeakerProfile.currentSchemaVersion))")
                 throw TargetSpeakerProfileError.schemaMismatch
             }
-            owLog("[TargetSpeaker] Keychain profile loaded successfully: schema=\(profile.schemaVersion), embeddings=\(profile.embeddings.count), model=\(profile.modelIdentifier)")
+            owLog("[TargetSpeaker] Keychain profile loaded successfully: schema=\(profile.schemaVersion), embeddings=\(profile.embeddings.count), model=\(profile.modelIdentifier), audioProcessingMode=\(profile.audioProcessingMode.rawValue)")
             return profile
         } catch let error as TargetSpeakerProfileError {
             throw error

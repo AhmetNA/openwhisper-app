@@ -400,6 +400,21 @@ struct SettingsView: View {
                 }
             }
 
+            if appState.targetSpeakerSampleIsRecording
+                || appState.targetSpeakerSampleIsProcessing
+                || !appState.targetSpeakerSampleStatus.isEmpty {
+                Text(appState.targetSpeakerSampleIsRecording
+                     ? "Ses örneği: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerSampleStatus)"
+                     : appState.targetSpeakerSampleStatus)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if appState.targetSpeakerSampleIsProcessing {
+                    ProgressView()
+                }
+            }
+
             HStack(spacing: 8) {
                 Button(appState.targetSpeakerEnrollmentIsRecording ? "Kaydı bitir" : "Sesimi kaydet") {
                     if appState.targetSpeakerEnrollmentIsRecording {
@@ -415,7 +430,27 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+                .disabled(appState.targetSpeakerEnrollmentIsProcessing
+                          || appState.targetSpeakerSampleIsRecording
+                          || appState.targetSpeakerSampleIsProcessing)
+
+                // Adding one sample to an existing profile, available any time rather than only
+                // through the short-lived offer that follows a rejected dictation.
+                if appState.hasStoredTargetSpeakerProfile && !appState.targetSpeakerEnrollmentActive {
+                    Button(appState.targetSpeakerSampleIsRecording ? "Örneği bitir" : "Ses örneği ekle") {
+                        if appState.targetSpeakerSampleIsRecording {
+                            owLog("[TargetSpeaker] User clicked 'Örneği bitir' in SettingsView")
+                            appState.stopTargetSpeakerSampleRecording()
+                        } else {
+                            owLog("[TargetSpeaker] User clicked 'Ses örneği ekle' in SettingsView")
+                            appState.startTargetSpeakerSampleRecording()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(!appState.targetSpeakerSampleIsRecording
+                              && !appState.canCaptureTargetSpeakerSample)
+                }
 
                 if appState.targetSpeakerEnrollmentActive {
                     Button("İptal") {
