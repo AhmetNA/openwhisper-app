@@ -4,7 +4,7 @@ final class LLMCleanup: Sendable {
     private let baseURL = "http://localhost:11434"
     let model: String
 
-    init(model: String = "qwen2.5:7b") {
+    init(model: String = "llama3.2:3b") {
         self.model = model
     }
 

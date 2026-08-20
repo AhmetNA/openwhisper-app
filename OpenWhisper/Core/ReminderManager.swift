@@ -157,12 +157,12 @@ final class ReminderManager {
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
-    /// "ollamaModel", default "qwen3:8b"). ReminderManager is a standalone singleton with no
+    /// "ollamaModel", default "llama3.2:3b"). ReminderManager is a standalone singleton with no
     /// AppState reference, so it reads the same UserDefaults key directly rather than
     /// hardcoding a model that may not actually be installed (this was the root cause of
     /// reminders silently never firing — see git history).
     private var selectedOllamaModel: String {
-        UserDefaults.standard.string(forKey: "ollamaModel") ?? "qwen3:8b"
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
     }
 
     /// Ask Ollama to parse task description and target fireDate from voice text

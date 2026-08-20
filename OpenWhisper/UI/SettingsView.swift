@@ -112,9 +112,11 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()
+                        // Only models actually installed via Ollama belong here. The
+                        // previous "Qwen 3 8B" entry pointed at `qwen3:8b`, which is not
+                        // pulled on this machine, so selecting it silently broke cleanup.
                         Picker("", selection: $appState.ollamaModel) {
                             Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
-                            Text("🧠 Yüksek Zekalı (Qwen 3 8B)").tag("qwen3:8b")
                         }
                         .labelsHidden()
                         .frame(width: 195)

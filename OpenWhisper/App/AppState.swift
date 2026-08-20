@@ -403,7 +403,7 @@ final class AppState {
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
-        ollamaModel = defaults.string(forKey: "ollamaModel") ?? "qwen3:8b"
+        ollamaModel = defaults.string(forKey: "ollamaModel") ?? "llama3.2:3b"
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false

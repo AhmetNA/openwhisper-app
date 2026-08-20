@@ -322,14 +322,14 @@ final class SpotifyManager: @unchecked Sendable {
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
-    /// "ollamaModel", default "qwen3:8b"). SpotifyManager is a standalone singleton with no
+    /// "ollamaModel", default "llama3.2:3b"). SpotifyManager is a standalone singleton with no
     /// AppState reference, so it reads the same UserDefaults key directly rather than
     /// hardcoding a model — this used to hardcode "qwen2.5:7b", a model that isn't installed
     /// (installed models are qwen3:8b, llama3.2:3b), so every classification request failed
     /// and silently fell through to the heuristic fallback. See ReminderManager's identical
     /// `selectedOllamaModel` for the same fix applied there.
     private static var selectedOllamaModel: String {
-        UserDefaults.standard.string(forKey: "ollamaModel") ?? "qwen3:8b"
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
     }
 
     /// Uses local Ollama LLM to classify whether the voice transcript is an intentional
