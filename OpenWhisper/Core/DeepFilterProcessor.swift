@@ -33,6 +33,32 @@ final class DeepFilterProcessor {
         Double(processedFrameCount * frameLength) / Self.sampleRate * 1000
     }
 
+    /// Ceiling, in dB, on how much DeepFilterNet may attenuate. libDF's own default is 100.0,
+    /// which is effectively unlimited, and that turned out to be the wrong choice here: when the
+    /// speaker is far from the microphone the model's own local SNR estimate collapses to about
+    /// -15 dB, it concludes the frame is all noise, and with no ceiling it removes the speech
+    /// along with it. Measured on identical input levels, -46.5 dBFS at +11 dB SNR transcribed
+    /// correctly while -46.6 dBFS at -15 dB SNR reached Whisper as silence.
+    ///
+    /// A bounded limit keeps real noise reduction while making that failure impossible: even
+    /// when the estimate is wrong, speech can only be pushed down by this much.
+    /// Overridable at runtime via the `deepFilterAttenuationLimitDb` UserDefaults key; the value
+    /// is read once when the model is created at launch, so a change needs an app restart.
+    static let defaultAttenuationLimitDb: Float = 20.0
+
+    static func resolvedAttenuationLimitDb(
+        defaults: UserDefaults = .standard
+    ) -> Float {
+        guard defaults.object(forKey: "deepFilterAttenuationLimitDb") != nil else {
+            return defaultAttenuationLimitDb
+        }
+        let raw = Float(defaults.double(forKey: "deepFilterAttenuationLimitDb"))
+        // 0 would mean "attenuate nothing", which is a confusing way to disable DF3 — Settings
+        // already has an explicit off switch. Anything non-finite or out of range falls back.
+        guard raw.isFinite, raw > 0, raw <= 100 else { return defaultAttenuationLimitDb }
+        return raw
+    }
+
     init?() {
         guard let modelPath = Bundle.main.path(forResource: "DeepFilterNet3_onnx", ofType: "tar.gz"),
               FileManager.default.fileExists(atPath: modelPath) else {
@@ -41,11 +67,13 @@ final class DeepFilterProcessor {
         }
 
         let tCreateStart = Date()
+        let attenuationLimitDb = Self.resolvedAttenuationLimitDb()
+        owLog(String(format: "[DeepFilter] Creating with attenuation limit %.1f dB", attenuationLimitDb))
         // df_create panics (aborting the process across the FFI boundary) on a bad path, so the
         // fileExists check above is load-bearing, not just a nicety.
         let createdState: OpaquePointer? = modelPath.withCString { cPath in
             "error".withCString { cLogLevel in
-                df_create(cPath, 100.0, cLogLevel)
+                df_create(cPath, attenuationLimitDb, cLogLevel)
             }
         }
         guard let createdState else {

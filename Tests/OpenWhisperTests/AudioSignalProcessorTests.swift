@@ -78,3 +78,35 @@ final class AudioSignalProcessorTests: XCTestCase {
         XCTAssertGreaterThan(abs(recovered[2]), abs(source[2]))
     }
 }
+
+final class DeepFilterAttenuationLimitTests: XCTestCase {
+    private func defaults(_ value: Any?) -> UserDefaults {
+        let suite = UserDefaults(suiteName: "DeepFilterAttenuationLimitTests")!
+        suite.removePersistentDomain(forName: "DeepFilterAttenuationLimitTests")
+        if let value { suite.set(value, forKey: "deepFilterAttenuationLimitDb") }
+        return suite
+    }
+
+    func testAbsentKeyUsesTheBoundedDefaultRatherThanLibDFsUnlimited() {
+        let limit = DeepFilterProcessor.resolvedAttenuationLimitDb(defaults: defaults(nil))
+        XCTAssertEqual(limit, DeepFilterProcessor.defaultAttenuationLimitDb)
+        // The whole point of the change: never ship libDF's effectively-unlimited 100.0, which
+        // let the model erase speech whenever it misjudged a far-field frame as pure noise.
+        XCTAssertLessThan(limit, 100)
+        XCTAssertGreaterThan(limit, 0)
+    }
+
+    func testAValidOverrideIsHonoured() {
+        XCTAssertEqual(DeepFilterProcessor.resolvedAttenuationLimitDb(defaults: defaults(35.0)), 35.0)
+    }
+
+    func testOutOfRangeAndNonsenseOverridesFallBack() {
+        for bad in [0.0, -5.0, 140.0, Double.nan] {
+            XCTAssertEqual(
+                DeepFilterProcessor.resolvedAttenuationLimitDb(defaults: defaults(bad)),
+                DeepFilterProcessor.defaultAttenuationLimitDb,
+                "\(bad) should have fallen back to the default"
+            )
+        }
+    }
+}
