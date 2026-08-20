@@ -133,10 +133,18 @@ final class FlowBarController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        // `.fullScreenAuxiliary` only makes a window auxiliary to a fullscreen window in the
-        // same app. FlowBar belongs to an accessory app, so use the system-overlay behavior
-        // that explicitly permits joining another app's fullscreen Space as well.
-        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .stationary]
+        // These are two independent axes in NSWindowCollectionBehavior, not alternatives:
+        // `.canJoinAllApplications` is the app-grouping axis (at most one of Primary /
+        // Auxiliary / CanJoinAllApplications), while `.fullScreenAuxiliary` is the fullscreen
+        // axis (at most one of FullScreenPrimary / FullScreenAuxiliary / FullScreenNone).
+        // Setting only the former left the fullscreen axis at its default, which is why the
+        // flow bar was invisible while another app owned a fullscreen Space.
+        panel.collectionBehavior = [
+            .canJoinAllSpaces,
+            .canJoinAllApplications,
+            .fullScreenAuxiliary,
+            .stationary
+        ]
         panel.isMovableByWindowBackground = true
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = false
