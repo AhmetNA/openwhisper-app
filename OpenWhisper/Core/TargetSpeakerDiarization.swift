@@ -580,6 +580,13 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         var acceptedWords: [WhisperTimedWord] = []
         var rejectedWordCount = 0
         var uncertainWordCount = 0
+        // A dropped-word count alone cannot be acted on: a word can be dropped because
+        // Sortformer never marked the target slot active over it, or because its re-scored
+        // embedding fell short — and those need opposite fixes. Record which one applied.
+        var droppedWordNotes: [String] = []
+        func noteDropped(_ word: WhisperTimedWord, _ reason: String) {
+            droppedWordNotes.append(String(format: "%@@%.2f-%.2fs:%@", word.word, word.start, word.end, reason))
+        }
 
         // Whisper emits words in chronological order. Keep that order exactly rather than
         // resorting, because equal timestamps are possible and their original order is useful
@@ -599,6 +606,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
 
             guard hasTargetActivity else {
                 rejectedWordCount += 1
+                noteDropped(word, "rejected(noTargetSlotActivity)")
                 continue
             }
 
@@ -628,6 +636,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
             )
             guard sampleEnd > sampleStart else {
                 uncertainWordCount += 1
+                noteDropped(word, "uncertain(emptyWindow)")
                 continue
             }
 
@@ -637,6 +646,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                   score.isFinite
             else {
                 uncertainWordCount += 1
+                noteDropped(word, "uncertain(embeddingUnavailable)")
                 continue
             }
 
@@ -644,9 +654,15 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 acceptedWords.append(word)
             } else if score >= configuration.wordUncertainFloor {
                 uncertainWordCount += 1
+                noteDropped(word, String(format: "uncertain(score=%.3f<%.2f)", score, configuration.wordSimilarityThreshold))
             } else {
                 rejectedWordCount += 1
+                noteDropped(word, String(format: "rejected(score=%.3f<%.2f)", score, configuration.wordUncertainFloor))
             }
+        }
+
+        if !droppedWordNotes.isEmpty {
+            owLog("[TargetSpeakerDiarization] dropped words: " + droppedWordNotes.joined(separator: " | "))
         }
 
         let hadOverlap = frames.contains(where: { $0.isOverlap })
