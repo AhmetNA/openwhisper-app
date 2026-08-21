@@ -165,6 +165,28 @@ final class GlobalHotkey {
 
     // MARK: - Space key (hands-free toggle)
 
+    /// Applies the same mode transition used by Fn+Space. Keeping this in one place makes
+    /// alternate hands-free shortcuts behave identically without changing the Fn+Space path.
+    ///
+    /// Returns `true` when the triggering key event should be swallowed.
+    private func toggleHandsFreeRecording() -> Bool {
+        switch mode {
+        case .idle:
+            mode = .handsFree
+            onPress()
+            return true
+        case .holding:
+            // User is already hold-to-talking; lock the active recording into hands-free.
+            mode = .handsFree
+            return true
+        case .handsFree:
+            mode = .idle
+            onRelease()
+            endActiveKeyDownCapture()
+            return true
+        }
+    }
+
     /// Called from the CGEventTap callback on every Space keyDown.
     /// Returns `true` if the event should be swallowed (don't pass through to the focused app).
     fileprivate func handleSpaceKeyDown(flags: CGEventFlags) -> Bool {
@@ -174,28 +196,27 @@ final class GlobalHotkey {
             && !flags.contains(.maskCommand)
             && !flags.contains(.maskControl)
 
-        switch mode {
-        case .idle:
-            if onlyFn {
-                mode = .handsFree
-                onPress()
-                return true
-            }
-            return false
-        case .holding:
-            // User is already hold-to-talking; tapping Space locks it into hands-free.
-            // Don't fire onPress/onRelease — the recording is already running.
-            if onlyFn {
-                mode = .handsFree
-                return true
-            }
-            return false
-        case .handsFree:
-            mode = .idle
-            onRelease()
-            endActiveKeyDownCapture()
-            return true
+        guard onlyFn else { return false }
+        return toggleHandsFreeRecording()
+    }
+
+    // MARK: - Command + Option + Control + D (hands-free toggle)
+
+    /// Makes ⌘⌥⌃D behave exactly like Fn+Space while keeping Fn+Space available.
+    /// Autorepeat is swallowed but does not toggle the recording a second time.
+    fileprivate func handleCommandOptionControlDKeyDown(
+        flags: CGEventFlags,
+        isRepeat: Bool
+    ) -> Bool {
+        let hasRequiredModifiers = flags.contains(.maskCommand)
+            && flags.contains(.maskAlternate)
+            && flags.contains(.maskControl)
+            && !flags.contains(.maskShift)
+        guard hasRequiredModifiers else { return false }
+        if !isRepeat {
+            return toggleHandsFreeRecording()
         }
+        return true
     }
 
     /// Called from the CGEventTap callback on Enter (keyCode 36 or 76) when in hands-free mode.
@@ -303,7 +324,8 @@ final class GlobalHotkey {
                 }
             } else if keyCode == me.dKeyCode {
                 let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-                if me.handleDiagnosticProbeKeyDown(flags: event.flags, isRepeat: isRepeat) {
+                if me.handleCommandOptionControlDKeyDown(flags: event.flags, isRepeat: isRepeat)
+                    || me.handleDiagnosticProbeKeyDown(flags: event.flags, isRepeat: isRepeat) {
                     return nil
                 }
             } else if keyCode == me.cKeyCode {
@@ -333,7 +355,7 @@ final class GlobalHotkey {
 
         eventTap = tap
         runLoopSource = source
-        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space; swap: ⌥Z; review: ⌥⇧C)")
+        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space/⌘⌥⌃D; swap: ⌥Z; review: ⌥⇧C)")
     }
 
     private func removeSpaceEventTap() {
