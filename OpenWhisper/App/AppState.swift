@@ -1074,7 +1074,8 @@ final class AppState {
                         audioData: segment.samples,
                         transcription: timedTranscription,
                         profile: profile,
-                        audioProcessingMode: audioProcessingMode
+                        audioProcessingMode: audioProcessingMode,
+                        segmentAcceptedRanges: filtered.acceptedSampleRanges
                     )
                     let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if diarized.acceptedWordCount > 0,

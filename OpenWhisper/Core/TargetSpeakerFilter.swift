@@ -7,7 +7,12 @@ struct TargetSpeakerFilterConfiguration: Sendable {
     static let vadFrameSamples = 4_096 // 256 ms at 16 kHz
     static let speakerWindowSamples = 24_000 // 1.5 s minimum
     static let speakerWindowHopSamples = 12_000 // 50% overlap
-    static let shortAdjacencySamples = 8_000 // 500 ms
+    /// Must be at least two VAD frames: adjacency gaps are effectively quantized to
+    /// `vadFrameSamples` boundaries, so a margin below `2 * vadFrameSamples` can rescue only a
+    /// one-frame pause and can *never* rescue a natural two-frame (e.g. ~512 ms) breath pause
+    /// between two accepted runs -- see Kusur B, SES-PLANI.md section 10. The previous fixed
+    /// 8_000 (500 ms) missed such a pause by 10 ms.
+    static let shortAdjacencySamples = 2 * vadFrameSamples
     static let acceptedPaddingSamples = 4_000 // 250 ms
     static let edgeFadeSamples = 160 // 10 ms
     /// FluidAudio embeddings are speaker-oriented but not pitch-invariant enough to use a
@@ -756,6 +761,15 @@ enum TargetSpeakerFilterDecision: Sendable, Equatable {
     case failClosed
 }
 
+/// A sample range (matching the same 16 kHz buffer indexing as the segment it was computed from)
+/// that the segment-level target-speaker gate already accepted as the target speaker. Downstream
+/// word-level diarization uses this to treat the region as resolved instead of independently
+/// re-vetoing it -- see Kusur A, SES-PLANI.md section 10.
+struct TargetSpeakerAcceptedRange: Sendable, Equatable {
+    let start: Int
+    let end: Int
+}
+
 struct TargetSpeakerFilterResult: Sendable {
     let samples: [Float]
     let acceptedSampleCount: Int
@@ -768,6 +782,9 @@ struct TargetSpeakerFilterResult: Sendable {
     /// Present only for `singleSpeakerUncertain`. The samples are already masked to the coherent
     /// candidate windows and can be passed to `appendConfirmedCandidate` after user confirmation.
     let confirmationCandidate: TargetSpeakerConfirmationCandidate?
+    /// The (padded, merged) sample ranges this segment gate accepted as the target speaker. Empty
+    /// when the gate made no per-range identity decision (disabled, fail-closed, no voice).
+    let acceptedSampleRanges: [TargetSpeakerAcceptedRange]
 
     var hasAcceptedTargetSpeech: Bool { acceptedSampleCount > 0 }
     var candidateSamples: [Float]? { confirmationCandidate?.samples }
@@ -779,7 +796,8 @@ struct TargetSpeakerFilterResult: Sendable {
         decision: TargetSpeakerFilterDecision = .accepted,
         wasFailClosed: Bool,
         errorDescription: String?,
-        confirmationCandidate: TargetSpeakerConfirmationCandidate? = nil
+        confirmationCandidate: TargetSpeakerConfirmationCandidate? = nil,
+        acceptedSampleRanges: [TargetSpeakerAcceptedRange] = []
     ) {
         self.samples = samples
         self.acceptedSampleCount = acceptedSampleCount
@@ -788,6 +806,7 @@ struct TargetSpeakerFilterResult: Sendable {
         self.wasFailClosed = wasFailClosed
         self.errorDescription = errorDescription
         self.confirmationCandidate = confirmationCandidate
+        self.acceptedSampleRanges = acceptedSampleRanges
     }
 }
 
@@ -1042,7 +1061,8 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 decision: decision,
                 wasFailClosed: false,
                 errorDescription: nil,
-                confirmationCandidate: confirmationCandidate
+                confirmationCandidate: confirmationCandidate,
+                acceptedSampleRanges: paddedAccepted.map { TargetSpeakerAcceptedRange(start: $0.start, end: $0.end) }
             )
         } catch {
             Self.logSummary(

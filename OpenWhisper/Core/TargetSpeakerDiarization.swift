@@ -137,11 +137,16 @@ struct TargetSpeakerDiarizationResult: Sendable, Equatable {
 protocol TargetSpeakerDiarizationService: Sendable {
     func prepare(progressHandler: TargetSpeakerDiarizationProgressHandler?) async throws
 
+    /// - Parameter segmentAcceptedRanges: Sample ranges (same 16 kHz indexing as `audioData`)
+    ///   that the segment-level `TargetSpeakerFilter` already accepted as the target speaker. A
+    ///   word fully resolved by that gate is not independently re-vetoed here -- see Kusur A,
+    ///   SES-PLANI.md section 10. Pass `[]` when no segment-level decision is available.
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        audioProcessingMode: AudioProcessingMode,
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
     ) async throws -> TargetSpeakerDiarizationResult
 }
 
@@ -151,13 +156,15 @@ extension TargetSpeakerDiarizationService {
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode = .off
+        audioProcessingMode: AudioProcessingMode = .off,
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange] = []
     ) async throws -> TargetSpeakerDiarizationResult {
         try await diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
             profile: profile,
-            audioProcessingMode: audioProcessingMode
+            audioProcessingMode: audioProcessingMode,
+            segmentAcceptedRanges: segmentAcceptedRanges
         )
     }
 }
@@ -192,13 +199,15 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        audioProcessingMode: AudioProcessingMode,
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
     ) async throws -> TargetSpeakerDiarizationResult {
         try await runtime.diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
             profile: profile,
-            audioProcessingMode: audioProcessingMode
+            audioProcessingMode: audioProcessingMode,
+            segmentAcceptedRanges: segmentAcceptedRanges
         )
     }
 }
@@ -351,9 +360,10 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        audioProcessingMode: AudioProcessingMode,
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
     ) async throws -> TargetSpeakerDiarizationResult {
-        owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count)")
+        owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count), segmentAcceptedRanges=\(segmentAcceptedRanges.count)")
         guard !audioData.isEmpty, audioData.allSatisfy({ $0.isFinite }) else {
             owLog("[TargetSpeakerDiarization] Error: invalidAudio (empty or non-finite samples)")
             throw TargetSpeakerDiarizationError.invalidAudio
@@ -387,7 +397,8 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 targetSlot: targetSlot,
                 profile: profile,
                 embeddingDiarizer: embeddingDiarizer,
-                intervals: intervals
+                intervals: intervals,
+                segmentAcceptedRanges: segmentAcceptedRanges
             )
             owLog("[TargetSpeakerDiarization] diarizeAndFilter succeeded: targetSlot=\(targetSlot), acceptedWords=\(result.acceptedWordCount)/\(transcription.words.count), rejectedWords=\(result.rejectedWordCount), uncertainWords=\(result.uncertainWordCount), hadOverlap=\(result.hadOverlap), text=\"\(result.text)\"")
             return result
@@ -575,8 +586,18 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         targetSlot: Int,
         profile: TargetSpeakerProfile,
         embeddingDiarizer: DiarizerManager,
-        intervals: [TargetSpeakerActivityInterval]
+        intervals: [TargetSpeakerActivityInterval],
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
     ) throws -> TargetSpeakerDiarizationResult {
+        // Converted once, in seconds, to match the time-based comparisons already used for words
+        // and frames below.
+        let acceptedIntervals: [(start: Double, end: Double)] = segmentAcceptedRanges.map {
+            (
+                start: Double($0.start) / Double(TargetSpeakerDiarizationConfiguration.sampleRate),
+                end: Double($0.end) / Double(TargetSpeakerDiarizationConfiguration.sampleRate)
+            )
+        }
+
         var acceptedWords: [WhisperTimedWord] = []
         var rejectedWordCount = 0
         var uncertainWordCount = 0
@@ -594,6 +615,21 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         for word in inputWords {
             let wordStart = max(0, Double(word.start))
             let wordEnd = max(wordStart, Double(word.end))
+
+            // Kusur A (SES-PLANI.md section 10): the segment-level gate already made an identity
+            // decision for this region using a longer, less noisy window. Re-vetoing a word inside
+            // that resolved region -- whether via the noTargetSlotActivity rejection below or the
+            // overlap re-score threshold -- only compounds two independent gates' false-reject
+            // rates. The word gate's job is to adjudicate regions the segment gate left unresolved,
+            // not to re-judge ones it already accepted.
+            let isInSegmentAcceptedRegion = acceptedIntervals.contains {
+                $0.end > wordStart && $0.start < wordEnd
+            }
+            if isInSegmentAcceptedRegion {
+                acceptedWords.append(word)
+                continue
+            }
+
             let overlappingFrames = frames.filter {
                 $0.endTime > wordStart && $0.startTime < wordEnd
             }
