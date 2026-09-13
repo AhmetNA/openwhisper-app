@@ -10,7 +10,6 @@ xcuserdata/
 
 # Swift Package Manager
 .swiftpm/
-Package.resolved
 
 # macOS
 .DS_Store

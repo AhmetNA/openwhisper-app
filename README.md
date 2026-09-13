@@ -207,7 +207,7 @@ swift build
 swift run OpenWhisper
 ```
 
-The project is also described by `project.yml` for XcodeGen users. Build artifacts, downloaded Whisper models, and local runtime data are intentionally ignored by Git.
+Build artifacts, downloaded Whisper models, and local runtime data are intentionally ignored by Git.
 
 Before opening a pull request, please check:
 

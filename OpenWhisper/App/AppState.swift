@@ -90,6 +90,22 @@ final class RecordingTranscriptionSession {
     }
 }
 
+/// A user-installed STT provider (manifest found under
+/// `~/Library/Application Support/OpenWhisper/STTProviders`) that has not yet been explicitly
+/// approved to run. Carries the resolved paths so Settings can show the user exactly what they'd
+/// be authorizing before they approve it. `manifestPath` is always present -- it's just the
+/// location the manifest was found at. `pythonPath`/`bridgePath` are nil when the security checks
+/// in `ExternalSTTProvider.resolveRuntime()` rejected the manifest (bridge escapes its directory,
+/// no allowlisted interpreter matched, etc.); such a provider still shows up here as rejected
+/// rather than silently disappearing from Settings.
+struct PendingProviderApproval: Identifiable, Sendable {
+    let id: String
+    let displayName: String
+    let manifestPath: String
+    let pythonPath: String?
+    let bridgePath: String?
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -658,6 +674,54 @@ final class AppState {
         transcriptionModelRegistry.availableProviders.map {
             (name: $0.descriptor.id, label: $0.descriptor.displayName)
         }
+    }
+
+    /// User-installed providers (manifest discovered from the user-writable STTProviders
+    /// directory) that are not yet approved to run. `.bundled` providers never appear here --
+    /// they're trusted like the rest of the app and have no gate to clear. See
+    /// `ExternalSTTProvider`'s approval gate for why this exists.
+    func pendingProviderApprovals() -> [PendingProviderApproval] {
+        transcriptionModelRegistry.providers.values
+            .compactMap { $0 as? ExternalSTTProvider }
+            .filter { $0.trust == .userInstalled && !$0.isApproved() }
+            .map { provider -> PendingProviderApproval in
+                // manifestPath is always present; pythonPath/bridgePath are nil when
+                // resolveRuntime() rejected the provider (e.g. bridge escapes the manifest
+                // directory, or no allowlisted interpreter matched). We deliberately do NOT drop
+                // those providers here -- the most suspicious manifest is exactly the one that
+                // failed resolution, and it must still show up in Settings instead of vanishing
+                // with only a log line as the trace.
+                let paths = provider.approvalDisplayPaths
+                return PendingProviderApproval(
+                    id: provider.descriptor.id,
+                    displayName: provider.descriptor.displayName,
+                    manifestPath: paths.manifestPath,
+                    pythonPath: paths.pythonPath,
+                    bridgePath: paths.bridgePath
+                )
+            }
+            .sorted { $0.displayName < $1.displayName }
+    }
+
+    /// Records the user's explicit approval, fingerprinted to the provider's current
+    /// manifest+bridge bytes so a later file change silently revokes it again.
+    func approveProvider(id: String) {
+        guard let provider = transcriptionModelRegistry.provider(for: id) as? ExternalSTTProvider else { return }
+        provider.approve()
+    }
+
+    func revokeProviderApproval(id: String) {
+        guard let provider = transcriptionModelRegistry.provider(for: id) as? ExternalSTTProvider else { return }
+        provider.revokeApproval()
+    }
+
+    /// User-installed providers currently approved to run, so Settings can offer a revoke action.
+    func approvedUserInstalledProviderIDs() -> [String] {
+        transcriptionModelRegistry.providers.values
+            .compactMap { $0 as? ExternalSTTProvider }
+            .filter { $0.trust == .userInstalled && $0.isApproved() }
+            .map(\.descriptor.id)
+            .sorted()
     }
 
     func loadModel() async {

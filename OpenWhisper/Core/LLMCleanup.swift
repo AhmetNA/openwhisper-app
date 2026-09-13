@@ -25,25 +25,6 @@ final class LLMCleanup: Sendable {
         "şey", "yani", "ee", "ıı", "hani", "um", "uh", "falan", "filan", "vs"
     ]
 
-    /// Path to the user's personal glossary file (symlinked to the project's sozluk.txt in dev setups).
-    private static var glossaryURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("OpenWhisper/glossary.txt")
-    }
-
-    /// Reads and parses the glossary file, stripping `#` comments and blank lines.
-    /// Tolerates a missing file by returning nil.
-    private static func loadGlossaryTerms() -> [String]? {
-        guard let contents = try? String(contentsOf: glossaryURL, encoding: .utf8) else {
-            return nil
-        }
-        let terms = contents
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-        return terms.isEmpty ? nil : terms
-    }
-
     /// Path to the learned-corrections store maintained by CorrectionStore.
     private static var correctionsURL: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -270,7 +251,7 @@ final class LLMCleanup: Sendable {
         // Read glossary + learned corrections once per cleanup call (fresh from disk each
         // time, not cached across calls) and thread them through to both the prompt builder
         // and the faithfulness check below, instead of each re-reading the files itself.
-        let glossaryTerms = Self.loadGlossaryTerms()
+        let glossaryTerms = GlossaryStore.terms()
         let corrections = Self.loadLearnedCorrections()
 
         let body: [String: Any] = [

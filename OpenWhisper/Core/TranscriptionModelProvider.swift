@@ -5,6 +5,17 @@ struct TranscriptionModelDescriptor: Sendable, Hashable {
     let displayName: String
 }
 
+/// Where a provider manifest was discovered. `.bundled` manifests ship inside the app bundle
+/// (`Bundle.module`) and are trusted like any other first-party code path. `.userInstalled`
+/// manifests are read from `~/Library/Application Support/OpenWhisper/STTProviders`, a
+/// user-writable directory -- anything found there must be explicitly approved before its bridge
+/// process is ever launched, since that process inherits OpenWhisper's microphone/Accessibility
+/// TCC grants.
+enum ProviderTrust: Sendable, Equatable {
+    case bundled
+    case userInstalled
+}
+
 private struct WhisperKitModelCatalog: Codable {
     let schemaVersion: Int
     let models: [Model]
@@ -90,20 +101,30 @@ final class TranscriptionModelRegistry: @unchecked Sendable {
             owLog("[TranscriptionModelRegistry] WhisperKit model manifesti bulunamadı")
         }
 
-        let userDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("OpenWhisper/STTProviders")
-        var manifestURLs = Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
-        if let userURLs = try? FileManager.default.contentsOfDirectory(
-            at: userDirectory, includingPropertiesForKeys: nil
-        ) {
-            manifestURLs.append(contentsOf: userURLs.filter { $0.pathExtension.lowercased() == "json" })
-        }
-
-        for url in manifestURLs {
+        // Paket içi manifestler uygulamanın kendi koduyla aynı güvene sahip (.bundled): imzalı
+        // app bundle'ının parçası, kullanıcı tarafından değiştirilemez.
+        let bundledManifestURLs = Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
+        for url in bundledManifestURLs {
             guard let data = try? Data(contentsOf: url),
                   let manifest = try? JSONDecoder().decode(ExternalSTTProviderManifest.self, from: data),
                   manifest.schemaVersion == 1 else { continue }
-            register(ExternalSTTProvider(manifest: manifest, manifestURL: url))
+            register(ExternalSTTProvider(manifest: manifest, manifestURL: url, trust: .bundled))
+        }
+
+        // Kullanıcı dizinindeki manifestler güvenilmez (.userInstalled): dizin kullanıcı
+        // tarafından yazılabilir, o yüzden bu sağlayıcılar listede görünür ama Ayarlar'dan açıkça
+        // onaylanmadan çalıştırılmaz (bkz. ExternalSTTProvider.run).
+        let userDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("OpenWhisper/STTProviders")
+        if let userURLs = try? FileManager.default.contentsOfDirectory(
+            at: userDirectory, includingPropertiesForKeys: nil
+        ) {
+            for url in userURLs where url.pathExtension.lowercased() == "json" {
+                guard let data = try? Data(contentsOf: url),
+                      let manifest = try? JSONDecoder().decode(ExternalSTTProviderManifest.self, from: data),
+                      manifest.schemaVersion == 1 else { continue }
+                register(ExternalSTTProvider(manifest: manifest, manifestURL: url, trust: .userInstalled))
+            }
         }
         owLog("[TranscriptionModelRegistry] keşfedilen sağlayıcılar: \(providers.keys.sorted().joined(separator: ", "))")
     }

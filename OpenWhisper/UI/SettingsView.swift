@@ -15,6 +15,11 @@ struct SettingsView: View {
     @State private var checkpointsWarning: String? = nil
     @State private var spotifyConnectTask: Task<Void, Never>?
 
+    /// Provider approval state lives in UserDefaults, not an @Observable stored property, so
+    /// approve/revoke actions bump this to force `transcriptionModelSection` to recompute its
+    /// pending/approved provider lists.
+    @State private var providerApprovalRefreshToken = UUID()
+
     enum SpotifyTestState: Equatable {
         case idle
         case testing
@@ -253,6 +258,8 @@ struct SettingsView: View {
         let extraDownloaded = downloaded
             .subtracting(catalog.map(\.name))
             .sorted()
+        let pendingApprovals = appState.pendingProviderApprovals()
+        let approvedUserInstalledIDs = appState.approvedUserInstalledProviderIDs()
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -284,6 +291,93 @@ struct SettingsView: View {
                  : "İnmiş modeller: \(downloaded.sorted().joined(separator: ", ")). ☁️ = henüz inmedi, seçince indirilir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+            if !pendingApprovals.isEmpty {
+                providerApprovalRows(pendingApprovals)
+                    .id(providerApprovalRefreshToken)
+            }
+
+            if !approvedUserInstalledIDs.isEmpty {
+                approvedProviderRevokeRows(approvedUserInstalledIDs)
+                    .id(providerApprovalRefreshToken)
+            }
+        }
+    }
+
+    /// One row per user-installed provider awaiting explicit approval. `manifestPath` is always
+    /// shown -- the row itself must never disappear, even for a manifest whose bridge/python
+    /// failed the security checks in `ExternalSTTProvider.resolveRuntime()` (that's the most
+    /// suspicious case, and the one most important to surface). When the interpreter or bridge
+    /// couldn't be resolved, that field reads "çözümlenemedi / reddedildi" and no approve button
+    /// is offered -- there is nothing to approve (`approve()` would silently no-op since it can't
+    /// compute a fingerprint), so we show a rejection notice pointing at the log instead.
+    private func providerApprovalRows(_ approvals: [PendingProviderApproval]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(approvals) { approval in
+                let isResolved = approval.pythonPath != nil && approval.bridgePath != nil
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 4) {
+                        Image(systemName: isResolved ? "exclamationmark.shield" : "xmark.shield")
+                            .foregroundStyle(isResolved ? .orange : .red)
+                        Text(isResolved
+                             ? "\(approval.displayName) onay bekliyor"
+                             : "\(approval.displayName) reddedildi")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+
+                    Group {
+                        Text("Manifest: \(approval.manifestPath)")
+                        Text("Yorumlayıcı: \(approval.pythonPath ?? "çözümlenemedi / reddedildi")")
+                        Text("Bridge: \(approval.bridgePath ?? "çözümlenemedi / reddedildi")")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+
+                    if isResolved {
+                        Text("Bu, kullanıcı dizininden keşfedilen bir sağlayıcı. Onaylarsanız yukarıdaki yorumlayıcı, OpenWhisper'ın mikrofon ve Accessibility izinlerini miras alarak çalıştırılır.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button("Çalıştırmaya izin ver") {
+                            appState.approveProvider(id: approval.id)
+                            providerApprovalRefreshToken = UUID()
+                        }
+                        .font(.caption)
+                    } else {
+                        Text("Bu sağlayıcı güvenlik kontrolünden geçemediği için çalıştırılamaz; onaylanacak bir şey yok. Ayrıntı için /tmp/openwhisper.log dosyasına bakın.")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill((isResolved ? Color.orange : Color.red).opacity(0.10)))
+            }
+        }
+    }
+
+    /// Lets the user revoke a previously granted approval for a user-installed provider.
+    private func approvedProviderRevokeRows(_ ids: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(ids, id: \.self) { id in
+                HStack {
+                    Text("\(id): çalıştırılmasına izin verildi")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("İzni kaldır") {
+                        appState.revokeProviderApproval(id: id)
+                        providerApprovalRefreshToken = UUID()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                }
+            }
         }
     }
 

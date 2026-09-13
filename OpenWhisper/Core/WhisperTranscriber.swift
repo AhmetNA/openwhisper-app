@@ -131,28 +131,11 @@ final class WhisperTranscriber: @unchecked Sendable {
     /// just glossary.txt's own header comment) to be live and wired up today.
     private static let maxGlossaryPromptTokens = 48
 
-    /// Path to the user's personal glossary file (symlinked to the project's sozluk.txt in dev setups).
-    private static var glossaryURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("OpenWhisper/glossary.txt")
-    }
-
-    /// Reads and parses the glossary file, stripping `#` comments and blank lines.
-    /// Tolerates a missing file by returning nil.
-    private static func loadGlossaryTerms() -> [String]? {
-        guard let contents = try? String(contentsOf: glossaryURL, encoding: .utf8) else {
-            return nil
-        }
-        let terms = contents
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-        return terms.isEmpty ? nil : terms
-    }
-
-    /// Comma-joined glossary text (nil when the glossary is missing/empty). Re-read from disk
-    /// on every call (rather than cached) so an edit to glossary.txt takes effect on the very
-    /// next dictation, with no app restart needed.
+    /// Comma-joined glossary text (nil when the glossary is missing/empty). Terms come from
+    /// `GlossaryStore.terms()`, which caches its parse but invalidates it as soon as the
+    /// glossary file's mtime/size changes — so an edit to glossary.txt still takes effect on
+    /// the very next dictation, with no app restart needed; we just no longer re-read and
+    /// re-parse the file from scratch when nothing has changed.
     ///
     /// Strips `.`/`!`/`?` from each term (e.g. "Claude.md" -> "Claudemd") before joining. This
     /// is a mitigation, not a full fix, for a real WhisperKit bug: `TextDecoder.decodeText`'s
@@ -168,7 +151,7 @@ final class WhisperTranscriber: @unchecked Sendable {
     /// fallback in `transcribe(audioData:language:)` is a real safety net, not a formality. We
     /// cannot fix the root cause without forking WhisperKit's TextDecoder.
     private static func glossaryPromptText() -> String? {
-        guard let terms = loadGlossaryTerms() else { return nil }
+        guard let terms = GlossaryStore.terms() else { return nil }
         let sanitizedTerms = terms.map { term in
             term.filter { !".!?".contains($0) }
         }

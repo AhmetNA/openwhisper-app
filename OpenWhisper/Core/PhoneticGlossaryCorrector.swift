@@ -44,21 +44,6 @@ enum PhoneticGlossaryCorrector {
     /// word stem (e.g. "bun"/"Bun", "git"/"Git") is too likely.
     private static let minRootLengthForBareMatch = 4
 
-    private static var glossaryURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("OpenWhisper/glossary.txt")
-    }
-
-    /// Single-word glossary terms only — a multi-word entry (e.g. "AI agent") can't be the
-    /// target of a one-word phonetic correction.
-    private static func loadSingleWordGlossaryTerms() -> [String] {
-        guard let contents = try? String(contentsOf: glossaryURL, encoding: .utf8) else { return [] }
-        return contents
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") && !$0.contains(" ") }
-    }
-
     /// `.ambiguous` is distinct from `.none`: it means the root DID connect to the glossary,
     /// just not to a single term confidently. Callers must treat that as a stop signal, not
     /// fall through to a less precise root guess (see `correctWord`).
@@ -191,7 +176,7 @@ enum PhoneticGlossaryCorrector {
     /// punctuation untouched. Returns the corrected text plus the (original, corrected) pairs
     /// that fired, for logging.
     static func correct(_ text: String) -> (result: String, applied: [(String, String)]) {
-        let terms = loadSingleWordGlossaryTerms()
+        let terms = GlossaryStore.singleWordTerms()
         guard !terms.isEmpty else { return (text, []) }
 
         var tokens = CorrectionEngine.tokenize(text)
