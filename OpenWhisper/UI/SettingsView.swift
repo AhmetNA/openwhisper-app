@@ -228,15 +228,12 @@ struct SettingsView: View {
                     Spacer()
                     Picker("", selection: $appState.ollamaModel) {
                         Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
-                        Text("🇹🇷 Türkçe Normalizasyon (ByT5)").tag(LLMCleanup.byT5ModelID)
                     }
                     .labelsHidden()
                     .frame(width: 260)
                 }
                 if !appState.cleanupAvailable {
-                    Text(appState.ollamaModel == LLMCleanup.byT5ModelID
-                         ? "ByT5 kurulumu gerekli: scripts/setup_byt5.sh"
-                         : "Seçili temizleme modeli hazır değil")
+                    Text("Seçili temizleme modeli hazır değil")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }

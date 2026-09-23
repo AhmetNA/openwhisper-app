@@ -162,10 +162,7 @@ final class ReminderManager {
     /// hardcoding a model that may not actually be installed (this was the root cause of
     /// reminders silently never firing — see git history).
     private var selectedOllamaModel: String {
-        let selected = UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
-        // ByT5 is a text normalizer, not a generative reminder parser. Selecting it for
-        // transcript cleanup must not break the separate Ollama-backed reminder feature.
-        return selected == LLMCleanup.byT5ModelID ? "llama3.2:3b" : selected
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
     }
 
     /// Ask Ollama to parse task description and target fireDate from voice text

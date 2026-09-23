@@ -81,20 +81,6 @@ ollama pull qwen3:8b
 
 Ollama should be available at `http://localhost:11434` while OpenWhisper is running.
 
-### Optional: Turkish ByT5 normalization
-
-The cleanup picker also offers `ByT5 Turkish Normalizer`, a CPU-only mode for informal and
-misspelled Turkish. It is independent from Ollama, so the existing Llama cleanup remains unchanged.
-Install its isolated runtime and download the model once:
-
-```bash
-./scripts/setup_byt5.sh
-```
-
-ByT5 protects URLs, numbers, code-shaped tokens, acronyms, and terms in `sozluk.txt`; unsafe or
-overly large rewrites fall back to the pre-normalization transcript. Ollama is still used for
-Spotify intent classification and flexible reminder parsing when it is running.
-
 ### 3. Build and install OpenWhisper
 
 ```bash

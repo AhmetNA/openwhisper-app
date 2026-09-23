@@ -168,7 +168,7 @@ final class AppState {
             llmCleanup = LLMCleanup(model: ollamaModel)
             Task { [weak self] in
                 guard let self else { return }
-                self.cleanupAvailable = await LLMCleanup.checkAvailability(model: self.ollamaModel)
+                self.cleanupAvailable = await LLMCleanup.checkAvailability()
             }
         }
     }
@@ -256,8 +256,7 @@ final class AppState {
     var audioLevel: Float = 0.0
     var recordingDuration: TimeInterval = 0.0
     var ollamaAvailable: Bool = false
-    /// Availability of the selected cleanup engine. Kept separate from Ollama because Spotify
-    /// intent and reminder parsing still need Ollama even when ByT5 handles transcript cleanup.
+    /// Availability of the selected cleanup engine.
     var cleanupAvailable: Bool = false
     var modelLoaded: Bool = false
     var modelLoading: Bool = false
@@ -464,7 +463,9 @@ final class AppState {
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
-        ollamaModel = defaults.string(forKey: "ollamaModel") ?? "llama3.2:3b"
+        let savedModel = defaults.string(forKey: "ollamaModel") ?? "llama3.2:3b"
+        // The ByT5 normalizer was removed; users who had it selected fall back to Llama.
+        ollamaModel = savedModel == "byt5-small-tr-normalizer" ? "llama3.2:3b" : savedModel
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
@@ -588,7 +589,7 @@ final class AppState {
 
         // Check Ollama availability
         ollamaAvailable = await LLMCleanup.checkAvailability()
-        cleanupAvailable = await LLMCleanup.checkAvailability(model: ollamaModel)
+        cleanupAvailable = await LLMCleanup.checkAvailability()
         owLog("[OpenWhisper] Ollama available: \(ollamaAvailable)")
         owLog("[OpenWhisper] Selected cleanup available: \(cleanupAvailable)")
 
@@ -2515,6 +2516,6 @@ final class AppState {
 
     func refreshOllamaStatus() async {
         ollamaAvailable = await LLMCleanup.checkAvailability()
-        cleanupAvailable = await LLMCleanup.checkAvailability(model: ollamaModel)
+        cleanupAvailable = await LLMCleanup.checkAvailability()
     }
 }
