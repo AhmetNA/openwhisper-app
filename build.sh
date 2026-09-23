@@ -44,6 +44,11 @@ cp "$DF_MODEL_SRC" "$APP_DIR/Resources/DeepFilterNet3_onnx.tar.gz"
 
 # Copy executable
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
+# SwiftPM stamps the binary with sdk == deployment target (14.0), which makes macOS
+# run it in compatibility mode and disables Liquid Glass. Re-stamp with the real SDK.
+SDK_VERSION="$(xcrun --show-sdk-version)"
+xcrun vtool -set-build-version macos 14.0 "$SDK_VERSION" -replace \
+    -output "$APP_DIR/MacOS/OpenWhisper" "$APP_DIR/MacOS/OpenWhisper"
 cp "$DF_LIB_SRC" "$APP_DIR/MacOS/libdf.dylib"
 
 # Copy resource bundle if exists

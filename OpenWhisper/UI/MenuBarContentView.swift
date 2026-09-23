@@ -4,13 +4,14 @@ struct MenuBarContentView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
+        LiquidGlassContainer(spacing: 14) {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 11) {
                 Image(systemName: "waveform")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
-                    .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 11))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 11, style: .continuous), tint: Color.accentColor.opacity(0.7), clear: true, interactive: true)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OpenWhisper")
@@ -34,7 +35,7 @@ struct MenuBarContentView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(appState.systemAudioEnabled ? Color.accentColor : .secondary)
                     .frame(width: 30, height: 30)
-                    .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Bilgisayar sesini yazıya dök")
                         .font(.subheadline.weight(.semibold))
@@ -51,6 +52,8 @@ struct MenuBarContentView: View {
                         appState.stopSystemAudioListening()
                     } else {
                         appState.startSystemAudioListening()
+                        // Close the MenuBarExtra panel so it doesn't sit over what's being listened to.
+                        NSApp.keyWindow?.close()
                     }
                 } label: {
                     HStack(spacing: 5) {
@@ -62,7 +65,7 @@ struct MenuBarContentView: View {
                     .foregroundStyle(appState.systemAudioEnabled && !appState.systemAudioIsRecording ? Color.primary : .white)
                     .padding(.horizontal, 10)
                     .frame(height: 28)
-                    .background(systemAudioButtonColor, in: Capsule())
+                    .liquidGlass(in: Capsule(), tint: systemAudioButtonColor, clear: true, interactive: true)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(appState.systemAudioIsRecording ? "Kaydı bitir ve metni panoya kopyala" :
@@ -70,7 +73,7 @@ struct MenuBarContentView: View {
                 .disabled(!appState.modelLoaded && !appState.systemAudioEnabled)
             }
             .padding(10)
-            .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
 
             Divider()
 
@@ -82,7 +85,7 @@ struct MenuBarContentView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 15, weight: .semibold))
                             .frame(width: 34, height: 34)
-                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                            .liquidGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
 
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Son kaydı yeniden analiz et")
@@ -98,7 +101,8 @@ struct MenuBarContentView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
                 }
                 .buttonStyle(.plain)
                 .disabled(isBusy)
@@ -146,18 +150,22 @@ struct MenuBarContentView: View {
             Divider()
 
             HStack {
-                Button("Çıkış") { NSApplication.shared.terminate(nil) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                Button {
+                    NSApplication.shared.terminate(nil)
+                } label: {
+                    Label("Çıkış", systemImage: "power")
+                }
+                .glassButtonStyle()
                 Spacer()
                 Button {
                     SettingsWindowController.shared.show()
                 } label: {
                     Label("Ayarlar…", systemImage: "gearshape")
                 }
-                .buttonStyle(.borderedProminent)
+                .glassProminentButtonStyle()
                 .keyboardShortcut(",", modifiers: .command)
             }
+        }
         }
         .padding(16)
         .frame(width: 350)
@@ -174,7 +182,7 @@ struct MenuBarContentView: View {
 
     private var systemAudioButtonColor: Color {
         if appState.systemAudioIsRecording { return .red }
-        if appState.systemAudioEnabled { return Color.primary.opacity(0.12) }
+        if appState.systemAudioEnabled { return .clear }
         return .accentColor
     }
 
@@ -200,6 +208,55 @@ struct MenuBarContentView: View {
             if appState.systemAudioIsRecording { return .red }
             if appState.systemAudioIsTranscribing { return .orange }
             return appState.modelLoaded ? .green : .orange
+        }
+    }
+}
+
+// MARK: - Liquid Glass
+
+/// Groups glass shapes so they blend/morph together on macOS 26+; plain stack otherwise.
+private struct LiquidGlassContainer<Content: View>: View {
+    var spacing: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { content }
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    /// Liquid Glass on macOS 26+, falls back to a translucent material on older systems.
+    @ViewBuilder
+    func liquidGlass<S: Shape>(in shape: S, tint: Color? = nil, clear: Bool = false, interactive: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect((clear ? Glass.clear : Glass.regular).tint(tint).interactive(interactive), in: shape)
+        } else {
+            self
+                .background((tint ?? .clear).opacity(0.85), in: shape)
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+        }
+    }
+
+    @ViewBuilder
+    func glassButtonStyle() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(.glass)
+        } else {
+            self.buttonStyle(.bordered)
+        }
+    }
+
+    @ViewBuilder
+    func glassProminentButtonStyle() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(.glassProminent)
+        } else {
+            self.buttonStyle(.borderedProminent)
         }
     }
 }

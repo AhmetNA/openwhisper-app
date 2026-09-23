@@ -264,9 +264,12 @@ struct SettingsView: View {
                         HStack {
                             Image(systemName: "waveform")
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(recording.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                Text(recording.previewLabel)
                                     .fontWeight(.medium)
-                                Text("\(Int(recording.duration)) saniye")
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .foregroundStyle(recording.previewText == nil ? .secondary : .primary)
+                                Text("\(Int(recording.duration.rounded())) sn · \(recording.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -286,6 +289,11 @@ struct SettingsView: View {
             }
             if let status = appState.replayStatus {
                 Text(status).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: appState.modelLoaded) {
+            if appState.modelLoaded {
+                appState.prepareRecordingPreviews()
             }
         }
     }
