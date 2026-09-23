@@ -329,7 +329,10 @@ final class SpotifyManager: @unchecked Sendable {
     /// and silently fell through to the heuristic fallback. See ReminderManager's identical
     /// `selectedOllamaModel` for the same fix applied there.
     private static var selectedOllamaModel: String {
-        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
+        let selected = UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
+        // ByT5 can clean transcripts but cannot answer the JSON intent prompt. Keep these
+        // independent Ollama features on the installed general-purpose model.
+        return selected == LLMCleanup.byT5ModelID ? "llama3.2:3b" : selected
     }
 
     /// Uses local Ollama LLM to classify whether the voice transcript is an intentional

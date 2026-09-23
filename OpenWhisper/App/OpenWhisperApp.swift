@@ -50,7 +50,7 @@ struct OpenWhisperApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            SettingsView()
+            MenuBarContentView()
                 .environment(AppState.shared)
         } label: {
             HStack(spacing: 4) {

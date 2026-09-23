@@ -5,7 +5,9 @@ struct FlowBarView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if let message = appState.flowBarMessage {
+            if appState.systemAudioEnabled && appState.recordingState == .idle {
+                systemAudioContent
+            } else if let message = appState.flowBarMessage {
                 if appState.targetSpeakerAppendOfferActive {
                     rejectedRecordingOfferContent(message: message)
 
@@ -65,6 +67,35 @@ struct FlowBarView: View {
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
         .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
+        .animation(.easeInOut(duration: 0.25), value: appState.systemAudioIsRecording)
+    }
+
+    // MARK: - System output recording
+
+    private var systemAudioContent: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(appState.systemAudioIsRecording ? Color.red : Color.green)
+                .frame(width: 8, height: 8)
+
+            Text(appState.systemAudioIsRecording ? "Bilgisayar sesi kaydediliyor" : "Bilgisayar sesi bekleniyor")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+
+            Button {
+                appState.stopSystemAudioListening()
+            } label: {
+                Text(appState.systemAudioIsRecording ? "Bitir ve kopyala" : "Kapat")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(appState.systemAudioIsRecording ? Color.red : Color.white.opacity(0.2)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(appState.systemAudioIsRecording ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini dinlemeyi kapat")
+        }
+        .frame(height: 26)
     }
 
     // MARK: - Target-speaker confirmation offer

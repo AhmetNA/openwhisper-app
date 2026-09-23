@@ -33,183 +33,260 @@ struct SettingsView: View {
         case failure(String)
     }
 
-    var body: some View {
-        @Bindable var appState = appState
+    enum Tab: String, CaseIterable, Identifiable {
+        case general, models, voice, recordings, spotify, corrections, approvals
 
-        VStack(alignment: .leading, spacing: 14) {
-            audioProcessingSection
-
-            Divider()
-
-            transcriptionModelSection
-
-            Divider()
-
-            // Language
-            HStack {
-                Label("Language", systemImage: "globe")
-                Spacer()
-                Picker("", selection: $appState.language) {
-                    Text("Auto-detect").tag("")
-                    Text("English").tag("en")
-                    Text("Spanish").tag("es")
-                    Text("French").tag("fr")
-                    Text("German").tag("de")
-                    Text("Hindi").tag("hi")
-                    Text("Telugu").tag("te")
-                    Text("Tamil").tag("ta")
-                    Text("Kannada").tag("kn")
-                    Text("Malayalam").tag("ml")
-                    Text("Bengali").tag("bn")
-                    Text("Marathi").tag("mr")
-                    Text("Gujarati").tag("gu")
-                    Text("Urdu").tag("ur")
-                    Text("Punjabi").tag("pa")
-                    Text("Japanese").tag("ja")
-                    Text("Chinese").tag("zh")
-                    Text("Korean").tag("ko")
-                    Text("Russian").tag("ru")
-                    Text("Portuguese").tag("pt")
-                    Text("Arabic").tag("ar")
-                    Text("Italian").tag("it")
-                    Text("Dutch").tag("nl")
-                    Text("Turkish").tag("tr")
-                    Text("Polish").tag("pl")
-                    Text("Thai").tag("th")
-                    Text("Vietnamese").tag("vi")
-                    Text("Indonesian").tag("id")
-                    Text("Ukrainian").tag("uk")
-                    Text("Swedish").tag("sv")
-                }
-                .labelsHidden()
-                .frame(width: 150)
-            }
-
-            // Input device
-            inputDeviceSection
-
-            Divider()
-
-            targetSpeakerSection
-
-            Divider()
-
-            // LLM Cleanup
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("LLM Cleanup", systemImage: "sparkles")
-                    Spacer()
-                    if appState.llmCleanupEnabled {
-                        Circle()
-                            .fill(appState.ollamaAvailable ? .green : .red)
-                            .frame(width: 6, height: 6)
-                            .help(appState.ollamaAvailable ? "Ollama connected" : "Ollama not running")
-                    }
-                    Toggle("", isOn: $appState.llmCleanupEnabled)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .controlSize(.small)
-                }
-
-                if appState.llmCleanupEnabled {
-                    HStack {
-                        Text("AI Model")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        // Only models actually installed via Ollama belong here. The
-                        // previous "Qwen 3 8B" entry pointed at `qwen3:8b`, which is not
-                        // pulled on this machine, so selecting it silently broke cleanup.
-                        Picker("", selection: $appState.ollamaModel) {
-                            Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
-                        }
-                        .labelsHidden()
-                        .frame(width: 195)
-                    }
-                }
-            }
-
-            HStack(alignment: .top, spacing: 8) {
-                Label("Gülmeyi random'a çevir", systemImage: "face.smiling")
-                Spacer()
-                Toggle("", isOn: $appState.laughterToRandomEnabled)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .controlSize(.small)
-            }
-
-            Text("Ha ha ha, haha ve kahkaha gibi ifadeleri klavye satırından üretilen 8–10 harflik random'a dönüştürür.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            // Spotify
-            spotifySection
-
-            Divider()
-
-            // Learned Corrections
-            correctionsSection
-
-            Divider()
-
-            // Model loading status
-            if appState.modelLoading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(appState.modelLoadProgress > 0
-                         ? (appState.modelIsDownloading
-                         ? "Downloading \(appState.transcriptionModel) model — \(Int(appState.modelLoadProgress * 100))%"
-                         : "Switching to \(appState.transcriptionModel) model...")
-                         : "Loading \(appState.transcriptionModel) model...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else if !appState.modelLoaded {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.circle")
-                        .foregroundStyle(.orange)
-                    Text("Model not loaded")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // Last error
-            if let error = appState.lastError {
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.yellow)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-
-            Divider()
-
-            // Footer
-            HStack {
-                Text("v1.0.0")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Button("Quit OpenWhisper") {
-                    NSApplication.shared.terminate(nil)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.red)
-                .font(.callout)
+        var id: Self { self }
+        var title: String {
+            switch self {
+            case .general: "Genel"
+            case .models: "Modeller"
+            case .voice: "Sesim"
+            case .recordings: "Kayıtlar"
+            case .spotify: "Spotify"
+            case .corrections: "Düzeltmeler"
+            case .approvals: "Onaylar"
             }
         }
-        .padding(16)
-        .frame(width: 330)
-        .onAppear {
-            appState.refreshPermissions()
+        var symbol: String {
+            switch self {
+            case .general: "slider.horizontal.3"
+            case .models: "waveform"
+            case .voice: "person.wave.2"
+            case .recordings: "waveform.badge.mic"
+            case .spotify: "music.note"
+            case .corrections: "text.badge.checkmark"
+            case .approvals: "checkmark.seal"
+            }
+        }
+    }
+
+    @State private var selectedTab: Tab = .general
+
+    var body: some View {
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            if selectedTab == .approvals {
+                CorrectionsManagementView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(selectedTab.title)
+                            .font(.title2.weight(.semibold))
+                        tabContent
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(minWidth: 760, minHeight: 540)
+        .onAppear { appState.refreshPermissions() }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("OPENWHISPER")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+            ForEach(Tab.allCases) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: tab.symbol)
+                            .frame(width: 18)
+                        Text(tab.title)
+                        Spacer(minLength: 0)
+                        if tab == .approvals {
+                            let count = CorrectionStore.shared.records.filter { $0.status == .candidate }.count
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                    .background(selectedTab == tab ? Color.accentColor.opacity(0.13) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(selectedTab == tab ? "Seçili" : "")
+            }
+            Spacer()
+            Text("v1.0.0")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
+        }
+        .padding(12)
+        .frame(width: 185)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch selectedTab {
+        case .general:
+            audioProcessingSection
+            Divider()
+            inputDeviceSection
+            Divider()
+            languageSection
+            if let error = appState.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+        case .models:
+            transcriptionModelSection
+            Divider()
+            cleanupSection
+            if appState.modelLoading {
+                ProgressView("Model yükleniyor…")
+            } else if !appState.modelLoaded {
+                Label("Model hazır değil", systemImage: "exclamationmark.circle")
+                    .foregroundStyle(.orange)
+            }
+        case .voice:
+            targetSpeakerSection
+        case .recordings:
+            recordingsSection
+        case .spotify:
+            spotifySection
+        case .corrections:
+            correctionsSection
+        case .approvals:
+            EmptyView()
+        }
+    }
+
+    private var languageSection: some View {
+        @Bindable var appState = appState
+        return HStack {
+        Label("Language", systemImage: "globe")
+        Spacer()
+        Picker("", selection: $appState.language) {
+            Text("Auto-detect").tag("")
+            Text("English").tag("en")
+            Text("Spanish").tag("es")
+            Text("French").tag("fr")
+            Text("German").tag("de")
+            Text("Hindi").tag("hi")
+            Text("Telugu").tag("te")
+            Text("Tamil").tag("ta")
+            Text("Kannada").tag("kn")
+            Text("Malayalam").tag("ml")
+            Text("Bengali").tag("bn")
+            Text("Marathi").tag("mr")
+            Text("Gujarati").tag("gu")
+            Text("Urdu").tag("ur")
+            Text("Punjabi").tag("pa")
+            Text("Japanese").tag("ja")
+            Text("Chinese").tag("zh")
+            Text("Korean").tag("ko")
+            Text("Russian").tag("ru")
+            Text("Portuguese").tag("pt")
+            Text("Arabic").tag("ar")
+            Text("Italian").tag("it")
+            Text("Dutch").tag("nl")
+            Text("Turkish").tag("tr")
+            Text("Polish").tag("pl")
+            Text("Thai").tag("th")
+            Text("Vietnamese").tag("vi")
+            Text("Indonesian").tag("id")
+            Text("Ukrainian").tag("uk")
+            Text("Swedish").tag("sv")
+        }
+        .labelsHidden()
+        .frame(width: 150)
+    }
+    }
+
+    private var cleanupSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("LLM Cleanup", systemImage: "sparkles")
+                Spacer()
+                Toggle("", isOn: $appState.llmCleanupEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            if appState.llmCleanupEnabled {
+                HStack {
+                    Text("AI Model")
+                    Spacer()
+                    Picker("", selection: $appState.ollamaModel) {
+                        Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
+                        Text("🇹🇷 Türkçe Normalizasyon (ByT5)").tag(LLMCleanup.byT5ModelID)
+                    }
+                    .labelsHidden()
+                    .frame(width: 260)
+                }
+                if !appState.cleanupAvailable {
+                    Text(appState.ollamaModel == LLMCleanup.byT5ModelID
+                         ? "ByT5 kurulumu gerekli: scripts/setup_byt5.sh"
+                         : "Seçili temizleme modeli hazır değil")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            Divider()
+            Toggle("Gülmeyi random'a çevir", isOn: $appState.laughterToRandomEnabled)
+            Text("Ha ha ha, haha ve kahkaha gibi ifadeleri klavye satırından üretilen 8–10 harflik random'a dönüştürür.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var recordingsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Son 7 ses kaydı bu Mac'te saklanır. Bir kaydı seçince yeniden analiz edilir ve metin panoya kopyalanır.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            if appState.savedRecordings.isEmpty {
+                ContentUnavailableView("Henüz kayıt yok", systemImage: "waveform", description: Text("İlk dikteniz burada görünecek."))
+            } else {
+                ForEach(appState.savedRecordings) { recording in
+                    Button {
+                        appState.replayRecording(recording)
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform")
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(recording.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                    .fontWeight(.medium)
+                                Text("\(Int(recording.duration)) saniye")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if appState.replayingRecordingID == recording.id {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "doc.on.clipboard")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(10)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(appState.replayingRecordingID != nil || appState.recordingState != .idle)
+                }
+            }
+            if let status = appState.replayStatus {
+                Text(status).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -777,16 +854,8 @@ struct SettingsView: View {
         }
     }
 
-    /// This whole flow runs behind a MenuBarExtra popover (`.menuBarExtraStyle(.window)`):
-    /// `SpotifyWebAPI.connectUserAccount()` opens the system browser via
-    /// `NSWorkspace.shared.open`, which steals focus and — being a `.window`-style
-    /// popover, not a persistent panel — closes it immediately, tearing down this view's
-    /// `@State` (including the "İptal" button and whatever `spotifyConnectState` would
-    /// have shown). The `Task` below isn't cancelled by that (it's a plain `Task {}`, not
-    /// a `.task {}` view modifier), so it keeps running and its state writes are still
-    /// safe — they just won't be visible if the user doesn't reopen the popover at the
-    /// right moment. A system notification is the only outcome-reporting path guaranteed
-    /// to reach the user regardless of popover state, so post one on every branch.
+    /// Authentication opens the system browser. The task remains active in the
+    /// dedicated settings window; a notification also reports the outcome if it closes.
     private func connectSpotifyAccount() {
         spotifyConnectState = .connecting
         spotifyConnectTask = Task {
@@ -901,7 +970,7 @@ struct SettingsView: View {
                 let totalCount = store.records.count
 
                 Button {
-                    CorrectionsWindowController.shared.show()
+                    selectedTab = .approvals
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.seal.fill")
@@ -947,266 +1016,345 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Dedicated Corrections Management Window
-
-@MainActor
-final class CorrectionsWindowController: NSObject, NSWindowDelegate {
-    static let shared = CorrectionsWindowController()
-    private var window: NSWindow?
-
-    func show() {
-        if let window = window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let contentView = CorrectionsManagementView(onClose: { [weak self] in
-            self?.close()
-        })
-
-        let hostingController = NSHostingController(rootView: contentView)
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "Öğrenilen Düzeltmeler & Onaylar"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.setFrameAutosaveName("CorrectionsManagementWindow")
-        window.delegate = self
-        self.window = window
-
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func close() {
-        window?.close()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        window = nil
-    }
-}
+// MARK: - Corrections and approvals tab
 
 struct CorrectionsManagementView: View {
-    var onClose: (() -> Void)?
-    @State private var newWrong: String = ""
-    @State private var newRight: String = ""
-    @State private var filter: Filter = .all
+    @State private var newWrong = ""
+    @State private var newRight = ""
+    @State private var filter: Filter = .candidate
+    @State private var pendingDeleteID: String?
 
-    enum Filter: String, CaseIterable {
-        case all = "Tümü"
-        case candidate = "Onay Bekleyenler"
-        case active = "Aktif"
-        case disabled = "Reddedilenler"
+    enum Filter: String, CaseIterable, Identifiable {
+        case candidate, all, active, disabled
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .candidate: "Bekleyen"
+            case .all: "Tümü"
+            case .active: "Aktif"
+            case .disabled: "Reddedilen"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .candidate: "clock.badge.exclamationmark"
+            case .all: "square.stack.3d.up"
+            case .active: "checkmark.circle"
+            case .disabled: "xmark.circle"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .candidate: .orange
+            case .all: .accentColor
+            case .active: .green
+            case .disabled: .secondary
+            }
+        }
     }
 
-    private func statusPriority(_ status: CorrectionStore.Status) -> Int {
-        switch status {
-        case .candidate: return 0
-        case .active: return 1
-        case .disabled: return 2
+    private var records: [CorrectionStore.Record] { CorrectionStore.shared.records }
+    private var pendingCount: Int { records.filter { $0.status == .candidate }.count }
+
+    private var filteredRecords: [CorrectionStore.Record] {
+        records.filter { record in
+            switch filter {
+            case .candidate: record.status == .candidate
+            case .all: true
+            case .active: record.status == .active
+            case .disabled: record.status == .disabled
+            }
+        }
+        .sorted { left, right in
+            let leftPriority = statusPriority(left.status)
+            let rightPriority = statusPriority(right.status)
+            return leftPriority == rightPriority ? left.lastSeen > right.lastSeen : leftPriority < rightPriority
         }
     }
 
     var body: some View {
-        let store = CorrectionStore.shared
-        VStack(alignment: .leading, spacing: 14) {
-            // Header
-            HStack {
-                Label("Öğrenilen Düzeltmeler & Onaylar", systemImage: "wand.and.stars")
-                    .font(.title2.weight(.bold))
-                Spacer()
-                if let onClose = onClose {
-                    Button("Kapat") {
-                        onClose()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 18)
+
+            HStack(spacing: 8) {
+                ForEach(Filter.allCases) { option in
+                    filterCard(option)
                 }
             }
-
-            Text("Metin alanlarında elle yaptığın düzeltmeler burada listelenir. Bekleyen adayları onaylayarak otomatik aktifleştirebilir, önemsiz olanları listeden kaldırabilirsin.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            // Segmented Picker Filter
-            Picker("", selection: $filter) {
-                let pendingCount = store.records.filter { $0.status == .candidate }.count
-                let activeCount = store.records.filter { $0.status == .active }.count
-                let disabledCount = store.records.filter { $0.status == .disabled }.count
-                Text("Tümü (\(store.records.count))").tag(Filter.all)
-                Text("Onay Bekleyenler (\(pendingCount))").tag(Filter.candidate)
-                Text("Aktif (\(activeCount))").tag(Filter.active)
-                Text("Reddedilenler (\(disabledCount))").tag(Filter.disabled)
-            }
-            .pickerStyle(.segmented)
-
-            // Records List
-            let filteredRecords = store.records.filter { record in
-                switch filter {
-                case .all: return true
-                case .candidate: return record.status == .candidate
-                case .active: return record.status == .active
-                case .disabled: return record.status == .disabled
-                }
-            }.sorted { r1, r2 in
-                let p1 = statusPriority(r1.status)
-                let p2 = statusPriority(r2.status)
-                if p1 != p2 {
-                    return p1 < p2
-                }
-                return r1.lastSeen > r2.lastSeen
-            }
-
-            if filteredRecords.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "tray")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.quaternary)
-                    Text(filter == .candidate ? "Onay bekleyen düzeltme yok" : "Henüz kayıtlı düzeltme yok")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(filteredRecords) { record in
-                        correctionRow(record)
-                    }
-                }
-                .listStyle(.inset)
-            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 18)
 
             Divider()
 
-            // Manual Add Form
-            HStack(spacing: 8) {
-                Text("Manuel Ekle:")
-                    .font(.callout.weight(.semibold))
+            if filteredRecords.isEmpty {
+                emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(filteredRecords) { record in
+                            correctionCard(record)
+                        }
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+
+            Divider()
+            manualAddSection
+                .padding(20)
+        }
+        .frame(minWidth: 520, minHeight: 540)
+        .confirmationDialog(
+            "Düzeltme silinsin mi?",
+            isPresented: Binding(
+                get: { pendingDeleteID != nil },
+                set: { if !$0 { pendingDeleteID = nil } }
+            )
+        ) {
+            Button("Düzeltmeyi sil", role: .destructive) {
+                if let id = pendingDeleteID { CorrectionStore.shared.delete(id: id) }
+                pendingDeleteID = nil
+            }
+        } message: {
+            Text("Bu düzeltme kayıtlı listeden kaldırılacak.")
+        }
+        .onAppear {
+            filter = pendingCount > 0 ? .candidate : .all
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Onaylar")
+                    .font(.title2.weight(.semibold))
+                Text("Öğrenilen düzeltmeleri inceleyin ve kullanılacak olanları seçin.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                TextField("yanlış (örn: cloud)", text: $newWrong)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Label(pendingCount == 0 ? "Bekleyen yok" : "\(pendingCount) bekliyor",
+                  systemImage: pendingCount == 0 ? "checkmark.circle" : "clock")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(pendingCount == 0 ? Color.green : Color.orange)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background((pendingCount == 0 ? Color.green : Color.orange).opacity(0.10), in: Capsule())
+        }
+    }
+
+    private func filterCard(_ option: Filter) -> some View {
+        let count: Int = {
+            switch option {
+            case .candidate: pendingCount
+            case .all: records.count
+            case .active: records.filter { $0.status == .active }.count
+            case .disabled: records.filter { $0.status == .disabled }.count
+            }
+        }()
+        let isSelected = filter == option
+        return Button {
+            filter = option
+        } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                Image(systemName: option.symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(option.tint)
+                Text("\(count)")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(option.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(11)
+            .background(isSelected ? option.tint.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(isSelected ? option.tint.opacity(0.55) : Color.primary.opacity(0.06))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(option.title): \(count)")
+        .accessibilityValue(isSelected ? "Seçili" : "")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: filter == .candidate ? "checkmark.seal" : "tray")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(.tertiary)
+            Text(emptyTitle)
+                .font(.headline)
+            Text(filter == .candidate
+                 ? "Yeni bir düzeltme önerildiğinde burada görünecek."
+                 : "Bu durumda kayıtlı bir düzeltme bulunmuyor.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(24)
+    }
+
+    private var emptyTitle: String {
+        switch filter {
+        case .candidate: "Onay bekleyen düzeltme yok"
+        case .all: "Henüz düzeltme yok"
+        case .active: "Aktif düzeltme yok"
+        case .disabled: "Reddedilen düzeltme yok"
+        }
+    }
+
+    private func correctionCard(_ record: CorrectionStore.Record) -> some View {
+        let store = CorrectionStore.shared
+        return VStack(alignment: .leading, spacing: 13) {
+            HStack(alignment: .top, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(record.wrong)
+                        .foregroundStyle(.secondary)
+                        .strikethrough()
+                    Image(systemName: "arrow.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text(record.right)
+                        .fontWeight(.semibold)
+                }
+                .font(.system(size: 16))
+                .lineLimit(2)
+                .help("\(record.wrong) → \(record.right)")
+                Spacer(minLength: 4)
+                Label(statusText(record.status), systemImage: statusSymbol(record.status))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(statusColor(record.status))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(statusColor(record.status).opacity(0.10), in: Capsule())
+            }
+
+            HStack(spacing: 8) {
+                Text("\(record.count) kez görüldü")
+                Text("·")
+                Text(record.appliedCount == 0 ? "Henüz uygulanmadı" : "\(record.appliedCount) kez uygulandı")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                switch record.status {
+                case .candidate:
+                    Button("Onayla") { store.approve(id: record.id) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    Button("Reddet") { store.reject(id: record.id) }
+                        .buttonStyle(.bordered)
+                        .help("Bu düzeltmeyi kapalı tutar; yeniden otomatik etkinleşmez.")
+                    Spacer()
+                    Button("Önemsiz") { store.discard(id: record.id) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Bu öneriyi listeden kaldırır.")
+                case .active, .disabled:
+                    Toggle("Aktif", isOn: Binding(
+                        get: { store.records.first(where: { $0.id == record.id })?.status == .active },
+                        set: { store.setDisabled(id: record.id, disabled: !$0) }
+                    ))
+                    .toggleStyle(.switch)
+                    Spacer()
+                    Button {
+                        pendingDeleteID = record.id
+                    } label: {
+                        Label("Sil", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help("Bu düzeltmeyi sil")
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.primary.opacity(0.06))
+        }
+    }
+
+    private var manualAddSection: some View {
+        let store = CorrectionStore.shared
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label("Elle düzeltme ekle", systemImage: "plus.circle")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("Onaylanmış olarak eklenir")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 9) {
+                TextField("Yanlış duyulan", text: $newWrong)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Yanlış duyulan metin")
                 Image(systemName: "arrow.right")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                TextField("doğru (örn: claude)", text: $newRight)
+                TextField("Doğru yazım", text: $newRight)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Doğru yazım")
                 Button("Ekle") {
                     store.addManual(wrong: newWrong, right: newRight)
                     newWrong = ""
                     newRight = ""
+                    filter = .active
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .disabled(newWrong.trimmingCharacters(in: .whitespaces).isEmpty || newRight.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(newWrong.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || newRight.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(20)
-        .frame(minWidth: 520, minHeight: 540)
     }
 
-    @ViewBuilder
-    private func correctionRow(_ record: CorrectionStore.Record) -> some View {
-        let store = CorrectionStore.shared
-        // An active record that has never actually fired is effectively dead weight — flag it
-        // with the same orange accent already used for "needs attention" elsewhere in this
-        // section (see the pending-approvals badge above) so it's easy to spot in the list.
-        let neverApplied = record.status == .active && record.appliedCount == 0
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(record.wrong)
-                        .font(.title3)
-                        .strikethrough()
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
-                    Text(record.right)
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.primary)
-                }
-                Text("\(record.count) kez görüldü • \(record.appliedCount) kez uygulandı • \(statusText(record.status))")
-                    .font(.caption)
-                    // `.orange` is a Color and `.tertiary` is a HierarchicalShapeStyle — the two
-                    // ternary branches don't unify under plain `some ShapeStyle` inference, so
-                    // both sides must be type-erased to the same AnyShapeStyle.
-                    .foregroundStyle(neverApplied ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.tertiary))
-            }
-
-            Spacer()
-
-            switch record.status {
-            case .candidate:
-                HStack(spacing: 8) {
-                    Button("Onayla") {
-                        store.approve(id: record.id)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(.regular)
-
-                    Button("Önemsiz") {
-                        store.discard(id: record.id)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.secondary)
-                    .controlSize(.regular)
-
-                    Button("Reddet") {
-                        store.reject(id: record.id)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    .controlSize(.regular)
-                }
-            case .active:
-                HStack(spacing: 12) {
-                    Toggle("Aktif", isOn: Binding(
-                        get: { true },
-                        set: { store.setDisabled(id: record.id, disabled: !$0) }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.regular)
-
-                    Button {
-                        store.delete(id: record.id)
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                }
-            case .disabled:
-                HStack(spacing: 12) {
-                    Toggle("Aktif", isOn: Binding(
-                        get: { false },
-                        set: { store.setDisabled(id: record.id, disabled: !$0) }
-                    ))
-                    .toggleStyle(.switch)
-                    .controlSize(.regular)
-
-                    Button {
-                        store.delete(id: record.id)
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+    private func statusPriority(_ status: CorrectionStore.Status) -> Int {
+        switch status {
+        case .candidate: 0
+        case .active: 1
+        case .disabled: 2
         }
-        .padding(.vertical, 4)
     }
 
     private func statusText(_ status: CorrectionStore.Status) -> String {
         switch status {
-        case .candidate: return "Onay Bekliyor"
-        case .active: return "Aktif"
-        case .disabled: return "Kapalı"
+        case .candidate: "Onay bekliyor"
+        case .active: "Aktif"
+        case .disabled: "Kapalı"
+        }
+    }
+
+    private func statusSymbol(_ status: CorrectionStore.Status) -> String {
+        switch status {
+        case .candidate: "clock"
+        case .active: "checkmark.circle"
+        case .disabled: "xmark.circle"
+        }
+    }
+
+    private func statusColor(_ status: CorrectionStore.Status) -> Color {
+        switch status {
+        case .candidate: .orange
+        case .active: .green
+        case .disabled: .secondary
         }
     }
 }

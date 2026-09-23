@@ -11,6 +11,7 @@ import QuartzCore
 @MainActor
 final class RecordingTranscriptionSession {
     let id: UInt64
+    let startedAt = Date()
     let targetApp: NSRunningApplication?
     var pasteContext: PasteContext
     let stream: AsyncStream<CompletedAudioSegment>
@@ -52,6 +53,7 @@ final class RecordingTranscriptionSession {
     var queuedSampleCount = 0
     var nextSegmentNumber = 0
     var isCancelled = false
+    var historySaveFailed = false
     var hasFinished = false
     /// Set when the first below-threshold rejection is detected so the UI can show
     /// "Ses eşleşmedi" immediately without waiting for Whisper transcription.
@@ -112,6 +114,22 @@ final class AppState {
 
     static let shared = AppState()
 
+    private let recordingHistoryStore = RecordingHistoryStore()
+    var savedRecordings: [SavedRecording] = []
+    var replayingRecordingID: UUID?
+    var replayStatus: String?
+    var systemAudioEnabled = false {
+        didSet { syncFlowBarVisibility() }
+    }
+    var systemAudioIsRecording = false {
+        didSet {
+            guard oldValue != systemAudioIsRecording else { return }
+            syncFlowBarVisibility()
+        }
+    }
+    var systemAudioIsTranscribing = false
+    var systemAudioStatus = "Kapalı"
+
     // MARK: - Recording State
 
     enum RecordingState: Sendable, Equatable {
@@ -148,6 +166,10 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel")
             llmCleanup = LLMCleanup(model: ollamaModel)
+            Task { [weak self] in
+                guard let self else { return }
+                self.cleanupAvailable = await LLMCleanup.checkAvailability(model: self.ollamaModel)
+            }
         }
     }
     var flowBarEnabled: Bool {
@@ -234,6 +256,9 @@ final class AppState {
     var audioLevel: Float = 0.0
     var recordingDuration: TimeInterval = 0.0
     var ollamaAvailable: Bool = false
+    /// Availability of the selected cleanup engine. Kept separate from Ollama because Spotify
+    /// intent and reminder parsing still need Ollama even when ByT5 handles transcript cleanup.
+    var cleanupAvailable: Bool = false
     var modelLoaded: Bool = false
     var modelLoading: Bool = false
     var modelLoadProgress: Double = 0.0
@@ -342,6 +367,10 @@ final class AppState {
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
     private var delayedStopWorkItem: DispatchWorkItem?
+    private var systemAudioCapture: SystemAudioCapture?
+    private var systemAudioGeneration: UInt64 = 0
+    private var systemAudioTranscriptionTail: Task<Void, Never>?
+    private var recordingPreviewTask: Task<Void, Never>?
 
     /// Whether any background transcription task (other than the currently recording session) is running.
     var isTranscribing: Bool {
@@ -373,7 +402,7 @@ final class AppState {
 
     var menuBarIcon: String {
         switch recordingState {
-        case .idle: "mic.fill"
+        case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : "mic.fill"
         case .recording: "waveform"
         case .transcribing: "waveform.path.ecg"
         }
@@ -381,7 +410,7 @@ final class AppState {
 
     var menuBarIconColor: Color {
         switch recordingState {
-        case .idle: .white
+        case .idle: systemAudioIsRecording ? .red : .white
         case .recording: .red
         case .transcribing: .orange
         }
@@ -465,6 +494,7 @@ final class AppState {
 
     func setup() async {
         owLog("[OpenWhisper] Setting up...")
+        savedRecordings = await recordingHistoryStore.items()
         if launchAtLogin && SMAppService.mainApp.status != .enabled {
             try? SMAppService.mainApp.register()
         }
@@ -558,7 +588,9 @@ final class AppState {
 
         // Check Ollama availability
         ollamaAvailable = await LLMCleanup.checkAvailability()
+        cleanupAvailable = await LLMCleanup.checkAvailability(model: ollamaModel)
         owLog("[OpenWhisper] Ollama available: \(ollamaAvailable)")
+        owLog("[OpenWhisper] Selected cleanup available: \(cleanupAvailable)")
 
         // Setup reminders
         reminderManager = ReminderManager.shared
@@ -761,7 +793,136 @@ final class AppState {
 
     // MARK: - Recording Flow
 
+    /// Listens to the mixed Mac output. The mic/Fn recording path remains separate.
+    func startSystemAudioListening() {
+        guard !systemAudioEnabled else { return }
+        recordingPreviewTask?.cancel()
+        guard modelLoaded else {
+            systemAudioStatus = "Önce konuşma modeli yüklensin."
+            return
+        }
+        systemAudioGeneration &+= 1
+        let generation = systemAudioGeneration
+        let capture = SystemAudioCapture()
+        systemAudioCapture = capture
+        systemAudioEnabled = true
+        systemAudioStatus = "Bilgisayar sesi açılıyor…"
+        capture.onClip = { [weak self] samples in
+            Task { @MainActor [weak self] in self?.enqueueSystemAudioClip(samples) }
+        }
+        capture.onRecordingChange = { [weak self] active in
+            Task { @MainActor [weak self] in
+                guard let self, self.systemAudioEnabled else { return }
+                self.systemAudioIsRecording = active
+                self.systemAudioStatus = active ? "Bilgisayar sesi kaydediliyor" : "Yeni ses bekleniyor"
+            }
+        }
+        capture.onError = { [weak self] message in
+            Task { @MainActor [weak self] in
+                guard let self, self.systemAudioGeneration == generation else { return }
+                self.lastError = message
+                self.stopSystemAudioListening()
+                self.systemAudioStatus = message
+            }
+        }
+        Task { @MainActor [weak self] in
+            do {
+                try await capture.start()
+                guard let self, self.systemAudioGeneration == generation, self.systemAudioEnabled else {
+                    await capture.stop()
+                    return
+                }
+                self.systemAudioStatus = "Yeni ses bekleniyor"
+            } catch {
+                guard let self, self.systemAudioGeneration == generation else { return }
+                let message = "Bilgisayar sesi açılamadı: \(error.localizedDescription)"
+                self.lastError = message
+                self.stopSystemAudioListening()
+                self.systemAudioStatus = message
+            }
+        }
+    }
+
+    func stopSystemAudioListening() {
+        guard systemAudioEnabled || systemAudioCapture != nil else { return }
+        systemAudioGeneration &+= 1
+        systemAudioEnabled = false
+        systemAudioIsRecording = false
+        systemAudioStatus = "Kapalı"
+        let capture = systemAudioCapture
+        systemAudioCapture = nil
+        Task { await capture?.stop() }
+    }
+
+    private func enqueueSystemAudioClip(_ samples: [Float]) {
+        guard samples.count >= 6_400 else { return }
+        let previous = systemAudioTranscriptionTail
+        systemAudioTranscriptionTail = Task { @MainActor [weak self] in
+            if let previous { await previous.value }
+            guard let self else { return }
+            await self.transcribeSystemAudioClip(samples)
+        }
+    }
+
+    private func transcribeSystemAudioClip(_ samples: [Float]) async {
+        systemAudioIsTranscribing = true
+        defer { systemAudioIsTranscribing = false }
+        systemAudioStatus = "Bilgisayar sesi yazıya dökülüyor…"
+        nextTranscriptionID &+= 1
+        let session = RecordingTranscriptionSession(
+            id: nextTranscriptionID,
+            targetApp: nil,
+            targetSpeakerEnabled: false,
+            targetSpeakerProfile: nil,
+            pasteContext: PasteContext.initial(targetApp: nil)
+        )
+        var saveFailed = false
+        for part in AudioSegmentation.makeSegments(from: samples) {
+            let segment = CompletedAudioSegment(samples: Array(part.samples), overlapSampleCount: part.overlapSampleCount)
+            session.queuedSampleCount += segment.samples.count - segment.overlapSampleCount
+            do {
+                try await recordingHistoryStore.append(segment, sessionID: session.id, startedAt: session.startedAt)
+            } catch {
+                saveFailed = true
+                owLog("[SystemAudio] History save failed: \(error)")
+            }
+            await transcribeStreamingSegment(segment, session: session)
+        }
+        do {
+            savedRecordings = try await recordingHistoryStore.finish(
+                sessionID: session.id,
+                keep: !saveFailed,
+                previewText: AudioSegmentation.joinTranscripts(session.segmentTexts)
+            )
+        } catch {
+            owLog("[SystemAudio] History finish failed: \(error)")
+            lastError = "Bilgisayar sesi geçmişe kaydedilemedi: \(error.localizedDescription)"
+        }
+        var output = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty, !output.hasPrefix("[BLANK"), !output.hasPrefix("(BLANK") else {
+            systemAudioStatus = systemAudioEnabled ? "Yeni ses bekleniyor" : "Metin çıkarılamadı"
+            return
+        }
+        output = CorrectionEngine.applyCorrections(to: output, pairs: CorrectionStore.shared.activePairs).0
+        output = PhoneticGlossaryCorrector.correct(output).0
+        if laughterToRandomEnabled {
+            output = LaughterRandomizer.transform(output).text
+        } else if llmCleanupEnabled && cleanupAvailable {
+            output = await llmCleanup?.cleanup(text: output) ?? output
+        }
+        output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else { return }
+        lastTranscription = output
+        textInjector?.copyToClipboard(output)
+        systemAudioStatus = systemAudioEnabled
+            ? "Metin panoya kopyalandı · yeni ses bekleniyor"
+            : "Metin panoya kopyalandı"
+        owLog("[SystemAudio] Transcript copied to clipboard")
+    }
+
     func startRecording() {
+        recordingPreviewTask?.cancel()
         let tStart = CACurrentMediaTime()
         let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
         owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
@@ -861,6 +1022,15 @@ final class AppState {
             guard let self else { return }
             for await segment in session.stream {
                 if Task.isCancelled || session.isCancelled { break }
+                if !session.historySaveFailed {
+                    do {
+                        try await self.recordingHistoryStore.append(segment, sessionID: session.id, startedAt: session.startedAt)
+                    } catch {
+                        session.historySaveFailed = true
+                        owLog("[RecordingHistory] Save failed: \(error)")
+                        self.lastError = "Ses geçmişi kaydedilemedi: \(error.localizedDescription)"
+                    }
+                }
                 await self.transcribeStreamingSegment(segment, session: session)
             }
             await self.finishTranscription(session)
@@ -1209,6 +1379,16 @@ final class AppState {
     func finishTranscription(_ session: RecordingTranscriptionSession) async {
         guard !session.hasFinished else { return }
         session.hasFinished = true
+        do {
+            savedRecordings = try await recordingHistoryStore.finish(
+                sessionID: session.id,
+                keep: !session.isCancelled && !session.historySaveFailed && session.queuedSampleCount >= 6_400,
+                previewText: AudioSegmentation.joinTranscripts(session.segmentTexts)
+            )
+        } catch {
+            lastError = "Ses geçmişi tamamlanamadı: \(error.localizedDescription)"
+            owLog("[RecordingHistory] Finish failed: \(error)")
+        }
         owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
 
         defer {
@@ -1370,7 +1550,7 @@ final class AppState {
                             // Once Ollama finishes, replace the initially pasted text in-place.
                             // Keep the generated keyboard random exact. LLM cleanup can rewrite
                             // or remove a random-looking token, which would defeat this setting.
-                            if self.llmCleanupEnabled && self.ollamaAvailable && !laughterWasRandomized {
+                            if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
                                 Task { @MainActor [weak self] in
                                     guard let self else { return }
                                     let cleaned = await self.llmCleanup?.cleanup(text: initialText) ?? initialText
@@ -1448,12 +1628,116 @@ final class AppState {
         }
     }
 
+    /// Re-runs the selected saved audio through the current recognition and text settings.
+    /// Replays never paste into another application or trigger voice commands.
+    func replayRecording(_ recording: SavedRecording) {
+        recordingPreviewTask?.cancel()
+        guard replayingRecordingID == nil else { return }
+        guard recordingState == .idle && pendingTranscriptionCount == 0 else {
+            replayStatus = "Önce mevcut ses kaydının işlenmesini bekleyin."
+            return
+        }
+        replayingRecordingID = recording.id
+        replayStatus = "Kayıt yeniden analiz ediliyor…"
+        Task { @MainActor in
+            defer { replayingRecordingID = nil }
+            let session = RecordingTranscriptionSession(
+                id: 0,
+                targetApp: nil,
+                targetSpeakerEnabled: targetSpeakerEnabled,
+                targetSpeakerProfile: targetSpeakerProfile,
+                pasteContext: PasteContext.initial(targetApp: nil)
+            )
+            do {
+                var frame: Int64 = 0
+                while let (segment, nextFrame) = try await recordingHistoryStore.segment(id: recording.id, startingAt: frame) {
+                    await transcribeStreamingSegment(segment, session: session)
+                    frame = nextFrame
+                }
+                var output = AudioSegmentation.joinTranscripts(session.segmentTexts)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !output.isEmpty, !output.hasPrefix("[BLANK"), !output.hasPrefix("(BLANK") else {
+                    replayStatus = "Bu kayıttan metin çıkarılamadı."
+                    return
+                }
+                output = CorrectionEngine.applyCorrections(to: output, pairs: CorrectionStore.shared.activePairs).0
+                output = PhoneticGlossaryCorrector.correct(output).0
+                if laughterToRandomEnabled {
+                    output = LaughterRandomizer.transform(output).text
+                } else if llmCleanupEnabled && cleanupAvailable {
+                    output = await llmCleanup?.cleanup(text: output) ?? output
+                }
+                output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !output.isEmpty else {
+                    replayStatus = "Bu kayıttan metin çıkarılamadı."
+                    return
+                }
+                textInjector?.copyToClipboard(output)
+                replayStatus = "Yeniden analiz edildi ve panoya kopyalandı."
+                do {
+                    savedRecordings = try await recordingHistoryStore.updatePreview(id: recording.id, text: output)
+                } catch {
+                    owLog("[RecordingHistory] Replay preview save failed: \(error)")
+                }
+            } catch {
+                replayStatus = "Kayıt açılamadı: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Older saved audio predates transcript previews. Fill those labels in the background
+    /// when the menu is opened, without changing or deleting any recording.
+    func prepareRecordingPreviews() {
+        guard modelLoaded, recordingPreviewTask == nil,
+              savedRecordings.contains(where: { $0.previewText == nil }) else { return }
+        recordingPreviewTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.recordingPreviewTask = nil }
+            for recording in self.savedRecordings where recording.previewText == nil {
+                guard !Task.isCancelled,
+                      self.recordingState == .idle,
+                      self.pendingTranscriptionCount == 0,
+                      !self.systemAudioIsRecording,
+                      !self.systemAudioIsTranscribing,
+                      self.replayingRecordingID == nil else { return }
+                let session = RecordingTranscriptionSession(
+                    id: 0,
+                    targetApp: nil,
+                    targetSpeakerEnabled: self.targetSpeakerEnabled,
+                    targetSpeakerProfile: self.targetSpeakerProfile,
+                    pasteContext: PasteContext.initial(targetApp: nil)
+                )
+                do {
+                    var frame: Int64 = 0
+                    while !Task.isCancelled,
+                          let (segment, nextFrame) = try await self.recordingHistoryStore.segment(id: recording.id, startingAt: frame) {
+                        await self.transcribeStreamingSegment(segment, session: session)
+                        frame = nextFrame
+                    }
+                    guard !Task.isCancelled else { return }
+                    self.savedRecordings = try await self.recordingHistoryStore.updatePreview(
+                        id: recording.id,
+                        text: AudioSegmentation.joinTranscripts(session.segmentTexts)
+                    )
+                } catch {
+                    owLog("[RecordingHistory] Preview could not be prepared: \(error)")
+                }
+            }
+        }
+    }
+
     // MARK: - Flow Bar Visibility
 
     /// The flow bar is invisible while idle and only appears for the duration of an active
     /// dictation (recording through transcribing/pasting), so the app runs invisibly in the
     /// background otherwise — the menu bar icon remains the only always-visible element.
     private func syncFlowBarVisibility() {
+        // Keep a reachable finish control onscreen while the system output is being heard,
+        // even if the normal microphone flow bar is disabled in Settings.
+        if systemAudioEnabled {
+            flowBarController?.show()
+            return
+        }
         guard flowBarEnabled else {
             flowBarController?.hide()
             return
@@ -2231,5 +2515,6 @@ final class AppState {
 
     func refreshOllamaStatus() async {
         ollamaAvailable = await LLMCleanup.checkAvailability()
+        cleanupAvailable = await LLMCleanup.checkAvailability(model: ollamaModel)
     }
 }

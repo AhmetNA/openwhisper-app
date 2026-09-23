@@ -1,8 +1,11 @@
 import Foundation
 
 final class LLMCleanup: Sendable {
+    static let byT5ModelID = "byt5-small-tr-normalizer"
     private let baseURL = "http://localhost:11434"
     let model: String
+
+    var usesByT5: Bool { model == Self.byT5ModelID }
 
     init(model: String = "llama3.2:3b") {
         self.model = model
@@ -226,7 +229,10 @@ final class LLMCleanup: Sendable {
     }
 
     /// Check if Ollama is running and responsive
-    static func checkAvailability() async -> Bool {
+    static func checkAvailability(model: String? = nil) async -> Bool {
+        if model == byT5ModelID {
+            return await ByT5Normalizer.checkAvailability()
+        }
         guard let url = URL(string: "http://localhost:11434/api/tags") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = 2
@@ -241,6 +247,10 @@ final class LLMCleanup: Sendable {
 
     /// Clean up transcribed text using local Ollama LLM
     func cleanup(text: String) async -> String {
+        if usesByT5 {
+            return await cleanupWithByT5(text: text)
+        }
+
         guard let url = URL(string: "\(baseURL)/api/generate") else { return text }
 
         var request = URLRequest(url: url)
@@ -302,5 +312,140 @@ final class LLMCleanup: Sendable {
         }
 
         return text
+    }
+
+    // MARK: - ByT5-specific cleanup
+
+    /// ByT5 is allowed to normalize Turkish word forms, unlike the deliberately strict Ollama
+    /// contract above. It therefore has its own input preparation and safety checks; changing
+    /// these rules cannot loosen the existing Ollama path.
+    private func cleanupWithByT5(text: String) async -> String {
+        let prepared = Self.removingStandaloneFillers(from: text)
+        guard !prepared.isEmpty else { return text }
+
+        do {
+            let generated = try await ByT5Normalizer.shared.normalize(prepared)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let restored = Self.restoringProtectedTerms(
+                in: generated,
+                from: prepared,
+                glossaryTerms: GlossaryStore.terms()
+            )
+            guard Self.isSafeByT5Normalization(
+                original: prepared,
+                normalized: restored,
+                glossaryTerms: GlossaryStore.terms()
+            ) else {
+                owLog("[ByT5] Unsafe normalization rejected; using pre-normalization transcript")
+                return prepared
+            }
+            return restored
+        } catch {
+            owLog("[ByT5] Normalization failed: \(error.localizedDescription)")
+            return text
+        }
+    }
+
+    static func removingStandaloneFillers(from text: String) -> String {
+        let pattern = #"(?iu)(?<![\p{L}\p{N}_])(şey|yani|ee+|ıı+|hani|um+|uh+|falan|filan|vs)(?![\p{L}\p{N}_])[,;:\s]*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        var result = regex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
+        result = result.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        result = result.replacingOccurrences(of: #"\s+([,.!?;:])"#, with: "$1", options: .regularExpression)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func protectedTerms(in text: String, glossaryTerms: [String]?) -> [String] {
+        var terms: [String] = []
+        let patterns = [
+            #"https?://[^\s]+"#,
+            #"[\p{L}\p{N}._%+\-]+@[\p{L}\p{N}.\-]+\.[A-Za-z]{2,}"#,
+            #"\b\d+(?:[.,:/\-]\d+)*\b"#,
+            #"\b[\p{L}\p{N}]*[_/#@`][\p{L}\p{N}_/#@`.\-]*\b"#,
+            #"\b[a-zçğıöşü]+[A-ZÇĞİÖŞÜ][\p{L}\p{N}]*\b"#,
+            #"\b[A-ZÇĞİÖŞÜ]{2,}[\p{L}\p{N}]*\b"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            for match in regex.matches(in: text, range: range) {
+                if let swiftRange = Range(match.range, in: text) {
+                    terms.append(String(text[swiftRange]))
+                }
+            }
+        }
+        for term in glossaryTerms ?? [] where !term.isEmpty {
+            if text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                terms.append(term)
+            }
+        }
+        return Array(Set(terms)).sorted { $0.count > $1.count }
+    }
+
+    static func restoringProtectedTerms(
+        in normalized: String,
+        from original: String,
+        glossaryTerms: [String]?
+    ) -> String {
+        var result = normalized
+        for term in protectedTerms(in: original, glossaryTerms: glossaryTerms) {
+            if let range = result.range(of: term, options: [.caseInsensitive, .diacriticInsensitive]) {
+                result.replaceSubrange(range, with: term)
+            }
+        }
+        return result
+    }
+
+    static func isSafeByT5Normalization(
+        original: String,
+        normalized: String,
+        glossaryTerms: [String]?
+    ) -> Bool {
+        guard !normalized.isEmpty else { return false }
+        let originalCount = max(1, original.count)
+        let lengthRatio = Double(normalized.count) / Double(originalCount)
+        guard (0.55...1.80).contains(lengthRatio) else { return false }
+
+        // URLs, numbers, code-shaped tokens, acronyms and glossary terms must survive. The
+        // casing restoration happens first, so this exact check also protects their spelling.
+        for term in protectedTerms(in: original, glossaryTerms: glossaryTerms) {
+            guard normalized.contains(term) else { return false }
+        }
+
+        // Turkish normalization may legitimately make sizeable edits to one short word
+        // ("alcam" -> "alacağım"), but a majority rewrite is not acceptable for dictation.
+        let distance = levenshtein(Array(original.lowercased()), Array(normalized.lowercased()))
+        let editRatio = Double(distance) / Double(max(original.count, normalized.count, 1))
+        guard editRatio <= 0.55 else { return false }
+
+        // Reject scripts outside Latin/Latin-extended while allowing punctuation, emoji and
+        // combining marks already present in normal Turkish text.
+        for scalar in normalized.unicodeScalars where CharacterSet.letters.contains(scalar) {
+            let value = scalar.value
+            let isLatin = (0x0041...0x007A).contains(value)
+                || (0x00C0...0x024F).contains(value)
+                || (0x1E00...0x1EFF).contains(value)
+            if !isLatin { return false }
+        }
+        return true
+    }
+
+    private static func levenshtein(_ lhs: [Character], _ rhs: [Character]) -> Int {
+        if lhs.isEmpty { return rhs.count }
+        if rhs.isEmpty { return lhs.count }
+        var previous = Array(0...rhs.count)
+        for (leftIndex, left) in lhs.enumerated() {
+            var current = [leftIndex + 1] + Array(repeating: 0, count: rhs.count)
+            for (rightIndex, right) in rhs.enumerated() {
+                current[rightIndex + 1] = min(
+                    current[rightIndex] + 1,
+                    previous[rightIndex + 1] + 1,
+                    previous[rightIndex] + (left == right ? 0 : 1)
+                )
+            }
+            previous = current
+        }
+        return previous[rhs.count]
     }
 }

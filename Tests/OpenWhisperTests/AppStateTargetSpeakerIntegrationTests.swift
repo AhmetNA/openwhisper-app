@@ -386,11 +386,10 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         session.enqueue(segment)
         await appState.transcribeStreamingSegment(segment, session: session)
         await appState.finishTranscription(session)
-        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "test transcript")
+        XCTAssertEqual(injector.clipboardContents, "test transcript")
 
         // Simulate the user copying something unrelated during the 8s offer window.
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("something the user copied in the meantime", forType: .string)
+        injector.clipboardContents = "something the user copied in the meantime"
 
         appState.confirmRetainedRecordingWasTargetSpeaker()
 
@@ -540,10 +539,12 @@ private final class RecordingTextInjector: TextInjecting {
 
     private(set) var pasteCalls: [PasteCall] = []
     private(set) var clipboardCalls: [String] = []
+    var clipboardContents: String?
     private(set) var replaceCalls: [(old: String, new: String)] = []
 
     func copyToClipboard(_ text: String) {
         clipboardCalls.append(text)
+        clipboardContents = text
     }
 
     func pasteText(_ text: String, targetApp: NSRunningApplication?, onPasted: (() -> Void)?) {

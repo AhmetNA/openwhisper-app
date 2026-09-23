@@ -24,6 +24,8 @@
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>OpenWhisper needs microphone access to transcribe your speech to text.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>OpenWhisper bilgisayarda çalan sesi mikrofona gerek kalmadan yazıya dökmek için sistem sesi erişimi ister. Görüntü kaydetmez.</string>
     <key>NSRemindersUsageDescription</key>
     <string>OpenWhisper needs access to Apple Reminders to create reminders from your voice commands.</string>
     <key>NSRemindersFullAccessUsageDescription</key>
