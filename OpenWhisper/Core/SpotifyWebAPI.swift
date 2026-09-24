@@ -133,11 +133,9 @@ enum SpotifyCredentialsStore {
     }
 }
 
-/// Client for the Spotify Web API used for track search and (when the user has connected
-/// their account) prioritizing their Liked Songs among search results. Playback itself is
-/// always done locally via AppleScript in `SpotifyManager`; this type never touches
-/// `/v1/me/player/*` — only `/v1/search` and `/v1/me/tracks/contains`, the latter guarded
-/// by the read-only `user-library-read` scope.
+/// Client for the Spotify Web API: track search (prioritizing the user's Liked Songs when
+/// their account is connected), the `/v1/me/player/*` playback endpoints used by
+/// `SpotifyController`, and adding tracks to Liked Songs.
 ///
 /// Token strategy (no separate "search token" cache — one path per token kind):
 /// - If the user has connected their account, their OAuth access token (refreshed via the
@@ -173,6 +171,7 @@ actor SpotifyWebAPI {
         case scopeInsufficient       // 403 on a player call: stored token predates the scope
         case noActiveDevice          // 404 NO_ACTIVE_DEVICE: Spotify is open but not "active"
         case premiumRequired         // 403 with "Premium required" in the response body
+        case playerRestricted        // 403 the device refuses the command (e.g. VOLUME_CONTROL_DISALLOW)
         case unexpected(String)
 
         var userMessage: String {
@@ -194,11 +193,13 @@ actor SpotifyWebAPI {
             case .alreadyInProgress:
                 return "Zaten bir bağlantı denemesi sürüyor — tarayıcıda tamamlayın ya da birkaç dakika bekleyin"
             case .scopeInsufficient:
-                return "Listeyi çalmak için ek izin gerekiyor — Ayarlar > Spotify'dan yeniden bağlan"
+                return "Bu komut için ek izin gerekiyor — Ayarlar > Spotify'dan yeniden bağlan"
             case .noActiveDevice:
                 return "Spotify'da aktif bir cihaz bulunamadı — Spotify'ı açıp bir kez manuel çalmayı dene, sonra tekrar söyle"
             case .premiumRequired:
-                return "Beğenilenler listesini çalmak için Spotify Premium gerekiyor"
+                return "Bu komut Spotify Web API üzerinden Spotify Premium gerektiriyor"
+            case .playerRestricted:
+                return "Spotify bu cihazda bu işleme izin vermiyor"
             case .unexpected(let detail):
                 return "Beklenmeyen hata: \(detail)"
             }
@@ -209,6 +210,15 @@ actor SpotifyWebAPI {
         let uri: String
         let name: String
         let artist: String
+        /// Set for tracks from search, so playback can continue through the album.
+        var albumURI: String? = nil
+    }
+
+    /// The playing item from `/v1/me/player`, reduced to what voice commands need.
+    struct CurrentlyPlaying {
+        let track: TrackResult
+        let album: String?
+        let isPlaying: Bool
     }
 
     /// One entry from `/v1/me/player/devices`.
@@ -219,13 +229,16 @@ actor SpotifyWebAPI {
         let type: String
     }
 
-    /// One search result plus its raw track ID — the ID (not the `spotify:track:` URI) is
-    /// what `/v1/me/tracks/contains` requires.
+    enum SearchType: String, Sendable {
+        case track, artist, album, playlist
+    }
+
     private struct SearchItem {
         let id: String
         let uri: String
         let name: String
         let artist: String
+        let albumURI: String?
     }
 
     // MARK: - OAuth configuration
@@ -237,7 +250,7 @@ actor SpotifyWebAPI {
     /// paste the exact same string into the dashboard.
     static let redirectURI = "http://127.0.0.1:8888/callback"
     private static let redirectPort: UInt16 = 8888
-    // `user-library-modify` was added alongside `addTrackToLikedSongs(trackID:)` below.
+    // `user-library-modify` is what `saveToLibrary(uri:)` below needs.
     // `user-modify-playback-state` and `user-read-playback-state` were added for
     // `startPlayback`/`fetchAvailableDevices` (playing the Liked Songs queue via the Web
     // API player endpoints instead of AppleScript's single-track `play track`). Accounts
@@ -245,9 +258,6 @@ actor SpotifyWebAPI {
     // the earlier set and will get a 403 from the corresponding endpoint until the user
     // reconnects via Ayarlar > Spotify (new consent grants all current scopes at once).
     //
-    // NOTE: `addTrackToLikedSongs` is currently unused (see its doc comment) — unrelated to
-    // OAuth, which works fine (token exchange returns HTTP 200 and the refresh token is
-    // persisted in the Keychain). Left as-is, not removed, in case it's wired up later.
     private static let userScope = "user-library-read user-library-modify user-modify-playback-state user-read-playback-state"
     /// 5 minutes: a user who doesn't already have a Spotify session in their default
     /// browser needs time to log in (plus 2FA) before consenting. The original 2-minute
@@ -305,9 +315,9 @@ actor SpotifyWebAPI {
 
         // 2. Fallback: app-only client-credentials token, plain top result (no liked info).
         let ccToken = try await validClientCredentialsToken()
-        let items = try await performSearch(query: query, token: ccToken, limit: 1)
+        let items = try await performSearch(query: query, type: .track, token: ccToken, limit: 1)
         guard let first = items.first else { throw SpotifyAPIError.noResults }
-        return TrackResult(uri: first.uri, name: first.name, artist: first.artist)
+        return TrackResult(uri: first.uri, name: first.name, artist: first.artist, albumURI: first.albumURI)
     }
 
     /// Fetches a fresh app token purely to validate stored client ID/Secret (used by the
@@ -316,112 +326,21 @@ actor SpotifyWebAPI {
         _ = try await validClientCredentialsToken()
     }
 
-    /// Fetches up to `limit` of the user's Liked Songs from a random position in their
-    /// library, so repeated "beğenilenleri çal" commands actually surface the whole
-    /// library over time instead of only ever the most-recently-saved `limit` tracks.
-    /// The caller (`SpotifyManager.playLikedSongs`) additionally shuffles the returned
-    /// window client-side before handing the URIs to the player endpoint.
-    ///
-    /// Two requests when the library is larger than `limit`: first `limit=1` just to read
-    /// `total` (Spotify always includes it, even for a 1-item page), then a second request
-    /// with a random `offset` in `0...(total - limit)` so the window itself is drawn from
-    /// anywhere in the library, not just the front. If `total <= limit`, the first request's
-    /// own items ARE the entire library — no second request needed, and the whole Liked
-    /// Songs list plays every time.
-    ///
-    /// Requires the user's own token — this is `/v1/me/tracks`, `user-library-read` scope,
-    /// which a client-credentials (app-only) token cannot access at all. Throws
-    /// `.notConnected` immediately rather than attempting the request and getting a
-    /// confusing 401 back.
-    func fetchLikedTracksWindow(limit: Int = 50) async throws -> [TrackResult] {
-        guard let token = await validUserAccessToken() else {
-            throw SpotifyAPIError.notConnected
+    /// Searches one catalog type (`artist`, `album`, `playlist`) and returns the top
+    /// result, as a `TrackResult` whose `artist` holds the subtitle (album artist or
+    /// playlist owner; empty for artists). Tracks use `searchTopTrack` instead, which
+    /// also prefers the user's Liked Songs.
+    func searchTopItem(query: String, type: SearchType) async throws -> TrackResult {
+        let token: String
+        if let userToken = await validUserAccessToken() {
+            token = userToken
+        } else {
+            token = try await validClientCredentialsToken()
         }
-
-        let (firstPageTracks, total) = try await fetchLikedTracksPage(limit: 1, offset: 0, token: token)
-
-        if total <= limit {
-            // The whole library fits in one window — re-fetch at the real `limit` (the
-            // probe above used limit=1) so we return everything, not just that one item.
-            let (allTracks, _) = try await fetchLikedTracksPage(limit: limit, offset: 0, token: token)
-            guard !allTracks.isEmpty else { throw SpotifyAPIError.noResults }
-            return allTracks
-        }
-
-        let maxOffset = total - limit
-        let offset = Int.random(in: 0...maxOffset)
-        let (windowTracks, _) = try await fetchLikedTracksPage(limit: limit, offset: offset, token: token)
-        guard !windowTracks.isEmpty else {
-            // Shouldn't happen given total > limit and a valid offset range, but don't
-            // silently return an empty list if it somehow does.
-            throw SpotifyAPIError.noResults
-        }
-        _ = firstPageTracks // probe page's items are discarded; only its `total` was needed
-        return windowTracks
-    }
-
-    /// One `GET /v1/me/tracks?limit=&offset=` request. Returns the page's tracks plus the
-    /// library-wide `total` Spotify reports on every page (used by `fetchLikedTracksWindow`
-    /// to pick a random offset without a separate "count" endpoint — there isn't one).
-    private func fetchLikedTracksPage(limit: Int, offset: Int, token: String) async throws -> (tracks: [TrackResult], total: Int) {
-        var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
-        components.queryItems = [
-            URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "offset", value: String(offset))
-        ]
-        guard let url = components.url else {
-            throw SpotifyAPIError.unexpected("invalid liked tracks URL")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = requestTimeout
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await URLSession.shared.data(for: request)
-        } catch {
-            throw SpotifyAPIError.network(error)
-        }
-
-        guard let http = response as? HTTPURLResponse else {
-            throw SpotifyAPIError.unexpected("no HTTP response")
-        }
-
-        switch http.statusCode {
-        case 200:
-            break
-        case 401:
-            throw SpotifyAPIError.invalidCredentials
-        case 429:
-            throw SpotifyAPIError.rateLimited
-        default:
-            throw SpotifyAPIError.unexpected("liked tracks HTTP \(http.statusCode)")
-        }
-
-        // Each item is a SavedTrackObject: { "added_at": ..., "track": { "id", "uri",
-        // "name", "artists": [...] } } — the track fields are nested one level deeper
-        // than in a /v1/search response. `total` is a top-level sibling of `items`.
-        guard
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let rawItems = json["items"] as? [[String: Any]],
-            let total = json["total"] as? Int
-        else {
-            throw SpotifyAPIError.unexpected("malformed liked tracks response")
-        }
-
-        let tracks: [TrackResult] = rawItems.compactMap { item in
-            guard let track = item["track"] as? [String: Any],
-                  let uri = track["uri"] as? String,
-                  let name = track["name"] as? String else { return nil }
-            let artists = track["artists"] as? [[String: Any]]
-            let artist = (artists?.first?["name"] as? String) ?? ""
-            return TrackResult(uri: uri, name: name, artist: artist)
-        }
-
-        return (tracks, total)
+        // Playlist search results can contain `null` entries, so ask for a few.
+        let items = try await performSearch(query: query, type: type, token: token, limit: 5)
+        guard let first = items.first else { throw SpotifyAPIError.noResults }
+        return TrackResult(uri: first.uri, name: first.name, artist: first.artist, albumURI: first.albumURI)
     }
 
     // MARK: - Public API — Playback (Web API player endpoints)
@@ -439,27 +358,136 @@ actor SpotifyWebAPI {
     /// specifically means "no active device", not "not found". See `SpotifyAPIError` cases
     /// `scopeInsufficient` / `noActiveDevice` / `premiumRequired`.
     func startPlayback(uris: [String], deviceID: String?) async throws {
-        guard let token = await validUserAccessToken() else {
-            throw SpotifyAPIError.notConnected
-        }
         guard !uris.isEmpty else {
             throw SpotifyAPIError.noResults
         }
+        _ = try await sendPlayerRequest(
+            method: "PUT",
+            path: "play",
+            deviceID: deviceID,
+            jsonBody: ["uris": Array(uris.prefix(100))]
+        )
+    }
 
-        var components = URLComponents(string: "https://api.spotify.com/v1/me/player/play")!
+    /// Plays an album, artist or playlist as a real context, so playback continues through
+    /// it afterwards. `offsetURI` starts at a given track inside an album/playlist.
+    func startPlayback(contextURI: String, offsetURI: String? = nil, deviceID: String?) async throws {
+        var body: [String: Any] = ["context_uri": contextURI]
+        if let offsetURI {
+            body["offset"] = ["uri": offsetURI]
+        }
+        _ = try await sendPlayerRequest(method: "PUT", path: "play", deviceID: deviceID, jsonBody: body)
+    }
+
+    /// `POST /v1/me/player/queue`: appends to the user's queue, which plays before the
+    /// rest of the current context.
+    func addToQueue(uri: String, deviceID: String? = nil) async throws {
+        _ = try await sendPlayerRequest(
+            method: "POST",
+            path: "queue",
+            deviceID: deviceID,
+            extraQueryItems: [URLQueryItem(name: "uri", value: uri)]
+        )
+    }
+
+    /// URIs of what plays next (`GET /v1/me/player/queue`), user-queued items first.
+    func fetchQueueURIs() async throws -> [String] {
+        let data = try await sendPlayerRequest(method: "GET", path: "queue")
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let queue = json["queue"] as? [[String: Any]] else { return [] }
+        return queue.compactMap { $0["uri"] as? String }
+    }
+
+    /// Resumes whatever the target device last had queued (`PUT /v1/me/player/play` with
+    /// no body). Premium-only, like every player write endpoint.
+    func resumePlayback(deviceID: String? = nil) async throws {
+        _ = try await sendPlayerRequest(method: "PUT", path: "play", deviceID: deviceID)
+    }
+
+    func pausePlayback() async throws {
+        _ = try await sendPlayerRequest(method: "PUT", path: "pause")
+    }
+
+    func skipToNext() async throws {
+        _ = try await sendPlayerRequest(method: "POST", path: "next")
+    }
+
+    func skipToPrevious() async throws {
+        _ = try await sendPlayerRequest(method: "POST", path: "previous")
+    }
+
+    /// `volume` must already be validated to 0...100 by the caller.
+    func setVolume(_ volume: Int) async throws {
+        _ = try await sendPlayerRequest(
+            method: "PUT",
+            path: "volume",
+            extraQueryItems: [URLQueryItem(name: "volume_percent", value: String(volume))]
+        )
+    }
+
+    /// `GET /v1/me/player` (playback state). Used instead of `/currently-playing`, which
+    /// needs the `user-read-currently-playing` scope that `userScope` doesn't request —
+    /// this returns the same `item`/`is_playing` under `user-read-playback-state`.
+    /// Returns nil when nothing is playing (HTTP 204, or a non-track item such as a
+    /// podcast episode).
+    func fetchCurrentlyPlaying() async throws -> CurrentlyPlaying? {
+        let data = try await sendPlayerRequest(method: "GET", path: "")
+        guard !data.isEmpty,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let item = json["item"] as? [String: Any],
+              let uri = item["uri"] as? String,
+              let name = item["name"] as? String else {
+            return nil
+        }
+        let artists = (item["artists"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        let album = (item["album"] as? [String: Any])?["name"] as? String
+        return CurrentlyPlaying(
+            track: TrackResult(uri: uri, name: name, artist: artists.joined(separator: ", ")),
+            album: album,
+            isPlaying: (json["is_playing"] as? Bool) ?? false
+        )
+    }
+
+    /// Shared transport for every `/v1/me/player/*` call. Every non-2xx response is logged
+    /// with its status AND body before throwing (see `startPlayback`'s doc comment for why
+    /// 403/404 need the body to be told apart). Returns the raw body (empty for 204).
+    private func sendPlayerRequest(
+        method: String,
+        path: String,
+        deviceID: String? = nil,
+        extraQueryItems: [URLQueryItem] = [],
+        jsonBody: [String: Any]? = nil
+    ) async throws -> Data {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+
+        let urlString = path.isEmpty
+            ? "https://api.spotify.com/v1/me/player"
+            : "https://api.spotify.com/v1/me/player/\(path)"
+        var components = URLComponents(string: urlString)!
+        var queryItems = extraQueryItems
         if let deviceID {
-            components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
+            queryItems.append(URLQueryItem(name: "device_id", value: deviceID))
+        }
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
         }
         guard let url = components.url else {
-            throw SpotifyAPIError.unexpected("invalid player play URL")
+            throw SpotifyAPIError.unexpected("invalid player \(path) URL")
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "PUT"
+        request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = requestTimeout
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["uris": Array(uris.prefix(100))])
+        if let jsonBody {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: jsonBody)
+        } else if method != "GET" {
+            // Spotify rejects body-less PUT/POST player calls without a Content-Length.
+            request.httpBody = Data()
+        }
 
         let data: Data
         let response: URLResponse
@@ -475,26 +503,31 @@ actor SpotifyWebAPI {
 
         switch http.statusCode {
         case 200, 202, 204:
-            return
+            return data
         case 401:
             throw SpotifyAPIError.invalidCredentials
         case 403:
             let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
-            owLog("[Spotify] player play HTTP 403, body: \(bodyText)")
+            owLog("[Spotify] player \(path) HTTP 403, body: \(bodyText)")
             if bodyText.localizedCaseInsensitiveContains("premium") {
                 throw SpotifyAPIError.premiumRequired
+            }
+            // Not a scope problem, so reconnecting would not help — don't tell the user it would.
+            if bodyText.localizedCaseInsensitiveContains("disallow")
+                || bodyText.localizedCaseInsensitiveContains("restriction") {
+                throw SpotifyAPIError.playerRestricted
             }
             throw SpotifyAPIError.scopeInsufficient
         case 404:
             let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
-            owLog("[Spotify] player play HTTP 404, body: \(bodyText)")
+            owLog("[Spotify] player \(path) HTTP 404, body: \(bodyText)")
             throw SpotifyAPIError.noActiveDevice
         case 429:
             throw SpotifyAPIError.rateLimited
         default:
             let bodyText = String(data: data, encoding: .utf8) ?? "<empty>"
-            owLog("[Spotify] player play HTTP \(http.statusCode), body: \(bodyText)")
-            throw SpotifyAPIError.unexpected("player play HTTP \(http.statusCode)")
+            owLog("[Spotify] player \(path) HTTP \(http.statusCode), body: \(bodyText)")
+            throw SpotifyAPIError.unexpected("player \(path) HTTP \(http.statusCode)")
         }
     }
 
@@ -560,45 +593,33 @@ actor SpotifyWebAPI {
         }
     }
 
-    /// Adds a track to the user's Liked Songs library. `trackID` is the raw Spotify ID
-    /// (e.g. `"1301WleyT98MSxVHPZCA6M"`), not the `spotify:track:` URI — callers get the
-    /// ID out of the AppleScript `id of current track` result (which returns the full
-    /// URI) by taking the last `:`-separated component.
-    ///
-    /// Requires the user's own token (`.notConnected` if not connected) AND the
-    /// `user-library-modify` scope specifically — a token from before that scope was added
-    /// comes back with an HTTP 403, surfaced here as `.authorizationFailed` with a message
-    /// telling the user to reconnect, rather than a generic/confusing error.
-    ///
-    /// NOT CURRENTLY CALLED. `SpotifyManager.likeCurrentTrack()` used to call this but was
-    /// switched to a local ⌥⇧B keyboard-shortcut path instead, for a reason UNRELATED to
-    /// OAuth: OAuth itself works fine (token exchange returns HTTP 200, the refresh token
-    /// is persisted in the Keychain, and `connectUserAccount()` above is a working flow).
-    /// The original switch was made under the belief that `/authorize` was dead
-    /// (`error=server_error`); that belief is now known to be stale — see the comment on
-    /// `userScope` above. Left unwired rather than reconnected here because re-plumbing
-    /// `likeCurrentTrack()` to call this again is a separate, deliberate decision this
-    /// change does not make; see the comment on `likeCurrentTrack()` itself for its current
-    /// (⌥⇧B-based) behavior.
-    func addTrackToLikedSongs(trackID: String) async throws {
+    /// Saves an item (here: the current track) to the user's library with `PUT
+    /// /v1/me/library?uris=`. This replaced `PUT /v1/me/tracks?ids=` for Development Mode
+    /// apps in Spotify's February 2026 Web API changes. Idempotent, unlike Spotify's
+    /// local ⌥⇧B shortcut (a toggle). Needs the `user-library-modify` scope; a 403
+    /// surfaces as `.authorizationFailed` telling the user to reconnect.
+    func saveToLibrary(uri: String) async throws {
         guard let token = await validUserAccessToken() else {
             throw SpotifyAPIError.notConnected
         }
 
-        var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
-        components.queryItems = [URLQueryItem(name: "ids", value: trackID)]
+        var components = URLComponents(string: "https://api.spotify.com/v1/me/library")!
+        components.queryItems = [URLQueryItem(name: "uris", value: uri)]
         guard let url = components.url else {
-            throw SpotifyAPIError.unexpected("invalid liked-songs URL")
+            throw SpotifyAPIError.unexpected("invalid library URL")
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = requestTimeout
+        // Spotify rejects body-less PUTs without a Content-Length (HTTP 411).
+        request.httpBody = Data()
 
+        let data: Data
         let response: URLResponse
         do {
-            (_, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await URLSession.shared.data(for: request)
         } catch {
             throw SpotifyAPIError.network(error)
         }
@@ -608,16 +629,18 @@ actor SpotifyWebAPI {
         }
 
         switch http.statusCode {
-        case 200, 201:
+        case 200, 201, 204:
             return
         case 401:
             throw SpotifyAPIError.invalidCredentials
         case 403:
+            owLog("[Spotify] library save HTTP 403, body: \(String(data: data, encoding: .utf8) ?? "<empty>")")
             throw SpotifyAPIError.authorizationFailed("Bu işlem için ek izin gerekiyor, Ayarlar > Spotify'dan hesabını yeniden bağla")
         case 429:
             throw SpotifyAPIError.rateLimited
         default:
-            throw SpotifyAPIError.unexpected("like HTTP \(http.statusCode)")
+            owLog("[Spotify] library save HTTP \(http.statusCode), body: \(String(data: data, encoding: .utf8) ?? "<empty>")")
+            throw SpotifyAPIError.unexpected("library HTTP \(http.statusCode)")
         }
     }
 
@@ -724,25 +747,25 @@ actor SpotifyWebAPI {
     /// plain top result if none of the candidates are liked, or if the Liked-Songs check
     /// itself fails for any reason (best-effort layer, never blocks the search).
     private func searchWithLikedPriority(query: String, token: String) async throws -> TrackResult {
-        let items = try await performSearch(query: query, token: token, limit: 10)
+        let items = try await performSearch(query: query, type: .track, token: token, limit: 10)
         guard let first = items.first else { throw SpotifyAPIError.noResults }
 
         if items.count > 1, let likedIndex = await firstLikedIndex(items: items, token: token) {
             let liked = items[likedIndex]
-            return TrackResult(uri: liked.uri, name: liked.name, artist: liked.artist)
+            return TrackResult(uri: liked.uri, name: liked.name, artist: liked.artist, albumURI: liked.albumURI)
         }
 
-        return TrackResult(uri: first.uri, name: first.name, artist: first.artist)
+        return TrackResult(uri: first.uri, name: first.name, artist: first.artist, albumURI: first.albumURI)
     }
 
     /// Returns the index of the first (highest-ranked) item the user has saved to Liked
     /// Songs, or nil if none are saved or the check couldn't be completed. Never throws —
     /// this is a "nice to have" ranking signal, not something that should fail a search.
     private func firstLikedIndex(items: [SearchItem], token: String) async -> Int? {
-        // /v1/me/tracks/contains allows up to 50 IDs per call; our candidate list (limit
-        // 10) is always well under that, so a single request suffices.
-        var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks/contains")!
-        components.queryItems = [URLQueryItem(name: "ids", value: items.map(\.id).joined(separator: ","))]
+        // /v1/me/library/contains (the February 2026 replacement for /me/tracks/contains)
+        // takes up to 40 URIs per call; our candidate list (limit 10) fits in one request.
+        var components = URLComponents(string: "https://api.spotify.com/v1/me/library/contains")!
+        components.queryItems = [URLQueryItem(name: "uris", value: items.map(\.uri).joined(separator: ","))]
         guard let url = components.url else { return nil }
 
         var request = URLRequest(url: url)
@@ -762,11 +785,11 @@ actor SpotifyWebAPI {
         return flags.firstIndex(of: true)
     }
 
-    private func performSearch(query: String, token: String, limit: Int) async throws -> [SearchItem] {
+    private func performSearch(query: String, type: SearchType, token: String, limit: Int) async throws -> [SearchItem] {
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "type", value: "track"),
+            URLQueryItem(name: "type", value: type.rawValue),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "market", value: "TR")
         ]
@@ -804,19 +827,23 @@ actor SpotifyWebAPI {
 
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let tracksObj = json["tracks"] as? [String: Any],
-            let rawItems = tracksObj["items"] as? [[String: Any]]
+            let resultsObj = json["\(type.rawValue)s"] as? [String: Any],
+            let rawItems = resultsObj["items"] as? [Any]
         else {
             throw SpotifyAPIError.noResults
         }
 
-        let items: [SearchItem] = rawItems.compactMap { item in
-            guard let id = item["id"] as? String,
+        // `[Any]`, not `[[String: Any]]`: playlist results can contain JSON nulls.
+        let items: [SearchItem] = rawItems.compactMap { raw in
+            guard let item = raw as? [String: Any],
+                  let id = item["id"] as? String,
                   let uri = item["uri"] as? String,
                   let name = item["name"] as? String else { return nil }
             let artists = item["artists"] as? [[String: Any]]
-            let artist = (artists?.first?["name"] as? String) ?? ""
-            return SearchItem(id: id, uri: uri, name: name, artist: artist)
+            let owner = (item["owner"] as? [String: Any])?["display_name"] as? String
+            let subtitle = (artists?.first?["name"] as? String) ?? owner ?? ""
+            let albumURI = (item["album"] as? [String: Any])?["uri"] as? String
+            return SearchItem(id: id, uri: uri, name: name, artist: subtitle, albumURI: albumURI)
         }
 
         guard !items.isEmpty else { throw SpotifyAPIError.noResults }

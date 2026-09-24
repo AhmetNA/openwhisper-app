@@ -16,6 +16,16 @@ final class SpotifyIntentRegressionTests: XCTestCase {
             "Sakın müziği aç",
             "Sonraki şarkı çok güzel",
             "Bu sistem ne çalıyor acaba?",
+            "Dosyayı masaya koy",
+            "Yeni bir müzik çalar aldım",
+            "Müzik çalar",
+            "Telefon çalar mı acaba",
+            "Çal bunu yarın konuşuruz",
+            "Kapıyı açsana",
+            "Bu akşam dışarı çıkalım bakalım",
+            "Müzik dinleyelim mi yoksa film mi",
+            "Müzik çalar mısın diye sordu",
+            "Alışveriş listesini aç",
         ]
 
         for transcript in ordinaryDictation {
@@ -36,6 +46,19 @@ final class SpotifyIntentRegressionTests: XCTestCase {
             "Şu an hangi şarkı çalıyor",
             "Şu an çalan şarkı ne?",
             "Şu an çalan parça ne?",
+            "Spotify'da Barış Manço çalsana",
+            "Spotify'da Tarkan'ı çalar mısın",
+            "Müziği açsana",
+            "Şarkı çal bakalım",
+            "Spotify'da Sezen Aksu dinleyelim",
+            "Spotify'da Ezhel koysana",
+            "Müzik çal Manga'nın We Could Be The Same",
+            "Hadi müzik çal Duman",
+            "Müzik çalabilir misin",
+            "Spotify'da sakin bir şeyler çal",
+            "Spotify'da Mor ve Ötesi Bir Derdim Var çal",
+            "Spotify'da Tarkan'ın Karma albümünü aç",
+            "Rock çalma listesini aç",
         ]
 
         for transcript in explicitCommands {

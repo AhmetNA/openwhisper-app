@@ -3,7 +3,7 @@ import Foundation
 // Standalone verification harness — NOT part of the app target (kept outside
 // OpenWhisper/ so SwiftPM never compiles it into the executable).
 //
-// SpotifyManager.swift pulls in LocalMCPBridge.swift and SpotifyWebAPI.swift as
+// SpotifyManager.swift pulls in SpotifyController.swift and SpotifyWebAPI.swift as
 // dependencies, and all three call the app's `owLog` and `OpenWhisperNotification.post`
 // (both defined in OpenWhisper/App/OpenWhisperApp.swift, alongside `@main`, which
 // top-level-code files like this one can't link against) — so tiny local stubs are
@@ -26,7 +26,8 @@ import Foundation
 //   EOF
 //   swiftc Tools/main.swift OpenWhisper/Core/CorrectionEngine.swift \
 //     OpenWhisper/Core/TurkishDateParser.swift OpenWhisper/Core/SpotifyManager.swift \
-//     OpenWhisper/Core/LocalMCPBridge.swift OpenWhisper/Core/SpotifyWebAPI.swift \
+//     OpenWhisper/Core/SpotifyController.swift OpenWhisper/Core/SpotifyWebAPI.swift \
+//     OpenWhisper/Core/SpotifyRequestParser.swift \
 //     /tmp/owlog_stub.swift -o /tmp/ow_harness && /tmp/ow_harness
 
 var failures = 0

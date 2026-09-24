@@ -21,16 +21,6 @@ BUNDLE_SRC="$BIN_DIR/OpenWhisper_OpenWhisper.bundle"
 mkdir -p "$APP_DIR/MacOS" "$APP_DIR/Resources"
 cp "OpenWhisper/Info.plist" "$APP_DIR/Info.plist"
 
-# The Spotify MCP server is a Python subprocess, so it must be shipped inside
-# the app bundle. Keeping the source in scripts/ avoids duplicating the server
-# implementation while this copy makes installed builds self-contained.
-MCP_SCRIPT_SRC="scripts/spotify_smart_mcp.py"
-if [ ! -f "$MCP_SCRIPT_SRC" ]; then
-    echo "ERROR: Missing Spotify MCP server at $MCP_SCRIPT_SRC"
-    exit 1
-fi
-cp "$MCP_SCRIPT_SRC" "$APP_DIR/Resources/spotify_smart_mcp.py"
-
 # DeepFilterNet 3 (libdf.dylib, capi build) — vendored native library + model. The dylib's
 # install name is @rpath/libdf.dylib and the executable already carries an @loader_path rpath
 # (set by SwiftPM), so placing it next to the executable is enough for it to be found.
