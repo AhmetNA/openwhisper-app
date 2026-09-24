@@ -14,7 +14,7 @@ struct MenuBarContentView: View {
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 11, style: .continuous), tint: Color.accentColor.opacity(0.7), clear: true, interactive: true)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("OpenWhisper")
+                    Text("Jarvis")
                         .font(.headline)
                     HStack(spacing: 5) {
                         Circle()

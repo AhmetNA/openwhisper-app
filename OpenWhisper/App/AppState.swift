@@ -119,7 +119,10 @@ final class AppState {
     var replayingRecordingID: UUID?
     var replayStatus: String?
     var systemAudioEnabled = false {
-        didSet { syncFlowBarVisibility() }
+        didSet {
+            syncFlowBarVisibility()
+            updateWakeWordListener()
+        }
     }
     var systemAudioIsRecording = false {
         didSet {
@@ -140,6 +143,13 @@ final class AppState {
         didSet {
             guard oldValue != recordingState else { return }
             syncFlowBarVisibility()
+            updateWakeWordListener()
+            // Resume at the end of recording, before transcription: a spoken Spotify command
+            // ("durdur", "sonraki şarkı") is handled after this and so still wins.
+            if oldValue == .recording, pausedSpotifyForVoiceSession {
+                pausedSpotifyForVoiceSession = false
+                Task { _ = await SpotifyController.shared.play() }
+            }
         }
     }
 
@@ -254,6 +264,12 @@ final class AppState {
     }
 
     var audioLevel: Float = 0.0
+    /// True while a hands-free recording (⌘⌥⌃D, Fn+Space, openwhisper://) is running; the
+    /// FlowBar shows a stop button then, since there is no held key to release.
+    var handsFreeActive = false {
+        // Re-measure the panel: the stop button changes its width.
+        didSet { if oldValue != handsFreeActive { syncFlowBarVisibility() } }
+    }
     var recordingDuration: TimeInterval = 0.0
     var ollamaAvailable: Bool = false
     /// Availability of the selected cleanup engine.
@@ -272,7 +288,9 @@ final class AppState {
     var targetSpeakerEnrollmentStep: Int = 0
     var targetSpeakerEnrollmentPrompt: String = ""
     var targetSpeakerEnrollmentActive = false
-    var targetSpeakerEnrollmentIsRecording = false
+    var targetSpeakerEnrollmentIsRecording = false {
+        didSet { updateWakeWordListener() }
+    }
     var targetSpeakerEnrollmentIsProcessing = false
     var targetSpeakerEnrollmentStatus: String = ""
     var flowBarMessage: String?
@@ -366,6 +384,18 @@ final class AppState {
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
     private var delayedStopWorkItem: DispatchWorkItem?
+    /// Own "Jarvis" listener, only while music plays (Vocal Shortcuts misses the phrase then).
+    @ObservationIgnored private var wakeWordListener: WakeWordListener?
+    @ObservationIgnored private var musicMonitor: MusicPlaybackMonitor?
+    @ObservationIgnored private var musicPlaying = false
+    /// A voice session paused Spotify so the silence auto-stop can hear the speaker; resumed
+    /// when that recording ends.
+    @ObservationIgnored private var pausedSpotifyForVoiceSession = false
+    @ObservationIgnored private var voiceSessionIgnoreLeadingAudio = false
+    /// Set by a URL start just before it reaches `startRecording()`, consumed there.
+    @ObservationIgnored private var armVoiceAutoStopForNextRecording = false
+    /// Present only for voice-triggered sessions; ends them after the speaker goes quiet.
+    @ObservationIgnored private var voiceEndpointDetector: VoiceEndpointDetector?
     private var systemAudioCapture: SystemAudioCapture?
     private var systemAudioGeneration: UInt64 = 0
     private var systemAudioTranscriptionTail: Task<Void, Never>?
@@ -464,15 +494,17 @@ final class AppState {
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
         let savedModel = defaults.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
-        // The ByT5 normalizer was removed; users who had it selected fall back to the default.
-        ollamaModel = savedModel == "byt5-small-tr-normalizer" ? LLMCleanup.defaultModel : savedModel
+        // Models dropped from the picker (the ByT5 normalizer, llama3.2:3b) fall back to the default
+        // instead of leaving a selection Settings can't show.
+        let isSupported = LLMCleanup.supportedModels.contains { $0.tag == savedModel }
+        ollamaModel = isSupported ? savedModel : LLMCleanup.defaultModel
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID")
         audioDuckingEnabled = defaults.object(forKey: "audioDuckingEnabled") as? Bool ?? true
-        audioDuckingTargetVolume = defaults.object(forKey: "audioDuckingTargetVolume") as? Float ?? 0.20
+        audioDuckingTargetVolume = defaults.object(forKey: "audioDuckingTargetVolume") as? Float ?? 0.10
         audioDuckingRestoreDuration = defaults.object(forKey: "audioDuckingRestoreDuration") as? Double ?? 1.5
         targetSpeakerProfileStore = profileStore
         self.targetSpeakerModel = targetSpeakerModel
@@ -579,6 +611,15 @@ final class AppState {
                 }
             }
         )
+        hotkey?.onVoiceSessionRequest = { [weak self] in
+            Task { @MainActor in
+                owLog("[OpenWhisper] Voice session requested (Vocal Shortcut)")
+                self?.startVoiceSession()
+            }
+        }
+        hotkey?.onHandsFreeChange = { [weak self] active in
+            Task { @MainActor in self?.handsFreeActive = active }
+        }
         hotkey?.register()
         owLog("[OpenWhisper] Hotkey registered (Fn/Globe)")
 
@@ -586,6 +627,8 @@ final class AppState {
         owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
         await loadModel()
         owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
+
+        setupWakeWordListener()
 
         // Check Ollama availability
         await refreshOllamaStatus()
@@ -942,6 +985,9 @@ final class AppState {
             stopRecording()
         }
 
+        let armVoiceAutoStop = armVoiceAutoStopForNextRecording
+        armVoiceAutoStopForNextRecording = false
+
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
         guard recordingState != .recording else { return }
@@ -950,6 +996,14 @@ final class AppState {
             owLog("[OpenWhisper] Cannot record — model not loaded yet")
             return
         }
+        let sessionStart = CACurrentMediaTime()
+        voiceEndpointDetector = armVoiceAutoStop
+            ? VoiceEndpointDetector(
+                startTime: sessionStart,
+                ignoreUntil: voiceSessionIgnoreLeadingAudio ? sessionStart + 0.8 : nil
+            )
+            : nil
+        voiceSessionIgnoreLeadingAudio = false
 
         if audioDuckingEnabled {
             AudioDucker.shared.duck()
@@ -970,9 +1024,13 @@ final class AppState {
                 audioProcessingMode: processingMode,
                 levelCallback: { rawLevel in
                     let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
+                    // Stamped here, on the audio thread, so main-thread stalls can't distort
+                    // the voice auto-stop's silence timing.
+                    let levelTime = CACurrentMediaTime()
                     Task { @MainActor in
                         guard let self else { return }
                         self.audioLevel = target
+                        self.feedVoiceEndpoint(rawRMS: rawLevel, at: levelTime)
                     }
                 }
             ) ?? false
@@ -1067,6 +1125,7 @@ final class AppState {
     /// the UI transitions to `.transcribing` immediately on key release so the user feels an instant response.
     func stopRecordingWithTail(delay: TimeInterval = 0.40) {
         guard recordingState == .recording else { return }
+        voiceEndpointDetector = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
         owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
@@ -1080,6 +1139,7 @@ final class AppState {
     func stopRecording() {
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
+        voiceEndpointDetector = nil
 
         AudioDucker.shared.restore()
         if targetSpeakerEnrollmentIsRecording {
@@ -2003,6 +2063,12 @@ final class AppState {
     /// this Fn-down is discarded here: no transcription, no injection from it, and the UI
     /// returns to the previous background-transcription state, if any.
     private func cancelRecordingForSwap() {
+        discardActiveRecording(reason: "Fn+Z swap")
+    }
+
+    /// Stops the microphone and throws the audio away: no transcription, no injection.
+    private func discardActiveRecording(reason: String) {
+        voiceEndpointDetector = nil
         AudioDucker.shared.restore()
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         recordingTimer?.invalidate()
@@ -2015,7 +2081,7 @@ final class AppState {
         recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
         recordingDuration = 0
         audioLevel = 0
-        owLog("[OpenWhisper] Recording cancelled for Fn+Z swap")
+        owLog("[OpenWhisper] Recording cancelled (\(reason))")
     }
 
     // MARK: - Target Speaker Enrollment
@@ -2478,6 +2544,114 @@ final class AppState {
     }
 
     // MARK: - Refresh
+
+    /// Handles openwhisper://start | stop | toggle, used by Siri Vocal Shortcuts / Shortcuts.
+    func handleExternalURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "openwhisper" else { return }
+        let action = (url.host ?? url.path).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let hotkey else {
+            owLog("[OpenWhisper] URL trigger '\(action)' ignored — setup not finished yet")
+            return
+        }
+        owLog("[OpenWhisper] URL trigger: \(action)")
+        switch action {
+        case "start": startVoiceSession()
+        case "stop": hotkey.externalStopHandsFree()
+        case "toggle", "":
+            armVoiceAutoStopForNextRecording = hotkey.isIdle
+            hotkey.externalToggleHandsFree()
+        default: owLog("[OpenWhisper] Unknown URL action: \(action)")
+        }
+    }
+
+    /// Voice-started sessions (Vocal Shortcuts, openwhisper://start) have nobody at the keyboard, so unlike
+    /// Fn they end themselves on silence. Start-only: no-op while anything is recording.
+    func startVoiceSession() {
+        guard let hotkey, hotkey.isIdle else { return }
+        armVoiceAutoStopForNextRecording = true
+        // Music defeats the level-based auto-stop (measured: a song never reads as silence),
+        // so pause Spotify for the session, the way Siri does.
+        if musicMonitor?.isSpotifyPlaying == true {
+            pausedSpotifyForVoiceSession = true
+            voiceSessionIgnoreLeadingAudio = true
+            Task { _ = await SpotifyController.shared.pause() }
+        }
+        hotkey.externalStartHandsFree()
+    }
+
+    // MARK: - Wake word while music plays
+
+    private func setupWakeWordListener() {
+        let listener = WakeWordListener { [weak self] in
+            owLog("[OpenWhisper] Voice session requested (wake word)")
+            self?.startVoiceSession()
+        }
+        listener.prepare()
+        wakeWordListener = listener
+        let monitor = MusicPlaybackMonitor { [weak self] playing in
+            guard let self else { return }
+            if playing {
+                self.musicPlaying = true
+                self.updateWakeWordListener()
+            } else {
+                // Skips and quick pause/play flips shouldn't bounce the microphone.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self, self.musicMonitor?.isPlaying == false else { return }
+                    self.musicPlaying = false
+                    self.updateWakeWordListener()
+                }
+            }
+        }
+        musicMonitor = monitor
+        // The app may launch mid-song, before any playback notification arrives.
+        Task { @MainActor in
+            if await SpotifyController.shared.isPlayingLocally() {
+                monitor.set("Spotify", playing: true)
+            }
+        }
+    }
+
+    /// One microphone user at a time: the listener runs only while music plays and nothing
+    /// else (dictation, enrollment, system-audio capture) is recording.
+    private func updateWakeWordListener() {
+        guard let listener = wakeWordListener else { return }
+        let shouldRun = musicPlaying
+            && modelLoaded
+            && recordingState != .recording
+            && !targetSpeakerEnrollmentIsRecording
+            && !systemAudioEnabled
+        if shouldRun && !listener.isRunning {
+            listener.start()
+        } else if !shouldRun && listener.isRunning {
+            listener.stop()
+        }
+    }
+
+    /// FlowBar stop button: finish and process, exactly like Enter/Space.
+    func finishHandsFreeRecording() {
+        hotkey?.externalStopHandsFree()
+    }
+
+    private func feedVoiceEndpoint(rawRMS: Float, at time: TimeInterval) {
+        guard recordingState == .recording, var detector = voiceEndpointDetector else { return }
+        let decision = detector.process(rms: rawRMS, at: time)
+        voiceEndpointDetector = detector
+        guard decision != .continueRecording else { return }
+
+        owLog("[VoiceAutoStop] \(decision) — \(detector.summary)")
+        voiceEndpointDetector = nil
+        switch decision {
+        case .stop, .stopMaxDuration:
+            // No release tail: the speaker has already been quiet for `silenceToStop`.
+            hotkey?.externalCancelHandsFree()
+            stopRecording()
+        case .cancelNoSpeech:
+            hotkey?.externalCancelHandsFree()
+            discardActiveRecording(reason: "voice trigger, no speech")
+        case .continueRecording:
+            break
+        }
+    }
 
     func refreshPermissions() {
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: false)

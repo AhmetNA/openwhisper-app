@@ -4,11 +4,11 @@ final class LLMCleanup: Sendable {
     private let baseURL = "http://localhost:11434"
     let model: String
 
-    /// Default cleanup model. Chosen over llama3.2:3b after a side-by-side run on TR/EN
-    /// code-switched dictation: llama translated English phrases and swapped words in half the
-    /// samples (so the faithfulness check threw its output away), qwen3.5:4b kept all of them
-    /// intact at ~0.7s per sentence vs ~0.3s.
-    static let defaultModel = "qwen3.5:4b"
+    /// Default cleanup model. Chosen after a side-by-side run on TR/EN code-switched dictation
+    /// with the glossary in the prompt: llama3.2:3b translated English phrases and swapped words
+    /// in half the samples (so the faithfulness check threw its output away), qwen3.5:4b was
+    /// accurate but ~1s per sentence, gemma4:e2b-it-qat kept every sample intact at ~0.3s.
+    static let defaultModel = "gemma4:e2b-it-qat"
 
     init(model: String = LLMCleanup.defaultModel) {
         self.model = model
@@ -17,9 +17,8 @@ final class LLMCleanup: Sendable {
     /// Cleanup models offered in Settings, fastest first. Each must be `ollama pull`-ed
     /// separately; `isModelInstalled` guards against picking one that isn't.
     static let supportedModels: [(tag: String, label: String)] = [
-        ("llama3.2:3b", "⚡ Aşırı Hızlı (Llama 3.2 3B)"),
-        ("gemma4:e2b-it-qat", "🚀 Hızlı (Gemma 4 E2B)"),
-        ("qwen3.5:4b", "🧠 Dengeli (Qwen 3.5 4B)")
+        ("gemma4:e2b-it-qat", "⚡ Hızlı (Gemma 4 E2B)"),
+        ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)")
     ]
 
     /// How long Ollama keeps the model resident after a request. Every request to the model

@@ -141,6 +141,8 @@ struct SettingsView: View {
             Divider()
             inputDeviceSection
             Divider()
+            audioDuckingSection
+            Divider()
             languageSection
             if let error = appState.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -421,7 +423,7 @@ struct SettingsView: View {
                     .textSelection(.enabled)
 
                     if isResolved {
-                        Text("Bu, kullanıcı dizininden keşfedilen bir sağlayıcı. Onaylarsanız yukarıdaki yorumlayıcı, OpenWhisper'ın mikrofon ve Accessibility izinlerini miras alarak çalıştırılır.")
+                        Text("Bu, kullanıcı dizininden keşfedilen bir sağlayıcı. Onaylarsanız yukarıdaki yorumlayıcı, Jarvis'in mikrofon ve Accessibility izinlerini miras alarak çalıştırılır.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -504,6 +506,43 @@ struct SettingsView: View {
         }
         .onAppear {
             appState.refreshInputDevices()
+        }
+    }
+
+    // MARK: - Audio Ducking Section
+
+    private var audioDuckingSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Kayıtta sesi kıs", systemImage: "speaker.wave.1")
+                Spacer()
+                Toggle("", isOn: $appState.audioDuckingEnabled)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            if appState.audioDuckingEnabled {
+                HStack(spacing: 10) {
+                    Slider(
+                        value: Binding(
+                            get: { Double(appState.audioDuckingTargetVolume) },
+                            set: { appState.audioDuckingTargetVolume = Float($0) }
+                        ),
+                        in: 0...0.5,
+                        step: 0.05
+                    ) {
+                        Text("Kayıt sırasındaki ses seviyesi")
+                    }
+                    .labelsHidden()
+                    Text("%\(Int((appState.audioDuckingTargetVolume * 100).rounded()))")
+                        .font(.callout.monospacedDigit())
+                        .frame(width: 40, alignment: .trailing)
+                }
+                Text("Kayıt sürerken Mac'in çıkış sesi bu seviyeye iner, bitince 1.5 saniyede eski haline döner. Ses zaten bunun altındaysa dokunulmaz.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

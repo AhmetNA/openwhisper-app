@@ -146,12 +146,15 @@ final class SpotifyManager: @unchecked Sendable {
     /// The only intents allowed to reach `SpotifyController`'s side effects. Keeping the
     /// recognition result structured prevents the handler from turning arbitrary residue
     /// into a search request when no real Spotify action was recognized.
-    private enum ExplicitSpotifyIntent {
+    enum ExplicitSpotifyIntent: Equatable {
         case pause
         case play
         case next
         case previous
+        /// System output volume, in percent (not Spotify's own slider; see `SystemVolume`).
         case setVolume(Int)
+        /// Relative system volume change ("müziğin sesi çok kısık" → +30).
+        case adjustVolume(Int)
         case currentTrack
         case search(SpotifySearchRequest)
         case likeCurrentTrack
@@ -275,7 +278,7 @@ final class SpotifyManager: @unchecked Sendable {
     /// A music noun by itself is never a command, and a generic word such as `sesim` cannot
     /// become a Spotify volume operation. Ollama may veto a candidate but cannot promote
     /// ordinary dictation into a side-effecting intent.
-    private static func explicitIntent(in text: String) -> ExplicitSpotifyIntent? {
+    static func explicitIntent(in text: String) -> ExplicitSpotifyIntent? {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return nil }
 
@@ -309,7 +312,10 @@ final class SpotifyManager: @unchecked Sendable {
         // numeric value, and an adjustment verb. `sesim`, `sesimi`, and "ses kontrol"
         // therefore remain dictation.
         let volumeWords: Set<String> = ["ses", "sesi", "sesini", "volume"]
-        let volumeVerbs: Set<String> = ["yap", "ayarla", "getir", "çıkar", "cikar", "indir", "artır", "artir", "azalt", "set"]
+        let volumeVerbs: Set<String> = [
+            "yap", "ayarla", "getir", "çıkar", "cikar", "indir", "artır", "artir", "azalt",
+            "düşür", "dusur", "yükselt", "yukselt", "set"
+        ]
         if hasExplicitTarget,
            !volumeWords.isDisjoint(with: wordSet),
            !volumeVerbs.isDisjoint(with: wordSet),
@@ -368,56 +374,392 @@ final class SpotifyManager: @unchecked Sendable {
         return nil
     }
 
-    /// Check if transcribed text is a Spotify voice command.
-    /// When Ollama is available, one structured call both verifies the intent (it can only
-    /// veto the deterministic gate, never promote dictation) and splits song/artist for the
-    /// search. The split is cached for the `handleCommand` call that follows, so a command
-    /// costs a single Ollama round trip.
-    static func isSpotifyCommand(_ text: String, ollamaAvailable: Bool = false) async -> Bool {
-        guard explicitIntent(in: text) != nil else { return false }
+    // MARK: - Decision
 
-        if ollamaAvailable,
-           let parse = await SpotifyRequestParser.queryOllama(transcript: text, model: selectedOllamaModel) {
-            owLog("[Spotify] Ollama parse for '\(text)': \(parse)")
-            ollamaParseCache.store(parse, for: text)
-            // The veto exists for ambiguous phrasing. A transcript that names Spotify is
-            // unambiguous, and llama3.2:3b has vetoed plain "Spotify'da Tarkan çal".
-            if !parse.isMusicCommand, addressesSpotify(text) {
-                owLog("[Spotify] Ignoring Ollama veto: transcript addresses Spotify explicitly")
-                return true
-            }
-            return parse.isMusicCommand
+    /// Raw last words that may end a Spotify search spoken without "Spotify" or a music noun
+    /// ("Hadise Düm Tek Tek çal"). Deliberately excludes "aç" ("dosyayı aç", "Chrome'u aç")
+    /// and the "koy" alias ("masaya koy"): those end far too much ordinary dictation, and
+    /// every candidate costs an Ollama round trip before the text can be pasted.
+    private static let promotionVerbs: Set<String> = [
+        "çal", "cal", "çalsana", "calsana", "oynat", "oynatsana", "dinlet", "dinletsene"
+    ]
+    private static let maxPromotionWordCount = 6
+
+    /// "çal" also means ring, knock and play an instrument ("zili çal", "kapıyı çal",
+    /// "gitar çal"); models happily read the object as a song title. Matched as word
+    /// prefixes so inflected forms ("kapısını", "gitarı") are caught too — so only stems
+    /// long/distinct enough not to start band or song names belong here (not "para": Paramore).
+    private static let nonMusicPlayObjects: [String] = [
+        "kapı", "zil", "korna", "alarm", "telefon",
+        "gitar", "piyano", "keman", "davul", "bağlama", "flüt", "enstrüman",
+        // A tune/lullaby to hum or an instrument, not a Spotify title: the model promoted
+        // these ("şu melodiyi çal", "biraz saz çal") once the prompt grew natural examples.
+        "saz", "melodi", "ninni"
+    ]
+
+    /// Personal pronouns mark ordinary sentences ("onun parasını çal", "ona bir şarkı çal"):
+    /// a spoken "<artist> <song> çal" request doesn't contain them.
+    private static let pronouns: Set<String> = [
+        "ben", "sen", "o", "biz", "siz", "onlar", "beni", "seni", "onu", "bizi", "sizi", "onları",
+        "bana", "sana", "ona", "bize", "size", "onlara", "benim", "senin", "onun", "bizim", "sizin", "onların"
+    ]
+
+    /// A transcript the rules rejected that Ollama may still promote to a search: short,
+    /// at least two words before a closing play verb (one bare noun — "bateri çal" — is far
+    /// more often an instrument or object than a song), and not quoting/negating anything.
+    static func isPromotionCandidate(_ text: String) -> Bool {
+        let normalized = normalize(text)
+        let spoken = normalized.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard spoken.count >= 3, spoken.count <= maxPromotionWordCount,
+              let last = spoken.last(where: { !commandTailWords.contains($0) }),
+              promotionVerbs.contains(last) else { return false }
+        let words = intentWords(normalized)
+        guard !words.contains(where: { word in nonMusicPlayObjects.contains { word.hasPrefix($0) } }),
+              pronouns.isDisjoint(with: words) else { return false }
+        return mentionOrNegationWords.isDisjoint(with: Set(words))
+    }
+
+    /// Whether the transcript itself supports what Ollama claims. The model's label alone
+    /// never causes a side effect; each intent needs its own words in the text.
+    ///
+    /// `natural` widens transport intents to conversational cues ("bu şarkıdan sıkıldım").
+    /// It is only set on the natural-phrasing path, never when Ollama would override a
+    /// rule-gate result, so a song title containing "geç" can't turn a search into a skip.
+    private static func hasEvidence(for parse: SpotifyRequestParser.OllamaParse, in text: String, natural: Bool = false) -> Bool {
+        let normalized = normalize(text)
+        let words = canonicalizeVerbs(intentWords(normalized))
+        let wordSet = Set(words)
+        let playVerbs: Set<String> = ["çal", "cal", "aç", "ac", "oynat", "başlat", "baslat", "dinlet", "play", "resume"]
+        let cues = cueWords(normalized)
+        switch parse.intent {
+        case .pause:
+            return !wordSet.isDisjoint(with: ["durdur", "kapat", "duraklat", "pause"])
+                || (natural && !Set(cues).isDisjoint(with: naturalPauseCues))
+        case .play:
+            // Nothing left to search for; otherwise this is a search, not a resume.
+            return !wordSet.isDisjoint(with: playVerbs) && shared.extractSearchQuery(normalized).isEmpty
+        case .next:
+            return !wordSet.isDisjoint(with: ["sonraki", "next", "atla", "skip"])
+                || (natural && (!Set(cues).isDisjoint(with: naturalNextWords)
+                    || cues.contains { word in naturalNextStems.contains { word.hasPrefix($0) } }))
+        case .previous:
+            return !wordSet.isDisjoint(with: ["önceki", "onceki", "previous", "prev"])
+        case .volume:
+            return volumeTarget(in: text) != nil
+        case .volumeUp:
+            return relativeVolumeCueDirection(in: text, up: true)
+        case .volumeDown:
+            return relativeVolumeCueDirection(in: text, up: false)
+        case .current:
+            return ["ne çalıyor", "hangi şarkı çalıyor", "hangi parça çalıyor", "çalan şarkı ne", "çalan parça ne"]
+                .contains { normalized.contains($0) }
+        case .like:
+            return !wordSet.isDisjoint(with: ["ekle", "beğen", "begen", "like"])
+                && (normalized.contains("çalan") || normalized.contains("beğenilenlerime")
+                    || normalized.contains("beğendiklerime") || normalized.contains("beğenilerime"))
+        case .search:
+            let request = searchRequest(for: normalized, parse: parse)
+            return !wordSet.isDisjoint(with: playVerbs.union(["ara", "bul", "search"]))
+                && !request.searchQueries.isEmpty
+        case .none:
+            return false
+        }
+    }
+
+    private static func searchRequest(for text: String, parse: SpotifyRequestParser.OllamaParse?) -> SpotifySearchRequest {
+        let rules = SpotifyRequestParser.requestFromRules(normalize(text))
+        guard let parse, parse.intent == .search else { return rules }
+        return SpotifyRequestParser.request(from: parse, transcript: text, rules: rules)
+    }
+
+    /// Nil when the intent can't be carried out from this text — a volume with neither a
+    /// number nor "sonuna kadar" must never default to muting Spotify.
+    private static func intent(from parse: SpotifyRequestParser.OllamaParse, text: String) -> ExplicitSpotifyIntent? {
+        switch parse.intent {
+        case .pause: return .pause
+        case .play: return .play
+        case .next: return .next
+        case .previous: return .previous
+        case .volume: return volumeTarget(in: text).map { .setVolume($0) }
+        case .volumeUp: return .adjustVolume(volumeStep(in: text))
+        case .volumeDown: return .adjustVolume(-volumeStep(in: text))
+        case .current: return .currentTrack
+        case .like: return .likeCurrentTrack
+        case .search, .none: return .search(searchRequest(for: text, parse: parse))
+        }
+    }
+
+    private static func sameKind(_ a: ExplicitSpotifyIntent, _ b: ExplicitSpotifyIntent) -> Bool {
+        switch (a, b) {
+        case (.search, .search), (.setVolume, .setVolume), (.adjustVolume, .adjustVolume): return true
+        default: return a == b
+        }
+    }
+
+    /// One decision from the rule gate (`rules`) and Ollama's reading (`parse`, nil when
+    /// Ollama is unavailable or timed out):
+    ///
+    /// | rules | Ollama                    | result                                             |
+    /// |-------|---------------------------|----------------------------------------------------|
+    /// | any   | unavailable               | rules (unchanged fail-closed behavior)             |
+    /// | R     | same intent               | R (a search gets Ollama's title/artist split)      |
+    /// | R     | none                      | R if Spotify is named or R is volume/current/like, |
+    /// |       |                           | whose gate is already narrow; else dictation       |
+    /// | R     | other intent, evidenced   | Ollama's intent                                     |
+    /// | R     | other intent, no evidence | R                                                  |
+    /// | nil   | search, evidenced,        | search — limited to short "… çal" phrases          |
+    /// |       | promotion candidate       |                                                    |
+    /// | nil   | volume, evidenced,        | that intent — natural phrasing ("müziğin sesi çok  |
+    /// |       | natural candidate         | kısık"); acts on the system volume                 |
+    /// | nil   | skip/pause/mood,          | that intent, only while Spotify is playing on this |
+    /// |       | evidenced, natural cand.  | Mac ("bu şarkıdan sıkıldım")                       |
+    /// | nil   | anything else             | dictation                                          |
+    static func decide(
+        rules: ExplicitSpotifyIntent?,
+        parse: SpotifyRequestParser.OllamaParse?,
+        text: String,
+        spotifyPlaying: Bool = false
+    ) -> ExplicitSpotifyIntent? {
+        guard let parse else { return rules }
+
+        guard let rules else {
+            if let promoted = promotedSearch(parse, text: text) { return promoted }
+            guard isNaturalCandidate(text) else { return nil }
+            return naturalIntent(parse, text: text, spotifyPlaying: spotifyPlaying)
         }
 
-        // With Ollama unavailable or timed out, the deterministic explicit-intent gate is
-        // already sufficient. It is deliberately fail-closed rather than keyword-based.
-        return true
+        if parse.intent == .none {
+            switch rules {
+            case .setVolume, .currentTrack, .likeCurrentTrack:
+                return rules
+            default:
+                if addressesSpotify(text) {
+                    owLog("[Spotify] Ignoring Ollama veto: transcript addresses Spotify explicitly")
+                    return rules
+                }
+                return nil
+            }
+        }
+
+        guard let llmIntent = intent(from: parse, text: text) else { return rules }
+        if sameKind(llmIntent, rules) {
+            if case .search = rules { return llmIntent }  // carries Ollama's split
+            return rules
+        }
+        if hasEvidence(for: parse, in: text) {
+            owLog("[Spotify] Ollama intent \(parse.intent) overrides rules for '\(text)'")
+            return llmIntent
+        }
+        return rules
+    }
+
+    /// Rule-rejected text Ollama may turn into a search of a named song/artist/album.
+    private static func promotedSearch(_ parse: SpotifyRequestParser.OllamaParse, text: String) -> ExplicitSpotifyIntent? {
+        // Only named items: a mood/playlist reading ("bir ninni çal") is too loose to
+        // turn dictation into playback.
+        guard parse.intent == .search, [.track, .artist, .album].contains(parse.kind),
+              isPromotionCandidate(text), hasEvidence(for: parse, in: text) else { return nil }
+        // Promotion needs Ollama to have named something, and every name to appear in
+        // the transcript; there is no rule-gate result to fall back on.
+        let title = SpotifyRequestParser.cleanOllamaName(parse.title)
+        let artist = SpotifyRequestParser.cleanOllamaName(parse.artist)
+        guard !(title.isEmpty && artist.isEmpty),
+              SpotifyRequestParser.isGrounded(title, in: text),
+              SpotifyRequestParser.isGrounded(artist, in: text) else { return nil }
+        let request = searchRequest(for: text, parse: parse)
+        owLog("[Spotify] Ollama promoted '\(text)' to a search: \(request)")
+        return .search(request)
+    }
+
+    /// Natural phrasing the rules rejected. Only intents that are cheap to undo qualify;
+    /// play/current/like keep needing the rule gate's explicit wording. Volume works any
+    /// time (it is the system volume); the Spotify-specific ones only while it plays.
+    private static func naturalIntent(
+        _ parse: SpotifyRequestParser.OllamaParse, text: String, spotifyPlaying: Bool
+    ) -> ExplicitSpotifyIntent? {
+        switch parse.intent {
+        case .volume, .volumeUp, .volumeDown:
+            guard hasEvidence(for: parse, in: text, natural: true) else { return nil }
+        case .next, .previous, .pause:
+            guard spotifyPlaying, hasEvidence(for: parse, in: text, natural: true) else { return nil }
+        case .search:
+            // Moods only ("biraz sakin bir şeyler dinleyelim"); named songs go through promotion.
+            guard spotifyPlaying, parse.kind == .playlist, SpotifyRequestParser.hasPlaylistEvidence(text),
+                  hasEvidence(for: parse, in: text, natural: true),
+                  case .search(let request)? = intent(from: parse, text: text),
+                  request.kind == .playlist else { return nil }
+        case .play, .current, .like, .none:
+            return nil
+        }
+        let result = intent(from: parse, text: text)
+        if let result { owLog("[Spotify] Natural phrasing '\(text)' → \(result)") }
+        return result
+    }
+
+    // MARK: - Natural phrasing
+
+    private static let maxNaturalWordCount = 10
+
+    /// Word starts (folded, see `cueWords`) that put an utterance on the subject of music.
+    private static let naturalTopicStems: [String] = ["muzi", "sarki", "parca", "spotify", "dinle"]
+    private static let volumeNouns: Set<String> = ["ses", "sesi", "sesini", "sesin", "volume"]
+
+    /// Lowercased words with every diacritic removed, including dotless "ı" (which
+    /// Foundation's diacritic folding leaves alone), so cue lists need a single spelling
+    /// that also matches Whisper's ASCII output ("kisik").
+    private static func cueWords(_ text: String) -> [String] {
+        SpotifyRequestParser.foldedWords(text).map { $0.replacingOccurrences(of: "ı", with: "i") }
+    }
+
+    /// A short utterance about music or its volume, not quoting or negating anything. Such
+    /// text reaches Ollama when it mentions volume, or otherwise while Spotify is playing on
+    /// this Mac (see `isSpotifyCommand`). `sesim` ("my voice") is deliberately not a volume noun.
+    static func isNaturalCandidate(_ text: String) -> Bool {
+        let normalized = normalize(text)
+        guard spokenWordCount(normalized) <= maxNaturalWordCount,
+              mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized))) else { return false }
+        let cues = cueWords(normalized)
+        return !volumeNouns.isDisjoint(with: cues)
+            || cues.contains { word in naturalTopicStems.contains { word.hasPrefix($0) } }
+    }
+
+    // Loudness cues, matched as word starts so "kısık", "kısıktı", "yükseltir misin" all count.
+    private static let louderStems: [String] = [
+        "kisik", "kisil", "dusuk", "duyulmu", "duyam", "duymuyor", "yukselt", "artir", "arttir"
+    ]
+    private static let quieterStems: [String] = [
+        "yuksek", "azalt", "dusur", "indir", "bagir", "patla", "patli", "gurultu", "fazla"
+    ]
+    /// Exact words only: as word starts "az" would match "azalt" and "kıs" would match "kısık".
+    private static let louderWords: Set<String> = ["az"]
+    private static let quieterWords: Set<String> = ["kis", "kisar", "kissana", "kisalim", "kisin", "kisabilir", "kisiver"]
+    /// "aç" means louder only next to a volume noun or an amount ("müziği biraz aç");
+    /// "müziği aç" alone is resume.
+    private static let openWords: Set<String> = ["ac", "acsana", "acar", "acabilir", "aciver"]
+    private static let smallAmountWords: Set<String> = ["biraz", "azicik", "azcik", "hafif", "hafifce", "tik"]
+    private static let largeAmountWords: Set<String> = ["cok", "asiri", "baya", "bayagi", "epey", "iyice", "fazla"]
+    private static let maxVolumePhrases: [String] = ["sonuna kadar", "son ses", "en yuksek", "maksimum", "full"]
+
+    private static let naturalPauseCues: Set<String> = [
+        "sustur", "sustursana", "durdursana", "kapatsana", "kapatir", "durdurur", "duraklatir"
+    ]
+    private static let naturalNextWords: Set<String> = ["gec", "gecsene", "gecelim", "gecer", "degistir", "degistirsene", "olmadi"]
+    private static let naturalNextStems: [String] = ["sikil", "sikici", "begenmedim", "sevmedim"]
+
+    private static func hasNumber(_ text: String) -> Bool {
+        intentWords(normalize(text)).compactMap(Int.init).contains { (0...100).contains($0) }
+    }
+
+    /// Whether the text itself says which way the volume should go. A number always
+    /// means an absolute setting, so "sesini 40'a yükselt" can never become +20.
+    private static func relativeVolumeCueDirection(in text: String, up: Bool) -> Bool {
+        guard !hasNumber(text) else { return false }
+        let cues = cueWords(normalize(text))
+        let cueSet = Set(cues)
+        if up {
+            let amountOrNoun = !cueSet.isDisjoint(with: smallAmountWords.union(largeAmountWords).union(volumeNouns).union(["daha"]))
+            return cues.contains { word in louderStems.contains { word.hasPrefix($0) } }
+                || !cueSet.isDisjoint(with: louderWords)
+                || (!cueSet.isDisjoint(with: openWords) && amountOrNoun)
+        }
+        return cues.contains { word in quieterStems.contains { word.hasPrefix($0) } }
+            || !cueSet.isDisjoint(with: quieterWords)
+    }
+
+    /// The absolute volume a `volume` intent asks for: the spoken number, or 100 for
+    /// "sonuna kadar aç". Nil otherwise — including "sonuna kadar kıs", which is not max.
+    private static func volumeTarget(in text: String) -> Int? {
+        let normalized = normalize(text)
+        let words = intentWords(normalized)
+        if !volumeNouns.isDisjoint(with: words), let number = words.compactMap(Int.init).first(where: { (0...100).contains($0) }) {
+            return number
+        }
+        let cues = cueWords(normalized)
+        // Only lowering verbs veto: "en yüksek" itself contains the "too loud" cue.
+        let lowering = !Set(cues).isDisjoint(with: quieterWords)
+            || cues.contains { word in ["azalt", "dusur", "indir"].contains { word.hasPrefix($0) } }
+        guard maxVolumePhrases.contains(where: cues.joined(separator: " ").contains), !lowering else { return nil }
+        return 100
+    }
+
+    /// A volume noun or a loudness cue: worth asking Ollama about even with no music on.
+    static func mentionsVolume(_ text: String) -> Bool {
+        !volumeNouns.isDisjoint(with: cueWords(normalize(text)))
+            || relativeVolumeCueDirection(in: text, up: true)
+            || relativeVolumeCueDirection(in: text, up: false)
+    }
+
+    /// Whisper hears "sesi biraz kıs" as "sesi biraz kız" (girl), which the model then
+    /// reads as the opposite direction. Next to a volume noun "kız" can only be "kıs".
+    static func repairVolumeMishearing(_ text: String) -> String {
+        let folded = cueWords(normalize(text))
+        guard !volumeNouns.isDisjoint(with: folded) || folded.contains(where: { word in naturalTopicStems.contains { word.hasPrefix($0) } }),
+              folded.contains(where: { ["kiz", "kizsana"].contains($0) }) else { return text }
+        return text.replacingOccurrences(
+            of: "\\b([Kk])[ıi]z(sana)?\\b", with: "$1ıs$2", options: .regularExpression
+        )
+    }
+
+    /// 10 for "biraz", 30 for "çok", 20 otherwise.
+    static func volumeStep(in text: String) -> Int {
+        let cues = Set(cueWords(normalize(text)))
+        if !cues.isDisjoint(with: smallAmountWords) { return 10 }
+        if !cues.isDisjoint(with: largeAmountWords) { return 30 }
+        return 20
+    }
+
+    /// Check if transcribed text is a Spotify voice command, deciding which one. Text the
+    /// rule gate rejects only reaches Ollama when it is a promotion candidate, or a natural
+    /// candidate while Spotify is playing on this Mac, so ordinary dictation isn't delayed.
+    /// The decision is cached for the `handleCommand` call that follows, so a command
+    /// costs a single Ollama round trip.
+    static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false) async -> Bool {
+        let text = repairVolumeMishearing(transcript)
+        let rules = explicitIntent(in: text)
+        let promotion = rules == nil && ollamaAvailable && isPromotionCandidate(text)
+        // Cheapest checks first: the word test, then the playback query (which never
+        // launches Spotify), and only then Ollama.
+        let natural = rules == nil && ollamaAvailable && isNaturalCandidate(text)
+        var spotifyPlaying = false
+        if natural {
+            spotifyPlaying = await SpotifyController.shared.isPlayingLocally()
+        }
+        guard rules != nil || promotion || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
+
+        var parse: SpotifyRequestParser.OllamaParse?
+        if ollamaAvailable {
+            parse = await SpotifyRequestParser.queryOllama(transcript: text, model: selectedOllamaModel)
+            if let parse { owLog("[Spotify] Ollama parse for '\(text)': \(parse)") }
+        }
+        let decision = decide(rules: rules, parse: parse, text: text, spotifyPlaying: spotifyPlaying)
+        if let decision { decisionCache.store(decision, for: transcript) }
+        return decision != nil
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
     /// "ollamaModel", default LLMCleanup.defaultModel). SpotifyManager is a standalone singleton with no
     /// AppState reference, so it reads the same UserDefaults key directly rather than
     /// hardcoding a model. See ReminderManager's identical `selectedOllamaModel`.
-    private static var selectedOllamaModel: String {
+    static var selectedOllamaModel: String {
         UserDefaults.standard.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
     }
 
-    private static let ollamaParseCache = OllamaParseCache()
+    private static let decisionCache = DecisionCache()
 
-    /// Holds the Ollama parse of the most recent transcript between `isSpotifyCommand` and
+    /// Holds the decision for the most recent transcript between `isSpotifyCommand` and
     /// `handleCommand`, which AppState calls back to back with the same text.
-    private final class OllamaParseCache: @unchecked Sendable {
+    private final class DecisionCache: @unchecked Sendable {
         private let lock = NSLock()
-        private var entry: (text: String, parse: SpotifyRequestParser.OllamaParse)?
+        private var entry: (text: String, intent: ExplicitSpotifyIntent)?
 
-        func store(_ parse: SpotifyRequestParser.OllamaParse, for text: String) {
-            lock.withLock { entry = (text, parse) }
+        func store(_ intent: ExplicitSpotifyIntent, for text: String) {
+            lock.withLock { entry = (text, intent) }
         }
 
-        func take(for text: String) -> SpotifyRequestParser.OllamaParse? {
+        func take(for text: String) -> ExplicitSpotifyIntent? {
             lock.withLock {
                 defer { entry = nil }
-                return entry?.text == text ? entry?.parse : nil
+                return entry?.text == text ? entry?.intent : nil
             }
         }
     }
@@ -428,13 +770,14 @@ final class SpotifyManager: @unchecked Sendable {
     /// gate below is the only way into `SpotifyController`, whose methods have side effects.
     func handleCommand(text: String, targetApp: NSRunningApplication? = nil) async -> Bool {
         let activeApp = targetApp ?? NSWorkspace.shared.frontmostApplication
-        guard let intent = Self.explicitIntent(in: text) else {
+        // The decision made by `isSpotifyCommand`; without one (called directly), only the
+        // rule gate can authorize a side effect.
+        guard let intent = Self.decisionCache.take(for: text) ?? Self.explicitIntent(in: text) else {
             owLog("[SpotifyManager] Refused non-explicit Spotify intent: '\(text)'")
             return false
         }
-        owLog("[SpotifyManager] Handling command: '\(text)'")
+        owLog("[SpotifyManager] Handling command: '\(text)' → \(intent)")
 
-        let ollamaParse = Self.ollamaParseCache.take(for: text)
         let controller = SpotifyController.shared
         let result: SpotifyActionResult
         switch intent {
@@ -447,21 +790,24 @@ final class SpotifyManager: @unchecked Sendable {
         case .previous:
             result = await controller.previousTrack()
         case .setVolume(let volume):
-            result = await controller.setVolume(volume)
+            result = SystemVolume.set(volume)
+        case .adjustVolume(let delta):
+            result = SystemVolume.adjust(by: delta)
         case .currentTrack:
             result = await controller.getCurrentTrack()
-        case .search(let rules):
-            var request = rules
-            if let ollamaParse {
-                request = SpotifyRequestParser.request(from: ollamaParse, transcript: text, rules: rules)
-            }
+        case .search(let request):
             owLog("[SpotifyManager] Search request: \(request)")
             result = await controller.searchAndPlay(request)
         case .likeCurrentTrack:
             result = await controller.likeCurrentTrack()
         }
 
-        sendNotification(title: "🎵 Spotify", body: result.message)
+        switch intent {
+        case .setVolume, .adjustVolume:
+            sendNotification(title: "🔊 Ses", body: result.message)
+        default:
+            sendNotification(title: "🎵 Spotify", body: result.message)
+        }
 
         if result.succeeded {
             keepInBackground(targetApp: activeApp)

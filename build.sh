@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build OpenWhisper and package into .app bundle cleanly
+# Build Jarvis (OpenWhisper target) and package into .app bundle cleanly
 set -e
 
 cd "$(dirname "$0")"
@@ -12,7 +12,7 @@ echo "==> Building OpenWhisper via SwiftPM..."
 swift build -c debug
 
 BIN_DIR="$(swift build -c debug --show-bin-path)"
-APP_BUNDLE="build/OpenWhisper.app"
+APP_BUNDLE="build/Jarvis.app"
 APP_DIR="$APP_BUNDLE/Contents"
 EXEC_SRC="$BIN_DIR/OpenWhisper"
 BUNDLE_SRC="$BIN_DIR/OpenWhisper_OpenWhisper.bundle"
@@ -77,15 +77,16 @@ codesign --force --deep --options runtime \
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then
         echo "==> Installing to /Applications..."
-        rm -rf /Applications/OpenWhisper.app
+        # The app was called OpenWhisper before; drop that copy so only one is installed.
+        rm -rf /Applications/OpenWhisper.app /Applications/Jarvis.app
         cp -R "$APP_BUNDLE" /Applications/
-        echo "  Installed at /Applications/OpenWhisper.app"
+        echo "  Installed at /Applications/Jarvis.app"
 
-        echo "==> Launching newly installed OpenWhisper..."
-        open /Applications/OpenWhisper.app
+        echo "==> Launching newly installed Jarvis..."
+        open /Applications/Jarvis.app
     fi
 }
 
-echo "Done! App bundle at: build/OpenWhisper.app"
+echo "Done! App bundle at: build/Jarvis.app"
 install_app
 echo ""

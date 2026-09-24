@@ -1,8 +1,8 @@
-# OpenWhisper
+# Jarvis
 
 <p align="center">
   <strong>Fast, private, local voice-to-text for macOS.</strong><br>
-  Speak anywhere you can type. OpenWhisper transcribes on your Mac and pastes the result at the active cursor.
+  Speak anywhere you can type. Jarvis transcribes on your Mac and pastes the result at the active cursor.
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22c55e?style=flat-square" alt="MIT License"></a>
 </p>
 
-OpenWhisper is a menu-bar dictation app for Apple Silicon Macs. It uses [WhisperKit](https://github.com/argmaxinc/WhisperKit) and Core ML for local transcription, then optionally uses [Ollama](https://ollama.com/) on `localhost` to remove filler words and improve punctuation.
+Jarvis is a menu-bar dictation app for Apple Silicon Macs. It uses [WhisperKit](https://github.com/argmaxinc/WhisperKit) and Core ML for local transcription, then optionally uses [Ollama](https://ollama.com/) on `localhost` to remove filler words and improve punctuation.
 
 Your microphone audio and transcript stay on your Mac during normal dictation. Spotify integration is optional and is the only feature that communicates with an external service.
 
@@ -28,7 +28,7 @@ Your microphone audio and transcript stay on your Mac during normal dictation. S
 - **Hands-free mode:** press `Space` or `Enter` while holding `Fn` to lock recording.
 - **Turkish-friendly cleanup:** local Ollama models can fix punctuation, filler words, and phrasing.
 - **Flow bar:** a small live overlay shows recording, audio level, and transcription state.
-- **Correction learning:** teach OpenWhisper recurring corrections from its settings window.
+- **Correction learning:** teach Jarvis recurring corrections from its settings window.
 - **Voice reminders:** say commands such as “bana 10 dakika sonra toplantıyı hatırlat”.
 - **Optional Spotify controls:** search, play, pause, skip, and use Liked Songs from voice commands.
 - **Input-device selection:** automatic mode prefers a connected headset microphone and falls back to the built-in Mac microphone; manual selection is also available.
@@ -55,7 +55,7 @@ Accessibility API → text pasted into the active app
 | Mac | Apple Silicon: M1, M2, M3, or M4 |
 | macOS | 14.0 or newer |
 | Build tools | Xcode Command Line Tools; the full Xcode app is not required |
-| Optional cleanup | Ollama plus `llama3.2:3b`, `gemma4:e2b-it-qat` or `qwen3.5:4b` |
+| Optional cleanup | Ollama plus `gemma4:e2b-it-qat` or `qwen3.5:4b` |
 | Optional Spotify | A Spotify Developer application and Spotify Premium for playback endpoints |
 
 Intel Macs are not supported by the current build.
@@ -74,13 +74,13 @@ Ollama is not required for raw transcription, but it enables cleanup and the fle
 
 ```bash
 brew install ollama
-ollama pull qwen3.5:4b
-# Optional faster, less accurate alternatives: llama3.2:3b, gemma4:e2b-it-qat
+ollama pull gemma4:e2b-it-qat
+# Optional slower alternative: ollama pull qwen3.5:4b
 ```
 
-Ollama should be available at `http://localhost:11434` while OpenWhisper is running.
+Ollama should be available at `http://localhost:11434` while Jarvis is running.
 
-### 3. Build and install OpenWhisper
+### 3. Build and install Jarvis
 
 ```bash
 git clone https://github.com/AhmetNA/openwhisper-app.git
@@ -88,11 +88,11 @@ cd openwhisper-app
 bash build.sh
 ```
 
-`build.sh` builds with SwiftPM, creates `build/OpenWhisper.app`, signs it with an available Apple Development identity (or ad-hoc signs it), copies it to `/Applications`, and launches it. To build without copying to `/Applications`:
+`build.sh` builds with SwiftPM, creates `build/Jarvis.app`, signs it with an available Apple Development identity (or ad-hoc signs it), copies it to `/Applications`, and launches it. To build without copying to `/Applications`:
 
 ```bash
 SKIP_INSTALL=1 bash build.sh
-open build/OpenWhisper.app
+open build/Jarvis.app
 ```
 
 ### One-line update/install
@@ -105,7 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/AhmetNA/openwhisper-app/main/instal
 
 ## First launch permissions
 
-OpenWhisper is a menu-bar app, so it may not open a normal window at launch. Look for its microphone icon in the menu bar and open **Settings** from there.
+Jarvis is a menu-bar app, so it may not open a normal window at launch. Look for its microphone icon in the menu bar and open **Settings** from there.
 
 Grant these permissions when macOS asks:
 
@@ -114,7 +114,7 @@ Grant these permissions when macOS asks:
 3. **Automation / Apple Events:** required only for Spotify controls and Apple Reminders integration.
 4. **Notifications:** required for local reminder notifications.
 
-For reliable `Fn` / `Globe` behavior, set **System Settings → Keyboard → Press 🌐 key to → Do Nothing**. Otherwise macOS may open the emoji picker instead of handing the key to OpenWhisper.
+For reliable `Fn` / `Globe` behavior, set **System Settings → Keyboard → Press 🌐 key to → Do Nothing**. Otherwise macOS may open the emoji picker instead of handing the key to Jarvis.
 
 ## Usage
 
@@ -134,7 +134,7 @@ After editing a pasted dictation, press `⌥⇧C` (Option–Shift–C) to compar
 
 ### Raw and cleaned text
 
-When cleanup is enabled, OpenWhisper keeps the raw Whisper result and the cleaned result for the latest pasted dictation. Use the swap shortcut shown in the app to replace the inserted version with the other one.
+When cleanup is enabled, Jarvis keeps the raw Whisper result and the cleaned result for the latest pasted dictation. Use the swap shortcut shown in the app to replace the inserted version with the other one.
 
 ## Settings
 
@@ -165,7 +165,7 @@ python bridge.py --transcribe /path/to/16k-mono.wav
 ```
 
 `--check` must exit with status 0 when the model can be prepared. `--transcribe` must print
-`{"text":"..."}` as its final JSON result. OpenWhisper discovers the provider on the next
+`{"text":"..."}` as its final JSON result. Jarvis discovers the provider on the next
 launch and adds it to the model picker; no Swift model-specific code is required. The bridge is
 responsible for model format, quantization, downloads, and its own local runtime.
 
@@ -176,14 +176,14 @@ Spotify is deliberately opt-in. If you enable it:
 1. Create an application in the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
 2. Add this exact redirect URI to the application:
    `http://127.0.0.1:43821/callback`
-3. Enter the Client ID and Client Secret in **OpenWhisper → Settings → Spotify**.
+3. Enter the Client ID and Client Secret in **Jarvis → Settings → Spotify**.
 4. Test the connection, then connect your Spotify account when you want account-scoped commands such as Liked Songs.
 
 Credentials and refresh tokens are stored in the macOS Keychain, not in `UserDefaults` or the repository. Do not commit credentials to source control.
 
 ## Optional mic-guard script
 
-`scripts/mic-guard/` contains an optional LaunchAgent helper for controlling the macOS system-default input device. It is not required for OpenWhisper's automatic mode, which selects the connected headset directly when recording starts. If enabled, the helper intentionally switches the macOS system default back to the Mac microphone, which affects other apps that follow the system default.
+`scripts/mic-guard/` contains an optional LaunchAgent helper for controlling the macOS system-default input device. It is not required for Jarvis's automatic mode, which selects the connected headset directly when recording starts. If enabled, the helper intentionally switches the macOS system default back to the Mac microphone, which affects other apps that follow the system default.
 
 It requires [SwitchAudioSource](https://github.com/deweller/switchaudio-osx):
 
@@ -230,4 +230,4 @@ Issues and pull requests are welcome. Please include the macOS version, chip mod
 
 ## License
 
-OpenWhisper is released under the [MIT License](LICENSE).
+Jarvis is released under the [MIT License](LICENSE).

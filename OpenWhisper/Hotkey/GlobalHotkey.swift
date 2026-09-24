@@ -13,8 +13,21 @@ final class GlobalHotkey {
     /// - `holding`: Fn/Globe held → release stops recording.
     /// - `handsFree`: Fn+Space toggled on → bare Space stops it.
     private enum Mode { case idle, holding, handsFree }
-    private var mode: Mode = .idle
+    private var mode: Mode = .idle {
+        didSet {
+            guard (oldValue == .handsFree) != (mode == .handsFree) else { return }
+            onHandsFreeChange?(mode == .handsFree)
+        }
+    }
+    /// Fired when hands-free recording turns on/off, so the FlowBar can show its stop button.
+    var onHandsFreeChange: ((Bool) -> Void)?
+    var isIdle: Bool { mode == .idle }
+    /// Fired on a Vocal Shortcuts recognition: start a voice session (hands-free recording that
+    /// ends itself on silence).
+    var onVoiceSessionRequest: (() -> Void)?
 
+    /// NX_SYSDEFINED — has no case in Swift's CGEventType.
+    fileprivate static let systemDefinedEventType: UInt32 = 14
     private let fnKeyCode: UInt16 = 63
     private let spaceKeyCode: Int64 = 49
     private let zKeyCode: Int64 = 6
@@ -187,9 +200,43 @@ final class GlobalHotkey {
         }
     }
 
+    // MARK: - External triggers (openwhisper:// URL — Vocal Shortcuts, Shortcuts, Voice Control)
+
+    /// Routed through the same state machine as ⌘⌥⌃D so a URL-started recording can still be
+    /// stopped with Enter / Fn+Space / ⌘⌥⌃D, and vice versa. A live Fn hold is never hijacked.
+    func externalStartHandsFree() {
+        guard mode == .idle else { return }
+        _ = toggleHandsFreeRecording()
+    }
+
+    func externalStopHandsFree() {
+        guard mode == .handsFree else { return }
+        _ = toggleHandsFreeRecording()
+    }
+
+    func externalToggleHandsFree() {
+        guard mode != .holding else { return }
+        _ = toggleHandsFreeRecording()
+    }
+
+    /// Leaves hands-free mode without firing `onRelease`; the caller stops or discards the
+    /// recording itself.
+    func externalCancelHandsFree() {
+        guard mode == .handsFree else { return }
+        mode = .idle
+    }
+
     /// Called from the CGEventTap callback on every Space keyDown.
     /// Returns `true` if the event should be swallowed (don't pass through to the focused app).
     fileprivate func handleSpaceKeyDown(flags: CGEventFlags) -> Bool {
+        // A bare Space ends a hands-free recording (there is no key being held to release).
+        if mode == .handsFree
+            && !flags.contains(.maskCommand)
+            && !flags.contains(.maskControl)
+            && !flags.contains(.maskAlternate) {
+            return toggleHandsFreeRecording()
+        }
+
         let fnDown = flags.contains(.maskSecondaryFn)
         // Ignore the chord if Cmd/Ctrl are also down — those are reserved for other shortcuts.
         let onlyFn = fnDown
@@ -262,6 +309,29 @@ final class GlobalHotkey {
         return true
     }
 
+    // MARK: - Vocal Shortcuts recognition (undocumented system event)
+
+    /// When Vocal Shortcuts recognizes *any* of the user's phrases, the system posts an
+    /// NX_SYSDEFINED event with subtype 211 / data1 98 (measured on macOS 27.2 beta; it is what
+    /// universalaccessd logs as "Event Type: 14 Subtype: 211"). Catching it here skips the
+    /// Shortcuts hop, which on this build recognizes the phrase but never runs the shortcut.
+    /// Undocumented: a macOS update may change or drop it — openwhisper://start remains.
+    private static let vocalShortcutSubtype: Int16 = 211
+    private static let vocalShortcutData1 = 98
+    private var lastVocalShortcutTrigger = Date.distantPast
+
+    fileprivate func handleSystemDefinedEvent(_ event: CGEvent) {
+        guard let ns = NSEvent(cgEvent: event),
+              ns.subtype.rawValue == Self.vocalShortcutSubtype,
+              ns.data1 == Self.vocalShortcutData1 else { return }
+        // One recognition could conceivably arrive twice; never start two sessions from it.
+        let now = Date()
+        guard now.timeIntervalSince(lastVocalShortcutTrigger) > 1.0 else { return }
+        lastVocalShortcutTrigger = now
+        owLog("[GlobalHotkey] Vocal Shortcuts phrase recognized (sysdefined 211/98)")
+        onVoiceSessionRequest?()
+    }
+
     // MARK: - Option + Shift + C (manual correction review)
 
     /// Called from the CGEventTap callback on every 'C' keyDown. The event is swallowed so
@@ -283,6 +353,7 @@ final class GlobalHotkey {
 
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << GlobalHotkey.systemDefinedEventType)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
         let callback: CGEventTapCallBack = { proxy, type, event, refcon in
@@ -295,6 +366,11 @@ final class GlobalHotkey {
                 if let tap = me.eventTap {
                     CGEvent.tapEnable(tap: tap, enable: true)
                 }
+                return Unmanaged.passUnretained(event)
+            }
+
+            if type.rawValue == GlobalHotkey.systemDefinedEventType {
+                me.handleSystemDefinedEvent(event)
                 return Unmanaged.passUnretained(event)
             }
 
@@ -355,7 +431,7 @@ final class GlobalHotkey {
 
         eventTap = tap
         runLoopSource = source
-        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space/⌘⌥⌃D; swap: ⌥Z; review: ⌥⇧C)")
+        owLog("[GlobalHotkey] CGEventTap installed (hands-free: 🌐Space/⌘⌥⌃D; voice: Vocal Shortcuts; swap: ⌥Z; review: ⌥⇧C)")
     }
 
     private func removeSpaceEventTap() {

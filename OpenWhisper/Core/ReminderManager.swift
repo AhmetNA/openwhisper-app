@@ -335,7 +335,7 @@ final class ReminderManager {
 
     private func scheduleNotification(reminder: Reminder) async -> Bool {
         let content = UNMutableNotificationContent()
-        content.title = "OpenWhisper Reminder"
+        content.title = "Jarvis Hatırlatıcı"
         content.body = reminder.task
         content.sound = .default
         content.categoryIdentifier = "REMINDER"

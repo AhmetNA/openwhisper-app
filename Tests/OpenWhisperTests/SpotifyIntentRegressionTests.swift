@@ -59,6 +59,7 @@ final class SpotifyIntentRegressionTests: XCTestCase {
             "Spotify'da Mor ve Ötesi Bir Derdim Var çal",
             "Spotify'da Tarkan'ın Karma albümünü aç",
             "Rock çalma listesini aç",
+            "Spotify'ın sesini 20'ye düşür",
         ]
 
         for transcript in explicitCommands {

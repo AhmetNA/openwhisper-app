@@ -141,7 +141,26 @@ struct FlowBarView: View {
     // MARK: - Recording
 
     private var recordingContent: some View {
-        AudioWaveformView(level: appState.audioLevel)
+        HStack(spacing: 8) {
+            AudioWaveformView(level: appState.audioLevel)
+
+            // Hands-free sessions have no key to release, so offer a click target. The panel is
+            // non-activating: clicking it leaves focus in the app the text will be pasted into.
+            if appState.handsFreeActive {
+                Button {
+                    appState.finishHandsFreeRecording()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color.white.opacity(0.22)))
+                }
+                .buttonStyle(.plain)
+                .help("Kaydı bitir ve yaz (Enter / Space)")
+                .accessibilityLabel("Kaydı bitir ve metni yaz")
+            }
+        }
     }
 
     // MARK: - Transcribing

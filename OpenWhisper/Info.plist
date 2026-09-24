@@ -2,35 +2,46 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>OpenWhisper</string>
-    <key>CFBundleDisplayName</key>
-    <string>OpenWhisper</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.openwhisper.app</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>OpenWhisper</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>OpenWhisper needs microphone access to transcribe your speech to text.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>OpenWhisper bilgisayarda çalan sesi mikrofona gerek kalmadan yazıya dökmek için sistem sesi erişimi ister. Görüntü kaydetmez.</string>
-    <key>NSRemindersUsageDescription</key>
-    <string>OpenWhisper needs access to Apple Reminders to create reminders from your voice commands.</string>
-    <key>NSRemindersFullAccessUsageDescription</key>
-    <string>OpenWhisper needs full access to Apple Reminders to create reminders from your voice commands.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>OpenWhisper needs to control Spotify to play, pause and search music with your voice.</string>
+	<key>CFBundleDisplayName</key>
+	<string>Jarvis</string>
+	<key>CFBundleExecutable</key>
+	<string>OpenWhisper</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.openwhisper.app</string>
+	<key>CFBundleName</key>
+	<string>Jarvis</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.openwhisper.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>openwhisper</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Jarvis needs to control Spotify to play, pause and search music with your voice.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jarvis needs microphone access to transcribe your speech to text.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Jarvis needs full access to Apple Reminders to create reminders from your voice commands.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Jarvis needs access to Apple Reminders to create reminders from your voice commands.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Jarvis bilgisayarda çalan sesi mikrofona gerek kalmadan yazıya dökmek için sistem sesi erişimi ister. Görüntü kaydetmez.</string>
 </dict>
 </plist>

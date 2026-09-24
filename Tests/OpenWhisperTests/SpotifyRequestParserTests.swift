@@ -96,7 +96,7 @@ final class SpotifyRequestParserTests: XCTestCase {
     private var rules: SpotifySearchRequest { SpotifyRequestParser.requestFromRules(transcript.lowercased()) }
 
     func testGroundedOllamaSplitIsUsed() {
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .track, title: "Şımarık", artist: "Tarkan")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "Şımarık", artist: "Tarkan")
         let request = SpotifyRequestParser.request(from: parse, transcript: transcript, rules: rules)
         XCTAssertEqual(request.title, "Şımarık")
         XCTAssertEqual(request.artist, "Tarkan")
@@ -104,12 +104,12 @@ final class SpotifyRequestParserTests: XCTestCase {
 
     /// Real llama3.2:3b output for this transcript dropped a letter.
     func testMisspelledOllamaNameFallsBackToRules() {
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .track, title: "şmarık", artist: "Tarkan")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "şmarık", artist: "Tarkan")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: transcript, rules: rules), rules)
     }
 
     func testInventedOllamaNameFallsBackToRules() {
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .track, title: "Kuzu Kuzu", artist: "Tarkan")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "Kuzu Kuzu", artist: "Tarkan")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: transcript, rules: rules), rules)
     }
 
@@ -117,21 +117,21 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testArtistOnlySplitThatDropsATitleFallsBackToRules() {
         let text = "Spotify'da Coldplay Yellow çal"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .artist, title: "", artist: "Coldplay")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .artist, title: "", artist: "Coldplay")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: text, rules: rules), .freeText("coldplay yellow"))
     }
 
     func testArtistOnlySplitWithOnlyFillerLeftIsKept() {
         let text = "Sezen Aksu'dan bir şarkı çal"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased(with: Locale(identifier: "tr_TR")))
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .artist, title: "", artist: "Sezen Aksu")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .artist, title: "", artist: "Sezen Aksu")
         let request = SpotifyRequestParser.request(from: parse, transcript: text, rules: rules)
         XCTAssertEqual(request.kind, .artist)
         XCTAssertEqual(request.artist, "Sezen Aksu")
     }
 
     func testOllamaNoneKindKeepsRules() {
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: nil, title: "", artist: "")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: nil, title: "", artist: "")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: transcript, rules: rules), rules)
     }
 
@@ -144,7 +144,7 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testGroundedOllamaPlaylistIsUsed() {
         let text = "Spotify'da sakin bir şeyler çal"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .playlist, title: "sakin", artist: "")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .playlist, title: "sakin", artist: "")
         let request = SpotifyRequestParser.request(from: parse, transcript: text, rules: rules)
         XCTAssertEqual(request.kind, .playlist)
         XCTAssertEqual(request.title, "sakin")
@@ -154,7 +154,7 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testTranslatedOllamaPlaylistFallsBackToRules() {
         let text = "Spotify'da sakin bir şeyler çal"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .playlist, title: "calm", artist: "")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .playlist, title: "calm", artist: "")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: text, rules: rules), rules)
     }
 
@@ -169,7 +169,7 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testSameTitleAndArtistBecomesArtist() {
         let text = "Spotify'da Barış Manço çalsana"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .track, title: "Barış Manço", artist: "Barış Manço")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "Barış Manço", artist: "Barış Manço")
         let request = SpotifyRequestParser.request(from: parse, transcript: text, rules: rules)
         XCTAssertEqual(request.kind, .artist)
         XCTAssertEqual(request.artist, "Barış Manço")
@@ -178,7 +178,7 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testCollectionNounAsPlaylistTitleFallsBackToRules() {
         let text = "Rock çalma listesini aç"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .playlist, title: "çalma listesi", artist: "")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .playlist, title: "çalma listesi", artist: "")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: text, rules: rules), rules)
         XCTAssertEqual(rules.title, "rock")
     }
@@ -187,15 +187,17 @@ final class SpotifyRequestParserTests: XCTestCase {
     func testOverlappingTitleAndArtistFallBackToRules() {
         let text = "Spotify'da Mor ve Ötesi Bir Derdim Var çal"
         let rules = SpotifyRequestParser.requestFromRules(text.lowercased())
-        let parse = SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .track, title: "Mor ve ötesi Bir Derdim Var", artist: "Bir Derdim Var")
+        let parse = SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "Mor ve ötesi Bir Derdim Var", artist: "Bir Derdim Var")
         XCTAssertEqual(SpotifyRequestParser.request(from: parse, transcript: text, rules: rules), rules)
     }
 
     func testDecodeOllamaResponse() {
         let parse = SpotifyRequestParser.decodeOllamaResponse(
-            #"{"is_music_command":true,"type":"artist","title":"","artist":"Sezen Aksu"}"#
+            #"{"intent":"search","type":"artist","title":"","artist":"Sezen Aksu"}"#
         )
-        XCTAssertEqual(parse, SpotifyRequestParser.OllamaParse(isMusicCommand: true, kind: .artist, title: "", artist: "Sezen Aksu"))
+        XCTAssertEqual(parse, SpotifyRequestParser.OllamaParse(intent: .search, kind: .artist, title: "", artist: "Sezen Aksu"))
         XCTAssertNil(SpotifyRequestParser.decodeOllamaResponse("not json"))
+        // The pre-intent schema must not decode as a command.
+        XCTAssertNil(SpotifyRequestParser.decodeOllamaResponse(#"{"is_music_command":true,"type":"none","title":"","artist":""}"#))
     }
 }

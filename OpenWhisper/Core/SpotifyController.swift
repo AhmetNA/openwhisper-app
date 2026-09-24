@@ -112,6 +112,21 @@ final class SpotifyController: @unchecked Sendable {
         )
     }
 
+    /// Whether the Spotify app on this Mac is running and playing right now. Natural
+    /// phrasing ("bu şarkıdan sıkıldım") only counts as a command while this holds, so
+    /// the same sentence is still dictation when no music is on. Requires the local app
+    /// so that music playing on a phone doesn't turn Mac dictation into commands.
+    func isPlayingLocally() async -> Bool {
+        guard isSpotifyRunning else { return false }
+        if Self.appleScriptFallbackEnabled {
+            if case .success(let state) = runSpotifyCommand("return player state as text") {
+                return state == "playing"
+            }
+        }
+        guard webAPIConnected else { return false }
+        return (try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying())?.isPlaying ?? false
+    }
+
     // MARK: - Current track
 
     func getCurrentTrack() async -> SpotifyActionResult {
@@ -470,7 +485,7 @@ final class SpotifyController: @unchecked Sendable {
             case .disabled:
                 return SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage
             case .permissionDenied:
-                return "Spotify kontrolü için izin gerekli — Sistem Ayarları > Gizlilik ve Güvenlik > Otomasyon > OpenWhisper > Spotify açık olmalı."
+                return "Spotify kontrolü için izin gerekli — Sistem Ayarları > Gizlilik ve Güvenlik > Otomasyon > Jarvis > Spotify açık olmalı."
             case .appNotRunning:
                 return "Spotify çalışmıyor görünüyor."
             case .other(let number, _):

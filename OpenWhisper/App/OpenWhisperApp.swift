@@ -64,6 +64,23 @@ struct OpenWhisperApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Registered via Apple Events rather than SwiftUI's onOpenURL: the app only has a
+        // MenuBarExtra scene, which doesn't reliably receive URL opens.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleGetURL(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL)
+        )
+    }
+
+    @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: string) else { return }
+        Task { @MainActor in AppState.shared.handleExternalURL(url) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         owLog("applicationDidFinishLaunching called")
         NSApplication.shared.setActivationPolicy(.accessory)

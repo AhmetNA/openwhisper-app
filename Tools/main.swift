@@ -27,7 +27,8 @@ import Foundation
 //   swiftc Tools/main.swift OpenWhisper/Core/CorrectionEngine.swift \
 //     OpenWhisper/Core/TurkishDateParser.swift OpenWhisper/Core/SpotifyManager.swift \
 //     OpenWhisper/Core/SpotifyController.swift OpenWhisper/Core/SpotifyWebAPI.swift \
-//     OpenWhisper/Core/SpotifyRequestParser.swift \
+//     OpenWhisper/Core/SpotifyRequestParser.swift OpenWhisper/Core/LLMCleanup.swift \
+//     OpenWhisper/Core/GlossaryStore.swift \
 //     /tmp/owlog_stub.swift -o /tmp/ow_harness && /tmp/ow_harness
 
 var failures = 0

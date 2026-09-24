@@ -1241,7 +1241,7 @@ actor SpotifyWebAPI {
     }
 
     private static func sendClosePage(on connection: NWConnection) {
-        let body = "<html><body><p>OpenWhisper: Spotify bağlantısı tamamlandı, bu pencereyi kapatabilirsiniz.</p></body></html>"
+        let body = "<html><body><p>Jarvis: Spotify bağlantısı tamamlandı, bu pencereyi kapatabilirsiniz.</p></body></html>"
         let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
         connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
             connection.cancel()

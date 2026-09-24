@@ -10,6 +10,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.12.4"),
+        .package(url: "https://github.com/microsoft/onnxruntime-swift-package-manager", exact: "1.19.2"),
     ],
     targets: [
         .systemLibrary(
@@ -21,6 +22,7 @@ let package = Package(
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
                 "CDeepFilter",
             ],
             path: "OpenWhisper",
@@ -38,7 +40,8 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenWhisperTests",
-            dependencies: ["OpenWhisper"]
+            dependencies: ["OpenWhisper"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

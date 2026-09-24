@@ -15,7 +15,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let view = SettingsView().environment(AppState.shared)
         let window = NSWindow(contentViewController: NSHostingController(rootView: view))
-        window.title = "OpenWhisper Ayarları"
+        window.title = "Jarvis Ayarları"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 880, height: 640))

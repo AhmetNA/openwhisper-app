@@ -199,4 +199,36 @@ final class AudioDuckerTests: XCTestCase {
 
         XCTAssertTrue(mockController.writtenVolumes.isEmpty, "duck() must abort without writing if volume cannot be read")
     }
+
+    // Sesli ses komutu, geri yükleme rampası sürerken gelirse kısık seviyeye değil,
+    // dikte öncesi seviyeye uygulanıyor ve rampa bir daha yazmıyor.
+    func testVolumeCommandDuringRestoreUsesPreDictationLevel() {
+        mockController.volumeToReturn = 0.50
+        ducker.updateConfiguration(targetVolume: 0.10, restoreDuration: 1.5)
+        ducker.duck()
+        ducker.restore()
+        ducker.flushQueueForTesting()
+        testScheduler.triggerTick()
+        ducker.flushQueueForTesting()
+
+        let change = ducker.applyVolumeCommand { $0 - 0.30 }
+        XCTAssertEqual(change?.from ?? -1, 0.50, accuracy: 0.0001)
+        XCTAssertEqual(change?.to ?? -1, 0.20, accuracy: 0.0001)
+        XCTAssertTrue(testScheduler.activeHandle.isStopped)
+
+        let writes = mockController.writtenVolumes.count
+        testScheduler.triggerTick()
+        ducker.restore()
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(mockController.writtenVolumes.count, writes, "A cancelled ramp must not overwrite the command")
+        XCTAssertEqual(mockController.volumeToReturn ?? -1, 0.20, accuracy: 0.0001)
+    }
+
+    func testVolumeCommandWithoutDuckReadsCurrentAndClamps() {
+        mockController.volumeToReturn = 0.90
+        let change = ducker.applyVolumeCommand { $0 + 0.30 }
+        XCTAssertEqual(change?.to ?? -1, 1.0, accuracy: 0.0001)
+        mockController.volumeToReturn = nil
+        XCTAssertNil(ducker.applyVolumeCommand { $0 + 0.1 })
+    }
 }

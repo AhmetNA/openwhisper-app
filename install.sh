@@ -1,16 +1,16 @@
 #!/bin/bash
-# OpenWhisper — one-line install & update script
+# Jarvis — one-line install & update script
 # Usage: curl -fsSL https://raw.githubusercontent.com/AhmetNA/openwhisper-app/main/install.sh | bash
 set -e
 
 REPO="https://github.com/AhmetNA/openwhisper-app.git"
 INSTALL_DIR="$HOME/.openwhisper"
 
-echo "==> OpenWhisper installer"
+echo "==> Jarvis installer"
 
 # Check requirements
 if [[ "$(uname -m)" != "arm64" ]]; then
-    echo "Error: OpenWhisper requires Apple Silicon (M1/M2/M3/M4)."
+    echo "Error: Jarvis requires Apple Silicon (M1/M2/M3/M4)."
     exit 1
 fi
 
@@ -20,7 +20,7 @@ if ! xcode-select -p &>/dev/null; then
 fi
 
 # Quit running instance
-pkill -x OpenWhisper 2>/dev/null && echo "==> Quit running OpenWhisper" || true
+pkill -x OpenWhisper 2>/dev/null && echo "==> Quit running Jarvis" || true
 
 # Clone or update
 if [ -d "$INSTALL_DIR/.git" ]; then
@@ -39,11 +39,11 @@ echo "==> Building..."
 bash build.sh
 
 # Launch
-echo "==> Launching OpenWhisper..."
-open /Applications/OpenWhisper.app 2>/dev/null || open build/OpenWhisper.app
+echo "==> Launching Jarvis..."
+open /Applications/Jarvis.app 2>/dev/null || open build/Jarvis.app
 
 echo ""
-echo "  OpenWhisper is ready! Look for the microphone icon in your menu bar."
+echo "  Jarvis is ready! Look for the microphone icon in your menu bar."
 echo "  Hold Right Option key, speak, release to transcribe."
 echo ""
 echo "  To update later, run this same command again."

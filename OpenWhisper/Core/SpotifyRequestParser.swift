@@ -131,6 +131,11 @@ enum SpotifyRequestParser {
     private static func words(_ residue: String) -> [Word] {
         residue
             .lowercased(with: Locale(identifier: "tr_TR"))
+            // Whisper sometimes detaches the case suffix ("Spotify da Neighborhood"), and
+            // English puts a preposition before it ("Daft Punk on Spotify"); both leftovers
+            // would otherwise end up inside the search query.
+            .replacingOccurrences(of: "\\bspotify (da|de|dan|den|ya|ye)\\b", with: "spotify", options: .regularExpression)
+            .replacingOccurrences(of: "\\b(on|in) spotify\\b", with: "spotify", options: .regularExpression)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "`", with: "'")
             .split(whereSeparator: { $0.isWhitespace })
@@ -202,11 +207,38 @@ enum SpotifyRequestParser {
 
     // MARK: - Ollama
 
+    /// What the model thinks the user asked for. `SpotifyManager.decide` only acts on it
+    /// when the transcript itself carries evidence for that intent.
+    enum OllamaIntent: String, CaseIterable, Sendable {
+        case pause, play, next, previous, volume, current, like, search, none
+        case volumeUp = "volume_up", volumeDown = "volume_down"
+    }
+
     struct OllamaParse: Equatable, Sendable {
-        let isMusicCommand: Bool
+        let intent: OllamaIntent
+        /// Search kind; only meaningful when `intent == .search`.
         let kind: SpotifySearchRequest.Kind?
         let title: String
         let artist: String
+
+        init(intent: OllamaIntent, kind: SpotifySearchRequest.Kind? = nil, title: String = "", artist: String = "") {
+            self.intent = intent
+            self.kind = kind
+            self.title = title
+            self.artist = artist
+        }
+    }
+
+    /// A playlist request needs a playlist noun ("liste", "playlist") or a mood phrased as a
+    /// vague/plural object ("sakin bir şeyler", "hareketli şarkılar"). Without one the model
+    /// has mislabeled a song ("Mor ve Ötesi Bir Derdim Var" came back as a playlist), and a
+    /// playlist search would start some unrelated playlist.
+    static func hasPlaylistEvidence(_ transcript: String) -> Bool {
+        let stems = Set(words(transcript).map(\.stem))
+        let moodObjects: Set<String> = ["şarkılar", "şarkıları", "parçalar", "parçaları", "sarkilar", "parcalar"]
+        return !stems.isDisjoint(with: playlistNouns)
+            || !stems.isDisjoint(with: vagueObjectWords.subtracting(["bir"]))
+            || !stems.isDisjoint(with: moodObjects)
     }
 
     /// Combines Ollama's split with the rule-based one. Any name Ollama returns that does
@@ -216,9 +248,15 @@ enum SpotifyRequestParser {
     static func request(from parse: OllamaParse, transcript: String, rules: SpotifySearchRequest) -> SpotifySearchRequest {
         let title = cleanOllamaName(parse.title)
         let artist = cleanOllamaName(parse.artist)
+        var kind = parse.kind
+        if kind == .playlist, !hasPlaylistEvidence(transcript) {
+            owLog("[SpotifyParser] Playlist without playlist evidence, searching as a track: \(parse)")
+            kind = .track
+        }
         // "Barış Manço çalsana" came back with the same name as both title and artist.
-        let kind: SpotifySearchRequest.Kind? = (parse.kind == .track || parse.kind == .album)
-            && !artist.isEmpty && foldedWords(title) == foldedWords(artist) ? .artist : parse.kind
+        if (kind == .track || kind == .album), !artist.isEmpty, foldedWords(title) == foldedWords(artist) {
+            kind = .artist
+        }
 
         // "Mor ve Ötesi Bir Derdim Var" came back as title "Mor ve ötesi Bir Derdim Var",
         // artist "Bir Derdim Var": one field swallowing the other means the split is wrong.
@@ -304,35 +342,69 @@ enum SpotifyRequestParser {
     private static let ollamaSchema: [String: Any] = [
         "type": "object",
         "properties": [
-            "is_music_command": ["type": "boolean"],
+            "intent": ["type": "string", "enum": OllamaIntent.allCases.map(\.rawValue)],
             "type": ["type": "string", "enum": ["track", "artist", "album", "playlist", "none"]],
             "title": ["type": "string"],
             "artist": ["type": "string"]
         ],
-        "required": ["is_music_command", "type", "title", "artist"]
+        "required": ["intent", "type", "title", "artist"]
     ]
 
     private static func ollamaPrompt(_ transcript: String) -> String {
         let quoted = (try? String(data: JSONSerialization.data(withJSONObject: [transcript]), encoding: .utf8))
             .map { String($0.dropFirst().dropLast()) } ?? "\"\(transcript)\""
         return """
-            You extract Spotify requests from Turkish voice transcripts. Return JSON only.
-            - is_music_command: true only if the user is asking to play music / control Spotify. Ordinary sentences are false.
-            - type: "track" if a specific song is named, "artist" if only a singer/band is named, "album" if an album is requested (albüm), "playlist" if a playlist (liste, çalma listesi, playlist) or a mood/genre ("sakin bir şeyler", "hareketli şarkılar") is requested, "none" otherwise (plain play/pause/next).
+            You classify Turkish voice transcripts: is the user giving Spotify / music player a command, and which one? Return JSON only.
+            - intent:
+              "pause" stop/pause/silence the music; "play" resume playback with nothing specific named;
+              "next" skip to another song, also when the user says they are bored of or dislike the current song; "previous" go back to the previous song;
+              "volume" set the music volume to a number, or to the maximum ("sonuna kadar aç");
+              "volume_up" the user wants the music louder, said directly ("biraz aç", "yükselt") or as a complaint that it is too quiet ("sesi çok kısık", "duyulmuyor");
+              "volume_down" the user wants the music quieter, said directly ("kıs", "azalt") or as a complaint that it is too loud ("çok yüksek", "kulağımı patlatıyor");
+              "current" ask what is playing now; "like" add the playing song to liked songs;
+              "search" play a named song, artist, album, playlist or mood;
+              "none" for everything else: ordinary sentences, talking about music or about the past, the user's own voice, or opening/closing things that are not music (a door, a file, an app, an account).
+            - type (only for "search", otherwise "none"): "track" if a specific song is named, "artist" if only a singer/band is named, "album" if an album (albüm) is requested, "playlist" only if the words liste / çalma listesi / playlist or a mood ("sakin bir şeyler", "hareketli şarkılar") appear.
             - title: the song, album or playlist name, or the mood words, exactly as spoken, without Turkish suffixes or filler words (şarkısını, albümünü, listesini, çal, aç, bana, lütfen, bir, şeyler). Empty if none.
             - artist: the singer/band exactly as spoken, with the Turkish case suffix removed ('ın, 'nin, 'dan, 'den, ...). Empty if none.
-            Never invent, translate or correct names; copy them from the transcript.
+            A song name that follows an artist is a track, not a playlist. Never invent, translate or correct names; copy them from the transcript.
 
             Examples:
-            "Spotify'da Tarkan'ın Şımarık şarkısını çal" -> {"is_music_command":true,"type":"track","title":"Şımarık","artist":"Tarkan"}
-            "Sezen Aksu'dan bir şarkı aç" -> {"is_music_command":true,"type":"artist","title":"","artist":"Sezen Aksu"}
-            "Spotify'da Coldplay Yellow çal" -> {"is_music_command":true,"type":"track","title":"Yellow","artist":"Coldplay"}
-            "Spotify'da Bohemian Rhapsody çal" -> {"is_music_command":true,"type":"track","title":"Bohemian Rhapsody","artist":""}
-            "Spotify'da Tarkan'ın Karma albümünü aç" -> {"is_music_command":true,"type":"album","title":"Karma","artist":"Tarkan"}
-            "Spotify'da sakin bir şeyler çal" -> {"is_music_command":true,"type":"playlist","title":"sakin","artist":""}
-            "Spotify'da spor listesi aç" -> {"is_music_command":true,"type":"playlist","title":"spor","artist":""}
-            "müziği durdur" -> {"is_music_command":true,"type":"none","title":"","artist":""}
-            "bu projeyi yarın başlatacağız" -> {"is_music_command":false,"type":"none","title":"","artist":""}
+            "Spotify'da Tarkan'ın Şımarık şarkısını çal" -> {"intent":"search","type":"track","title":"Şımarık","artist":"Tarkan"}
+            "Sezen Aksu'dan bir şarkı aç" -> {"intent":"search","type":"artist","title":"","artist":"Sezen Aksu"}
+            "Spotify'da Coldplay Yellow çal" -> {"intent":"search","type":"track","title":"Yellow","artist":"Coldplay"}
+            "Duman Bu Akşam çal" -> {"intent":"search","type":"track","title":"Bu Akşam","artist":"Duman"}
+            "Spotify'da Bohemian Rhapsody çal" -> {"intent":"search","type":"track","title":"Bohemian Rhapsody","artist":""}
+            "Spotify'da Tarkan'ın Karma albümünü aç" -> {"intent":"search","type":"album","title":"Karma","artist":"Tarkan"}
+            "Spotify'da sakin bir şeyler çal" -> {"intent":"search","type":"playlist","title":"sakin","artist":""}
+            "Spotify'da spor listesi aç" -> {"intent":"search","type":"playlist","title":"spor","artist":""}
+            "müziği durdur" -> {"intent":"pause","type":"none","title":"","artist":""}
+            "müziği kapat lütfen" -> {"intent":"pause","type":"none","title":"","artist":""}
+            "müziği başlat" -> {"intent":"play","type":"none","title":"","artist":""}
+            "sonraki şarkıya geç" -> {"intent":"next","type":"none","title":"","artist":""}
+            "müziğin sesini 40 yap" -> {"intent":"volume","type":"none","title":"","artist":""}
+            "müziği sonuna kadar aç" -> {"intent":"volume","type":"none","title":"","artist":""}
+            "müziğin sesi çok kısık ya" -> {"intent":"volume_up","type":"none","title":"","artist":""}
+            "şarkının sesi biraz az" -> {"intent":"volume_up","type":"none","title":"","artist":""}
+            "müziğin sesi duyulmuyor" -> {"intent":"volume_up","type":"none","title":"","artist":""}
+            "müziği biraz aç" -> {"intent":"volume_up","type":"none","title":"","artist":""}
+            "müzik çok yüksek ya" -> {"intent":"volume_down","type":"none","title":"","artist":""}
+            "şarkının sesini biraz kıs" -> {"intent":"volume_down","type":"none","title":"","artist":""}
+            "müziğin sesi çok bağırıyor" -> {"intent":"volume_down","type":"none","title":"","artist":""}
+            "bu şarkıdan sıkıldım" -> {"intent":"next","type":"none","title":"","artist":""}
+            "bir önceki şarkı daha iyiydi" -> {"intent":"previous","type":"none","title":"","artist":""}
+            "müziği bir sustur" -> {"intent":"pause","type":"none","title":"","artist":""}
+            "biraz sakin bir şeyler dinleyelim" -> {"intent":"search","type":"playlist","title":"sakin","artist":""}
+            "şu an hangi şarkı çalıyor" -> {"intent":"current","type":"none","title":"","artist":""}
+            "çalan şarkıyı beğenilerime ekle" -> {"intent":"like","type":"none","title":"","artist":""}
+            "bu projeyi yarın başlatacağız" -> {"intent":"none","type":"none","title":"","artist":""}
+            "kapıyı kapat" -> {"intent":"none","type":"none","title":"","artist":""}
+            "kapıyı çal" -> {"intent":"none","type":"none","title":"","artist":""}
+            "bu şarkı çok güzel" -> {"intent":"none","type":"none","title":"","artist":""}
+            "dün konserde şarkının sesi çok kısıktı" -> {"intent":"none","type":"none","title":"","artist":""}
+            "şarkının sözleri çok anlamlı" -> {"intent":"none","type":"none","title":"","artist":""}
+            "bu şarkıyı ilk kez dinliyorum" -> {"intent":"none","type":"none","title":"","artist":""}
+            "sesim bugün çok kısık" -> {"intent":"none","type":"none","title":"","artist":""}
 
             Transcript: \(quoted)
             """
@@ -380,7 +452,7 @@ enum SpotifyRequestParser {
     static func decodeOllamaResponse(_ text: String) -> OllamaParse? {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let isMusicCommand = json["is_music_command"] as? Bool else { return nil }
+              let intent = (json["intent"] as? String).flatMap(OllamaIntent.init(rawValue:)) else { return nil }
         let kind: SpotifySearchRequest.Kind?
         switch json["type"] as? String {
         case "track": kind = .track
@@ -390,7 +462,7 @@ enum SpotifyRequestParser {
         default: kind = nil
         }
         return OllamaParse(
-            isMusicCommand: isMusicCommand,
+            intent: intent,
             kind: kind,
             title: (json["title"] as? String) ?? "",
             artist: (json["artist"] as? String) ?? ""
