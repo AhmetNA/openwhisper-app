@@ -4,9 +4,29 @@ final class LLMCleanup: Sendable {
     private let baseURL = "http://localhost:11434"
     let model: String
 
-    init(model: String = "llama3.2:3b") {
+    /// Default cleanup model. Chosen over llama3.2:3b after a side-by-side run on TR/EN
+    /// code-switched dictation: llama translated English phrases and swapped words in half the
+    /// samples (so the faithfulness check threw its output away), qwen3.5:4b kept all of them
+    /// intact at ~0.7s per sentence vs ~0.3s.
+    static let defaultModel = "qwen3.5:4b"
+
+    init(model: String = LLMCleanup.defaultModel) {
         self.model = model
     }
+
+    /// Cleanup models offered in Settings, fastest first. Each must be `ollama pull`-ed
+    /// separately; `isModelInstalled` guards against picking one that isn't.
+    static let supportedModels: [(tag: String, label: String)] = [
+        ("llama3.2:3b", "⚡ Aşırı Hızlı (Llama 3.2 3B)"),
+        ("gemma4:e2b-it-qat", "🚀 Hızlı (Gemma 4 E2B)"),
+        ("qwen3.5:4b", "🧠 Dengeli (Qwen 3.5 4B)")
+    ]
+
+    /// How long Ollama keeps the model resident after a request. Every request to the model
+    /// (cleanup, Spotify, reminders) must send this: Ollama resets the timer to whatever the
+    /// latest request asked for, so one request without it would drop back to the 5 min default
+    /// and the next push-to-talk would pay the cold load again.
+    static let keepAlive = "30m"
 
     private static let basePrompt = """
         You are a minimal transcript cleaner. Your SINGLE task is to remove spoken filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan, vs.) and fix capitalization/punctuation.
@@ -239,6 +259,38 @@ final class LLMCleanup: Sendable {
         }
     }
 
+    /// Whether `model` shows up in Ollama's installed-model list. A tag without an explicit
+    /// `:variant` matches its `:latest` entry.
+    static func isModelInstalled(_ model: String) async -> Bool {
+        guard let url = URL(string: "http://localhost:11434/api/tags") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]]
+        else { return false }
+
+        let wanted = model.contains(":") ? model : "\(model):latest"
+        return models.contains { ($0["name"] as? String) == wanted }
+    }
+
+    /// Loads `model` into memory ahead of the first dictation (an empty prompt makes Ollama
+    /// load the model without generating), so push-to-talk doesn't pay the cold load.
+    static func warmUp(model: String) async {
+        guard let url = URL(string: "http://localhost:11434/api/generate") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120
+
+        let body: [String: Any] = ["model": model, "prompt": "", "keep_alive": keepAlive]
+        guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return }
+        request.httpBody = requestData
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
     /// Clean up transcribed text using local Ollama LLM
     func cleanup(text: String) async -> String {
         guard let url = URL(string: "\(baseURL)/api/generate") else { return text }
@@ -258,6 +310,10 @@ final class LLMCleanup: Sendable {
             "model": model,
             "prompt": "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
             "stream": false,
+            // Qwen 3.5 / Gemma 4 think by default: without this the answer arrives only after a
+            // long hidden reasoning pass (or the num_predict budget runs out inside it).
+            "think": false,
+            "keep_alive": Self.keepAlive,
             "options": [
                 "temperature": 0.0,
                 "num_predict": min(max(50, text.count + 30), 200),

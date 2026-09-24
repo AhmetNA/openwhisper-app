@@ -55,7 +55,7 @@ Accessibility API → text pasted into the active app
 | Mac | Apple Silicon: M1, M2, M3, or M4 |
 | macOS | 14.0 or newer |
 | Build tools | Xcode Command Line Tools; the full Xcode app is not required |
-| Optional cleanup | Ollama plus `qwen3:8b` or `llama3.2:3b` |
+| Optional cleanup | Ollama plus `llama3.2:3b`, `gemma4:e2b-it-qat` or `qwen3.5:4b` |
 | Optional Spotify | A Spotify Developer application and Spotify Premium for playback endpoints |
 
 Intel Macs are not supported by the current build.
@@ -74,9 +74,8 @@ Ollama is not required for raw transcription, but it enables cleanup and the fle
 
 ```bash
 brew install ollama
-ollama pull qwen3:8b
-# Optional faster model:
-# ollama pull llama3.2:3b
+ollama pull qwen3.5:4b
+# Optional faster, less accurate alternatives: llama3.2:3b, gemma4:e2b-it-qat
 ```
 
 Ollama should be available at `http://localhost:11434` while OpenWhisper is running.

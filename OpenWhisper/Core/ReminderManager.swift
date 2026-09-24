@@ -157,12 +157,12 @@ final class ReminderManager {
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key
-    /// "ollamaModel", default "llama3.2:3b"). ReminderManager is a standalone singleton with no
+    /// "ollamaModel", default LLMCleanup.defaultModel). ReminderManager is a standalone singleton with no
     /// AppState reference, so it reads the same UserDefaults key directly rather than
     /// hardcoding a model that may not actually be installed (this was the root cause of
     /// reminders silently never firing — see git history).
     private var selectedOllamaModel: String {
-        UserDefaults.standard.string(forKey: "ollamaModel") ?? "llama3.2:3b"
+        UserDefaults.standard.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
     }
 
     /// Ask Ollama to parse task description and target fireDate from voice text
@@ -235,6 +235,7 @@ final class ReminderManager {
             // (done_reason "length") before any JSON was produced. "think": false skips that,
             // and "format": "json" makes Ollama constrain the output to valid JSON.
             "think": false,
+            "keep_alive": LLMCleanup.keepAlive,
             "format": "json",
             "options": [
                 "temperature": 0.1,

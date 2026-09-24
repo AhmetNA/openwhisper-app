@@ -168,7 +168,7 @@ final class AppState {
             llmCleanup = LLMCleanup(model: ollamaModel)
             Task { [weak self] in
                 guard let self else { return }
-                self.cleanupAvailable = await LLMCleanup.checkAvailability()
+                await self.refreshOllamaStatus()
             }
         }
     }
@@ -463,9 +463,9 @@ final class AppState {
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
-        let savedModel = defaults.string(forKey: "ollamaModel") ?? "llama3.2:3b"
-        // The ByT5 normalizer was removed; users who had it selected fall back to Llama.
-        ollamaModel = savedModel == "byt5-small-tr-normalizer" ? "llama3.2:3b" : savedModel
+        let savedModel = defaults.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
+        // The ByT5 normalizer was removed; users who had it selected fall back to the default.
+        ollamaModel = savedModel == "byt5-small-tr-normalizer" ? LLMCleanup.defaultModel : savedModel
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
@@ -588,8 +588,7 @@ final class AppState {
         owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
 
         // Check Ollama availability
-        ollamaAvailable = await LLMCleanup.checkAvailability()
-        cleanupAvailable = await LLMCleanup.checkAvailability()
+        await refreshOllamaStatus()
         owLog("[OpenWhisper] Ollama available: \(ollamaAvailable)")
         owLog("[OpenWhisper] Selected cleanup available: \(cleanupAvailable)")
 
@@ -2514,8 +2513,15 @@ final class AppState {
         return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false
     }
 
+    /// Cleanup counts as available only when the selected model is actually installed, not
+    /// merely when Ollama is running. When it is, the model is loaded in the background so the
+    /// first dictation doesn't wait on the cold load.
     func refreshOllamaStatus() async {
         ollamaAvailable = await LLMCleanup.checkAvailability()
-        cleanupAvailable = await LLMCleanup.checkAvailability()
+        let model = ollamaModel
+        cleanupAvailable = ollamaAvailable ? await LLMCleanup.isModelInstalled(model) : false
+        if cleanupAvailable && llmCleanupEnabled {
+            Task.detached(priority: .utility) { await LLMCleanup.warmUp(model: model) }
+        }
     }
 }

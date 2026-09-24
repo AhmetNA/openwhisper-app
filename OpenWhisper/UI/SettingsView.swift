@@ -227,13 +227,15 @@ struct SettingsView: View {
                     Text("AI Model")
                     Spacer()
                     Picker("", selection: $appState.ollamaModel) {
-                        Text("⚡ Aşırı Hızlı (Llama 3.2 3B)").tag("llama3.2:3b")
+                        ForEach(LLMCleanup.supportedModels, id: \.tag) { option in
+                            Text(option.label).tag(option.tag)
+                        }
                     }
                     .labelsHidden()
                     .frame(width: 260)
                 }
                 if !appState.cleanupAvailable {
-                    Text("Seçili temizleme modeli hazır değil")
+                    Text("Seçili model kurulu değil — terminalde: ollama pull \(appState.ollamaModel)")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
