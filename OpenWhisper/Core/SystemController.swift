@@ -45,7 +45,7 @@ enum SystemController {
     // MARK: - Shortcuts
 
     /// Names from `shortcuts list`; only called when the transcript mentions a shortcut.
-    static func shortcutNames() -> [String] {
+    nonisolated static func shortcutNames() -> [String] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
         process.arguments = ["list"]
@@ -103,7 +103,7 @@ enum SystemController {
     }
 
     /// App names (without ".app") in the usual folders, for "X'i aç / kapat".
-    static func installedApps() -> [String] {
+    nonisolated static func installedApps() -> [String] {
         let folders = ["/Applications", "/Applications/Utilities", "/System/Applications",
                        "/System/Applications/Utilities", NSHomeDirectory() + "/Applications"]
         var names: [String] = []

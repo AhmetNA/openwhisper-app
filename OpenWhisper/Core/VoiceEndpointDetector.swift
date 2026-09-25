@@ -45,7 +45,12 @@ struct VoiceEndpointDetector {
         var floorWindow: TimeInterval = 3
         var floorPercentile: Float = 0.2
         /// …but never closer than this to the speaker, so continuous speech can't become the floor.
-        var floorMaxBelowSpeakerDB: Float = 10
+        /// 10 dB put the end threshold within ~5 dB of the voice and cut sentences mid-way.
+        var floorMaxBelowSpeakerDB: Float = 15
+        /// Off for a gating headset mic: it already removes the room, and in continuous speech
+        /// the percentile climbed to -37 dBFS, putting the end threshold at -27 against a -23
+        /// voice, so a softer word ended the recording (25 Sep 2026).
+        var adaptiveFloor = true
         /// Only frames at least this close to the speaker's level update it; louder background
         /// between the end threshold and the speaker no longer drags it down.
         var speakerTrackingDB: Float = 10
@@ -67,6 +72,9 @@ struct VoiceEndpointDetector {
             config.endFraction = 0.7
             config.minSpeechDB = -45
             config.gatedFloorDB = -90
+            config.adaptiveFloor = false
+            // A thinking pause mid-sentence runs past 1 s; the user expects ~2 s to end.
+            config.silenceToStop = 1.5
             return config
         }
     }
@@ -150,7 +158,7 @@ struct VoiceEndpointDetector {
         if let first = recent.first, time - first.time > config.floorWindow {
             recent.removeAll { time - $0.time > config.floorWindow }
         }
-        if speechDetected, let speaker = speakerDB, let first = recent.first,
+        if config.adaptiveFloor, speechDetected, let speaker = speakerDB, let first = recent.first,
            time - first.time >= config.floorWindow / 2 {
             let sorted = recent.map(\.dB).sorted()
             let percentile = sorted[Int(Float(sorted.count - 1) * config.floorPercentile)]

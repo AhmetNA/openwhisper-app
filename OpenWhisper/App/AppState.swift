@@ -1817,13 +1817,20 @@ final class AppState {
 
             // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": only in a
             // Jarvis session, so dictating the same words with the hotkey still types them.
+            // A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
+            // when the user turns to someone else): if the whole transcript is no command, the
+            // first sentence alone may be.
+            let firstSentence = session.isVoiceCommand ? Self.leadingSentence(of: trimmed) : nil
+            func parseSystem(_ candidate: String) -> SystemCommand? {
+                SystemCommandParser.parse(
+                    candidate,
+                    installedApps: SystemController.installedApps(),
+                    shortcuts: candidate.range(of: SystemCommandParser.shortcutMention, options: [.regularExpression, .caseInsensitive]) != nil
+                        ? SystemController.shortcutNames() : []
+                )
+            }
             if session.isVoiceCommand,
-               let command = SystemCommandParser.parse(
-                   trimmed,
-                   installedApps: SystemController.installedApps(),
-                   shortcuts: trimmed.range(of: SystemCommandParser.shortcutMention, options: [.regularExpression, .caseInsensitive]) != nil
-                       ? SystemController.shortcutNames() : []
-               ) {
+               let command = parseSystem(trimmed) ?? firstSentence.flatMap(parseSystem) {
                 owLog("[Route] system (\(command))")
                 let status = await SystemController.perform(command)
                 owLog("[Result] System command: \(status)")
@@ -1833,9 +1840,16 @@ final class AppState {
             }
 
             let isReminderCommand = ReminderManager.isReminder(text)
-            let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
+            var commandText = text
+            var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
                 text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
             )
+            if !isSpotifyCommand, !isReminderCommand, let firstSentence,
+               await SpotifyManager.isSpotifyCommand(firstSentence, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
+                owLog("[Route] first sentence is the command: '\(firstSentence)'")
+                commandText = firstSentence
+                isSpotifyCommand = true
+            }
             owLog("[Route] \(isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
             if isReminderCommand {
                 owLog("[OpenWhisper] Reminder detected: \(text)")
@@ -1847,11 +1861,11 @@ final class AppState {
                     owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
                 }
             } else if isSpotifyCommand {
-                owLog("[OpenWhisper] Spotify command detected: \(text)")
-                let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: text)
-                let misheard = self.cleanupAvailable ? self.misheardWords(in: text) : []
+                owLog("[OpenWhisper] Spotify command detected: \(commandText)")
+                let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: commandText)
+                let misheard = self.cleanupAvailable ? self.misheardWords(in: commandText) : []
                 let handled = await SpotifyManager.shared.handleCommand(
-                    text: text, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
+                    text: commandText, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
                 )
                 owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
                 if handled {
@@ -1861,7 +1875,7 @@ final class AppState {
                         owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
                         Task { @MainActor [weak self] in
                             await self?.rerunCorrectedCommand(
-                                text, misheard: misheard, generation: generation, session: session
+                                commandText, misheard: misheard, generation: generation, session: session
                             )
                         }
                     }
@@ -3021,6 +3035,15 @@ final class AppState {
             else if busy { "Kayıt sırasında duraklatıldı" }
             else if !modelLoaded { "Model bekleniyor" }
             else { "Mikrofon açılamadı" }
+    }
+
+    /// The first sentence when the transcript has more than one, for a command followed by
+    /// talk that wasn't meant for Jarvis.
+    nonisolated static func leadingSentence(of text: String) -> String? {
+        guard let end = text.firstIndex(where: { ".!?".contains($0) }) else { return nil }
+        let first = text[...end].trimmingCharacters(in: .whitespacesAndNewlines)
+        let rest = text[text.index(after: end)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty || first.split(separator: " ").count < 2 ? nil : first
     }
 
     /// FlowBar stop button: finish and process, exactly like Enter/Space.

@@ -12,11 +12,17 @@ enum DailyBriefing {
         var reminders: [String]
         var unreadMailCount: Int?
         var mail: [String]
+        /// Sources macOS refused, so "etkinlik yok" isn't claimed for a calendar never read.
+        var missingAccess: [String] = []
 
         /// Flow bar line: counts plus the next thing on the calendar.
         var headline: String {
             var parts: [String] = []
-            parts.append(events.isEmpty ? "etkinlik yok" : "\(events.count) etkinlik")
+            if missingAccess.contains("Takvim") {
+                parts.append("takvim izni yok")
+            } else {
+                parts.append(events.isEmpty ? "etkinlik yok" : "\(events.count) etkinlik")
+            }
             if !reminders.isEmpty { parts.append("\(reminders.count) hatırlatıcı") }
             if let unreadMailCount, unreadMailCount > 0 { parts.append("\(unreadMailCount) okunmamış mail") }
             let first = events.first.map { " — ilk: \($0)" } ?? ""
@@ -32,6 +38,9 @@ enum DailyBriefing {
                 lines.append(unreadMailCount == 0 ? "✉️ Okunmamış mail yok"
                              : "✉️ \(unreadMailCount) okunmamış: " + mail.joined(separator: " · "))
             }
+            if !missingAccess.isEmpty {
+                lines.append("⚠️ İzin yok: \(missingAccess.joined(separator: ", ")) — Sistem Ayarları › Gizlilik ve Güvenlik")
+            }
             return lines.joined(separator: "\n")
         }
     }
@@ -45,15 +54,19 @@ enum DailyBriefing {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         let dayEvents = await events(from: dayStart, to: dayEnd)
         let dueReminders = await reminders(dueBefore: dayEnd)
+        var missing: [String] = []
+        if dayEvents == nil { missing.append("Takvim") }
+        if dueReminders == nil { missing.append("Anımsatıcılar") }
         // Mail only describes now, so tomorrow's briefing leaves it out.
         let unread = dayOffset == 0 ? await MailController.unreadCount() : nil
         let mail = dayOffset == 0 ? await MailController.unreadMessages(limit: 3) ?? [] : []
         return Summary(
             title: dayOffset == 0 ? "Bugün" : "Yarın",
-            events: dayEvents,
-            reminders: dueReminders,
+            events: dayEvents ?? [],
+            reminders: dueReminders ?? [],
             unreadMailCount: unread,
-            mail: mail.map { "\($0.sender): \($0.subject)" }
+            mail: mail.map { "\($0.sender): \($0.subject)" },
+            missingAccess: missing
         )
     }
 
@@ -68,10 +81,11 @@ enum DailyBriefing {
         do { try await center.add(request) } catch { owLog("[Briefing] Notification failed: \(error)") }
     }
 
-    private static func events(from start: Date, to end: Date) async -> [String] {
+    /// nil = no calendar access.
+    private static func events(from start: Date, to end: Date) async -> [String]? {
         guard (try? await store.requestFullAccessToEvents()) == true else {
-            owLog("[Briefing] Calendar access not granted")
-            return []
+            owLog("[Briefing] Calendar access not granted (status \(EKEventStore.authorizationStatus(for: .event).rawValue))")
+            return nil
         }
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         let formatter = DateFormatter()
@@ -84,10 +98,11 @@ enum DailyBriefing {
             }
     }
 
-    private static func reminders(dueBefore end: Date) async -> [String] {
+    /// nil = no reminders access.
+    private static func reminders(dueBefore end: Date) async -> [String]? {
         guard (try? await store.requestFullAccessToReminders()) == true else {
-            owLog("[Briefing] Reminders access not granted")
-            return []
+            owLog("[Briefing] Reminders access not granted (status \(EKEventStore.authorizationStatus(for: .reminder).rawValue))")
+            return nil
         }
         let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: end, calendars: nil)
         let reminders: [EKReminder] = await withCheckedContinuation { continuation in

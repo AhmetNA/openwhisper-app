@@ -192,7 +192,14 @@ final class SpotifyManager: @unchecked Sendable {
         "açsana": "aç", "acsana": "aç",
         "oynatsana": "oynat",
         "koy": "çal", "koysana": "çal",
-        "dinleyelim": "dinlet", "dinletsene": "dinlet"
+        "dinleyelim": "dinlet", "dinletsene": "dinlet",
+        // Hortative, plural, "-ıver" and future forms ("biraz müzik açalım", "eğlenceli bir
+        // şeyler açacağız"): heard in voice sessions on 25 Sep 2026 and pasted as dictation.
+        "açalım": "aç", "acalim": "aç", "açın": "aç", "acin": "aç", "açıver": "aç", "aciver": "aç",
+        "açacağız": "aç", "acacagiz": "aç", "açacağım": "aç", "acacagim": "aç",
+        "çalalım": "çal", "calalim": "çal", "çalın": "çal", "calin": "çal", "çalıver": "çal", "caliver": "çal",
+        "çalacağız": "çal", "calacagiz": "çal", "çalacağım": "çal", "calacagim": "çal",
+        "oynatalım": "oynat", "oynatalim": "oynat", "başlatalım": "başlat", "baslatalim": "başlat"
     ]
 
     /// "çalar mısın", "açabilir misin": these stems are verbs only when a question particle

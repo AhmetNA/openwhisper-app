@@ -6,5 +6,11 @@
     <true/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- Hardened runtime denies these silently without the entitlement: Jarvis never even
+         appeared under Privacy › Calendars. Calendars also covers Reminders. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.device.bluetooth</key>
+    <true/>
 </dict>
 </plist>

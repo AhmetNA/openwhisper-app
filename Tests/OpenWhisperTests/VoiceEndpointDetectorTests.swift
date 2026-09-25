@@ -128,11 +128,9 @@ final class VoiceEndpointDetectorTests: XCTestCase {
 
     func testCloseTalkEndsSoonerOverLoudRoom() {
         // Headset mic: voice -25, room -50. A -35 background right after the voice (60% of the
-        // way up) is "not the speaker" for close talk: stop one pause after the voice ends.
+        // way up) is "not the speaker" for close talk: stop one pause (1.5 s) after the voice ends.
         let segments: [(dB: Float, seconds: TimeInterval)] = [(-50, 0.3), (-25, 2), (-35, 1.4), (-50, 4)]
-        let closeTalk = run(segments, config: .closeTalk)?.1 ?? 99
-        XCTAssertEqual(closeTalk, 3.3, accuracy: 0.2)
-        XCTAssertGreaterThanOrEqual(run(segments)?.1 ?? 0, closeTalk)
+        XCTAssertEqual(run(segments, config: .closeTalk)?.1 ?? 99, 2.3 + 1.5, accuracy: 0.2)
     }
 
     func testCloseTalkKeepsWordGapsOpen() {
@@ -141,14 +139,14 @@ final class VoiceEndpointDetectorTests: XCTestCase {
         segments.append((-50, 3))
         let result = run(segments, config: .closeTalk)
         XCTAssertEqual(result?.0, .stop)
-        XCTAssertGreaterThan(result?.1 ?? 0, 0.3 + 6 * 0.9 - 0.4 + 0.9)
+        XCTAssertGreaterThan(result?.1 ?? 0, 0.3 + 6 * 0.9 - 0.4 + 1.4)
     }
 
     func testHeadsetDigitalSilenceEndsRecording() {
         // Buds gate their mic to exact zeros between words; after speech that is a pause.
         let result = run([(-140, 0.8), (-22, 1.5), (-140, 5)], config: .closeTalk)
         XCTAssertEqual(result?.0, .stop)
-        XCTAssertEqual(result?.1 ?? 99, 2.3 + 1.0, accuracy: 0.15)
+        XCTAssertEqual(result?.1 ?? 99, 2.3 + 1.5, accuracy: 0.15)
     }
 
     func testHeadsetNoiseBlipBeforeSpeechDoesNotEndEarly() {
@@ -156,5 +154,17 @@ final class VoiceEndpointDetectorTests: XCTestCase {
         let result = run([(-140, 0.8), (-60, 0.3), (-140, 1.5), (-22, 1.5), (-140, 5)], config: .closeTalk)
         XCTAssertEqual(result?.0, .stop)
         XCTAssertGreaterThan(result?.1 ?? 0, 4.1 + 0.9)
+    }
+
+    func testCloseTalkKeepsSofterWordsAndThinkingPauses() {
+        // Real headset trace (25 Sep 2026): voice -20…-25, softer words around -30…-36, gated
+        // pauses at -120 and a 1.2 s thinking pause mid-sentence. Must not stop until the end.
+        var segments: [(dB: Float, seconds: TimeInterval)] = [(-140, 0.8)]
+        for _ in 0..<3 { segments += [(-21, 1.0), (-31, 1.2), (-140, 0.4), (-36, 0.8)] }
+        segments += [(-22, 1.0), (-140, 1.2), (-22, 1.0), (-140, 4)]
+        let result = run(segments, config: .closeTalk)
+        XCTAssertEqual(result?.0, .stop)
+        let speechEnd = 0.8 + 3 * 3.4 + 1.0 + 1.2 + 1.0
+        XCTAssertGreaterThan(result?.1 ?? 0, speechEnd + 1.4)
     }
 }

@@ -120,4 +120,24 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(summary.headline, "Bugün: 2 etkinlik · 1 hatırlatıcı · 2 okunmamış mail — ilk: Tüm gün: Tatil")
         XCTAssertEqual(summary.body, "📅 Tüm gün: Tatil\n📅 14:00 Toplantı\n☑️ Faturayı öde (gecikmiş)\n✉️ 2 okunmamış: Ada: Rapor · Ali: Selam")
     }
+
+    func testBrightnessNumberWords() {
+        // Heard 25 Sep 2026 and pasted as dictation: Whisper wrote the number in words.
+        XCTAssertEqual(SystemCommandParser.parse("parlaklığı yüzde yüz yap."), .brightness(up: true, level: 100))
+        XCTAssertEqual(SystemCommandParser.parse("Parlaklığı yüzde elli yap"), .brightness(up: true, level: 50))
+        XCTAssertEqual(SystemCommandParser.parse("Parlaklığı yüzde yetmiş beş yap"), .brightness(up: true, level: 75))
+    }
+
+    func testLeadingSentence() {
+        XCTAssertEqual(AppState.leadingSentence(of: "Şarkıyı durdur. Neden. Var öyle, sulamam gerekiyor."), "Şarkıyı durdur.")
+        XCTAssertNil(AppState.leadingSentence(of: "Şarkıyı durdur."))
+        XCTAssertNil(AppState.leadingSentence(of: "Tamam. Şarkıyı durdur."))
+        XCTAssertEqual(SystemCommandParser.parse(AppState.leadingSentence(of: "Ekranı kilitle. Sonra konuşuruz seninle.") ?? ""), .lockScreen)
+    }
+
+    func testBriefingSaysWhenCalendarIsUnreadable() {
+        let summary = DailyBriefing.Summary(title: "Yarın", events: [], reminders: [], unreadMailCount: nil, mail: [], missingAccess: ["Takvim"])
+        XCTAssertEqual(summary.headline, "Yarın: takvim izni yok")
+        XCTAssertTrue(summary.body.contains("İzin yok: Takvim"))
+    }
 }

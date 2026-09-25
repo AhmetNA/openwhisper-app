@@ -217,10 +217,20 @@ enum SystemCommandParser {
             .trimmingCharacters(in: .whitespaces)
     }
 
+    /// "50", "yüzde elli", "yüzde yetmiş beş", "yüzde yüz".
     private static func percent(in text: String) -> Int? {
-        guard let range = text.range(of: #"\d{1,3}"#, options: .regularExpression),
-              let value = Int(text[range]), (0...100).contains(value) else { return nil }
-        return value
+        if let range = text.range(of: #"\d{1,3}"#, options: .regularExpression),
+           let value = Int(text[range]), (0...100).contains(value) { return value }
+        guard let yuzde = text.range(of: "yüzde ") else { return nil }
+        let tens = ["on": 10, "yirmi": 20, "otuz": 30, "kırk": 40, "elli": 50, "altmış": 60, "yetmiş": 70, "seksen": 80, "doksan": 90, "yüz": 100]
+        let units = ["sıfır": 0, "bir": 1, "iki": 2, "üç": 3, "dört": 4, "beş": 5, "altı": 6, "yedi": 7, "sekiz": 8, "dokuz": 9]
+        var value: Int?
+        for word in text[yuzde.upperBound...].split(separator: " ").map(String.init) {
+            if let ten = tens[word], value == nil { value = ten; continue }
+            if let unit = units[word] { value = (value ?? 0) + unit }
+            break
+        }
+        return value.flatMap { (0...100).contains($0) ? $0 : nil }
     }
 
     private static func matches(_ text: String, _ pattern: String) -> Bool {

@@ -35,6 +35,21 @@ final class SpotifyVoiceCommandTests: XCTestCase {
         XCTAssertNil(decide("Yarın toplantı var", Parse(intent: .none), commandMode: true))
     }
 
+    func testFutureAndHortativePlayVerbsCount() {
+        // 25 Sep 2026: gemma4 answered a playlist search, but "açacağız" wasn't a play verb.
+        let parse = Parse(intent: .search, kind: .playlist, title: "eğlenceli", artist: "")
+        for transcript in ["Eğlenceli bir şeyler açacağız biraz.", "Biraz eğlenceli bir şeyler açalım", "Eğlenceli bir şeyler çalalım"] {
+            guard case .search? = decide(transcript, parse, commandMode: true) else {
+                return XCTFail("expected a search for '\(transcript)'")
+            }
+        }
+    }
+
+    func testFirstSentenceCommandIsACandidate() {
+        XCTAssertTrue(SpotifyManager.isCommandCandidate("Şarkıyı durdur."))
+        XCTAssertEqual(decide("Şarkıyı durdur.", Parse(intent: .pause), commandMode: true), .pause)
+    }
+
     func testCommandModeSkipsWithoutSpotifyPlayingCheck() {
         XCTAssertEqual(decide("Bu şarkıdan sıkıldım", Parse(intent: .next), commandMode: true), .next)
     }
