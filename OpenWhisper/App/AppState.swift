@@ -918,6 +918,7 @@ final class AppState {
             }
             await transcribeStreamingSegment(segment, session: session)
         }
+        let recordingID = await recordingHistoryStore.activeRecordingID(sessionID: session.id)
         do {
             savedRecordings = try await recordingHistoryStore.finish(
                 sessionID: session.id,
@@ -928,9 +929,26 @@ final class AppState {
             owLog("[SystemAudio] History finish failed: \(error)")
             lastError = "Bilgisayar sesi geçmişe kaydedilemedi: \(error.localizedDescription)"
         }
+        let traceID = recordingID.flatMap { id in savedRecordings.contains { $0.id == id } ? id : nil }
+        if let traceID {
+            VoiceEventLog.shared.begin(traceID, header: [
+                "Recording \(traceID.uuidString)",
+                "Started: \(session.startedAt.formatted(date: .numeric, time: .standard))",
+                "Source: system audio",
+                String(format: "Duration: %.1f s", Double(samples.count) / 16_000),
+                "Whisper segments: \(session.allSegmentTexts)",
+            ])
+        }
+        await VoiceTrace.$current.withValue(traceID) {
+            await finishSystemAudioClip(session)
+        }
+    }
+
+    private func finishSystemAudioClip(_ session: RecordingTranscriptionSession) async {
         var output = AudioSegmentation.joinTranscripts(session.segmentTexts)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty, !output.hasPrefix("[BLANK"), !output.hasPrefix("(BLANK") else {
+            owLog("[Result] System audio: no text")
             systemAudioStatus = systemAudioEnabled ? "Yeni ses bekleniyor" : "Metin çıkarılamadı"
             return
         }
@@ -949,6 +967,7 @@ final class AppState {
             ? "Metin panoya kopyalandı · yeni ses bekleniyor"
             : "Metin panoya kopyalandı"
         owLog("[SystemAudio] Transcript copied to clipboard")
+        owLog("[Result] System audio copied to clipboard: '\(output)'")
     }
 
     func startRecording() {
@@ -1439,6 +1458,7 @@ final class AppState {
                 recordingMedia.end(resuming: resumeMediaAfterCommand)
             }
         }
+        let recordingID = await recordingHistoryStore.activeRecordingID(sessionID: session.id)
         do {
             savedRecordings = try await recordingHistoryStore.finish(
                 sessionID: session.id,
@@ -1448,6 +1468,18 @@ final class AppState {
         } catch {
             lastError = "Ses geçmişi tamamlanamadı: \(error.localizedDescription)"
             owLog("[RecordingHistory] Finish failed: \(error)")
+        }
+        // Only kept recordings get a trace: it lives and is pruned next to their audio.
+        let traceID = recordingID.flatMap { id in savedRecordings.contains { $0.id == id } ? id : nil }
+        if let traceID {
+            VoiceEventLog.shared.begin(traceID, header: [
+                "Recording \(traceID.uuidString)",
+                "Started: \(session.startedAt.formatted(date: .numeric, time: .standard))",
+                "Source: \(session.isVoiceCommand ? "voice (Jarvis / shortcut)" : "hotkey")",
+                "Target app: \(session.targetApp?.bundleIdentifier ?? "unknown")",
+                String(format: "Duration: %.1f s", Double(session.queuedSampleCount) / 16_000),
+                "Whisper segments: \(session.allSegmentTexts)",
+            ])
         }
         owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
 
@@ -1465,261 +1497,321 @@ final class AppState {
             }
         }
 
-        guard !session.isCancelled else { return }
-        if !session.hadFailClosedPassthrough &&
-            (session.hadSingleSpeakerUncertain ||
-             (session.hadDiarizationAttempt && session.segmentTexts.isEmpty) ||
-             TargetSpeakerOutputGate.shouldSkipPostProcessing(
-                 featureEnabled: session.targetSpeakerEnabled,
-                 acceptedSampleCount: session.acceptedTargetSpeechSamples
-             )) {
-            let rawCandidateText: String = {
-                let confirmationText = AudioSegmentation.joinTranscripts(session.confirmationTranscriptTexts).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !confirmationText.isEmpty && !confirmationText.hasPrefix("[BLANK") && !confirmationText.hasPrefix("(BLANK") {
-                    return confirmationText
-                }
-                let unmatchedText = AudioSegmentation.joinTranscripts(session.unmatchedSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !unmatchedText.isEmpty && !unmatchedText.hasPrefix("[BLANK") && !unmatchedText.hasPrefix("(BLANK") {
-                    return unmatchedText
-                }
-                let allText = AudioSegmentation.joinTranscripts(session.allSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !allText.isEmpty && !allText.hasPrefix("[BLANK") && !allText.hasPrefix("(BLANK") {
-                    return allText
-                }
-                return ""
-            }()
-
-            if !rawCandidateText.isEmpty {
-                let candidateSamples = !session.ambiguousTargetSamples.isEmpty
-                    ? session.ambiguousTargetSamples
-                    : session.belowThresholdRejectedSamples
-                let candidate = session.confirmationCandidate ?? TargetSpeakerConfirmationCandidate(
-                    samples: candidateSamples,
-                    windows: [],
-                    internalCoherence: 0.5,
-                    anchorProfileScore: 0.5,
-                    separation: nil,
-                    separationReason: "fallback candidate"
-                )
-                retainConfirmation(
-                    candidate: candidate,
-                    text: rawCandidateText,
-                    pasteContext: session.pasteContext,
-                    targetApp: session.targetApp
-                )
-                textInjector?.copyToClipboard(rawCandidateText)
-                showTargetSpeakerAppendOffer(message: "")
-                owLog("[OpenWhisper] Near-threshold candidate retained for 'Bu benim sesimdi' confirmation without showing error warning")
-            } else {
-                dismissFlowBarMessage()
-            }
-            return
-        }
-        guard session.queuedSampleCount >= 6400 else {
-            owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)")
-            return
-        }
-
-        let text = AudioSegmentation.joinTranscripts(session.segmentTexts)
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              !trimmed.hasPrefix("[BLANK"),
-              !trimmed.hasPrefix("(BLANK") else {
-            owLog("[OpenWhisper] Empty/blank transcription, skipping")
-            return
-        }
-        guard !AudioSegmentation.isRepetitionHallucination(trimmed) else {
-            owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
-            return
-        }
-
-        owLog("[OpenWhisper] Raw: \(text)")
-        correctionGeneration &+= 1
-        let generation = correctionGeneration
-
-        let isReminderCommand = ReminderManager.isReminder(text)
-        let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
-            text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
-        )
-
-        @MainActor
-        func pasteAsDictation() async {
-            let rawText = trimmed
-            var initialText = rawText
-
-            // Tracks which learned pairs actually fired for THIS dictation, so the paste
-            // callback below can hand them to DictationSnapshot.capture for reversal detection.
-            // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
-            // below) — that corrector has no corresponding CorrectionStore record to penalize.
-            var appliedCorrectionPairs: [(wrong: String, right: String)] = []
-
-            let activePairs = CorrectionStore.shared.activePairs
-            if !activePairs.isEmpty {
-                let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
-                if !applied.isEmpty {
-                    initialText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
-                    for (wrong, right) in applied {
-                        owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
+        await VoiceTrace.$current.withValue(traceID) {
+            guard !session.isCancelled else { return }
+            if !session.hadFailClosedPassthrough &&
+                (session.hadSingleSpeakerUncertain ||
+                 (session.hadDiarizationAttempt && session.segmentTexts.isEmpty) ||
+                 TargetSpeakerOutputGate.shouldSkipPostProcessing(
+                     featureEnabled: session.targetSpeakerEnabled,
+                     acceptedSampleCount: session.acceptedTargetSpeechSamples
+                 )) {
+                let rawCandidateText: String = {
+                    let confirmationText = AudioSegmentation.joinTranscripts(session.confirmationTranscriptTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !confirmationText.isEmpty && !confirmationText.hasPrefix("[BLANK") && !confirmationText.hasPrefix("(BLANK") {
+                        return confirmationText
                     }
-                    CorrectionStore.shared.recordApplied(pairs: applied)
-                    appliedCorrectionPairs = applied
+                    let unmatchedText = AudioSegmentation.joinTranscripts(session.unmatchedSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !unmatchedText.isEmpty && !unmatchedText.hasPrefix("[BLANK") && !unmatchedText.hasPrefix("(BLANK") {
+                        return unmatchedText
+                    }
+                    let allText = AudioSegmentation.joinTranscripts(session.allSegmentTexts).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !allText.isEmpty && !allText.hasPrefix("[BLANK") && !allText.hasPrefix("(BLANK") {
+                        return allText
+                    }
+                    return ""
+                }()
+
+                if !rawCandidateText.isEmpty {
+                    let candidateSamples = !session.ambiguousTargetSamples.isEmpty
+                        ? session.ambiguousTargetSamples
+                        : session.belowThresholdRejectedSamples
+                    let candidate = session.confirmationCandidate ?? TargetSpeakerConfirmationCandidate(
+                        samples: candidateSamples,
+                        windows: [],
+                        internalCoherence: 0.5,
+                        anchorProfileScore: 0.5,
+                        separation: nil,
+                        separationReason: "fallback candidate"
+                    )
+                    retainConfirmation(
+                        candidate: candidate,
+                        text: rawCandidateText,
+                        pasteContext: session.pasteContext,
+                        targetApp: session.targetApp
+                    )
+                    textInjector?.copyToClipboard(rawCandidateText)
+                    showTargetSpeakerAppendOffer(message: "")
+                    owLog("[OpenWhisper] Near-threshold candidate retained for 'Bu benim sesimdi' confirmation without showing error warning")
+                } else {
+                    dismissFlowBarMessage()
                 }
+                return
+            }
+            guard session.queuedSampleCount >= 6400 else {
+                owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)")
+                return
             }
 
-            let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
-            if !phoneticApplied.isEmpty {
-                initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
-                for (wrong, right) in phoneticApplied {
-                    owLog("[PhoneticGlossary] Corrected: \(wrong) -> \(right)")
+            let text = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  !trimmed.hasPrefix("[BLANK"),
+                  !trimmed.hasPrefix("(BLANK") else {
+                owLog("[OpenWhisper] Empty/blank transcription, skipping")
+                return
+            }
+            guard !AudioSegmentation.isRepetitionHallucination(trimmed) else {
+                owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
+                return
+            }
+
+            owLog("[OpenWhisper] Raw: \(text)")
+            correctionGeneration &+= 1
+            let generation = correctionGeneration
+
+            /// Pastes `rawText` (after learned/phonetic corrections) into `targetApp`. With
+            /// `send`, presses Return once the paste landed, for coding agents: the text is
+            /// then gone from the field, so the swap, snapshot and LLM cleanup steps are skipped.
+            @MainActor
+            func pasteAsDictation(
+                _ rawText: String,
+                targetApp: NSRunningApplication?,
+                pasteContext: PasteContext,
+                send: Bool
+            ) async {
+                var initialText = rawText
+
+                // Tracks which learned pairs actually fired for THIS dictation, so the paste
+                // callback below can hand them to DictationSnapshot.capture for reversal detection.
+                // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
+                // below) — that corrector has no corresponding CorrectionStore record to penalize.
+                var appliedCorrectionPairs: [(wrong: String, right: String)] = []
+
+                let activePairs = CorrectionStore.shared.activePairs
+                if !activePairs.isEmpty {
+                    let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
+                    if !applied.isEmpty {
+                        initialText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                        for (wrong, right) in applied {
+                            owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
+                        }
+                        CorrectionStore.shared.recordApplied(pairs: applied)
+                        appliedCorrectionPairs = applied
+                    }
                 }
-            }
 
-            var laughterWasRandomized = false
-            if self.laughterToRandomEnabled {
-                let result = LaughterRandomizer.transform(initialText)
-                if result.didTransform {
-                    initialText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    laughterWasRandomized = true
-                    owLog("[LaughterRandomizer] Laughter converted to keyboard random")
+                let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
+                if !phoneticApplied.isEmpty {
+                    initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                    for (wrong, right) in phoneticApplied {
+                        owLog("[PhoneticGlossary] Corrected: \(wrong) -> \(right)")
+                    }
                 }
-            }
 
-            self.lastTranscription = initialText
-            let misheard = self.misheardWords(in: initialText)
-            if !misheard.isEmpty {
-                owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text))")
-            }
+                var laughterWasRandomized = false
+                if self.laughterToRandomEnabled {
+                    let result = LaughterRandomizer.transform(initialText)
+                    if result.didTransform {
+                        initialText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        laughterWasRandomized = true
+                        owLog("[LaughterRandomizer] Laughter converted to keyboard random")
+                    }
+                }
 
-            if self.autoPasteEnabled {
-                let targetApp = session.targetApp
-                let pasteContext = session.pasteContext
+                self.lastTranscription = initialText
+                let misheard = self.misheardWords(in: initialText)
+                if !misheard.isEmpty {
+                    owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text))")
+                }
 
-                // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
-                self.textInjector?.pasteTextResult(
-                    initialText,
-                    targetApp: targetApp,
-                    context: pasteContext
-                ) { [weak self] outcome in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        switch outcome {
-                        case .pastedVerified, .pastedUnverified:
-                            self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
-                            self.swapTargetApp = targetApp
-                            self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
-                            self.lastInjectedIsCleaned = false
-                            self.lastInjectedText = initialText
-                            self.hotkey?.setSwapAvailable(true)
-                            DictationSnapshot.shared.capture(
-                                pastedText: initialText,
-                                targetApp: targetApp,
-                                appliedPairs: appliedCorrectionPairs
-                            )
-
-                            self.dismissFlowBarMessage()
-
-                            // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
-                            // Once Ollama finishes, replace the initially pasted text in-place.
-                            // Keep the generated keyboard random exact. LLM cleanup can rewrite
-                            // or remove a random-looking token, which would defeat this setting.
-                            if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
-                                Task { @MainActor [weak self] in
-                                    guard let self else { return }
-                                    let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
-                                    let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                                    guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
-                                    // A corrected word can reveal a voice command ("Sesifullah"
-                                    // → "Sesi fulle"): take the dictation back out and run it.
-                                    if !misheard.isEmpty,
-                                       !LLMCleanup.sameWords(trimmedCleaned, initialText),
-                                       await self.runCorrectedDictationAsCommand(
-                                        pasted: initialText, corrected: trimmedCleaned,
-                                        generation: generation, session: session, targetApp: targetApp
-                                       ) {
-                                        return
+                if self.autoPasteEnabled {
+                    // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
+                    self.textInjector?.pasteTextResult(
+                        initialText,
+                        targetApp: targetApp,
+                        context: pasteContext
+                    ) { [weak self] outcome in
+                        // The paste callback runs outside the task: re-bind the trace so the
+                        // cleanup below (and everything it logs) still lands in it.
+                        Task { @MainActor in VoiceTrace.$current.withValue(traceID) {
+                            guard let self else { return }
+                            owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
+                            switch outcome {
+                            case .pastedVerified where send, .pastedUnverified where send:
+                                self.swapPair = nil
+                                self.swapPasteContext = nil
+                                self.hotkey?.setSwapAvailable(false)
+                                // Electron composers and CLI bracketed paste need a moment to
+                                // take the paste before Return, or only part of it is sent.
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                                    MainActor.assumeIsolated {
+                                        guard let self else { return }
+                                        let sent = pasteContext.targetPID.map {
+                                            (self.textInjector as? TextInjector)?.pressReturn(inPID: $0) ?? false
+                                        } ?? false
+                                        owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
+                                        if let traceID {
+                                            VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
+                                        }
+                                        self.showFlowBarMessage(sent ? "gönderildi" : "yazıldı, gönderilmedi", durationMs: 1200)
                                     }
-                                    owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
+                                }
+                            case .pastedVerified, .pastedUnverified:
+                                self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
+                                self.swapTargetApp = targetApp
+                                self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
+                                self.lastInjectedIsCleaned = false
+                                self.lastInjectedText = initialText
+                                self.hotkey?.setSwapAvailable(true)
+                                DictationSnapshot.shared.capture(
+                                    pastedText: initialText,
+                                    targetApp: targetApp,
+                                    appliedPairs: appliedCorrectionPairs
+                                )
 
-                                    self.textInjector?.replaceInjectedText(
-                                        oldText: initialText,
-                                        newText: trimmedCleaned,
-                                        targetApp: targetApp,
-                                        context: self.swapPasteContext
-                                    ) { [weak self] in
-                                        Task { @MainActor in
-                                            guard let self else { return }
-                                            self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
-                                            self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: trimmedCleaned)
-                                            self.lastTranscription = trimmedCleaned
-                                            self.lastInjectedIsCleaned = true
-                                            self.lastInjectedText = trimmedCleaned
-                                            self.textInjector?.copyToClipboard(rawText)
-                                            self.showFlowBarMessage("fixed", durationMs: 1000)
-                                            // The field now holds the LLM-cleaned text, not what
-                                            // was captured at the raw paste above — without this,
-                                            // every later diff compares raw-vs-cleaned and can
-                                            // learn the LLM's own edits as if the user made them.
-                                            // `capture` re-runs the same suppressNextCapture check
-                                            // as the original call (see `install`), so an
-                                            // intervening Option+Z swap still correctly discards
-                                            // this recapture instead of resurrecting a snapshot
-                                            // for text the user already threw away.
-                                            DictationSnapshot.shared.capture(
-                                                pastedText: trimmedCleaned,
-                                                targetApp: targetApp,
-                                                appliedPairs: appliedCorrectionPairs
-                                            )
-                                            owLog("[OpenWhisper] Async LLM replacement finished.")
+                                self.dismissFlowBarMessage()
+
+                                // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
+                                // Once Ollama finishes, replace the initially pasted text in-place.
+                                // Keep the generated keyboard random exact. LLM cleanup can rewrite
+                                // or remove a random-looking token, which would defeat this setting.
+                                if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
+                                    Task { @MainActor [weak self] in
+                                        guard let self else { return }
+                                        let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
+                                        let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                                        guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+                                        // A corrected word can reveal a voice command ("Sesifullah"
+                                        // → "Sesi fulle"): take the dictation back out and run it.
+                                        if !misheard.isEmpty,
+                                           !LLMCleanup.sameWords(trimmedCleaned, initialText),
+                                           await self.runCorrectedDictationAsCommand(
+                                            pasted: initialText, corrected: trimmedCleaned,
+                                            generation: generation, session: session, targetApp: targetApp
+                                           ) {
+                                            return
+                                        }
+                                        owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
+
+                                        self.textInjector?.replaceInjectedText(
+                                            oldText: initialText,
+                                            newText: trimmedCleaned,
+                                            targetApp: targetApp,
+                                            context: self.swapPasteContext
+                                        ) { [weak self] in
+                                            Task { @MainActor in
+                                                guard let self else { return }
+                                                self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
+                                                self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: trimmedCleaned)
+                                                self.lastTranscription = trimmedCleaned
+                                                self.lastInjectedIsCleaned = true
+                                                self.lastInjectedText = trimmedCleaned
+                                                self.textInjector?.copyToClipboard(rawText)
+                                                self.showFlowBarMessage("fixed", durationMs: 1000)
+                                                // The field now holds the LLM-cleaned text, not what
+                                                // was captured at the raw paste above — without this,
+                                                // every later diff compares raw-vs-cleaned and can
+                                                // learn the LLM's own edits as if the user made them.
+                                                // `capture` re-runs the same suppressNextCapture check
+                                                // as the original call (see `install`), so an
+                                                // intervening Option+Z swap still correctly discards
+                                                // this recapture instead of resurrecting a snapshot
+                                                // for text the user already threw away.
+                                                DictationSnapshot.shared.capture(
+                                                    pastedText: trimmedCleaned,
+                                                    targetApp: targetApp,
+                                                    appliedPairs: appliedCorrectionPairs
+                                                )
+                                                owLog("[OpenWhisper] Async LLM replacement finished.")
+                                                if let traceID {
+                                                    VoiceEventLog.shared.append(traceID, "[Result] Replaced pasted text with cleanup: '\(trimmedCleaned)'")
+                                                }
+                                            }
                                         }
                                     }
                                 }
+                            case .clipboardOnly(let reason):
+                                self.swapPair = nil
+                                self.swapPasteContext = nil
+                                self.hotkey?.setSwapAvailable(false)
+                                self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
                             }
-                        case .clipboardOnly(let reason):
-                            self.swapPair = nil
-                            self.swapPasteContext = nil
-                            self.hotkey?.setSwapAvailable(false)
-                            self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
+                        } }
+                    }
+                } else {
+                    self.textInjector?.copyToClipboard(initialText)
+                    owLog("[Result] Auto-paste off, copied to clipboard: '\(initialText)'")
+                }
+            }
+
+            // "Claude Code'a / Codex'e şunu yaz … gönder": checked before reminders and
+            // Spotify so a prompt that mentions them is still typed, not executed. A bare
+            // trailing "gönder" only counts in agent apps and terminals.
+            if let agent = AgentCommandParser.parse(trimmed),
+               agent.target != nil || AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "") {
+                owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send))")
+                guard !agent.body.isEmpty else {
+                    owLog("[Agent] Nothing to write after the command words, skipping")
+                    return
+                }
+                var targetApp = session.targetApp
+                var pasteContext = session.pasteContext
+                if let target = agent.target,
+                   !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false) {
+                    guard let app = await AgentAppActivator.activate(target) else {
+                        self.textInjector?.copyToClipboard(agent.body)
+                        self.showFlowBarMessage("\(target.displayName) açılamadı, panoya kopyalandı")
+                        return
+                    }
+                    targetApp = app
+                    pasteContext = PasteContext.capture(targetApp: app)
+                }
+                await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                return
+            }
+
+            let isReminderCommand = ReminderManager.isReminder(text)
+            let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
+                text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
+            )
+            owLog("[Route] \(isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
+            if isReminderCommand {
+                owLog("[OpenWhisper] Reminder detected: \(text)")
+                self.lastTranscription = text
+                if self.ollamaAvailable {
+                    let scheduled = await self.reminderManager?.handleReminder(text: text) ?? false
+                    owLog("[Result] Reminder \(scheduled ? "scheduled" : "not scheduled")")
+                } else {
+                    owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
+                }
+            } else if isSpotifyCommand {
+                owLog("[OpenWhisper] Spotify command detected: \(text)")
+                let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: text)
+                let misheard = self.cleanupAvailable ? self.misheardWords(in: text) : []
+                let handled = await SpotifyManager.shared.handleCommand(
+                    text: text, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
+                )
+                owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
+                if handled {
+                    resumeMediaAfterCommand = resumesMedia
+                    self.lastTranscription = text
+                    if !misheard.isEmpty {
+                        owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
+                        Task { @MainActor [weak self] in
+                            await self?.rerunCorrectedCommand(
+                                text, misheard: misheard, generation: generation, session: session
+                            )
                         }
                     }
+                } else {
+                    owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
+                    await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
                 }
             } else {
-                self.textInjector?.copyToClipboard(initialText)
+                await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
-        }
-
-        if isReminderCommand {
-            owLog("[OpenWhisper] Reminder detected: \(text)")
-            self.lastTranscription = text
-            if self.ollamaAvailable {
-                let _ = await self.reminderManager?.handleReminder(text: text)
-            } else {
-                owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
-            }
-        } else if isSpotifyCommand {
-            owLog("[OpenWhisper] Spotify command detected: \(text)")
-            let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: text)
-            let misheard = self.cleanupAvailable ? self.misheardWords(in: text) : []
-            let handled = await SpotifyManager.shared.handleCommand(
-                text: text, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
-            )
-            if handled {
-                resumeMediaAfterCommand = resumesMedia
-                self.lastTranscription = text
-                if !misheard.isEmpty {
-                    owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
-                    Task { @MainActor [weak self] in
-                        await self?.rerunCorrectedCommand(
-                            text, misheard: misheard, generation: generation, session: session
-                        )
-                    }
-                }
-            } else {
-                owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
-                await pasteAsDictation()
-            }
-        } else {
-            await pasteAsDictation()
         }
     }
 

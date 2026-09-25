@@ -235,6 +235,31 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         }
     }
 
+    /// Presses Return in `pid`, used to send a message to a coding agent after its text was
+    /// pasted. Only when `pid` is still frontmost: a Return posted to whatever app the user
+    /// switched to could send or confirm something else. Returns whether it was posted.
+    @discardableResult
+    func pressReturn(inPID pid: pid_t) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            owLog("[TextInjector] Return skipped: target is no longer frontmost")
+            return false
+        }
+        let returnKeyCode: CGKeyCode = 36
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: returnKeyCode, keyDown: false) else {
+            owLog("[TextInjector] Return CGEvent creation failed")
+            return false
+        }
+        // Held modifiers would turn this into Shift/Cmd+Return (newline or another action).
+        keyDown.flags = []
+        keyUp.flags = []
+        keyDown.post(tap: .cghidEventTap)
+        usleep(20_000)
+        keyUp.post(tap: .cghidEventTap)
+        owLog("[TextInjector] CGEvent Return posted")
+        return true
+    }
+
     private struct PasteDestination {
         let element: AXUIElement
         let pid: pid_t

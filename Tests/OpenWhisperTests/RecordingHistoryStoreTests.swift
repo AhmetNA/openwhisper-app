@@ -3,14 +3,16 @@ import XCTest
 @testable import OpenWhisper
 
 final class RecordingHistoryStoreTests: XCTestCase {
-    func testSevenNewestRecordingsSurviveRestartAndReplayAudio() async throws {
+    func testNewestRecordingsUpToLimitSurviveRestartAndReplayAudio() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = RecordingHistoryStore(directory: directory)
         let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let limit = RecordingHistoryStore.limit
+        XCTAssertEqual(limit, 30)
 
-        for number in 0..<8 {
-            let samples = [Float](repeating: Float(number) / 10, count: 6_400)
+        for number in 0...limit {
+            let samples = [Float](repeating: Float(number) / 100, count: 6_400)
             try await store.append(
                 CompletedAudioSegment(samples: samples, overlapSampleCount: 0),
                 sessionID: UInt64(number),
@@ -21,12 +23,42 @@ final class RecordingHistoryStoreTests: XCTestCase {
 
         let reopened = RecordingHistoryStore(directory: directory)
         let items = await reopened.items()
-        XCTAssertEqual(items.count, 7)
-        XCTAssertEqual(items.first?.createdAt, start.addingTimeInterval(7))
+        XCTAssertEqual(items.count, limit)
+        XCTAssertEqual(items.first?.createdAt, start.addingTimeInterval(Double(limit)))
         XCTAssertEqual(items.last?.createdAt, start.addingTimeInterval(1))
         let replay = try await reopened.segment(id: items[0].id, startingAt: 0)
         XCTAssertEqual(replay?.0.samples.count, 6_400)
-        XCTAssertEqual(replay?.0.samples[0] ?? 0, 0.7, accuracy: 0.0001)
+        XCTAssertEqual(replay?.0.samples[0] ?? 0, Float(limit) / 100, accuracy: 0.0001)
+    }
+
+    func testPrunedRecordingTakesItsTraceWithIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RecordingHistoryStore(directory: directory)
+        let log = VoiceEventLog(directory: directory)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        var firstID: UUID?
+
+        for number in 0...RecordingHistoryStore.limit {
+            try await store.append(
+                CompletedAudioSegment(samples: [Float](repeating: 0.1, count: 6_400), overlapSampleCount: 0),
+                sessionID: UInt64(number),
+                startedAt: start.addingTimeInterval(Double(number))
+            )
+            let id = await store.activeRecordingID(sessionID: UInt64(number))
+            XCTAssertNotNil(id)
+            if number == 0 { firstID = id }
+            _ = try await store.finish(sessionID: UInt64(number), keep: true)
+            log.begin(id!, header: ["Recording \(number)"])
+            log.flush()
+            if number == 0 {
+                XCTAssertTrue(FileManager.default.fileExists(atPath: log.url(for: id!).path))
+            }
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: log.url(for: firstID!).path))
+        let logs = try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".log") }
+        XCTAssertEqual(logs.count, RecordingHistoryStore.limit)
     }
 
     func testCancelledRecordingDoesNotReplaceSavedHistory() async throws {

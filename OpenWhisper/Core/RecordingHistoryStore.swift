@@ -31,8 +31,9 @@ struct SavedRecording: Codable, Identifiable, Sendable {
 }
 
 /// Stores only completed dictations. Audio stays on this Mac under Application Support.
+/// Each recording may also have a `VoiceEventLog` trace (`<id>.log`), pruned with it.
 actor RecordingHistoryStore {
-    static let limit = 7
+    static let limit = 30
     private let directory: URL
     private var recordings: [SavedRecording]
     private var active: [UInt64: (file: AVAudioFile, url: URL, id: UUID, date: Date, samples: Int)] = [:]
@@ -49,6 +50,9 @@ actor RecordingHistoryStore {
     }
 
     func items() -> [SavedRecording] { recordings }
+
+    /// The id the recording of `sessionID` will be saved under, while it is still being written.
+    func activeRecordingID(sessionID: UInt64) -> UUID? { active[sessionID]?.id }
 
     func append(_ segment: CompletedAudioSegment, sessionID: UInt64, startedAt: Date) throws {
         let samples = segment.samples.dropFirst(segment.overlapSampleCount)
@@ -99,6 +103,7 @@ actor RecordingHistoryStore {
         recordings = retained
         for old in updated.dropFirst(Self.limit) {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(old.id.uuidString).caf"))
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(VoiceEventLog.fileName(for: old.id)))
         }
         return recordings
     }

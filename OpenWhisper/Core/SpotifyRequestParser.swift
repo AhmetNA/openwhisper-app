@@ -439,11 +439,17 @@ enum SpotifyRequestParser {
         guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = requestData
 
+        let start = Date()
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
             guard (response as? HTTPURLResponse)?.statusCode == 200,
                   let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let responseText = envelope["response"] as? String else { return nil }
+                  let responseText = envelope["response"] as? String else {
+                owLog("[SpotifyParser] Ollama (\(model)) gave no usable answer in \(ms) ms")
+                return nil
+            }
+            owLog("[SpotifyParser] Ollama (\(model), \(ms) ms) answered: \(responseText)")
             return decodeOllamaResponse(responseText)
         } catch {
             owLog("[SpotifyParser] Ollama request failed: \(error)")

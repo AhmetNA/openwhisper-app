@@ -4,11 +4,13 @@ final class LLMCleanup: Sendable {
     private let baseURL = "http://localhost:11434"
     let model: String
 
-    /// Default cleanup model. Chosen after a side-by-side run on TR/EN code-switched dictation
-    /// with the glossary in the prompt: llama3.2:3b translated English phrases and swapped words
-    /// in half the samples (so the faithfulness check threw its output away), qwen3.5:4b was
-    /// accurate but ~1s per sentence, gemma4:e2b-it-qat kept every sample intact at ~0.3s.
-    static let defaultModel = "gemma4:e2b-it-qat"
+    /// Default model for cleanup, Spotify and reminders. Chosen after a side-by-side run
+    /// (Tools/CleanupEval, Tools/SpotifyEval, 25 Sep 2026) on TR/EN code-switched dictation:
+    /// gemma4:e4b-it-qat cleaned 20/20 at ~0.44s median and got 96/97 Spotify commands at
+    /// ~0.9s; gemma4:e2b-it-qat was faster (~0.27s) but left fillers in 5/20; qwen3.5:4b got
+    /// 17/20 and 94/97 at ~0.9-1.1s; qwen3.5:9b and gemma4:12b-it-qat were too slow for the
+    /// 3s Spotify timeout. (llama3.2:3b, earlier, translated English phrases.)
+    static let defaultModel = "gemma4:e4b-it-qat"
 
     init(model: String = LLMCleanup.defaultModel) {
         self.model = model
@@ -18,6 +20,7 @@ final class LLMCleanup: Sendable {
     /// separately; `isModelInstalled` guards against picking one that isn't.
     static let supportedModels: [(tag: String, label: String)] = [
         ("gemma4:e2b-it-qat", "⚡ Hızlı (Gemma 4 E2B)"),
+        ("gemma4:e4b-it-qat", "⭐ Önerilen (Gemma 4 E4B)"),
         ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)")
     ]
 
@@ -453,14 +456,20 @@ final class LLMCleanup: Sendable {
             ]
         ]
 
+        let start = Date()
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let (data, response) = try await URLSession.shared.data(for: request)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
 
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return text }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                owLog("[LLMCleanup] Ollama (\(model)) HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1) after \(ms) ms")
+                return text
+            }
 
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let responseText = json["response"] as? String {
+                owLog("[LLMCleanup] Ollama (\(model), \(ms) ms) answered: \(responseText)")
                 let cleaned = responseText
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
@@ -492,7 +501,7 @@ final class LLMCleanup: Sendable {
                 }
             }
         } catch {
-            // Silently fall back to raw text
+            owLog("[LLMCleanup] Ollama (\(model)) request failed: \(error.localizedDescription)")
         }
 
         return text

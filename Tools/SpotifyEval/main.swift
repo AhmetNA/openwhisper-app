@@ -9,6 +9,7 @@ import Foundation
 //     OpenWhisper/Core/SpotifyWebAPI.swift OpenWhisper/Core/SpotifyRequestParser.swift \
 //     OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
 //     OpenWhisper/Core/SystemVolume.swift OpenWhisper/Core/AudioDucker.swift \
+//     OpenWhisper/Core/MisheardWordDetector.swift \
 //     -o /tmp/spotify_eval && /tmp/spotify_eval [-v] [model ...]   # "off" = Ollama unavailable
 //
 // Nothing is sent to Spotify: only the decision is computed.

@@ -32,6 +32,7 @@ private let owLogDateFormatter: DateFormatter = {
 }()
 
 func owLog(_ msg: String) {
+    VoiceEventLog.shared.appendToCurrent(msg)
     let timestamp = owLogDateFormatter.string(from: Date())
     let line = "[\(timestamp)] \(msg)\n"
     let path = "/tmp/openwhisper.log"
