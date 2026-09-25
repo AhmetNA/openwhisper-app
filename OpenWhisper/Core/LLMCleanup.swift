@@ -107,7 +107,11 @@ final class LLMCleanup: Sendable {
     /// here, rather than this function re-reading them itself, so a single cleanup pass only
     /// touches each file once even though the results are also needed by `isFaithfulCleanup`.
     /// Falls back to the base prompt when both are missing/empty.
-    private static func cleanupPrompt(glossaryTerms: [String]?, corrections: [LearnedCorrection]) -> String {
+    private static func cleanupPrompt(
+        glossaryTerms: [String]?,
+        corrections: [LearnedCorrection],
+        misheard: [MisheardWordDetector.Word] = []
+    ) -> String {
         var prompt = basePrompt
 
         if let terms = glossaryTerms, !terms.isEmpty {
@@ -130,7 +134,80 @@ final class LLMCleanup: Sendable {
                 """
         }
 
+        if !misheard.isEmpty {
+            // No spell checker guesses: they point the wrong way too often ("fülle" → "gülle").
+            let listed = misheard.map { "\"\($0.text)\"" }.joined(separator: "; ")
+            prompt += """
+
+
+                MISHEARD WORDS: speech-to-text produced these words, which are neither Turkish nor English: \(listed)
+                Replace each with the word the speaker most likely said, judged by how it sounds and by the sentence. Prefer a Turkish word; use English only if no Turkish word fits. It may be two words run together (e.g. "Sesifullah" -> "Sesi fulle"). If it is a name of a person, artist, song or brand, keep it as it is. Change no other word.
+                """
+        }
+
         return prompt
+    }
+
+    /// Lowercased, diacritics removed, dotless ı folded to i: how close two spellings sound.
+    private static func folded(_ word: String) -> String {
+        word.lowercased()
+            .folding(options: .diacriticInsensitive, locale: Locale(identifier: "tr_TR"))
+            .replacingOccurrences(of: "ı", with: "i")
+    }
+
+    private static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        guard !a.isEmpty else { return b.count }
+        guard !b.isEmpty else { return a.count }
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
+
+    /// A misheard word may become up to this many words ("sesifullah" -> "sesi fulle").
+    private static let maxMisheardSplit = 3
+
+    /// How many cleaned words, starting at `cleanedIndex`, stand in for the misheard source
+    /// word `source`, or nil if none do. The replacement must sound like the source (small
+    /// edit distance once diacritics are folded) and be made of real words, unless it is only
+    /// the source split apart ("hadisedüm" -> "hadise düm"). The walk must resync right after
+    /// it on `remainingSource`, the source words that follow (fillers may have been dropped).
+    static func misheardReplacementLength(
+        source: String,
+        cleanedWords: [String],
+        cleanedIndex: Int,
+        remainingSource: ArraySlice<String>,
+        isKnownWord: (String) -> Bool
+    ) -> Int? {
+        let foldedSource = folded(source)
+        let tolerance = max(2, foldedSource.count / 4)
+        func resyncs(at end: Int) -> Bool {
+            guard end < cleanedWords.count else { return remainingSource.allSatisfy(fillerWords.contains) }
+            for word in remainingSource {
+                if word == cleanedWords[end] { return true }
+                if !fillerWords.contains(word) { return false }
+            }
+            return false
+        }
+        for length in 1...maxMisheardSplit {
+            let end = cleanedIndex + length
+            guard end <= cleanedWords.count else { return nil }
+            let replacement = Array(cleanedWords[cleanedIndex..<end])
+            let joined = folded(replacement.joined())
+            // Only cutting the end off ("frontendi" -> "frontend") strips a Turkish suffix.
+            guard resyncs(at: end), editDistance(joined, foldedSource) <= tolerance,
+                  !(foldedSource.hasPrefix(joined) && joined != foldedSource) else { continue }
+            if joined == foldedSource || replacement.allSatisfy(isKnownWord) {
+                return length
+            }
+        }
+        return nil
     }
 
     private static func normalizedWords(from text: String) -> [String] {
@@ -184,11 +261,18 @@ final class LLMCleanup: Sendable {
     /// correction (`isAllowedSubstitution`) is authorized for the same reason.
     /// `glossaryTerms`/`corrections` must be the same values passed to `cleanupPrompt`, so what's
     /// allowed to appear "out of nowhere" here matches what was actually offered to the model.
+    ///
+    /// A word `MisheardWordDetector` flagged (`misheardWords`, normalized) may also be replaced,
+    /// under the rules of `misheardReplacementLength`; `isKnownWord` checks the replacement.
+    ///
+    /// A filler the model kept is fine: fillers are skipped only when they don't match.
     private static func isFaithfulCleanup(
         original: String,
         cleaned: String,
         glossaryTerms: [String]?,
-        corrections: [LearnedCorrection]
+        corrections: [LearnedCorrection],
+        misheardWords: Set<String> = [],
+        isKnownWord: (String) -> Bool = { _ in false }
     ) -> Bool {
         let originalWords = normalizedWords(from: original)
         let cleanedWords = normalizedWords(from: cleaned)
@@ -197,16 +281,38 @@ final class LLMCleanup: Sendable {
         let glossaryWords = Set((glossaryTerms ?? []).flatMap { normalizedWords(from: $0) })
 
         var originalIndex = 0
-        for (cleanedIndex, cleanedWord) in cleanedWords.enumerated() {
+        var cleanedIndex = 0
+        while cleanedIndex < cleanedWords.count {
+            let cleanedWord = cleanedWords[cleanedIndex]
             while originalIndex < originalWords.count,
+                  originalWords[originalIndex] != cleanedWord,
                   fillerWords.contains(originalWords[originalIndex]) {
                 originalIndex += 1
             }
 
-            guard originalIndex < originalWords.count else { return false }
+            guard originalIndex < originalWords.count else {
+                owLog("[LLMCleanup] Faithfulness: extra cleaned word '\(cleanedWord)'")
+                return false
+            }
             if originalWords[originalIndex] == cleanedWord {
                 originalIndex += 1
-            } else if isAllowedSubstitution(
+                cleanedIndex += 1
+                continue
+            }
+            if misheardWords.contains(originalWords[originalIndex]),
+               let length = misheardReplacementLength(
+                source: originalWords[originalIndex],
+                cleanedWords: cleanedWords,
+                cleanedIndex: cleanedIndex,
+                remainingSource: originalWords[(originalIndex + 1)...],
+                isKnownWord: isKnownWord
+               ) {
+                owLog("[LLMCleanup] Misheard word replaced: \(originalWords[originalIndex]) -> \(cleanedWords[cleanedIndex..<(cleanedIndex + length)].joined(separator: " "))")
+                originalIndex += 1
+                cleanedIndex += length
+                continue
+            }
+            if isAllowedSubstitution(
                 cleanedWord: cleanedWord,
                 sourceWord: originalWords[originalIndex],
                 glossaryWords: glossaryWords,
@@ -232,16 +338,40 @@ final class LLMCleanup: Sendable {
                     guard span <= maxGlossaryMergeSpan else { return false }
                 }
                 originalIndex += span
+                cleanedIndex += 1
             } else {
+                owLog("[LLMCleanup] Faithfulness: '\(originalWords[originalIndex])' became '\(cleanedWord)'")
                 return false
             }
         }
 
         while originalIndex < originalWords.count {
-            guard fillerWords.contains(originalWords[originalIndex]) else { return false }
+            guard fillerWords.contains(originalWords[originalIndex]) else {
+                owLog("[LLMCleanup] Faithfulness: dropped '\(originalWords[originalIndex])'")
+                return false
+            }
             originalIndex += 1
         }
         return true
+    }
+
+    /// Same words in the same order, ignoring case and punctuation: a cleanup that only
+    /// changed those didn't correct anything.
+    static func sameWords(_ a: String, _ b: String) -> Bool {
+        normalizedWords(from: a) == normalizedWords(from: b)
+    }
+
+    /// `isFaithfulCleanup` without glossary or learned corrections, for tests.
+    static func isFaithfulCleanup(
+        original: String,
+        cleaned: String,
+        misheardWords: Set<String> = [],
+        isKnownWord: (String) -> Bool = { _ in false }
+    ) -> Bool {
+        isFaithfulCleanup(
+            original: original, cleaned: cleaned, glossaryTerms: nil, corrections: [],
+            misheardWords: misheardWords, isKnownWord: isKnownWord
+        )
     }
 
     /// Check if Ollama is running and responsive
@@ -290,8 +420,9 @@ final class LLMCleanup: Sendable {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    /// Clean up transcribed text using local Ollama LLM
-    func cleanup(text: String) async -> String {
+    /// Clean up transcribed text using local Ollama LLM. `misheard` are the words
+    /// `MisheardWordDetector` found in `text`; only these may be replaced by other words.
+    func cleanup(text: String, misheard: [MisheardWordDetector.Word] = []) async -> String {
         guard let url = URL(string: "\(baseURL)/api/generate") else { return text }
 
         var request = URLRequest(url: url)
@@ -307,7 +438,7 @@ final class LLMCleanup: Sendable {
 
         let body: [String: Any] = [
             "model": model,
-            "prompt": "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
+            "prompt": "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections, misheard: misheard))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
             "stream": false,
             // Qwen 3.5 / Gemma 4 think by default: without this the answer arrives only after a
             // long hidden reasoning pass (or the num_predict budget runs out inside it).
@@ -315,7 +446,9 @@ final class LLMCleanup: Sendable {
             "keep_alive": Self.keepAlive,
             "options": [
                 "temperature": 0.0,
-                "num_predict": min(max(50, text.count + 30), 200),
+                // Turkish runs to ~1 token per 2-3 characters; a lower cap cut long dictations
+                // short and the faithfulness check then rejected the whole cleanup.
+                "num_predict": min(max(50, text.count + 30), 800),
                 "stop": ["\n", "\n\n", "</think>", "Transcript:"]
             ]
         ]
@@ -338,11 +471,17 @@ final class LLMCleanup: Sendable {
                 }
 
                 if !hasChinese && !cleaned.isEmpty && cleaned.count < text.count * 3 {
+                    let misheardWords = Set(misheard.flatMap { Self.normalizedWords(from: $0.text) })
+                    let knownCleanedWords: Set<String> = misheard.isEmpty ? [] : await MainActor.run {
+                        Set(Self.normalizedWords(from: cleaned).filter(MisheardWordDetector.isKnown))
+                    }
                     guard Self.isFaithfulCleanup(
                         original: text,
                         cleaned: cleaned,
                         glossaryTerms: glossaryTerms,
-                        corrections: corrections
+                        corrections: corrections,
+                        misheardWords: misheardWords,
+                        isKnownWord: knownCleanedWords.contains
                     ) else {
                         owLog("[LLMCleanup] Rejected unrelated cleanup output; using raw transcript")
                         return text

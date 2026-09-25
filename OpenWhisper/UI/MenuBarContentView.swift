@@ -31,6 +31,31 @@ struct MenuBarContentView: View {
             Divider()
 
             HStack(spacing: 10) {
+                Image(systemName: appState.wakeWordListening ? "ear.fill" : "ear")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(appState.wakeWordListening ? Color.accentColor : .secondary)
+                    .frame(width: 30, height: 30)
+                    .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("“Jarvis” ile sesle başlat")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(appState.wakeWordStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .accessibilityLabel("“Jarvis” sözcüğünü dinle")
+            }
+            .padding(10)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+
+            HStack(spacing: 10) {
                 Image(systemName: appState.systemAudioEnabled ? "speaker.wave.2.fill" : "speaker.wave.2")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(appState.systemAudioEnabled ? Color.accentColor : .secondary)

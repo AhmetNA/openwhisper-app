@@ -18,6 +18,9 @@ final class RecordingTranscriptionSession {
     let continuation: AsyncStream<CompletedAudioSegment>.Continuation
     let targetSpeakerEnabled: Bool
     let targetSpeakerProfile: TargetSpeakerProfile?
+    /// Started by voice ("Jarvis", Vocal Shortcuts, openwhisper://start) rather than Fn:
+    /// the user is giving a command, so Spotify intents are read less strictly.
+    var isVoiceCommand = false
 
     var task: Task<Void, Never>?
     var segmentTexts: [String] = []
@@ -144,12 +147,6 @@ final class AppState {
             guard oldValue != recordingState else { return }
             syncFlowBarVisibility()
             updateWakeWordListener()
-            // Resume at the end of recording, before transcription: a spoken Spotify command
-            // ("durdur", "sonraki şarkı") is handled after this and so still wins.
-            if oldValue == .recording, pausedSpotifyForVoiceSession {
-                pausedSpotifyForVoiceSession = false
-                Task { _ = await SpotifyController.shared.play() }
-            }
         }
     }
 
@@ -227,27 +224,7 @@ final class AppState {
     var audioDuckingEnabled: Bool {
         didSet {
             UserDefaults.standard.set(audioDuckingEnabled, forKey: "audioDuckingEnabled")
-            syncAudioDuckerConfiguration()
         }
-    }
-    var audioDuckingTargetVolume: Float {
-        didSet {
-            UserDefaults.standard.set(audioDuckingTargetVolume, forKey: "audioDuckingTargetVolume")
-            syncAudioDuckerConfiguration()
-        }
-    }
-    var audioDuckingRestoreDuration: TimeInterval {
-        didSet {
-            UserDefaults.standard.set(audioDuckingRestoreDuration, forKey: "audioDuckingRestoreDuration")
-            syncAudioDuckerConfiguration()
-        }
-    }
-
-    private func syncAudioDuckerConfiguration() {
-        AudioDucker.shared.updateConfiguration(
-            targetVolume: audioDuckingTargetVolume,
-            restoreDuration: audioDuckingRestoreDuration
-        )
     }
 
     // MARK: - Runtime State
@@ -274,7 +251,9 @@ final class AppState {
     var ollamaAvailable: Bool = false
     /// Availability of the selected cleanup engine.
     var cleanupAvailable: Bool = false
-    var modelLoaded: Bool = false
+    var modelLoaded: Bool = false {
+        didSet { updateWakeWordListener() }
+    }
     var modelLoading: Bool = false
     var modelLoadProgress: Double = 0.0
     var modelIsDownloading: Bool = false
@@ -341,6 +320,9 @@ final class AppState {
     private var audioEngine: AudioEngine?
     private let transcriptionModelRegistry = TranscriptionModelRegistry()
     private var llmCleanup: LLMCleanup?
+    /// Bumped for every transcript: a background correction only acts if no newer
+    /// transcript came in meanwhile.
+    private var correctionGeneration: UInt64 = 0
     private var textInjector: TextInjecting? = TextInjector()
     private var hotkey: GlobalHotkey?
     private var flowBarController: FlowBarController?
@@ -384,14 +366,23 @@ final class AppState {
     private var nextTranscriptionID: UInt64 = 0
     private var pendingTranscriptionCount = 0
     private var delayedStopWorkItem: DispatchWorkItem?
-    /// Own "Jarvis" listener, only while music plays (Vocal Shortcuts misses the phrase then).
+    /// Menu bar switch for the own "Jarvis" listener.
+    var wakeWordEnabled = UserDefaults.standard.object(forKey: "wakeWordEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(wakeWordEnabled, forKey: "wakeWordEnabled")
+            updateWakeWordListener()
+        }
+    }
+    private(set) var wakeWordListening = false
+    private(set) var wakeWordStatus = "Kapalı"
     @ObservationIgnored private var wakeWordListener: WakeWordListener?
-    @ObservationIgnored private var musicMonitor: MusicPlaybackMonitor?
-    @ObservationIgnored private var musicPlaying = false
-    /// A voice session paused Spotify so the silence auto-stop can hear the speaker; resumed
-    /// when that recording ends.
-    @ObservationIgnored private var pausedSpotifyForVoiceSession = false
-    @ObservationIgnored private var voiceSessionIgnoreLeadingAudio = false
+    @ObservationIgnored private var wakeCandidateVerifying = false
+    @ObservationIgnored private var mediaActivityMonitor: SystemMediaActivityMonitor?
+    @ObservationIgnored private var mediaPlaying = false
+    @ObservationIgnored private var systemAsleep = false
+    @ObservationIgnored private var screensAsleep = false
+    @ObservationIgnored private var sleepObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private let recordingMedia = RecordingMediaController.shared
     /// Set by a URL start just before it reaches `startRecording()`, consumed there.
     @ObservationIgnored private var armVoiceAutoStopForNextRecording = false
     /// Present only for voice-triggered sessions; ends them after the speaker goes quiet.
@@ -504,15 +495,12 @@ final class AppState {
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID")
         audioDuckingEnabled = defaults.object(forKey: "audioDuckingEnabled") as? Bool ?? true
-        audioDuckingTargetVolume = defaults.object(forKey: "audioDuckingTargetVolume") as? Float ?? 0.10
-        audioDuckingRestoreDuration = defaults.object(forKey: "audioDuckingRestoreDuration") as? Double ?? 1.5
         targetSpeakerProfileStore = profileStore
         self.targetSpeakerModel = targetSpeakerModel
         targetSpeakerFilter = TargetSpeakerFilter(model: targetSpeakerModel)
         self.targetSpeakerDiarization = targetSpeakerDiarization
         injectedTranscriptionService = transcriptionService
         targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
-        syncAudioDuckerConfiguration()
     }
 
     private static let targetSpeakerEnrollmentPromptText =
@@ -545,7 +533,6 @@ final class AppState {
 
         loadTargetSpeakerProfile()
         startTargetSpeakerDiarizationPreparation()
-        AudioDucker.shared.prewarmOutputDeviceCapability()
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -1000,13 +987,12 @@ final class AppState {
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
                 startTime: sessionStart,
-                ignoreUntil: voiceSessionIgnoreLeadingAudio ? sessionStart + 0.8 : nil
+                ignoreUntil: mediaPlaying ? sessionStart + 0.8 : nil
             )
             : nil
-        voiceSessionIgnoreLeadingAudio = false
 
-        if audioDuckingEnabled {
-            AudioDucker.shared.duck()
+        if audioDuckingEnabled || armVoiceAutoStop {
+            recordingMedia.begin()
         }
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
@@ -1068,6 +1054,7 @@ final class AppState {
             targetSpeakerProfile: targetSpeakerProfile,
             pasteContext: initialContext
         )
+        session.isVoiceCommand = armVoiceAutoStop
         activeTranscriptionSession = session
         pendingTranscriptionCount += 1
 
@@ -1141,7 +1128,6 @@ final class AppState {
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
 
-        AudioDucker.shared.restore()
         if targetSpeakerEnrollmentIsRecording {
             stopTargetSpeakerEnrollmentRecording()
             return
@@ -1152,11 +1138,16 @@ final class AppState {
         recordingTimer = nil
 
         guard let audioEngine, let session = activeTranscriptionSession else {
+            recordingMedia.end()
             owLog("[OpenWhisper] No audio engine")
             recordingState = pendingTranscriptionCount > 0 ? .transcribing : .idle
             return
         }
         let segments = audioEngine.stopRecording()
+        // A voice command keeps media paused until it has run (see finishTranscription).
+        if !session.isVoiceCommand {
+            recordingMedia.end()
+        }
 
         // Batches already drained during recording are queued before the final tail returned by
         // stopRecording(), so the per-session stream preserves the original recording order.
@@ -1439,6 +1430,15 @@ final class AppState {
     func finishTranscription(_ session: RecordingTranscriptionSession) async {
         guard !session.hasFinished else { return }
         session.hasFinished = true
+        // Media paused when a voice session started plays again only after its command
+        // (or dictation) is done, on every exit path below. A recording started meanwhile
+        // owns the pause now and releases it when it stops.
+        var resumeMediaAfterCommand = true
+        defer {
+            if session.isVoiceCommand && recordingState != .recording {
+                recordingMedia.end(resuming: resumeMediaAfterCommand)
+            }
+        }
         do {
             savedRecordings = try await recordingHistoryStore.finish(
                 sessionID: session.id,
@@ -1528,11 +1528,19 @@ final class AppState {
             owLog("[OpenWhisper] Empty/blank transcription, skipping")
             return
         }
+        guard !AudioSegmentation.isRepetitionHallucination(trimmed) else {
+            owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
+            return
+        }
 
         owLog("[OpenWhisper] Raw: \(text)")
+        correctionGeneration &+= 1
+        let generation = correctionGeneration
 
         let isReminderCommand = ReminderManager.isReminder(text)
-        let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(text, ollamaAvailable: self.ollamaAvailable)
+        let isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
+            text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
+        )
 
         @MainActor
         func pasteAsDictation() async {
@@ -1577,6 +1585,10 @@ final class AppState {
             }
 
             self.lastTranscription = initialText
+            let misheard = self.misheardWords(in: initialText)
+            if !misheard.isEmpty {
+                owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text))")
+            }
 
             if self.autoPasteEnabled {
                 let targetApp = session.targetApp
@@ -1613,10 +1625,20 @@ final class AppState {
                             if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
                                 Task { @MainActor [weak self] in
                                     guard let self else { return }
-                                    let cleaned = await self.llmCleanup?.cleanup(text: initialText) ?? initialText
+                                    let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
                                     let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                     guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+                                    // A corrected word can reveal a voice command ("Sesifullah"
+                                    // → "Sesi fulle"): take the dictation back out and run it.
+                                    if !misheard.isEmpty,
+                                       !LLMCleanup.sameWords(trimmedCleaned, initialText),
+                                       await self.runCorrectedDictationAsCommand(
+                                        pasted: initialText, corrected: trimmedCleaned,
+                                        generation: generation, session: session, targetApp: targetApp
+                                       ) {
+                                        return
+                                    }
                                     owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
 
                                     self.textInjector?.replaceInjectedText(
@@ -1676,9 +1698,22 @@ final class AppState {
             }
         } else if isSpotifyCommand {
             owLog("[OpenWhisper] Spotify command detected: \(text)")
-            let handled = await SpotifyManager.shared.handleCommand(text: text, targetApp: session.targetApp)
+            let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: text)
+            let misheard = self.cleanupAvailable ? self.misheardWords(in: text) : []
+            let handled = await SpotifyManager.shared.handleCommand(
+                text: text, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
+            )
             if handled {
+                resumeMediaAfterCommand = resumesMedia
                 self.lastTranscription = text
+                if !misheard.isEmpty {
+                    owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
+                    Task { @MainActor [weak self] in
+                        await self?.rerunCorrectedCommand(
+                            text, misheard: misheard, generation: generation, session: session
+                        )
+                    }
+                }
             } else {
                 owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
                 await pasteAsDictation()
@@ -1686,6 +1721,89 @@ final class AppState {
         } else {
             await pasteAsDictation()
         }
+    }
+
+    // MARK: - Misheard word correction
+
+    /// Words in `text` that are neither Turkish nor English, minus the user's own glossary
+    /// terms and learned corrections, which are often not dictionary words either.
+    private func misheardWords(in text: String) -> [MisheardWordDetector.Word] {
+        let locale = Locale(identifier: "tr_TR")
+        var ignoring = Set((GlossaryStore.terms() ?? []).flatMap { MisheardWordDetector.words(in: $0) }
+            .map { $0.lowercased(with: locale) })
+        for pair in CorrectionStore.shared.activePairs {
+            ignoring.formUnion(MisheardWordDetector.words(in: pair.right).map { $0.lowercased(with: locale) })
+        }
+        return MisheardWordDetector.find(in: text, ignoring: ignoring)
+    }
+
+    /// A correction may only act while nothing newer happened: no newer transcript and no
+    /// recording in progress (a volume revert would also undo the recording's ducking).
+    private func correctionIsCurrent(_ generation: UInt64) -> Bool {
+        correctionGeneration == generation && recordingState == .idle
+    }
+
+    /// A Spotify command ran on a transcript with misheard words. Corrects the transcript in
+    /// the background; if it then asks for another command, the first one is undone and the
+    /// corrected one runs (see `SpotifyManager.rerunIfCorrected`).
+    private func rerunCorrectedCommand(
+        _ text: String,
+        misheard: [MisheardWordDetector.Word],
+        generation: UInt64,
+        session: RecordingTranscriptionSession
+    ) async {
+        guard let llmCleanup else { return }
+        let corrected = await llmCleanup.cleanup(text: text, misheard: misheard)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !LLMCleanup.sameWords(corrected, text) else {
+            owLog("[Misheard] Command '\(text)' unchanged after correction")
+            return
+        }
+        owLog("[Misheard] Command corrected: '\(text)' → '\(corrected)'")
+        guard correctionIsCurrent(generation),
+              await SpotifyManager.isSpotifyCommand(
+                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.isVoiceCommand
+              ),
+              correctionIsCurrent(generation) else { return }
+        if await SpotifyManager.shared.rerunIfCorrected(original: text, corrected: corrected, targetApp: session.targetApp) {
+            showFlowBarMessage("fixed", durationMs: 1000)
+        }
+    }
+
+    /// A dictation was pasted, and its correction turned out to be a Spotify command. Deletes
+    /// the pasted text and runs the command. Returns false (the caller then pastes the
+    /// correction as usual) if it isn't a command or the text couldn't be deleted safely.
+    private func runCorrectedDictationAsCommand(
+        pasted: String,
+        corrected: String,
+        generation: UInt64,
+        session: RecordingTranscriptionSession,
+        targetApp: NSRunningApplication?
+    ) async -> Bool {
+        guard correctionIsCurrent(generation),
+              let injector = textInjector as? TextInjector,
+              await SpotifyManager.isSpotifyCommand(
+                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.isVoiceCommand
+              ),
+              correctionIsCurrent(generation) else { return false }
+        let deleted = await withCheckedContinuation { continuation in
+            injector.deleteInjectedText(pasted, targetApp: targetApp, context: swapPasteContext) {
+                continuation.resume(returning: $0)
+            }
+        }
+        guard deleted else {
+            owLog("[Misheard] '\(corrected)' is a command, but the pasted text couldn't be deleted; keeping it as text")
+            return false
+        }
+        owLog("[Misheard] Dictation '\(pasted)' was the command '\(corrected)'")
+        swapPair = nil
+        swapPasteContext = nil
+        hotkey?.setSwapAvailable(false)
+        if await SpotifyManager.shared.handleCommand(text: corrected, targetApp: targetApp) {
+            lastTranscription = corrected
+            showFlowBarMessage("fixed", durationMs: 1000)
+        }
+        return true
     }
 
     /// Re-runs the selected saved audio through the current recognition and text settings.
@@ -2069,7 +2187,6 @@ final class AppState {
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     private func discardActiveRecording(reason: String) {
         voiceEndpointDetector = nil
-        AudioDucker.shared.restore()
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         recordingTimer?.invalidate()
         recordingTimer = nil
@@ -2078,6 +2195,7 @@ final class AppState {
         session.task?.cancel()
         activeTranscriptionSession = nil
         _ = audioEngine?.stopRecording()  // discard captured samples — no transcription
+        recordingMedia.end()
         recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
         recordingDuration = 0
         audioLevel = 0
@@ -2094,6 +2212,8 @@ final class AppState {
 
     @discardableResult
     private func teardownTargetSpeakerEnrollmentRecording() -> [Float] {
+        let wasRecording = targetSpeakerEnrollmentIsRecording
+        defer { if wasRecording { recordingMedia.end() } }
         recordingTimer?.invalidate()
         recordingTimer = nil
         let samples: [Float]
@@ -2130,7 +2250,7 @@ final class AppState {
         clearFlowBarMessage()
 
         if audioDuckingEnabled {
-            AudioDucker.shared.duck()
+            recordingMedia.begin()
         }
 
         targetSpeakerSampleIsRecording = true
@@ -2168,7 +2288,6 @@ final class AppState {
 
     func stopTargetSpeakerSampleRecording() {
         owLog("[TargetSpeaker] stopTargetSpeakerSampleRecording called")
-        AudioDucker.shared.restore()
         guard targetSpeakerSampleIsRecording else { return }
         let samples = teardownTargetSpeakerSampleRecording()
 
@@ -2222,6 +2341,8 @@ final class AppState {
     }
 
     private func teardownTargetSpeakerSampleRecording() -> [Float] {
+        let wasRecording = targetSpeakerSampleIsRecording
+        defer { if wasRecording { recordingMedia.end() } }
         recordingTimer?.invalidate()
         recordingTimer = nil
         let samples: [Float]
@@ -2269,7 +2390,7 @@ final class AppState {
         clearFlowBarMessage()
 
         if audioDuckingEnabled {
-            AudioDucker.shared.duck()
+            recordingMedia.begin()
         }
 
         targetSpeakerEnrollmentIsRecording = true
@@ -2308,7 +2429,6 @@ final class AppState {
 
     func stopTargetSpeakerEnrollmentRecording() {
         owLog("[TargetSpeaker] stopTargetSpeakerEnrollmentRecording called")
-        AudioDucker.shared.restore()
         guard targetSpeakerEnrollmentIsRecording else { return }
         let samples = teardownTargetSpeakerEnrollmentRecording()
 
@@ -2569,62 +2689,109 @@ final class AppState {
     func startVoiceSession() {
         guard let hotkey, hotkey.isIdle else { return }
         armVoiceAutoStopForNextRecording = true
-        // Music defeats the level-based auto-stop (measured: a song never reads as silence),
-        // so pause Spotify for the session, the way Siri does.
-        if musicMonitor?.isSpotifyPlaying == true {
-            pausedSpotifyForVoiceSession = true
-            voiceSessionIgnoreLeadingAudio = true
-            Task { _ = await SpotifyController.shared.pause() }
-        }
         hotkey.externalStartHandsFree()
+        // Load the model while the user is still speaking; after an idle night Ollama has
+        // unloaded it and the cold load alone outlasts a command's wait.
+        if ollamaAvailable {
+            let model = SpotifyManager.selectedOllamaModel
+            Task.detached { await LLMCleanup.warmUp(model: model) }
+        }
     }
 
-    // MARK: - Wake word while music plays
+    // MARK: - Wake word
 
     private func setupWakeWordListener() {
         let listener = WakeWordListener { [weak self] in
             owLog("[OpenWhisper] Voice session requested (wake word)")
             self?.startVoiceSession()
         }
+        listener.onCandidate = { [weak self] audio, peak in
+            MainActor.assumeIsolated { self?.verifyWakeCandidate(audio: audio, peak: peak) }
+        }
         listener.prepare()
         wakeWordListener = listener
-        let monitor = MusicPlaybackMonitor { [weak self] playing in
+        let mediaMonitor = SystemMediaActivityMonitor { [weak self] playing in
             guard let self else { return }
-            if playing {
-                self.musicPlaying = true
-                self.updateWakeWordListener()
-            } else {
-                // Skips and quick pause/play flips shouldn't bounce the microphone.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                    guard let self, self.musicMonitor?.isPlaying == false else { return }
-                    self.musicPlaying = false
-                    self.updateWakeWordListener()
-                }
-            }
+            self.mediaPlaying = playing
+            self.wakeWordListener?.setMediaPlaying(playing)
+            self.updateWakeWordListener()
         }
-        musicMonitor = monitor
-        // The app may launch mid-song, before any playback notification arrives.
-        Task { @MainActor in
-            if await SpotifyController.shared.isPlayingLocally() {
-                monitor.set("Spotify", playing: true)
+        mediaActivityMonitor = mediaMonitor
+        mediaMonitor.start()
+        observeSleepForWakeWord()
+        updateWakeWordListener()
+    }
+
+    /// Grey-zone wake score: Whisper must hear "Jarvis" and the LLM must judge it a call rather
+    /// than a song or talk about Jarvis (`WakeWordVerifier`). One check at a time.
+    private func verifyWakeCandidate(audio: [Float], peak: Float) {
+        guard !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
+              let hotkey, hotkey.isIdle else { return }
+        wakeCandidateVerifying = true
+        let mediaPlaying = self.mediaPlaying
+        let ollama = ollamaAvailable
+        let model = SpotifyManager.selectedOllamaModel
+        let started = Date()
+        Task { [weak self] in
+            let verdict = await WakeWordVerifier.verify(
+                audio: audio, transcriber: transcriber, mediaPlaying: mediaPlaying,
+                ollamaAvailable: ollama, model: model
+            )
+            guard let self else { return }
+            self.wakeCandidateVerifying = false
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            switch verdict {
+            case .accepted(let why):
+                owLog(String(format: "[WakeWord] Candidate %.2f accepted in %d ms — %@", peak, ms, why))
+                self.startVoiceSession()
+            case .rejected(let why):
+                owLog(String(format: "[WakeWord] Candidate %.2f rejected in %d ms — %@", peak, ms, why))
             }
         }
     }
 
-    /// One microphone user at a time: the listener runs only while music plays and nothing
-    /// else (dictation, enrollment, system-audio capture) is recording.
+    /// System sleep stops the listener; `didWake` only arrives on a full wake, so the DarkWakes of
+    /// Power Nap never reopen the mic. With the display asleep and nothing playing, the open mic
+    /// would be the only thing keeping the Mac from idle sleep, so the listener pauses then too.
+    private func observeSleepForWakeWord() {
+        let center = NSWorkspace.shared.notificationCenter
+        let handlers: [(Notification.Name, (AppState) -> Void)] = [
+            (NSWorkspace.willSleepNotification, { $0.systemAsleep = true }),
+            (NSWorkspace.didWakeNotification, { $0.systemAsleep = false }),
+            (NSWorkspace.screensDidSleepNotification, { $0.screensAsleep = true }),
+            (NSWorkspace.screensDidWakeNotification, { $0.screensAsleep = false }),
+        ]
+        sleepObservers = handlers.map { name, apply in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    owLog("[WakeWord] \(name.rawValue)")
+                    apply(self)
+                    self.updateWakeWordListener()
+                }
+            }
+        }
+    }
+
+    /// One microphone user at a time: the listener runs while enabled and nothing else
+    /// (dictation, enrollment, system-audio capture) is recording.
     private func updateWakeWordListener() {
         guard let listener = wakeWordListener else { return }
-        let shouldRun = musicPlaying
-            && modelLoaded
-            && recordingState != .recording
-            && !targetSpeakerEnrollmentIsRecording
-            && !systemAudioEnabled
+        let busy = recordingState == .recording || targetSpeakerEnrollmentIsRecording || systemAudioEnabled
+        let paused = systemAsleep || (screensAsleep && !mediaPlaying)
+        let shouldRun = wakeWordEnabled && modelLoaded && !busy && !paused
         if shouldRun && !listener.isRunning {
             listener.start()
         } else if !shouldRun && listener.isRunning {
             listener.stop()
         }
+        wakeWordListening = listener.isRunning
+        wakeWordStatus = if !wakeWordEnabled { "Kapalı" }
+            else if listener.isRunning { "“Jarvis” deyince dinlemeye başlar" }
+            else if paused { "Uykuda — duraklatıldı" }
+            else if busy { "Kayıt sırasında duraklatıldı" }
+            else if !modelLoaded { "Model bekleniyor" }
+            else { "Mikrofon açılamadı" }
     }
 
     /// FlowBar stop button: finish and process, exactly like Enter/Space.

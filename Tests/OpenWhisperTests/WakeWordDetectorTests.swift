@@ -27,9 +27,13 @@ final class WakeWordDetectorTests: XCTestCase {
     }
 
     private func scores(_ name: String, chunk: Int = 1280) throws -> [Float] {
+        try scores(of: try samples(name), chunk: chunk)
+    }
+
+    private func scores(of audio: [Float], chunk: Int = 1280, gate: WakeWordActivityGate? = nil) throws -> [Float] {
         let modelDir = try XCTUnwrap(WakeWordDetector.bundledModelDirectory())
         let detector = try WakeWordDetector(modelDirectory: modelDir)
-        let audio = try samples(name)
+        detector.gate = gate
         var out: [Float] = []
         var i = 0
         while i < audio.count {
@@ -66,5 +70,84 @@ final class WakeWordDetectorTests: XCTestCase {
         for i in settledBlock..<a.count {
             XCTAssertEqual(a[i], b[i], accuracy: 0.02)
         }
+    }
+
+    // MARK: - Activity gate
+
+    /// The fixture's speech sits ~45 dB above its noise; the raw mic in real use gives 17–37 dB.
+    /// Scale the speech down by `attenuationDB`, lay it over steady noise at the fixture's own
+    /// floor (~31 dB) and precede it with `leadSeconds` of that noise alone.
+    private func realistic(_ name: String, attenuationDB: Float, leadSeconds: Int = 6) throws -> [Float] {
+        var rng = SystemRandomNumberGenerator()
+        let gain = pow(10, -attenuationDB / 20)
+        let speech = try samples(name).map { $0 * gain }
+        let noise = { Float(Int.random(in: -60...60, using: &rng)) }
+        return (0..<(16000 * leadSeconds)).map { _ in noise() } + speech.map { $0 + noise() }
+    }
+
+    func testGateScoresMatchUngatedForQuietSpeech() throws {
+        for attenuation: Float in [20, 30] {
+            let audio = try realistic("wake_positive", attenuationDB: attenuation)
+            let plain = try scores(of: audio)
+            let gated = try scores(of: audio, gate: WakeWordActivityGate())
+            XCTAssertEqual(plain.count, gated.count)
+            XCTAssertEqual(gated.max() ?? 0, plain.max() ?? 0, accuracy: 0.001, "attenuation \(attenuation) dB")
+            // Every block the gate let through must score exactly as without the gate.
+            for i in plain.indices where gated[i] > 0 {
+                XCTAssertEqual(gated[i], plain[i], accuracy: 0.001, "block \(i)")
+            }
+        }
+    }
+
+    func testGateStillDetectsModeratelyQuietSpeech() throws {
+        let audio = try realistic("wake_positive", attenuationDB: 20)
+        XCTAssertGreaterThan(try scores(of: audio, gate: WakeWordActivityGate()).max() ?? 0, 0.5)
+    }
+
+    func testGateSkipsMostEmbeddingsInQuietRoom() throws {
+        let modelDir = try XCTUnwrap(WakeWordDetector.bundledModelDirectory())
+        let detector = try WakeWordDetector(modelDirectory: modelDir)
+        detector.gate = WakeWordActivityGate()
+        let quiet = (0..<(16000 * 10)).map { _ in Float(Int.random(in: -60...60)) }
+        let scores = try detector.process(quiet)
+        XCTAssertEqual(scores.max() ?? 1, 0)
+        XCTAssertLessThan(detector.embeddingCount, detector.blockCount / 10)
+    }
+
+    func testGateFloorOnlyFallsWhileMediaPlays() {
+        var gate = WakeWordActivityGate()
+        for _ in 0..<50 { _ = gate.isActive(levelDB: 30) }   // quiet room learned
+        gate.mediaPlaying = true
+        for _ in 0..<2000 { XCTAssertTrue(gate.isActive(levelDB: 60)) }   // speaker music keeps it open
+        XCTAssertEqual(gate.floor ?? 0, 30, accuracy: 0.01)
+        gate.mediaPlaying = false
+        XCTAssertTrue(gate.isActive(levelDB: 60))
+    }
+
+    func testGateLearnsFloorDuringMediaAndOnlyLowersIt() {
+        var gate = WakeWordActivityGate()
+        gate.mediaPlaying = true
+        _ = gate.isActive(levelDB: 60)   // started mid-song
+        for _ in 0..<50 { _ = gate.isActive(levelDB: 35) }   // quiet passage
+        XCTAssertTrue(gate.isActive(levelDB: 60))
+        XCTAssertEqual(gate.floor ?? 0, 35, accuracy: 0.01)
+    }
+
+    func testDigitalSilenceNeverTeachesFloor() {
+        var gate = WakeWordActivityGate()
+        for _ in 0..<20 { XCTAssertFalse(gate.isActive(levelDB: 0)) }
+        XCTAssertNil(gate.floor)
+        for _ in 0..<50 { _ = gate.isActive(levelDB: 20) }
+        XCTAssertFalse(gate.isActive(levelDB: 22))
+        XCTAssertTrue(gate.isActive(levelDB: 30))
+    }
+
+    func testWarmupBlocksDoNotTeachFloor() {
+        var gate = WakeWordActivityGate()
+        gate.warmupBlocks = 6
+        for _ in 0..<6 { XCTAssertTrue(gate.isActive(levelDB: 12)) }   // mic ramping up
+        XCTAssertNil(gate.floor)
+        _ = gate.isActive(levelDB: 25)
+        XCTAssertEqual(gate.floor ?? 0, 25, accuracy: 0.01)
     }
 }

@@ -231,3 +231,26 @@ Issues and pull requests are welcome. Please include the macOS version, chip mod
 ## License
 
 Jarvis is released under the [MIT License](LICENSE).
+
+### Wake word during system playback
+
+The bundled Jarvis wake-word listener activates while another application plays audio,
+including Safari, Spotify, Music, and other browsers. On macOS 14.2+ it polls CoreAudio
+process output activity, excluding Jarvis itself. Playback must persist for one second;
+a three-second grace period avoids restarting the microphone during short gaps.
+Dictation, speaker enrollment, and system-audio capture still take priority over the listener.
+Recording now pauses the macOS Now Playing item (including Safari and Spotify), without
+changing system volume. After the microphone and its release tail stop, only the same paused
+item is resumed. Already-paused media, changed players/items, and seeks are left alone.
+The setting is **Kayıtta medyayı duraklat**; wake-word sessions always attempt a pause.
+Players must publish a macOS Now Playing session. Unsupported players are left untouched.
+Recording and session ownership are implemented in Swift. For macOS releases that restrict
+Now Playing queries from third-party executables, a small embedded JXA bridge runs in the
+system `/usr/bin/osascript` host. There is no Python, external package, or browser JavaScript
+permission dependency. The bridge uses private MediaRemote APIs and is disabled in APP_STORE
+builds; if unavailable it fails without sending a blind play/pause toggle.
+
+CoreAudio reports running output IO, which can include a silent stream. Such apps can be
+excluded with `defaults write com.openwhisper.app mediaActivityIgnoredApps -array com.example.app`.
+On macOS 14.0–14.1 the fallback checks default output device activity and cannot exclude
+individual processes.

@@ -515,34 +515,16 @@ struct SettingsView: View {
         @Bindable var appState = appState
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("Kayıtta sesi kıs", systemImage: "speaker.wave.1")
+                Label("Kayıtta medyayı duraklat", systemImage: "pause.circle")
                 Spacer()
                 Toggle("", isOn: $appState.audioDuckingEnabled)
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            if appState.audioDuckingEnabled {
-                HStack(spacing: 10) {
-                    Slider(
-                        value: Binding(
-                            get: { Double(appState.audioDuckingTargetVolume) },
-                            set: { appState.audioDuckingTargetVolume = Float($0) }
-                        ),
-                        in: 0...0.5,
-                        step: 0.05
-                    ) {
-                        Text("Kayıt sırasındaki ses seviyesi")
-                    }
-                    .labelsHidden()
-                    Text("%\(Int((appState.audioDuckingTargetVolume * 100).rounded()))")
-                        .font(.callout.monospacedDigit())
-                        .frame(width: 40, alignment: .trailing)
-                }
-                Text("Kayıt sürerken Mac'in çıkış sesi bu seviyeye iner, bitince 1.5 saniyede eski haline döner. Ses zaten bunun altındaysa dokunulmaz.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Safari, Spotify ve macOS medya denetimini destekleyen oynatıcılar kayıt sırasında duraklatılır. Kayıt bitince aynı içerik devam eder; ses seviyesi değişmez.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

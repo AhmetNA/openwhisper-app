@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AppKit
 import UserNotifications
 
@@ -518,11 +519,13 @@ final class SpotifyManager: @unchecked Sendable {
         rules: ExplicitSpotifyIntent?,
         parse: SpotifyRequestParser.OllamaParse?,
         text: String,
-        spotifyPlaying: Bool = false
+        spotifyPlaying: Bool = false,
+        commandMode: Bool = false
     ) -> ExplicitSpotifyIntent? {
         guard let parse else { return rules }
 
         guard let rules else {
+            if commandMode { return commandIntent(parse, text: text) }
             if let promoted = promotedSearch(parse, text: text) { return promoted }
             guard isNaturalCandidate(text) else { return nil }
             return naturalIntent(parse, text: text, spotifyPlaying: spotifyPlaying)
@@ -551,6 +554,17 @@ final class SpotifyManager: @unchecked Sendable {
             return llmIntent
         }
         return rules
+    }
+
+    /// A voice-started session ("Jarvis", Vocal Shortcuts) is a request to *do* something,
+    /// so the dictation guards — music noun, named item only, Spotify already playing — are
+    /// dropped. Evidence still applies: the words themselves must carry the intent (a play
+    /// verb for a search, a loudness cue for volume), so plain speech keeps being pasted.
+    private static func commandIntent(_ parse: SpotifyRequestParser.OllamaParse, text: String) -> ExplicitSpotifyIntent? {
+        guard parse.intent != .none, hasEvidence(for: parse, in: text, natural: true),
+              let result = intent(from: parse, text: text) else { return nil }
+        owLog("[Spotify] Voice command '\(text)' → \(result)")
+        return result
     }
 
     /// Rule-rejected text Ollama may turn into a search of a named song/artist/album.
@@ -691,13 +705,39 @@ final class SpotifyManager: @unchecked Sendable {
 
     /// Whisper hears "sesi biraz kıs" as "sesi biraz kız" (girl), which the model then
     /// reads as the opposite direction. Next to a volume noun "kız" can only be "kıs".
+    /// It also spells "sesi fulle" as "Ses fülle", which Ollama can't tie to "full";
+    /// there "fülle"/"fülla"/"füll" can only be "fulle"/"full".
     static func repairVolumeMishearing(_ text: String) -> String {
         let folded = cueWords(normalize(text))
-        guard !volumeNouns.isDisjoint(with: folded) || folded.contains(where: { word in naturalTopicStems.contains { word.hasPrefix($0) } }),
-              folded.contains(where: { ["kiz", "kizsana"].contains($0) }) else { return text }
-        return text.replacingOccurrences(
-            of: "\\b([Kk])[ıi]z(sana)?\\b", with: "$1ıs$2", options: .regularExpression
+        guard !volumeNouns.isDisjoint(with: folded) || folded.contains(where: { word in naturalTopicStems.contains { word.hasPrefix($0) } })
+        else { return text }
+        var repaired = text
+        if folded.contains(where: { ["kiz", "kizsana"].contains($0) }) {
+            repaired = repaired.replacingOccurrences(
+                of: "\\b([Kk])[ıi]z(sana)?\\b", with: "$1ıs$2", options: .regularExpression
+            )
+        }
+        if folded.contains(where: { ["fulle", "fulla", "full"].contains($0) }) {
+            repaired = repaired
+                .replacingOccurrences(of: "\\b([Ff])[üu]ll[ea]\\b", with: "$1ulle", options: .regularExpression)
+                .replacingOccurrences(of: "\\b([Ff])üll\\b", with: "$1ull", options: .regularExpression)
+        }
+        return repaired
+    }
+
+    /// Whisper sometimes ends a command with "çalk" ("Eğlenceli bir şeyler çalk"). No Turkish
+    /// word ends an utterance that way, so a closing "çalk"/"çalg" can only be "çal".
+    static func repairPlayVerbMishearing(_ text: String) -> String {
+        text.replacingOccurrences(
+            of: "\\b([ÇçCc])al[kg]([.!?]*)\\s*$", with: "$1al$2", options: .regularExpression
         )
+    }
+
+    /// Short, not quoting or negating anything: what a voice-started session sends to Ollama.
+    static func isCommandCandidate(_ text: String) -> Bool {
+        let normalized = normalize(text)
+        return spokenWordCount(normalized) <= maxNaturalWordCount
+            && mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
     }
 
     /// 10 for "biraz", 30 for "çok", 20 otherwise.
@@ -713,9 +753,12 @@ final class SpotifyManager: @unchecked Sendable {
     /// candidate while Spotify is playing on this Mac, so ordinary dictation isn't delayed.
     /// The decision is cached for the `handleCommand` call that follows, so a command
     /// costs a single Ollama round trip.
-    static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false) async -> Bool {
-        let text = repairVolumeMishearing(transcript)
+    ///
+    /// `commandMode` marks a voice-started session: see `commandIntent`.
+    static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false, commandMode: Bool = false) async -> Bool {
+        let text = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let rules = explicitIntent(in: text)
+        let command = commandMode && rules == nil && ollamaAvailable && isCommandCandidate(text)
         let promotion = rules == nil && ollamaAvailable && isPromotionCandidate(text)
         // Cheapest checks first: the word test, then the playback query (which never
         // launches Spotify), and only then Ollama.
@@ -724,14 +767,18 @@ final class SpotifyManager: @unchecked Sendable {
         if natural {
             spotifyPlaying = await SpotifyController.shared.isPlayingLocally()
         }
-        guard rules != nil || promotion || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
+        guard rules != nil || command || promotion || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
 
         var parse: SpotifyRequestParser.OllamaParse?
         if ollamaAvailable {
-            parse = await SpotifyRequestParser.queryOllama(transcript: text, model: selectedOllamaModel)
+            // A voice session warms the model when it starts, but a cold load still takes
+            // several seconds; dictation keeps the short timeout so pasting isn't held up.
+            parse = await SpotifyRequestParser.queryOllama(
+                transcript: text, model: selectedOllamaModel, timeout: commandMode ? 15 : 3
+            )
             if let parse { owLog("[Spotify] Ollama parse for '\(text)': \(parse)") }
         }
-        let decision = decide(rules: rules, parse: parse, text: text, spotifyPlaying: spotifyPlaying)
+        let decision = decide(rules: rules, parse: parse, text: text, spotifyPlaying: spotifyPlaying, commandMode: commandMode)
         if let decision { decisionCache.store(decision, for: transcript) }
         return decision != nil
     }
@@ -746,6 +793,19 @@ final class SpotifyManager: @unchecked Sendable {
 
     private static let decisionCache = DecisionCache()
 
+    /// Whether media paused for a voice command may play again once `text` was handled.
+    /// Playback commands decide what plays next ("durdur" keeps it paused, "X çal" starts
+    /// something else); volume, track info and like leave the paused media as it was.
+    /// Must be called before `handleCommand`, which consumes the cached decision.
+    static func resumesPausedMedia(afterCommand text: String) -> Bool {
+        switch decisionCache.peek(for: text) ?? explicitIntent(in: text) {
+        case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack, nil:
+            return true
+        case .pause, .play, .next, .previous, .search:
+            return false
+        }
+    }
+
     /// Holds the decision for the most recent transcript between `isSpotifyCommand` and
     /// `handleCommand`, which AppState calls back to back with the same text.
     private final class DecisionCache: @unchecked Sendable {
@@ -754,6 +814,10 @@ final class SpotifyManager: @unchecked Sendable {
 
         func store(_ intent: ExplicitSpotifyIntent, for text: String) {
             lock.withLock { entry = (text, intent) }
+        }
+
+        func peek(for text: String) -> ExplicitSpotifyIntent? {
+            lock.withLock { entry?.text == text ? entry?.intent : nil }
         }
 
         func take(for text: String) -> ExplicitSpotifyIntent? {
@@ -768,7 +832,9 @@ final class SpotifyManager: @unchecked Sendable {
 
     /// Handles a transcript already identified as a Spotify command. The explicit-intent
     /// gate below is the only way into `SpotifyController`, whose methods have side effects.
-    func handleCommand(text: String, targetApp: NSRunningApplication? = nil) async -> Bool {
+    ///
+    /// `recordUndo` saves what the command changes first, so `rerunIfCorrected` can undo it.
+    func handleCommand(text: String, targetApp: NSRunningApplication? = nil, recordUndo: Bool = false) async -> Bool {
         let activeApp = targetApp ?? NSWorkspace.shared.frontmostApplication
         // The decision made by `isSpotifyCommand`; without one (called directly), only the
         // rule gate can authorize a side effect.
@@ -779,6 +845,15 @@ final class SpotifyManager: @unchecked Sendable {
         owLog("[SpotifyManager] Handling command: '\(text)' → \(intent)")
 
         let controller = SpotifyController.shared
+        var playerBefore: SpotifyController.PlayerSnapshot?
+        if recordUndo {
+            switch intent {
+            case .pause, .play, .next, .previous, .search:
+                playerBefore = controller.playerSnapshot()
+            case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack:
+                break
+            }
+        }
         let result: SpotifyActionResult
         switch intent {
         case .pause:
@@ -812,11 +887,98 @@ final class SpotifyManager: @unchecked Sendable {
         if result.succeeded {
             keepInBackground(targetApp: activeApp)
         }
+        if recordUndo {
+            let undo: CommandUndo?
+            switch intent {
+            case .setVolume, .adjustVolume:
+                undo = SystemVolume.lastChange.map { .volume(from: $0.from, to: $0.to) }
+            case .pause, .play, .next, .previous, .search:
+                undo = playerBefore.map { .player($0) }
+            case .currentTrack:
+                undo = .nothing
+            case .likeCurrentTrack:
+                // Unliking could remove a song the user had liked long before.
+                undo = nil
+            }
+            lastCommand.withLock { $0 = result.succeeded ? LastCommand(text: text, intent: intent, undo: undo, date: Date()) : nil }
+        }
 
         // Refusals and failures are not successful handling. AppState will preserve the
         // transcript through the normal dictation fallback instead of swallowing it as
         // though Spotify acted.
         return result.succeeded
+    }
+
+    // MARK: - Re-run after correction
+
+    /// How to take back a command so a corrected one can replace it.
+    private enum CommandUndo {
+        case volume(from: Float, to: Float)
+        case player(SpotifyController.PlayerSnapshot)
+        /// Nothing changed (e.g. "ne çalıyor").
+        case nothing
+    }
+
+    /// The last command run with `recordUndo`, and how to undo it (nil: it can't be undone).
+    private let lastCommand = OSAllocatedUnfairLock<LastCommand?>(initialState: nil)
+
+    private struct LastCommand {
+        let text: String
+        let intent: ExplicitSpotifyIntent
+        let undo: CommandUndo?
+        let date: Date
+    }
+
+    /// A correction arriving later than this leaves the command alone: by then the user may
+    /// have changed the song or volume by hand, and a restore would overwrite that.
+    private static let correctionWindow: TimeInterval = 15
+
+    /// Called once `corrected` (the cleaned version of `original`) was confirmed as a command
+    /// by `isSpotifyCommand`. If it asks for something else than what `original` did, undoes
+    /// that first and runs the corrected command. Returns whether it ran.
+    func rerunIfCorrected(original: String, corrected: String, targetApp: NSRunningApplication?) async -> Bool {
+        guard let newIntent = Self.decisionCache.peek(for: corrected) else { return false }
+        guard let last = lastCommand.withLock({ state -> LastCommand? in
+            defer { state = nil }
+            return state
+        }), last.text == original, Date().timeIntervalSince(last.date) < Self.correctionWindow else {
+            _ = Self.decisionCache.take(for: corrected)
+            return false
+        }
+        guard newIntent != last.intent else {
+            owLog("[SpotifyManager] Correction '\(corrected)' asks for the same command, nothing to redo")
+            _ = Self.decisionCache.take(for: corrected)
+            return false
+        }
+        if Self.correctionNeedsUndo(of: last.intent, before: newIntent) {
+            guard let undo = last.undo, undoCommand(undo) else {
+                owLog("[SpotifyManager] Correction '\(corrected)' → \(newIntent), but '\(original)' can't be undone; keeping it")
+                _ = Self.decisionCache.take(for: corrected)
+                return false
+            }
+            owLog("[SpotifyManager] Undid '\(original)' (\(last.intent)); running corrected '\(corrected)'")
+        } else {
+            owLog("[SpotifyManager] Corrected '\(corrected)' replaces '\(original)' outright")
+        }
+        return await handleCommand(text: corrected, targetApp: targetApp)
+    }
+
+    /// Whether `old` must be undone before its correction `new` runs. A search replaces what
+    /// plays and an absolute volume replaces the level, so undoing first would only make the
+    /// old song or level flash back; everything else would stack ("biraz kıs" twice).
+    static func correctionNeedsUndo(of old: ExplicitSpotifyIntent, before new: ExplicitSpotifyIntent) -> Bool {
+        switch (old, new) {
+        case (.search, .search), (.setVolume, .setVolume), (.adjustVolume, .setVolume): return false
+        default: return true
+        }
+    }
+
+    private func undoCommand(_ undo: CommandUndo) -> Bool {
+        switch undo {
+        case .volume(let from, let to): return SystemVolume.revert(from: from, to: to)
+        case .player(let snapshot): return SpotifyController.shared.restore(snapshot)
+        case .nothing: return true
+        }
     }
 
     private func keepInBackground(targetApp: NSRunningApplication?) {

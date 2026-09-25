@@ -95,7 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        owLog("[OpenWhisper] applicationWillTerminate called — restoring audio volume immediately")
+        owLog("[OpenWhisper] applicationWillTerminate called — resuming paused media")
+        RecordingMediaController.shared.end()
+        RecordingMediaController.shared.waitUntilIdle()
         AudioDucker.shared.restoreImmediatelyForTermination()
     }
 

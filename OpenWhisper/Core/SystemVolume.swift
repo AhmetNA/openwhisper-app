@@ -19,11 +19,29 @@ enum SystemVolume {
         return apply { current in Float(clamped(percent(current) + step)) / 100 }
     }
 
+    /// The last change a volume command made, so a command re-run after correction can
+    /// put the volume back first (see `SpotifyManager.undoLastCommand`).
+    nonisolated(unsafe) static var lastChange: (from: Float, to: Float)?
+
     private static func apply(_ transform: (Float) -> Float) -> SpotifyActionResult {
         guard let (from, to) = AudioDucker.shared.applyVolumeCommand(transform) else {
             return .failure("Ses seviyesi değiştirilemedi")
         }
+        lastChange = (from, to)
         return .success(changeMessage(from: percent(from), to: percent(to)))
+    }
+
+    /// Sets the volume back to `from`, but only while it is still at `to`: if the user
+    /// changed it by hand since, their change wins.
+    static func revert(from: Float, to: Float) -> Bool {
+        var reverted = false
+        _ = AudioDucker.shared.applyVolumeCommand { current in
+            guard abs(current - to) < 0.02 else { return current }
+            reverted = true
+            return from
+        }
+        owLog("[SystemVolume] Revert \(percent(to)) → \(percent(from)): \(reverted ? "done" : "skipped, volume changed since")")
+        return reverted
     }
 
     static func percent(_ scalar: Float) -> Int {

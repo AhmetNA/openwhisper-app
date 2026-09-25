@@ -816,6 +816,12 @@ final class AudioEngine: @unchecked Sendable {
         return isBluetoothTransport(deviceID: id)
     }
 
+    /// True when the system's current default input is the Mac's own microphone.
+    static func systemDefaultInputIsBuiltIn() -> Bool {
+        guard let id = defaultInputDeviceID() else { return false }
+        return isBuiltInTransport(deviceID: id)
+    }
+
     /// Look up an AudioDeviceID by its persistent UID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         return availableInputDevices().first(where: { $0.uid == uid })?.id

@@ -69,6 +69,15 @@ final class SpotifyNaturalPhrasingTests: XCTestCase {
         )
     }
 
+    /// Whisper wrote "Ses fülle." for "sesi fulle".
+    func testFulleMishearingIsRepairedNextToVolume() {
+        XCTAssertEqual(SpotifyManager.repairVolumeMishearing("Ses fülle."), "Ses fulle.")
+        XCTAssertEqual(SpotifyManager.repairVolumeMishearing("Müziğin sesini füll yap"), "Müziğin sesini full yap")
+        XCTAssertEqual(SpotifyManager.repairVolumeMishearing("Fülle geldi"), "Fülle geldi")
+        let repaired = SpotifyManager.repairVolumeMishearing("Ses fülle.")
+        XCTAssertEqual(decide(repaired, Parse(intent: .volume), playing: false), .setVolume(100))
+    }
+
     func testSesiBirazYukseltelimWithoutMusic() {
         XCTAssertEqual(decide("Sesi biraz yükseltelim.", Parse(intent: .volumeUp), playing: false), .adjustVolume(10))
     }

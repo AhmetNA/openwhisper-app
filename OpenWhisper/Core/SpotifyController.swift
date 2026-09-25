@@ -127,6 +127,40 @@ final class SpotifyController: @unchecked Sendable {
         return (try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying())?.isPlaying ?? false
     }
 
+    // MARK: - Undo
+
+    /// What the local Spotify app was playing, so a command re-run after correction can
+    /// undo the first one. AppleScript only: it can jump to a track and a second directly.
+    struct PlayerSnapshot: Equatable {
+        let trackURI: String
+        let position: Double
+        let isPlaying: Bool
+    }
+
+    func playerSnapshot() -> PlayerSnapshot? {
+        guard Self.appleScriptFallbackEnabled, isSpotifyRunning,
+              case .success(let output) = runSpotifyCommand(
+                "return (player state as text) & linefeed & (id of current track) & linefeed & (player position as text)"
+              ) else { return nil }
+        let lines = (output ?? "").components(separatedBy: "\n")
+        guard lines.count == 3, Self.isValidTrackURI(lines[1]),
+              let position = Double(lines[2].replacingOccurrences(of: ",", with: ".")) else { return nil }
+        return PlayerSnapshot(trackURI: lines[1], position: position, isPlaying: lines[0] == "playing")
+    }
+
+    /// Puts Spotify back to `snapshot`: the same track at the same second, playing or paused.
+    func restore(_ snapshot: PlayerSnapshot) -> Bool {
+        guard Self.isValidTrackURI(snapshot.trackURI), let current = playerSnapshot() else { return false }
+        if current.trackURI != snapshot.trackURI {
+            guard case .success = runSpotifyCommand("play track \"\(snapshot.trackURI)\""),
+                  case .success = runSpotifyCommand("set player position to \(Int(snapshot.position))") else { return false }
+        }
+        let command = snapshot.isPlaying ? "play" : "pause"
+        guard case .success = runSpotifyCommand(command) else { return false }
+        owLog("[SpotifyController] Restored \(snapshot.trackURI) at \(Int(snapshot.position))s, \(command)")
+        return true
+    }
+
     // MARK: - Current track
 
     func getCurrentTrack() async -> SpotifyActionResult {

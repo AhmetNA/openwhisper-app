@@ -212,6 +212,29 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         }
     }
 
+    /// Deletes `text`, just pasted, with backspaces: used when a dictation turned out to be a
+    /// voice command once corrected. Only in the frontmost target; a background field is
+    /// left alone (false), since its caret may have moved.
+    func deleteInjectedText(
+        _ text: String,
+        targetApp: NSRunningApplication?,
+        context: PasteContext?,
+        completion: @escaping (Bool) -> Void
+    ) {
+        let capturedContext = context ?? PasteContext.capture(targetApp: targetApp)
+        resolveDestination(capturedContext) { [weak self] resolution in
+            guard let self, case .ready(let destination) = resolution, !destination.isBackground else {
+                completion(false)
+                return
+            }
+            owLog("[TextInjector] Deleting \(text.count) chars of a dictation that was a command")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                self?.sendBackspaces(count: text.count)
+                DispatchQueue.main.async { completion(true) }
+            }
+        }
+    }
+
     private struct PasteDestination {
         let element: AXUIElement
         let pid: pid_t

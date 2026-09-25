@@ -86,6 +86,13 @@ struct AudioSegmentation {
         return best?.cut
     }
 
+    /// Whisper's classic failure on music or noise: one word over and over ("Bu Bu Bu Bu Bu Bu").
+    /// Nobody dictates a single word four or more times with nothing else around it.
+    static func isRepetitionHallucination(_ text: String) -> Bool {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init).map(normalize)
+        return words.count >= 4 && Set(words).count == 1
+    }
+
     /// Removes only a long, exact normalized suffix/prefix match caused by audio overlap.
     /// Ambiguous or short repetitions are retained so intentional spoken repeats are never
     /// silently lost.

@@ -24,15 +24,27 @@ final class FlowBarController {
     /// SwiftUI updates fitting size on the next main-loop turn after a recording-state change.
     /// A second, coalesced measurement keeps wider content centered.
     private var recenterScheduled = false
+    private var spaceObserver: NSObjectProtocol?
 
     init(appState: AppState) {
         self.appState = appState
         // Pre-create panel at app startup for zero-latency hotkey display
         createPanel()
+        // A bar that was already shown doesn't follow the user into a fullscreen Space on its
+        // own; re-front it there so a "Jarvis" heard mid-fullscreen is visible.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isShown else { return }
+                self.panel?.orderFrontRegardless()
+                self.recenterAfterContentLayout()
+            }
+        }
     }
 
-    /// Show the flow bar. Idempotent — calling it again while already shown (e.g. the
-    /// recording → transcribing transition) is a no-op so it doesn't refade in and flicker.
+    /// Show the flow bar. Calling it again while already shown (e.g. the recording →
+    /// transcribing transition) only re-fronts it, so it doesn't refade in and flicker.
     func show() {
         let tShowStart = CACurrentMediaTime()
         let elapsedFromFn = (tShowStart - GlobalHotkey.lastFnPressUptime) * 1000
@@ -46,11 +58,12 @@ final class FlowBarController {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
             panel?.alphaValue = 1
-            // The menu-bar app is normally inactive while the user dictates into another app.
-            // orderFrontRegardless keeps the nonactivating overlay visible without stealing
-            // keyboard focus from that target app, including while it owns a fullscreen Space.
-            panel?.orderFrontRegardless()
         }
+        // The menu-bar app is normally inactive while the user dictates into another app.
+        // orderFrontRegardless keeps the nonactivating overlay visible without stealing
+        // keyboard focus from that target app, including while it owns a fullscreen Space.
+        // Every time, not only on the first show: a fullscreen app may have covered it since.
+        panel?.orderFrontRegardless()
         recenterAfterContentLayout()
 
         let tShowEnd = CACurrentMediaTime()
@@ -129,7 +142,9 @@ final class FlowBarController {
             defer: false
         )
 
-        panel.level = .statusBar  // Above floating windows
+        // Above fullscreen apps and their auto-shown menu bar/Dock; `.statusBar` could end up
+        // under a fullscreen video's controls.
+        panel.level = .screenSaver
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true

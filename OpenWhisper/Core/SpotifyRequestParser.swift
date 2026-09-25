@@ -358,7 +358,7 @@ enum SpotifyRequestParser {
             - intent:
               "pause" stop/pause/silence the music; "play" resume playback with nothing specific named;
               "next" skip to another song, also when the user says they are bored of or dislike the current song; "previous" go back to the previous song;
-              "volume" set the music volume to a number, or to the maximum ("sonuna kadar aç");
+              "volume" set the music volume to a number, or to the maximum ("sonuna kadar aç", "fulle", "full yap");
               "volume_up" the user wants the music louder, said directly ("biraz aç", "yükselt") or as a complaint that it is too quiet ("sesi çok kısık", "duyulmuyor");
               "volume_down" the user wants the music quieter, said directly ("kıs", "azalt") or as a complaint that it is too loud ("çok yüksek", "kulağımı patlatıyor");
               "current" ask what is playing now; "like" add the playing song to liked songs;
@@ -384,6 +384,8 @@ enum SpotifyRequestParser {
             "sonraki şarkıya geç" -> {"intent":"next","type":"none","title":"","artist":""}
             "müziğin sesini 40 yap" -> {"intent":"volume","type":"none","title":"","artist":""}
             "müziği sonuna kadar aç" -> {"intent":"volume","type":"none","title":"","artist":""}
+            "sesi fulle" -> {"intent":"volume","type":"none","title":"","artist":""}
+            "müziğin sesini full yap" -> {"intent":"volume","type":"none","title":"","artist":""}
             "müziğin sesi çok kısık ya" -> {"intent":"volume_up","type":"none","title":"","artist":""}
             "şarkının sesi biraz az" -> {"intent":"volume_up","type":"none","title":"","artist":""}
             "müziğin sesi duyulmuyor" -> {"intent":"volume_up","type":"none","title":"","artist":""}
@@ -412,13 +414,13 @@ enum SpotifyRequestParser {
 
     /// One structured-output call (Ollama `format` = JSON schema). Returns nil on any
     /// failure — timeout, model missing, malformed output — so callers fall back to rules.
-    static func queryOllama(transcript: String, model: String) async -> OllamaParse? {
+    static func queryOllama(transcript: String, model: String, timeout: TimeInterval = 3) async -> OllamaParse? {
         guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 3
+        request.timeoutInterval = timeout
 
         let body: [String: Any] = [
             "model": model,

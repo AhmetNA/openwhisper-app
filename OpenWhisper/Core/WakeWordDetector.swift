@@ -12,6 +12,10 @@ import OnnxRuntimeBindings
 ///   3. wake model on the last 16 features
 ///   4. the first 5 predictions after start/reset are forced to 0 (feature buffers still warming)
 ///
+/// With `gate` set, blocks the gate calls quiet skip steps 2–3 (the embedding model is ~90% of
+/// the cost) and score 0. Their mel windows are kept, so when the gate reopens the last 16
+/// features are rebuilt first: every scored block matches the ungated pipeline exactly.
+///
 /// Model licence note: the pretrained openWakeWord models are CC BY-NC-SA 4.0 (non-commercial).
 /// Not thread-safe: call from one serial queue.
 final class WakeWordDetector {
@@ -31,6 +35,14 @@ final class WakeWordDetector {
     private var mel: [[Float]] = []
     private var features: [[Float]] = []
     private var predictionCount = 0
+    /// Mel windows of the most recent gated-out blocks, oldest first (at most `featureWindow`).
+    private var skippedWindows: [[[Float]]] = []
+    var gate: WakeWordActivityGate?
+    /// Blocks seen / embeddings actually computed (backfill included) — the real cost.
+    private(set) var blockCount = 0
+    private(set) var embeddingCount = 0
+    /// Level of the latest block, for logging next to a detection.
+    private(set) var lastLevelDB: Float = 0
     /// Feature history seeded from noise, computed once: `reset()` runs on every listener start.
     private var seedFeatures: [[Float]] = []
 
@@ -63,6 +75,7 @@ final class WakeWordDetector {
         raw = []
         mel = Array(repeating: Array(repeating: 1, count: 32), count: Self.melWindow)
         predictionCount = 0
+        skippedWindows = []
         if seedFeatures.isEmpty {
             // Python seeds the feature history with embeddings of 4 s of random noise in ±1000.
             let noise = (0..<(16000 * 4)).map { _ in Float(Int.random(in: -1000..<1000)) }
@@ -96,12 +109,38 @@ final class WakeWordDetector {
         mel.append(contentsOf: try melFrames(raw))
         if mel.count > Self.melMaxFrames { mel.removeFirst(mel.count - Self.melMaxFrames) }
 
-        features.append(try embedding(Array(mel.suffix(Self.melWindow))))
-        if features.count > Self.featureMaxFrames { features.removeFirst(features.count - Self.featureMaxFrames) }
+        let window = Array(mel.suffix(Self.melWindow))
+        predictionCount += 1
+        blockCount += 1
+        lastLevelDB = Self.levelDB(block)
+        if var gate {
+            let active = gate.isActive(levelDB: lastLevelDB)
+            self.gate = gate
+            guard active else {
+                skippedWindows.append(window)
+                if skippedWindows.count > Self.featureWindow { skippedWindows.removeFirst() }
+                return 0
+            }
+        }
+        for skipped in skippedWindows { try appendFeature(skipped) }
+        skippedWindows.removeAll()
+        try appendFeature(window)
 
         let score = try wakeScore(Array(features.suffix(Self.featureWindow)))
-        predictionCount += 1
         return predictionCount <= 5 ? 0 : score
+    }
+
+    private func appendFeature(_ melWindow: [[Float]]) throws {
+        features.append(try embedding(melWindow))
+        embeddingCount += 1
+        if features.count > Self.featureMaxFrames { features.removeFirst(features.count - Self.featureMaxFrames) }
+    }
+
+    /// Block RMS in dB (int16 scale, so absolute values only matter relative to each other).
+    private static func levelDB(_ block: [Float]) -> Float {
+        var sum: Float = 0
+        for x in block { sum += x * x }
+        return 10 * log10(max(sum / Float(block.count), 1))
     }
 
     // MARK: - Models
@@ -138,5 +177,51 @@ final class WakeWordDetector {
             data.getBytes(buffer.baseAddress!, length: count * 4)
             initialized = count
         }
+    }
+}
+
+/// Decides per 80 ms block whether anything louder than the room is going on. The noise floor
+/// follows quiet stretches down at once and creeps up ~1 dB/s, so a fan or AC is learned within
+/// seconds. While media plays the floor may only fall: speaker music then stays above the floor
+/// (its quietest moment at worst), so the gate stays open and nothing is lost, while silently-open
+/// output (Safari, visualizers) or headphone listening still lets a quiet room be gated.
+/// Digital silence (the engine's first buffers, a muted mic) never teaches the floor: learning
+/// 0 dB from it would hold the gate open for good.
+struct WakeWordActivityGate {
+    /// dB above the floor that counts as sound. Real triggers ran 20–30 dB above the floor.
+    var margin: Float = 6
+    var floorRisePerBlock: Float = 0.08
+    /// Blocks kept open after the last loud one (~1 s); the score peaks at the end of the word.
+    var hangoverBlocks = 13
+    var mediaPlaying = false
+
+    private(set) var floor: Float?
+    private var hangover = 0
+
+    /// Below this a block is digital zeros, not a room (the quietest real mic reads ~16 dB).
+    static let digitalSilenceDB: Float = 10
+    /// Blocks passed through without touching the floor, set when the mic (re)starts: its first
+    /// buffers ramp up from near-silence and would teach a floor no room has.
+    var warmupBlocks = 0
+
+    mutating func isActive(levelDB: Float) -> Bool {
+        if warmupBlocks > 0 {
+            warmupBlocks -= 1
+            return true
+        }
+        guard levelDB > Self.digitalSilenceDB else { return false }
+        if let current = floor {
+            floor = min(levelDB, current + (mediaPlaying ? 0 : floorRisePerBlock))
+        } else {
+            floor = levelDB
+        }
+        guard let floor else { return true }
+        if levelDB >= floor + margin {
+            hangover = hangoverBlocks
+            return true
+        }
+        guard hangover > 0 else { return false }
+        hangover -= 1
+        return true
     }
 }

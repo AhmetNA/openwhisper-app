@@ -9,22 +9,19 @@ import CoreAudio
 /// "Running output" means the app has its audio IO running, not that it's audible — a paused
 /// player usually stops its IO within a moment, which the off-debounce absorbs.
 ///
-/// Processes that are also recording are skipped: those are call apps (where the listener
-/// shouldn't run anyway) and always-on voice utilities, whose output IO never stops. Anything
-/// else that keeps output open while silent can be ignored by bundle ID:
-/// `defaults write com.openwhisper.app mediaActivityIgnoredApps -array com.example.app`
+/// The app's own output is excluded so opening the microphone cannot keep the listener alive.
+/// Other processes count even if they also record (for example a browser with microphone access).
+/// Output IO is a playback proxy, not an audibility meter. Apps that keep output open while
+/// silent can be ignored: `defaults write com.openwhisper.app mediaActivityIgnoredApps -array com.example.app`
 final class SystemMediaActivityMonitor {
     private let onChange: (Bool) -> Void
     private let queue = DispatchQueue(label: "com.openwhisper.media-activity", qos: .utility)
     private var timer: DispatchSourceTimer?
     private let ownPID = ProcessInfo.processInfo.processIdentifier
 
-    private var reported = false
-    private var activeSince: Date?
-    private var inactiveSince: Date?
-    /// A skip or a notification sound shouldn't bounce the microphone.
-    private let onDelay: TimeInterval = 1.0
-    private let offDelay: TimeInterval = 3.0
+    private var activity = MediaActivityDebouncer()
+
+    deinit { timer?.cancel() }
 
     init(onChange: @escaping (Bool) -> Void) {
         self.onChange = onChange
@@ -41,30 +38,26 @@ final class SystemMediaActivityMonitor {
 
     private func poll() {
         let players = Self.outputtingProcesses(excluding: ownPID)
-        let now = Date()
-        if !players.isEmpty {
-            inactiveSince = nil
-            if activeSince == nil { activeSince = now }
-            if !reported, now.timeIntervalSince(activeSince!) >= onDelay {
-                reported = true
-                owLog("[MediaActivity] Audio playing: \(players.joined(separator: ", "))")
-                DispatchQueue.main.async { self.onChange(true) }
-            }
-        } else {
-            activeSince = nil
-            if inactiveSince == nil { inactiveSince = now }
-            if reported, now.timeIntervalSince(inactiveSince!) >= offDelay {
-                reported = false
-                owLog("[MediaActivity] Audio stopped")
-                DispatchQueue.main.async { self.onChange(false) }
-            }
+        if let playing = activity.update(hasOutput: !players.isEmpty, at: ProcessInfo.processInfo.systemUptime) {
+            owLog(playing ? "[MediaActivity] Audio playing: \(players.joined(separator: ", "))" : "[MediaActivity] Audio stopped")
+            DispatchQueue.main.async { [weak self] in self?.onChange(playing) }
         }
     }
 
     /// Names of processes (other than us) with running audio output.
     static func outputtingProcesses(excluding excludedPID: pid_t) -> [String] {
+        if #available(macOS 14.2, *) {
+            return outputtingProcessIDs(excluding: excludedPID).map { pid in
+                let app = NSRunningApplication(processIdentifier: pid)
+                return app?.localizedName ?? app?.bundleIdentifier ?? "pid \(pid)"
+            }
+        }
+        return defaultOutputRunningSomewhere() ? ["(unknown app)"] : []
+    }
+
+    static func outputtingProcessIDs(excluding excludedPID: pid_t) -> [pid_t] {
         guard #available(macOS 14.2, *) else {
-            return defaultOutputRunningSomewhere() ? ["(unknown app)"] : []
+            return []
         }
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -79,17 +72,16 @@ final class SystemMediaActivityMonitor {
             return []
         }
 
-        var names: [String] = []
+        var pids: [pid_t] = []
         let ignored = Set(UserDefaults.standard.stringArray(forKey: "mediaActivityIgnoredApps") ?? [])
         for object in objects {
             guard let running: UInt32 = property(object, kAudioProcessPropertyIsRunningOutput), running != 0,
                   let pid: pid_t = property(object, kAudioProcessPropertyPID), pid != excludedPID else { continue }
-            if let recording: UInt32 = property(object, kAudioProcessPropertyIsRunningInput), recording != 0 { continue }
             let app = NSRunningApplication(processIdentifier: pid)
             if let bundleID = app?.bundleIdentifier, ignored.contains(bundleID) { continue }
-            names.append(app?.localizedName ?? app?.bundleIdentifier ?? "pid \(pid)")
+            pids.append(pid)
         }
-        return names
+        return pids
     }
 
     private static func property<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> T? {
@@ -117,5 +109,26 @@ final class SystemMediaActivityMonitor {
         guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr,
               let running: UInt32 = property(device, kAudioDevicePropertyDeviceIsRunningSomewhere) else { return false }
         return running != 0
+    }
+}
+
+/// Debounces transient sounds and short playback gaps using a monotonic clock.
+struct MediaActivityDebouncer {
+    private(set) var isPlaying = false
+    private var pendingSince: TimeInterval?
+
+    mutating func update(hasOutput: Bool, at now: TimeInterval) -> Bool? {
+        guard hasOutput != isPlaying else {
+            pendingSince = nil
+            return nil
+        }
+        guard let since = pendingSince else {
+            pendingSince = now
+            return nil
+        }
+        guard now - since >= (hasOutput ? 1.0 : 3.0) else { return nil }
+        isPlaying = hasOutput
+        pendingSince = nil
+        return isPlaying
     }
 }
