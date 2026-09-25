@@ -34,7 +34,7 @@ struct SettingsView: View {
     }
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, models, jarvis, voice, recordings, spotify, corrections, approvals
+        case general, models, jarvis, voice, recordings, spotify, corrections, approvals, permissions
 
         var id: Self { self }
         var title: String {
@@ -47,6 +47,7 @@ struct SettingsView: View {
             case .spotify: "Spotify"
             case .corrections: "Düzeltmeler"
             case .approvals: "Onaylar"
+            case .permissions: "İzinler"
             }
         }
         var symbol: String {
@@ -59,6 +60,7 @@ struct SettingsView: View {
             case .spotify: "music.note"
             case .corrections: "text.badge.checkmark"
             case .approvals: "checkmark.seal"
+            case .permissions: "lock.shield"
             }
         }
     }
@@ -179,6 +181,8 @@ struct SettingsView: View {
             correctionsSection
         case .approvals:
             EmptyView()
+        case .permissions:
+            PermissionsView()
         }
     }
 
