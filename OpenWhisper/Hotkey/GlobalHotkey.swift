@@ -22,6 +22,8 @@ final class GlobalHotkey {
     /// Fired when hands-free recording turns on/off, so the FlowBar can show its stop button.
     var onHandsFreeChange: ((Bool) -> Void)?
     var isIdle: Bool { mode == .idle }
+    /// How the current (or last) recording was started; kept after it ends.
+    private(set) var trigger: RecordingTrigger = .fnHold
     /// Fired on a Vocal Shortcuts recognition: start a voice session (hands-free recording that
     /// ends itself on silence).
     var onVoiceSessionRequest: (() -> Void)?
@@ -156,6 +158,7 @@ final class GlobalHotkey {
                 let now = CACurrentMediaTime()
                 GlobalHotkey.lastFnPressUptime = now
                 owLog("[Perf] [FnKeyDown] Fn key pressed down at t=\(String(format: "%.3f", now))")
+                trigger = .fnHold
                 mode = .holding
                 fnPressTime = Date()
                 onPress()
@@ -182,14 +185,16 @@ final class GlobalHotkey {
     /// alternate hands-free shortcuts behave identically without changing the Fn+Space path.
     ///
     /// Returns `true` when the triggering key event should be swallowed.
-    private func toggleHandsFreeRecording() -> Bool {
+    private func toggleHandsFreeRecording(_ trigger: RecordingTrigger) -> Bool {
         switch mode {
         case .idle:
+            self.trigger = trigger
             mode = .handsFree
             onPress()
             return true
         case .holding:
             // User is already hold-to-talking; lock the active recording into hands-free.
+            self.trigger = trigger
             mode = .handsFree
             return true
         case .handsFree:
@@ -204,19 +209,19 @@ final class GlobalHotkey {
 
     /// Routed through the same state machine as ⌘⌥⌃D so a URL-started recording can still be
     /// stopped with Enter / Fn+Space / ⌘⌥⌃D, and vice versa. A live Fn hold is never hijacked.
-    func externalStartHandsFree() {
+    func externalStartHandsFree(trigger: RecordingTrigger = .external) {
         guard mode == .idle else { return }
-        _ = toggleHandsFreeRecording()
+        _ = toggleHandsFreeRecording(trigger)
     }
 
     func externalStopHandsFree() {
         guard mode == .handsFree else { return }
-        _ = toggleHandsFreeRecording()
+        _ = toggleHandsFreeRecording(.external)
     }
 
     func externalToggleHandsFree() {
         guard mode != .holding else { return }
-        _ = toggleHandsFreeRecording()
+        _ = toggleHandsFreeRecording(.external)
     }
 
     /// Leaves hands-free mode without firing `onRelease`; the caller stops or discards the
@@ -234,7 +239,7 @@ final class GlobalHotkey {
             && !flags.contains(.maskCommand)
             && !flags.contains(.maskControl)
             && !flags.contains(.maskAlternate) {
-            return toggleHandsFreeRecording()
+            return toggleHandsFreeRecording(.fnSpace)
         }
 
         let fnDown = flags.contains(.maskSecondaryFn)
@@ -244,7 +249,7 @@ final class GlobalHotkey {
             && !flags.contains(.maskControl)
 
         guard onlyFn else { return false }
-        return toggleHandsFreeRecording()
+        return toggleHandsFreeRecording(.fnSpace)
     }
 
     // MARK: - Command + Option + Control + D (hands-free toggle)
@@ -261,7 +266,7 @@ final class GlobalHotkey {
             && !flags.contains(.maskShift)
         guard hasRequiredModifiers else { return false }
         if !isRepeat {
-            return toggleHandsFreeRecording()
+            return toggleHandsFreeRecording(.keyboardShortcut)
         }
         return true
     }

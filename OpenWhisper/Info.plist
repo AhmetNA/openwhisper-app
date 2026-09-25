@@ -34,7 +34,13 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Jarvis needs to control Spotify to play, pause and search music with your voice.</string>
+	<string>Jarvis needs to control Spotify to play, pause and search music, System Events to switch dark mode, and Mail to count, read and open your mail, with your voice.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Jarvis sesli komutla Bluetooth'u açıp kapatmak ve kulaklığı bağlamak ya da bağlantısını kesmek için Bluetooth erişimi ister.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Jarvis "bugün ne var" dediğinizde günün takvim etkinliklerini özetlemek için takviminizi okur.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Jarvis "bugün ne var" dediğinizde günün takvim etkinliklerini özetlemek için takviminizi okur.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Jarvis needs microphone access to transcribe your speech to text.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

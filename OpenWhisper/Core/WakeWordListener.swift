@@ -21,6 +21,14 @@ final class WakeWordListener {
         let stored = UserDefaults.standard.float(forKey: "wakeWordThreshold")
         return stored > 0 ? stored : 0.25
     }
+    /// Direct detections below this start the session at once but are double-checked by
+    /// Whisper in parallel (`WakeWordVerifier.heardWakeWord`). On 25 Sep 2026 false wakes scored
+    /// 0.25 and 0.44 (background talk), while real calls ran 0.25–0.98.
+    /// Override: `defaults write com.openwhisper.app wakeWordConfirmedScore 0.6`
+    static var confirmedScore: Float {
+        let stored = UserDefaults.standard.float(forKey: "wakeWordConfirmedScore")
+        return stored > 0 ? stored : 0.5
+    }
     /// Scores from here up to `threshold` are only candidates: the surrounding audio is handed to
     /// `onCandidate` for Whisper + LLM confirmation (`WakeWordVerifier`).
     /// Override: `defaults write com.openwhisper.app wakeWordCandidateThreshold 0.15`
@@ -38,7 +46,9 @@ final class WakeWordListener {
     private static let inputGain: Float = 4
     private let cooldown: TimeInterval = 3
 
-    private let onWake: () -> Void
+    /// Direct detection, with the last 2 s of audio (the word itself, normalized like
+    /// `onCandidate`'s) for the speaker and word checks, and the score.
+    private let onWake: ([Float], Float) -> Void
     /// Grey-zone candidate: 16 kHz mono audio in -1…1 around the word, and its peak score.
     /// Runs on the main queue; the listener keeps running meanwhile.
     var onCandidate: (([Float], Float) -> Void)?
@@ -47,6 +57,7 @@ final class WakeWordListener {
     private var lastCandidate = Date.distantPast
     private let queue = DispatchQueue(label: "com.openwhisper.wakeword", qos: .utility)
     private var engine: AVAudioEngine?
+    private var capture: HALInputCapture?
     private var detector: WakeWordDetector?
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
@@ -64,7 +75,7 @@ final class WakeWordListener {
 
     private(set) var isRunning = false
 
-    init(onWake: @escaping () -> Void) {
+    init(onWake: @escaping ([Float], Float) -> Void) {
         self.onWake = onWake
     }
 
@@ -134,13 +145,29 @@ final class WakeWordListener {
             gate.warmupBlocks = 6
             detector.gate = gate
         }
+        // Built-in mic through a bare AUHAL unit: an AVAudioEngine pinned with setDeviceID fell
+        // back to Bluetooth buds that are the system default (see `HALInputCapture`).
+        if let builtIn {
+            do {
+                let capture = try HALInputCapture(deviceID: builtIn.id)
+                let monoFormat = AVAudioFormat(standardFormatWithSampleRate: capture.format.sampleRate, channels: 1)!
+                converter = AVAudioConverter(from: monoFormat, to: targetFormat)
+                try capture.start { [weak self] buffer, _ in
+                    self?.handle(buffer, monoFormat: monoFormat)
+                }
+                self.capture = capture
+                peakSinceLog = 0
+                lastPeakLog = Date()
+                owLog("[WakeWord] Listening on \(builtIn.name) (\(Int(capture.format.sampleRate)) Hz), threshold \(Self.threshold)")
+            } catch {
+                owLog("[WakeWord] Failed to start: \(error)")
+                stopEngine()
+            }
+            return
+        }
         do {
             let engine = AVAudioEngine()
             let input = engine.inputNode
-            // Only switch devices when needed: every switch posts a configuration change.
-            if let builtIn, !AudioEngine.systemDefaultInputIsBuiltIn() {
-                try input.auAudioUnit.setDeviceID(builtIn.id)
-            }
             let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 owLog("[WakeWord] No usable input format")
@@ -156,6 +183,8 @@ final class WakeWordListener {
             peakSinceLog = 0
             lastPeakLog = Date()
             // Apple's recipe: a configuration change stops the engine, restarting it keeps the tap.
+            // If the input format changed underneath the tap (a device appeared or went away),
+            // the restart fails; rebuild with a fresh tap instead of waiting for the watchdog.
             configObserver = NotificationCenter.default.addObserver(
                 forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
             ) { [weak self, weak engine] _ in
@@ -164,10 +193,12 @@ final class WakeWordListener {
                     try engine.start()
                     owLog("[WakeWord] Engine restarted after configuration change")
                 } catch {
-                    owLog("[WakeWord] Restart after configuration change failed: \(error)")
+                    owLog("[WakeWord] Restart after configuration change failed: \(error) — rebuilding engine")
+                    self.stopEngine()
+                    self.startEngine()
                 }
             }
-            owLog("[WakeWord] Listening on \(builtIn?.name ?? "default input"), threshold \(Self.threshold)")
+            owLog("[WakeWord] Listening on default input, threshold \(Self.threshold)")
         } catch {
             owLog("[WakeWord] Failed to start: \(error)")
             stopEngine()
@@ -185,6 +216,11 @@ final class WakeWordListener {
             owLog("[WakeWord] Stopped listening")
         }
         engine = nil
+        if let capture {
+            capture.stop()
+            owLog("[WakeWord] Stopped listening")
+        }
+        capture = nil
     }
 
     /// Covers what the notification doesn't: a device that vanished, a start that failed.
@@ -249,7 +285,8 @@ final class WakeWordListener {
                              s, detector.lastLevelDB, detector.gate?.floor ?? .nan))
                 if pendingCandidate != nil { owLog("[WakeWord] Candidate superseded by direct detection") }
                 pendingCandidate = nil
-                DispatchQueue.main.async { [weak self] in self?.onWake() }
+                let audio = Self.normalizedForWhisper(recentAudio)
+                DispatchQueue.main.async { [weak self] in self?.onWake(audio, s) }
             } else if pendingCandidate != nil {
                 let peak = pendingCandidate?.peak ?? 0
                 pendingCandidate?.peak = max(peak, s)

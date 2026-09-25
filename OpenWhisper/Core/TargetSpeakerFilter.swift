@@ -817,6 +817,39 @@ final class TargetSpeakerFilter: @unchecked Sendable {
         self.model = model
     }
 
+    /// Loads the embedding model ahead of the first wake check, so a direct "Jarvis" isn't
+    /// delayed by the model download/compile.
+    func prepareModel() async throws {
+        try await model.prepare(progressHandler: nil)
+    }
+
+    /// Wake-word speaker check: "Jarvis" is too short for the dictation gate's VAD runs, so the
+    /// clip around the word is slid through in 1.5 s windows (0.25 s hop) and the best profile
+    /// similarity wins. The wake clip comes from the built-in mic, not the dictation input, so
+    /// its scores run lower than dictation's; see `wakeThreshold`.
+    func wakeSpeakerScore(samples: [Float], profile: TargetSpeakerProfile) async throws -> Float {
+        try await model.prepare(progressHandler: nil)
+        let window = TargetSpeakerFilterConfiguration.speakerWindowSamples
+        let hop = TargetSpeakerFilterConfiguration.sampleRate / 4
+        let clip = samples.count >= window ? samples : samples + Array(repeating: 0, count: window - samples.count)
+        var best: Float = -1
+        var start = 0
+        while start + window <= clip.count {
+            let embedding = try await model.embedding(for: Array(clip[start..<start + window]))
+            let score = profile.embeddings.map { Self.cosineSimilarity(embedding, $0) }.max() ?? -1
+            best = max(best, score)
+            start += hop
+        }
+        return best
+    }
+
+    /// Minimum `wakeSpeakerScore` for "Jarvis" to count as the user's voice.
+    /// Override: `defaults write com.openwhisper.app targetSpeakerWakeThreshold 0.35`
+    static var wakeThreshold: Float {
+        let stored = UserDefaults.standard.double(forKey: "targetSpeakerWakeThreshold")
+        return stored > 0 && stored <= 1 ? Float(stored) : TargetSpeakerFilterConfiguration.uncertainSimilarityFloor
+    }
+
     func filter(
         samples: [Float],
         profile: TargetSpeakerProfile?,

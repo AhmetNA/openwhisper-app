@@ -7,6 +7,10 @@ struct SavedRecording: Codable, Identifiable, Sendable {
     let sampleCount: Int
     /// A short transcript excerpt for the menu. Older index entries decode as nil.
     let previewText: String?
+    /// Speech time, pauses, levels, words. Older index entries decode as nil.
+    var stats: RecordingStats? = nil
+    /// How it was started (Hey Jarvis, Fn, Fn+Space…); nil for system audio and older entries.
+    var trigger: RecordingTrigger? = nil
 
     var duration: TimeInterval { Double(sampleCount) / 16_000 }
 
@@ -36,7 +40,7 @@ actor RecordingHistoryStore {
     static let limit = 30
     private let directory: URL
     private var recordings: [SavedRecording]
-    private var active: [UInt64: (file: AVAudioFile, url: URL, id: UUID, date: Date, samples: Int)] = [:]
+    private var active: [UInt64: (file: AVAudioFile, url: URL, id: UUID, date: Date, samples: Int, stats: RecordingStatsAccumulator)] = [:]
 
     init(directory: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -63,7 +67,7 @@ actor RecordingHistoryStore {
             let url = directory.appendingPathComponent("\(id.uuidString).partial.caf")
             let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
             let file = try AVAudioFile(forWriting: url, settings: format.settings)
-            active[sessionID] = (file, url, id, startedAt, 0)
+            active[sessionID] = (file, url, id, startedAt, 0, RecordingStatsAccumulator())
         }
         guard var entry = active[sessionID],
               let buffer = AVAudioPCMBuffer(pcmFormat: entry.file.processingFormat, frameCapacity: AVAudioFrameCount(samples.count)),
@@ -74,23 +78,26 @@ actor RecordingHistoryStore {
         }
         try entry.file.write(from: buffer)
         entry.samples += samples.count
+        entry.stats.add(samples)
         active[sessionID] = entry
     }
 
-    func finish(sessionID: UInt64, keep: Bool, previewText: String? = nil) throws -> [SavedRecording] {
-        guard let metadata = ({ () -> (URL, UUID, Date, Int)? in
+    func finish(sessionID: UInt64, keep: Bool, previewText: String? = nil, whisperSegments: Int? = nil, trigger: RecordingTrigger? = nil) throws -> [SavedRecording] {
+        guard let metadata = ({ () -> (URL, UUID, Date, Int, RecordingStatsAccumulator)? in
             guard let entry = active.removeValue(forKey: sessionID) else { return nil }
-            return (entry.url, entry.id, entry.date, entry.samples)
+            return (entry.url, entry.id, entry.date, entry.samples, entry.stats)
         })() else { return recordings }
         // AVAudioFile is released before the partial file is moved.
-        let (partialURL, id, date, count) = metadata
+        let (partialURL, id, date, count, accumulator) = metadata
+        let stats = accumulator.finish(transcript: previewText, whisperSegments: whisperSegments)
+        owLog("[RecordingStats] \(keep && count >= 6_400 ? id.uuidString : "not kept") | Trigger: \(trigger?.rawValue ?? "system audio") | \(stats.summary)")
         if !keep || count < 6_400 {
             try? FileManager.default.removeItem(at: partialURL)
             return recordings
         }
         let finalURL = directory.appendingPathComponent("\(id.uuidString).caf")
         try FileManager.default.moveItem(at: partialURL, to: finalURL)
-        let updated = ([SavedRecording(id: id, createdAt: date, sampleCount: count, previewText: Self.normalizedPreview(previewText))] + recordings)
+        let updated = ([SavedRecording(id: id, createdAt: date, sampleCount: count, previewText: Self.normalizedPreview(previewText), stats: stats, trigger: trigger)] + recordings)
             .sorted { $0.createdAt > $1.createdAt }
         let retained = Array(updated.prefix(Self.limit))
         do {
@@ -116,7 +123,9 @@ actor RecordingHistoryStore {
             id: old.id,
             createdAt: old.createdAt,
             sampleCount: old.sampleCount,
-            previewText: Self.normalizedPreview(text)
+            previewText: Self.normalizedPreview(text),
+            stats: old.stats.map { var stats = $0; stats.wordCount = RecordingStats.wordCount(in: text); return stats },
+            trigger: old.trigger
         )
         let data = try JSONEncoder().encode(updated)
         try data.write(to: directory.appendingPathComponent("index.json"), options: .atomic)

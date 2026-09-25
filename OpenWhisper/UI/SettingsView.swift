@@ -34,13 +34,14 @@ struct SettingsView: View {
     }
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, models, voice, recordings, spotify, corrections, approvals
+        case general, models, jarvis, voice, recordings, spotify, corrections, approvals
 
         var id: Self { self }
         var title: String {
             switch self {
             case .general: "Genel"
             case .models: "Modeller"
+            case .jarvis: "Jarvis"
             case .voice: "Sesim"
             case .recordings: "Kayıtlar"
             case .spotify: "Spotify"
@@ -52,6 +53,7 @@ struct SettingsView: View {
             switch self {
             case .general: "slider.horizontal.3"
             case .models: "waveform"
+            case .jarvis: "ear"
             case .voice: "person.wave.2"
             case .recordings: "waveform.badge.mic"
             case .spotify: "music.note"
@@ -62,6 +64,12 @@ struct SettingsView: View {
     }
 
     @State private var selectedTab: Tab = .general
+
+    // Read live by `WakeWordListener` / `TargetSpeakerFilter` on every score, so no restart needed.
+    @AppStorage("wakeWordThreshold") private var wakeWordThreshold: Double = 0.25
+    @AppStorage("wakeWordCandidateThreshold") private var wakeWordCandidateThreshold: Double = 0.12
+    @AppStorage("wakeWordConfirmedScore") private var wakeWordConfirmedScore: Double = 0.5
+    @AppStorage("targetSpeakerWakeThreshold") private var targetSpeakerWakeThreshold: Double = 0.40
 
     var body: some View {
         HStack(spacing: 0) {
@@ -159,6 +167,8 @@ struct SettingsView: View {
                 Label("Model hazır değil", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
             }
+        case .jarvis:
+            jarvisSection
         case .voice:
             targetSpeakerSection
         case .recordings:
@@ -273,6 +283,12 @@ struct SettingsView: View {
                                 Text("\(Int(recording.duration.rounded())) sn · \(recording.createdAt.formatted(date: .abbreviated, time: .shortened))")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let stats = recording.stats {
+                                    Text([recording.trigger?.title, stats.label].compactMap { $0 }.joined(separator: " · "))
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .help(stats.logLines.joined(separator: "\n"))
+                                }
                             }
                             Spacer()
                             if appState.replayingRecordingID == recording.id {
@@ -528,6 +544,118 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Jarvis Section
+
+    private var jarvisSection: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("“Jarvis” ile sesle başlat", systemImage: "ear")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.wakeWordEnabled },
+                                             set: { appState.wakeWordEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                Text(appState.wakeWordStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("“Jarvis” veya “Hey Jarvis” dediğinizde kayıt başlar; susunca kendiliğinden biter ve komut (Spotify, hatırlatıcı…) ya da yazı olarak işlenir.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label("Hassasiyet", systemImage: "dial.medium")
+                    Spacer()
+                    Button("Varsayılanlar") {
+                        for key in ["wakeWordThreshold", "wakeWordCandidateThreshold", "wakeWordConfirmedScore"] {
+                            UserDefaults.standard.removeObject(forKey: key)
+                        }
+                        wakeWordThreshold = 0.25
+                        wakeWordCandidateThreshold = 0.12
+                        wakeWordConfirmedScore = 0.5
+                    }
+                    .controlSize(.small)
+                }
+                jarvisSlider("Doğrudan uyanma", value: $wakeWordThreshold, range: 0.10...0.90,
+                             help: "Bu puanın üstünde hemen uyanır. Düşürürseniz daha az kaçırır ama yanlış uyanma artar.")
+                jarvisSlider("Emin olmadan uyanma", value: $wakeWordConfirmedScore, range: 0.10...0.95,
+                             help: "Doğrudan uyanma ile bu puan arası hemen başlar; Whisper arkada “Jarvis” duymazsa kayıt iptal edilir.")
+                jarvisSlider("Aday", value: $wakeWordCandidateThreshold, range: 0.05...0.50,
+                             help: "Bu puandan doğrudan uyanmaya kadar olan sesler önce Whisper ve Ollama ile kontrol edilir.")
+                if wakeWordCandidateThreshold >= wakeWordThreshold {
+                    Label("Aday eşiği doğrudan uyanma eşiğinden düşük olmalı.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Yalnızca benim sesimle uyan", systemImage: "person.wave.2")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { jarvisSpeakerCheckOn }, set: setJarvisSpeakerCheck))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!appState.hasTargetSpeakerProfile && !jarvisSpeakerCheckOn)
+                }
+                if appState.hasTargetSpeakerProfile {
+                    jarvisSlider("Ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
+                                 help: "Log'da kendi sesinizin puanı bunun altında kalıyorsa düşürün.")
+                        .disabled(!jarvisSpeakerCheckOn)
+                } else {
+                    HStack(spacing: 6) {
+                        Text("Önce ses profili gerekli.")
+                        Button("Sesim sekmesine git") { selectedTab = .voice }
+                            .buttonStyle(.link)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var jarvisSpeakerCheckOn: Bool {
+        appState.targetSpeakerEnabled && appState.targetSpeakerScope.coversWakeWord
+    }
+
+    /// Maps the Jarvis switch onto the shared "Yalnızca Benim Sesim" switch + scope, keeping the
+    /// dictation half as it was.
+    private func setJarvisSpeakerCheck(_ on: Bool) {
+        let transcription = appState.targetSpeakerEnabled && appState.targetSpeakerScope.coversTranscription
+        switch (on, transcription) {
+        case (true, true): appState.targetSpeakerScope = .always
+        case (true, false): appState.targetSpeakerScope = .wakeWordOnly
+        case (false, true): appState.targetSpeakerScope = .transcriptionOnly
+        case (false, false): break
+        }
+        appState.targetSpeakerEnabled = on || transcription
+    }
+
+    private func jarvisSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title).font(.caption)
+                Slider(value: value, in: range, step: 0.01)
+                Text(String(format: "%.2f", value.wrappedValue))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 36, alignment: .trailing)
+            }
+            Text(help)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Target Speaker Section
 
     private var targetSpeakerSection: some View {
@@ -542,6 +670,19 @@ struct SettingsView: View {
                     .controlSize(.small)
                     .disabled(!appState.hasTargetSpeakerProfile && !appState.targetSpeakerEnabled)
             }
+
+            Picker("Nerede geçerli", selection: $appState.targetSpeakerScope) {
+                ForEach(TargetSpeakerScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(!appState.targetSpeakerEnabled)
+            Text(appState.targetSpeakerScope.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
                 Image(systemName: appState.hasTargetSpeakerProfile

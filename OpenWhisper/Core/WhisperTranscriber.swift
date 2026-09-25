@@ -302,6 +302,7 @@ final class WhisperTranscriber: @unchecked Sendable {
 
         // Remove adjacent repetitive hallucinated sentence loops (e.g. "x. x. x.")
         text = Self.deduplicateRepetitivePhrases(in: text)
+        text = Self.removeLoopsAndOutros(from: text)
 
         // Filter out Whisper hallucinations on silence/noise
         let hallucinations: Set<String> = [
@@ -391,6 +392,11 @@ final class WhisperTranscriber: @unchecked Sendable {
             owLog("[Whisper] Removed hallucinated trailing subtitle credit from timed result")
             text = filteredText
         }
+        let cleanedText = Self.removeLoopsAndOutros(from: text)
+        if cleanedText != text {
+            // The word timestamps no longer match the text; keep the text only.
+            return cleanedText.isEmpty ? .textOnly("") : .textOnly(cleanedText)
+        }
 
         let hallucinations: Set<String> = [
             "Thank you.", "Thanks for watching.", "Subscribe.",
@@ -403,6 +409,25 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
 
         return TimedTranscriptionResult(text: text, words: selectedPass.words)
+    }
+
+    /// Collapses decoding loops ("abone ol" ×70), strips a YouTube outro from the end, and
+    /// drops a transcript that is only an outro. Both decode passes can loop the same way, so this runs on the chosen one.
+    private static func removeLoopsAndOutros(from text: String) -> String {
+        var result = AudioSegmentation.collapseRepetitionLoops(text)
+        if result != text {
+            owLog("[Whisper] Collapsed repetition loop: '\(text.prefix(80))…' → '\(result)'")
+        }
+        let withoutOutro = AudioSegmentation.removeTrailingOutros(result)
+        if withoutOutro != result {
+            owLog("[Whisper] Removed hallucinated trailing outro: '\(result)' → '\(withoutOutro)'")
+            result = withoutOutro
+        }
+        if AudioSegmentation.isKnownHallucination(result) {
+            owLog("[Whisper] Dropped hallucinated outro: '\(result)'")
+            result = ""
+        }
+        return result
     }
 
     private static func removeTrailingSubtitleCredit(from text: String) -> String {

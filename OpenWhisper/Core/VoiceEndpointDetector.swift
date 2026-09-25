@@ -37,6 +37,38 @@ struct VoiceEndpointDetector {
         /// Frames below this are engine start-up zeros or dropouts, not the room. Letting one
         /// through would pin the floor near -120 and make room noise look like speech forever.
         var dropoutDB: Float = -100
+        /// Once speech has started, the floor also follows this percentile of the last
+        /// `floorWindow` seconds. Pauses between words sit at the background level, so a steady
+        /// background (outside noise the Mac mic hears while the user wears earbuds) becomes the
+        /// floor. Before this, noise above floor + `onsetMarginDB` never let the floor rise and
+        /// the recording never ended (25 Sep 2026: 32 s sessions, DeepFilter SNR -8.8 dB).
+        var floorWindow: TimeInterval = 3
+        var floorPercentile: Float = 0.2
+        /// …but never closer than this to the speaker, so continuous speech can't become the floor.
+        var floorMaxBelowSpeakerDB: Float = 10
+        /// Only frames at least this close to the speaker's level update it; louder background
+        /// between the end threshold and the speaker no longer drags it down.
+        var speakerTrackingDB: Float = 10
+        /// Loud stretches shorter than this (a cough, a door, a noise burst) don't reset the pause.
+        var minLoudToResetSilence: TimeInterval = 0.15
+        /// Speech onset also needs this absolute level. Off by default (the built-in mic's
+        /// dictation runs as low as -63 dBFS); a headset mic puts the voice at -20…-30 while
+        /// stray noise it lets through sits at -55…-63 (25 Sep 2026).
+        var minSpeechDB: Float = -.infinity
+        /// A mic that gates to exact zeros when nobody speaks (Bluetooth headsets) leaves no room
+        /// level to measure: seed the floor here from that silence instead of from the first
+        /// speech frame, which would hide the speech onset.
+        var gatedFloorDB: Float?
+
+        /// A headset mic next to the mouth: the user's voice stands far above the room, so the
+        /// recording ends once the level falls below 70% of the way from the room to the voice.
+        static var closeTalk: Config {
+            var config = Config()
+            config.endFraction = 0.7
+            config.minSpeechDB = -45
+            config.gatedFloorDB = -90
+            return config
+        }
     }
 
     enum Decision: Equatable {
@@ -57,6 +89,8 @@ struct VoiceEndpointDetector {
     private var onsetSumDB: Float = 0
     private var onsetFrames = 0
     private var silentFor: TimeInterval = 0
+    private var loudFor: TimeInterval = 0
+    private var recent: [(time: TimeInterval, dB: Float)] = []
 
     /// Frames before this are ignored (timeouts still count from `startTime`). Used when the
     /// session paused music: the first few hundred ms still carry the song, which would
@@ -83,7 +117,19 @@ struct VoiceEndpointDetector {
         // Level callbacks arrive at ~20 Hz; clamp so one late callback can't count as a long pause.
         let dt = min(max(time - (lastTime ?? time), 0), 0.2)
         lastTime = time
-        if dB < config.dropoutDB || time < ignoreUntil { return timeoutDecision(at: time) }
+        if time < ignoreUntil { return timeoutDecision(at: time) }
+        if dB < config.dropoutDB {
+            // Never part of the floor (engine start-up zeros would pin it near -120), but after
+            // speech it is a pause: a Bluetooth headset gates its mic to digital silence between
+            // words, and ignoring those frames kept a 2 s command open for 10 s.
+            if floorDB == nil, let gated = config.gatedFloorDB { floorDB = gated }
+            if speechDetected {
+                loudFor = 0
+                silentFor += dt
+                if silentFor >= config.silenceToStop { return .stop }
+            }
+            return timeoutDecision(at: time)
+        }
 
         guard let floor = floorDB else {
             floorDB = dB
@@ -91,13 +137,25 @@ struct VoiceEndpointDetector {
         }
 
         let onsetThreshold = floor + config.onsetMarginDB
-        let isLoud = dB > onsetThreshold
+        let isLoud = dB > onsetThreshold && dB > config.minSpeechDB
 
         // Floor: drop immediately, rise slowly and only on frames that don't look like speech.
         if dB < floor {
             floorDB = floor + config.floorFallSmoothing * (dB - floor)
         } else if !isLoud {
             floorDB = min(dB, floor + config.floorRiseDBPerSecond * Float(dt))
+        }
+
+        recent.append((time, dB))
+        if let first = recent.first, time - first.time > config.floorWindow {
+            recent.removeAll { time - $0.time > config.floorWindow }
+        }
+        if speechDetected, let speaker = speakerDB, let first = recent.first,
+           time - first.time >= config.floorWindow / 2 {
+            let sorted = recent.map(\.dB).sorted()
+            let percentile = sorted[Int(Float(sorted.count - 1) * config.floorPercentile)]
+            let adaptive = min(percentile, speaker - config.floorMaxBelowSpeakerDB)
+            if let floor = floorDB, adaptive > floor { floorDB = adaptive }
         }
 
         if !speechDetected {
@@ -118,11 +176,13 @@ struct VoiceEndpointDetector {
             }
         } else if let endThreshold = endThresholdDB {
             if dB >= endThreshold {
-                silentFor = 0
-                if isLoud, let speaker = speakerDB {
+                loudFor += dt
+                if loudFor >= config.minLoudToResetSilence { silentFor = 0 } else { silentFor += dt }
+                if isLoud, let speaker = speakerDB, dB >= speaker - config.speakerTrackingDB {
                     speakerDB = speaker + 0.1 * (dB - speaker)
                 }
             } else {
+                loudFor = 0
                 silentFor += dt
             }
         }

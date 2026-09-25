@@ -141,6 +141,8 @@ final class AudioEngine: @unchecked Sendable {
         return false
     }
 
+    /// Set while a recording runs through `HALInputCapture` instead of the engine's input node.
+    private var halCapture: HALInputCapture?
     private var configuredDeviceUID: String? = nil
     private var configuredAudioProcessingMode: AudioProcessingMode? = nil
     private var isEnginePrepared = false
@@ -203,6 +205,8 @@ final class AudioEngine: @unchecked Sendable {
             do {
                 try inputNode.auAudioUnit.setDeviceID(deviceID)
                 owLog("[AudioEngine] Set input device UID=\(uid) id=\(deviceID)")
+                // Before `prepare()`: the unit's bus format can't be changed once initialized.
+                _ = Self.tapFormat(for: inputNode)
             } catch {
                 owLog("[AudioEngine] Failed to set input device \(uid): \(error)")
             }
@@ -265,15 +269,29 @@ final class AudioEngine: @unchecked Sendable {
         pinnedInputChannelIndex = nil
         lock.unlock()
 
+        // Any named mic while Bluetooth buds are the system default (the buds' own mic or the
+        // Mac's): record through a bare AUHAL unit bound to exactly that device. The engine's
+        // input node, even pinned with setDeviceID, fell back to the buds and delivered nothing
+        // (see `HALInputCapture`). Voice processing still needs the engine.
+        var capture: HALInputCapture?
+        if audioProcessingMode != .appleVoiceProcessing, let uid = deviceUID,
+           let deviceID = Self.audioDeviceID(forUID: uid),
+           Self.systemDefaultInputIsBluetooth() {
+            do {
+                capture = try HALInputCapture(deviceID: deviceID, maxFrames: Self.maxInputFrameCount)
+            } catch {
+                owLog("[AudioEngine] AUHAL capture unavailable (\(error)); using the engine")
+            }
+        }
+
         // Only rebuild the AudioEngine graph if device/mode changed or engine is unconfigured
-        if !isEnginePrepared || configuredDeviceUID != deviceUID || configuredAudioProcessingMode != audioProcessingMode {
+        if capture == nil, !isEnginePrepared || configuredDeviceUID != deviceUID || configuredAudioProcessingMode != audioProcessingMode {
             owLog("[AudioEngine] Configuring audio engine graph inline (deviceUID=\(deviceUID ?? "default"), audioProcessingMode=\(audioProcessingMode))...")
             configureEngine(deviceUID: deviceUID, audioProcessingMode: audioProcessingMode)
         }
 
-        let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
-        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch")
+        let format = capture?.format ?? Self.tapFormat(for: engine.inputNode)
+        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch\(capture == nil ? "" : " (AUHAL)")")
 
         lock.lock()
         let loadedDeepFilter = deepFilterProcessor
@@ -354,8 +372,8 @@ final class AudioEngine: @unchecked Sendable {
         deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
         lock.unlock()
 
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format) { [weak self] buffer, _ in
+        if capture == nil { engine.inputNode.removeTap(onBus: 0) }
+        let tapBlock: AVAudioNodeTapBlock = { [weak self] buffer, _ in
             guard let self else { return }
             let frameLength = Int(buffer.frameLength)
             guard frameLength > 0 else { return }
@@ -417,7 +435,13 @@ final class AudioEngine: @unchecked Sendable {
         }
 
         do {
-            try engine.start()
+            if let capture {
+                try capture.start(handler: tapBlock)
+                halCapture = capture
+            } else {
+                engine.inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format, block: tapBlock)
+                try engine.start()
+            }
             let tEngineStarted = CACurrentMediaTime()
             let elapsedEngineStarted = (tEngineStarted - GlobalHotkey.lastFnPressUptime) * 1000
             owLog(String(format: "[Perf] [AudioEngineEngineStarted] engine.start() completed (%.2f ms / %.3f s from Fn press)", elapsedEngineStarted, elapsedEngineStarted / 1000.0))
@@ -430,8 +454,13 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     func stopRecording() -> [CompletedAudioSegment] {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if let halCapture {
+            halCapture.stop()
+            self.halCapture = nil
+        } else {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         // Reset and release the AUAudioUnit / CoreAudio HAL claim so system output volume
         // is never ducked and Bluetooth devices return to A2DP immediately.
         engine.reset()
@@ -816,10 +845,42 @@ final class AudioEngine: @unchecked Sendable {
         return isBluetoothTransport(deviceID: id)
     }
 
+    /// The system default input when it is a Bluetooth headset, for recording from it by UID.
+    static func systemDefaultBluetoothInput() -> AudioInputDevice? {
+        guard let id = defaultInputDeviceID(), isBluetoothTransport(deviceID: id) else { return nil }
+        return availableInputDevices().first { $0.id == id }
+    }
+
     /// True when the system's current default input is the Mac's own microphone.
     static func systemDefaultInputIsBuiltIn() -> Bool {
         guard let id = defaultInputDeviceID() else { return false }
         return isBuiltInTransport(deviceID: id)
+    }
+
+    /// Format for an input-node tap, taken from the hardware side. After `setDeviceID` the
+    /// node's output format still describes the previous device (measured: Bluetooth default
+    /// at 16 kHz, built-in mic selected, output still 16 kHz while the hardware runs 48 kHz),
+    /// and `installTap` raises an Objective-C exception on that mismatch. Swift can't catch
+    /// it; AppKit swallows it on the main thread and the Swift runtime is left corrupted,
+    /// which later crashed the app when the menu bar item was clicked. Tapping at the hardware
+    /// rate alone avoided the exception but delivered no audio, so the unit's output bus is
+    /// set to the hardware format first (measured: node output then reads 48 kHz).
+    static func tapFormat(for input: AVAudioInputNode) -> AVAudioFormat {
+        let hardware = input.inputFormat(forBus: 0)
+        let output = input.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0,
+              hardware.sampleRate != output.sampleRate || hardware.channelCount != output.channelCount,
+              let format = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate,
+                                         channels: hardware.channelCount)
+        else { return output }
+        let busses = input.auAudioUnit.outputBusses
+        if busses.count > 1 {
+            do { try busses[1].setFormat(format) } catch {
+                owLog("[AudioEngine] Could not align input format: \(error)")
+            }
+        }
+        owLog("[AudioEngine] Input node output format was stale (\(output.sampleRate) Hz, \(output.channelCount)ch); aligned to hardware \(hardware.sampleRate) Hz → now \(input.outputFormat(forBus: 0).sampleRate) Hz")
+        return format
     }
 
     /// Look up an AudioDeviceID by its persistent UID.

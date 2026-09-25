@@ -78,6 +78,21 @@ enum WakeWordVerifier {
         return previous[b.count]
     }
 
+    /// Word-only check for a direct detection below `WakeWordListener.confirmedScore`: the
+    /// session is already recording, so this only decides whether to throw it away. No LLM:
+    /// a clip that really holds "Jarvis" is kept.
+    static func heardWakeWord(audio: [Float], transcriber: WhisperTranscriptionService) async -> Verdict {
+        do {
+            let transcript = try await transcriber.transcribe(audioData: audio, language: "tr", overlapSampleCount: 0)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return containsWakeWord(transcript) ? .accepted("heard '\(transcript)'")
+                                                : .rejected("no wake word in '\(transcript)'")
+        } catch {
+            // Whisper trouble must not silence real calls.
+            return .accepted("whisper failed, keeping: \(error)")
+        }
+    }
+
     /// Runs Whisper and, when needed, the LLM. `audio` is 16 kHz mono in -1…1.
     static func verify(
         audio: [Float],
