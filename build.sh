@@ -74,6 +74,16 @@ codesign --force --deep --options runtime \
     --entitlements OpenWhisper/OpenWhisper.entitlements \
     --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
 
+# Local voice for spoken replies (OmniVoice): keep the installed server script and reference
+# voice in sync with the repo. The Python venv itself comes from tts_server/setup.sh (once).
+TTS_DEST="$HOME/Library/Application Support/OpenWhisper/tts"
+if [ -x "$TTS_DEST/.venv/bin/python" ]; then
+    cp tts_server/server.py tts_server/jarvis_ref.wav "$TTS_DEST/"
+    echo "==> Updated local voice server in $TTS_DEST"
+else
+    echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run tts_server/setup.sh"
+fi
+
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then
         echo "==> Installing to /Applications..."

@@ -41,6 +41,10 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Karanlık modu kapat"), .darkMode(on: false))
         XCTAssertEqual(SystemCommandParser.parse("Aydınlık moda geç"), .darkMode(on: false))
         XCTAssertEqual(SystemCommandParser.parse("Ekranı kilitle."), .lockScreen)
+        // 26 Sep 2026: Whisper heard "Ekranı kilitle" as "Ekranı kilitli".
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı kilitli."), .lockScreen)
+        XCTAssertNil(SystemCommandParser.parse("Ekranım kilitli kaldı"))
+        XCTAssertEqual(SystemCommandParser.parse("Arlaklığı%70 yapabilir misin?"), .brightness(up: true, level: 70))
         XCTAssertEqual(SystemCommandParser.parse("Ekranı kapat"), .displaySleep)
         XCTAssertEqual(SystemCommandParser.parse("Bilgisayarı uyut"), .sleep)
         XCTAssertEqual(SystemCommandParser.parse("Ekran görüntüsü al"), .screenshot)

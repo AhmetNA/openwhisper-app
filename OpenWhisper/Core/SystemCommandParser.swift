@@ -141,7 +141,7 @@ enum SystemCommandParser {
     /// Fixed actions, checked before the generic "X'i aç / kapat" app form.
     private static func parseAction(_ text: String) -> SystemCommand? {
         // Brightness: "parlaklığı artır", "ekranı biraz karart", "parlaklığı yüzde 50 yap".
-        if matches(text, #"parlaklı|parlak|ekranı karart|ekranı aydınlat"#) {
+        if matches(text, #"parlaklı|parlak|^arlaklı|ekranı karart|ekranı aydınlat"#) {
             if let level = percent(in: text) { return .brightness(up: true, level: level) }
             if matches(text, #"sonuna kadar|en yüksek|maksimum|full|tam"#) { return .brightness(up: true, level: 100) }
             if matches(text, #"en düşük|minimum"#) { return .brightness(up: false, level: 0) }
@@ -156,7 +156,7 @@ enum SystemCommandParser {
         }
         if matches(text, #"(?:aydınlık|açık|light) (?:mod|tema|görünüm)"#),
            matches(text, #"\baç|geç|etkinleştir|yap"#) { return .darkMode(on: false) }
-        if matches(text, #"(?:ekranı|bilgisayarı|mac'?i|makineyi) kilitle|^kilitle$|lock (?:the )?screen"#) { return .lockScreen }
+        if matches(text, #"(?:ekranı|bilgisayarı|mac'?i|makineyi) kilitl[ei]|^kilitle$|lock (?:the )?screen"#) { return .lockScreen }
         if matches(text, #"^ekranı (?:kapat|kapa|söndür|uyut)"#) { return .displaySleep }
         if matches(text, #"(?:bilgisayarı|mac'?i|makineyi|sistemi) (?:uyut|uykuya al|uyku moduna al)|^uyku moduna (?:geç|al)$"#) { return .sleep }
         if matches(text, #"ekran koruyucu"#), !matches(text, #"kapat"#) { return .screenSaver }

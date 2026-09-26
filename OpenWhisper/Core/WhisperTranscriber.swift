@@ -258,7 +258,11 @@ final class WhisperTranscriber: @unchecked Sendable {
         // (pass `glossaryPromptTokens()` instead of `nil` here) if that's ever worth revisiting.
         let promptTokens: [Int]? = nil
 
-        async let primaryTask = runDecode(
+        // One decode at a time on the shared WhisperKit instance. Running the recovery pass in
+        // parallel (`async let`) and dropping it when the primary was confident cancelled a live
+        // decode mid-flight; with both on one model that crashed the app (EXC_BAD_ACCESS in an
+        // autorelease pool pop, 25–26 Sep 2026, three times). Recovery now runs only when needed.
+        var selectedPass = try await runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
@@ -266,20 +270,15 @@ final class WhisperTranscriber: @unchecked Sendable {
             isRecovery: false
         )
 
-        async let recoveryTask = runDecode(
-            whisperKit: whisperKit,
-            audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-            language: language,
-            promptTokens: nil,
-            isRecovery: true
-        )
-
-        var selectedPass = try await primaryTask
-
-        // If primary decode is low confidence, check the parallel recovery decode pass.
         if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence decode; evaluating parallel recovery pass")
-            let recoveryPass = try await recoveryTask
+            owLog("[Whisper] Low-confidence decode; running recovery pass")
+            let recoveryPass = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+                language: language,
+                promptTokens: nil,
+                isRecovery: true
+            )
             if Self.isBetter(recoveryPass, than: selectedPass) {
                 owLog("[Whisper] Recovery decode selected text=\(recoveryPass.text)")
                 selectedPass = recoveryPass
@@ -360,7 +359,8 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
 
         owLog("[Whisper] Timed transcription samples=\(audioData.count) overlap=\(overlapSampleCount)")
-        async let primaryTimedTask = runDecode(
+        // Sequential for the same reason as `transcribe(audioData:language:)`.
+        var selectedPass = try await runDecode(
             whisperKit: whisperKit,
             audioData: audioData,
             language: language,
@@ -368,19 +368,15 @@ final class WhisperTranscriber: @unchecked Sendable {
             wordTimestamps: true
         )
 
-        async let recoveryTimedTask = runDecode(
-            whisperKit: whisperKit,
-            audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-            language: language,
-            promptTokens: nil,
-            wordTimestamps: true
-        )
-
-        var selectedPass = try await primaryTimedTask
-
         if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence timed decode; evaluating parallel recovery pass")
-            let recoveryPass = try await recoveryTimedTask
+            owLog("[Whisper] Low-confidence timed decode; running recovery pass")
+            let recoveryPass = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
+                language: language,
+                promptTokens: nil,
+                wordTimestamps: true
+            )
             if Self.isBetter(recoveryPass, than: selectedPass) {
                 selectedPass = recoveryPass
             }

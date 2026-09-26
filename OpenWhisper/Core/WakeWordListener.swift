@@ -68,6 +68,21 @@ final class WakeWordListener {
     private var blocksAtLog = 0
     private var levelsSinceLog: [Float] = []
     private var mediaPlaying = false
+    /// Echo cancellation while something plays (see `EchoCanceller`); queue-confined state.
+    private var aecActive = false
+    private var aecAligner = EchoReferenceAligner()
+    private var echoCanceller = EchoCanceller()
+    private var aecDump: EchoDebugWriter?
+    private var lastAECLog = Date()
+    private var loggedMicTiming = false
+    /// Main-thread: the reference stream, running while media plays on the built-in mic path.
+    private var echoReference: SystemOutputReference?
+    /// Main-thread copy of `mediaPlaying` (that one belongs to `queue`).
+    private var mediaPlayingOnMain = false
+    private var referenceGeneration = 0
+    /// Queue: the reference stream whose buffers are accepted (late ones from a stopped
+    /// stream must not switch cancellation back on).
+    private var acceptedReference = 0
     private var configObserver: NSObjectProtocol?
     private var watchdog: DispatchSourceTimer?
     /// Uptime of the last buffer from the tap: the only reliable sign the mic is still flowing.
@@ -105,6 +120,74 @@ final class WakeWordListener {
             self.mediaPlaying = playing
             self.detector?.gate?.mediaPlaying = playing
         }
+        mediaPlayingOnMain = playing
+        updateEchoReference(playing: playing && isRunning)
+    }
+
+    /// Main thread. Starts the reference when music plays and the built-in mic is in use;
+    /// otherwise stops it and returns the mic to the plain path.
+    private func updateEchoReference(playing: Bool) {
+        let wanted = playing && capture != nil && EchoCancellationSettings.isEnabled
+        if wanted, echoReference == nil {
+            guard SystemOutputReference.hasPermission else {
+                owLog("[AEC] No Screen Recording permission — running without echo cancellation")
+                return
+            }
+            referenceGeneration += 1
+            let generation = referenceGeneration
+            queue.async { [weak self] in self?.acceptedReference = generation }
+            let reference = SystemOutputReference { [weak self] samples, pts in
+                self?.queue.async { self?.ingestReference(samples, pts: pts, generation: generation) }
+            }
+            echoReference = reference
+            Task {
+                do { try await reference.start() } catch {
+                    owLog("[AEC] Reference capture failed: \(error.localizedDescription)")
+                    await MainActor.run { [weak self] in
+                        if self?.echoReference === reference { self?.echoReference = nil }
+                    }
+                }
+            }
+        } else if !wanted, let reference = echoReference {
+            echoReference = nil
+            Task { await reference.stop() }
+            queue.async { [weak self] in
+                self?.acceptedReference = 0
+                self?.deactivateAEC()
+            }
+        }
+    }
+
+    /// Queue: the first reference buffer switches the mic onto the cancelling path.
+    private func ingestReference(_ samples: [Float], pts: Double, generation: Int) {
+        guard generation == acceptedReference else { return }
+        if !aecActive {
+            aecActive = true
+            loggedMicTiming = false
+            aecAligner = EchoReferenceAligner()
+            echoCanceller = EchoCanceller()
+            echoCanceller.log = { owLog($0) }
+            lastAECLog = Date()
+            if EchoCancellationSettings.dumpsAudio {
+                aecDump = EchoDebugWriter(names: ["mic", "reference"])
+                if let dir = aecDump?.directory { owLog("[AEC] Dumping audio to \(dir.path)") }
+            }
+            owLog("[AEC] Echo cancellation active")
+        }
+        aecAligner.appendReference(samples, startIndex: Int((pts * Double(EchoCanceller.sampleRate)).rounded()))
+    }
+
+    /// Queue: back to the plain mic; whatever the aligner still held is scored as is.
+    private func deactivateAEC() {
+        guard aecActive else { return }
+        aecActive = false
+        let held = aecAligner.drain()
+        aecAligner = EchoReferenceAligner()
+        echoCanceller = EchoCanceller()
+        aecDump?.close()
+        aecDump = nil
+        owLog("[AEC] Echo cancellation off")
+        if !held.isEmpty { score(held) }
     }
 
     /// Wanted state; the engine underneath is rebuilt by the watchdog if audio stops arriving.
@@ -152,10 +235,11 @@ final class WakeWordListener {
                 let capture = try HALInputCapture(deviceID: builtIn.id)
                 let monoFormat = AVAudioFormat(standardFormatWithSampleRate: capture.format.sampleRate, channels: 1)!
                 converter = AVAudioConverter(from: monoFormat, to: targetFormat)
-                try capture.start { [weak self] buffer, _ in
-                    self?.handle(buffer, monoFormat: monoFormat)
+                try capture.start { [weak self] buffer, time in
+                    self?.handle(buffer, monoFormat: monoFormat, time: time)
                 }
                 self.capture = capture
+                updateEchoReference(playing: mediaPlayingOnMain)
                 peakSinceLog = 0
                 lastPeakLog = Date()
                 owLog("[WakeWord] Listening on \(builtIn.name) (\(Int(capture.format.sampleRate)) Hz), threshold \(Self.threshold)")
@@ -221,6 +305,7 @@ final class WakeWordListener {
             owLog("[WakeWord] Stopped listening")
         }
         capture = nil
+        updateEchoReference(playing: false)
     }
 
     /// Covers what the notification doesn't: a device that vanished, a start that failed.
@@ -234,7 +319,7 @@ final class WakeWordListener {
     }
 
     /// Audio thread: take channel 0, resample to 16 kHz, hand off to the detector queue.
-    private func handle(_ buffer: AVAudioPCMBuffer, monoFormat: AVAudioFormat) {
+    private func handle(_ buffer: AVAudioPCMBuffer, monoFormat: AVAudioFormat, time: AVAudioTime? = nil) {
         lastAudio.withLock { $0 = ProcessInfo.processInfo.systemUptime }
         guard let converter, let channel = buffer.floatChannelData?[0],
               let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: buffer.frameLength) else { return }
@@ -255,14 +340,46 @@ final class WakeWordListener {
             return mono
         }
         guard error == nil, let data = out.floatChannelData?[0] else { return }
-        // openWakeWord expects int16-scale values.
-        let scale = 32767 * Self.inputGain
         let raw = Array(UnsafeBufferPointer(start: data, count: Int(out.frameLength)))
-        let samples = raw.map { min(max($0 * scale, -32768), 32767) }
-        queue.async { [weak self] in self?.score(samples, raw: raw) }
+        // 16 kHz sample index on the host clock, for pairing with the echo reference.
+        let hostIndex = time.flatMap { $0.isHostTimeValid
+            ? Int((AVAudioTime.seconds(forHostTime: $0.hostTime) * Double(EchoCanceller.sampleRate)).rounded())
+            : nil }
+        queue.async { [weak self] in self?.ingestMic(raw, hostIndex: hostIndex) }
     }
 
-    private func score(_ samples: [Float], raw: [Float]) {
+    /// Queue: echo-cancelled first while the reference runs, then scored.
+    private func ingestMic(_ raw: [Float], hostIndex: Int?) {
+        if aecActive, !loggedMicTiming {
+            loggedMicTiming = true
+            let now = AVAudioTime.seconds(forHostTime: mach_absolute_time()) * Double(EchoCanceller.sampleRate)
+            owLog(hostIndex.map { String(format: "[AEC] Mic timestamps valid: mic time − host now = %.1f ms", (Double($0) - now) / 16) }
+                  ?? "[AEC] Mic buffers have no valid host time — echo cancellation bypassed")
+        }
+        guard aecActive, let hostIndex else {
+            score(raw)
+            return
+        }
+        guard let pair = aecAligner.appendMic(raw, startIndex: hostIndex) else { return }
+        let cleaned = echoCanceller.process(mic: pair.mic, reference: pair.reference)
+        // The paired inputs; offline tuning re-runs the canceller on them.
+        aecDump?.write([pair.mic, pair.reference])
+        if Date().timeIntervalSince(lastAECLog) >= 10 {
+            lastAECLog = Date()
+            let erle = echoCanceller.takeERLESamples().sorted()
+            let median = erle.isEmpty ? Float.nan : erle[erle.count / 2]
+            let paired = aecAligner.takePairedPercent() ?? .nan
+            owLog(String(format: "[AEC] ERLE median %.1f dB over %d blocks, paired with reference %.0f%%, filter delay %.1f ms, mic resyncs %d",
+                         median, erle.count, paired,
+                         Double(echoCanceller.filterDelay - EchoCanceller.lookahead) / 16, aecAligner.resyncs))
+        }
+        if !cleaned.isEmpty { score(cleaned) }
+    }
+
+    private func score(_ raw: [Float]) {
+        // openWakeWord expects int16-scale values.
+        let scale = 32767 * Self.inputGain
+        let samples = raw.map { min(max($0 * scale, -32768), 32767) }
         recentAudio.append(contentsOf: raw)
         if recentAudio.count > Self.preRollSamples { recentAudio.removeFirst(recentAudio.count - Self.preRollSamples) }
         pendingCandidate?.audio.append(contentsOf: raw)

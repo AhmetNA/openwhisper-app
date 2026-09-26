@@ -45,6 +45,55 @@ final class SpotifyVoiceCommandTests: XCTestCase {
         }
     }
 
+    func testMisheardPastAndConverbPlayVerbsCountInCommandMode() {
+        // 26 Sep 2026: "aç" came out of Whisper as "açtık" / "açıp" and both were pasted.
+        let cases: [(String, Parse)] = [
+            ("Piyano tarzı bir şey açtık Spotify'da.", Parse(intent: .search, kind: .playlist, title: "Piyano", artist: "")),
+            ("Piyano müziği açıp Spotify'da", Parse(intent: .search, kind: .playlist, title: "Piyano müziği", artist: ""))
+        ]
+        for (transcript, parse) in cases {
+            guard case .search? = decide(transcript, parse, commandMode: true) else {
+                return XCTFail("expected a search for '\(transcript)'")
+            }
+            XCTAssertNil(decide(transcript, parse, commandMode: false))
+        }
+        XCTAssertEqual(SpotifyManager.repairCommandVerbMishearing("Tarkan çaldık"), "Tarkan çal")
+        XCTAssertEqual(SpotifyManager.repairCommandVerbMishearing("Kapı açık kaldı"), "Kapı açık kaldı")
+        XCTAssertEqual(SpotifyManager.repairCommandVerbMishearing("Çalışıyor"), "Çalışıyor")
+    }
+
+    func testCommandVerbRepairCoversEveryControlVerb() {
+        let repair = SpotifyManager.repairCommandVerbMishearing
+        XCTAssertEqual(repair("Şarkıyı durdurdun"), "Şarkıyı durdur")
+        XCTAssertEqual(repair("Müziği kapattık"), "Müziği kapat")
+        XCTAssertEqual(repair("Sesi kıstık"), "Sesi kıs")
+        XCTAssertEqual(repair("Şarkıyı geçtik"), "Şarkıyı geç")
+        XCTAssertEqual(repair("spotfader dur"), "spotfader durdur")
+        XCTAssertEqual(repair("Kutfaida şarkac."), "Kutfaida şarkı aç.")
+        XCTAssertEqual(repair("Bir şarkı çağırsana"), "Bir şarkı çalsana")
+        // Words that merely start like a verb stay as they are.
+        XCTAssertEqual(repair("Müziğin sesi çok kısık"), "Müziğin sesi çok kısık")
+        XCTAssertEqual(repair("Kısa bir durum"), "Kısa bir durum")
+    }
+
+    func testSpelledPercentBecomesDigits() {
+        XCTAssertEqual(SpotifyManager.digitizeSpelledPercent("Sesi yüzde elli yap"), "Sesi yüzde 50 yap")
+        XCTAssertEqual(SpotifyManager.digitizeSpelledPercent("Sesi yüzde yetmiş beşe çıkar"), "Sesi yüzde 75'e çıkar")
+        XCTAssertEqual(SpotifyManager.digitizeSpelledPercent("sesi yüzde yüz."), "sesi yüzde 100.")
+        XCTAssertEqual(SpotifyManager.digitizeSpelledPercent("yüzde biraz"), "yüzde biraz")
+        let parse = Parse(intent: .volume)
+        XCTAssertEqual(decide(SpotifyManager.repairCommandVerbMishearing("Sesi yüzde elli yap"), parse, commandMode: true), .setVolume(50))
+    }
+
+    func testVerblessSpotifyRequestSearchesInCommandMode() {
+        // 26 Sep 2026: "Piyanosal bir şeyler Spotify'da." was pasted as dictation.
+        let parse = Parse(intent: .search, kind: .playlist, title: "Piyanosal", artist: "")
+        guard case .search? = decide("Piyanosal bir şeyler Spotify'da.", parse, commandMode: true) else {
+            return XCTFail("expected a search")
+        }
+        XCTAssertNil(decide("Piyanosal bir şeyler Spotify'da.", parse, commandMode: false))
+    }
+
     func testFirstSentenceCommandIsACandidate() {
         XCTAssertTrue(SpotifyManager.isCommandCandidate("Şarkıyı durdur."))
         XCTAssertEqual(decide("Şarkıyı durdur.", Parse(intent: .pause), commandMode: true), .pause)

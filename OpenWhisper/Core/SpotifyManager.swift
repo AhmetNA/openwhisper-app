@@ -568,7 +568,11 @@ final class SpotifyManager: @unchecked Sendable {
     /// dropped. Evidence still applies: the words themselves must carry the intent (a play
     /// verb for a search, a loudness cue for volume), so plain speech keeps being pasted.
     private static func commandIntent(_ parse: SpotifyRequestParser.OllamaParse, text: String) -> ExplicitSpotifyIntent? {
-        guard parse.intent != .none, hasEvidence(for: parse, in: text, natural: true),
+        let text = repairCommandVerbMishearing(text)
+        // "Piyanosal bir şeyler Spotify'da": naming Spotify is the request, verb or not.
+        let spotifySearch = parse.intent == .search && addressesSpotify(text)
+            && !searchRequest(for: normalize(text), parse: parse).searchQueries.isEmpty
+        guard parse.intent != .none, spotifySearch || hasEvidence(for: parse, in: text, natural: true),
               let result = intent(from: parse, text: text) else { return nil }
         owLog("[Spotify] Voice command '\(text)' → \(result)")
         return result
@@ -653,7 +657,7 @@ final class SpotifyManager: @unchecked Sendable {
     ]
     /// Exact words only: as word starts "az" would match "azalt" and "kıs" would match "kısık".
     private static let louderWords: Set<String> = ["az"]
-    private static let quieterWords: Set<String> = ["kis", "kisar", "kissana", "kisalim", "kisin", "kisabilir", "kisiver"]
+    private static let quieterWords: Set<String> = ["kis", "kisar", "kissana", "kisalim", "kisin", "kisabilir", "kisiver", "yukseldi"]
     /// "aç" means louder only next to a volume noun or an amount ("müziği biraz aç");
     /// "müziği aç" alone is resume.
     private static let openWords: Set<String> = ["ac", "acsana", "acar", "acabilir", "aciver"]
@@ -740,6 +744,63 @@ final class SpotifyManager: @unchecked Sendable {
         )
     }
 
+    /// In a voice session Whisper turns spoken command verbs into past or converb forms
+    /// ("Piyano tarzı bir şey açtık Spotify'da", "Piyano müziği açıp Spotify'da": 26 Sep
+    /// 2026, both pasted as dictation). Nobody tells Jarvis what they already did, so these
+    /// count as the imperative there; dictation never goes through this. It also restores
+    /// "Spotify dur" → "durdur", "şarkac" → "şarkı aç" and spelled-out percentages.
+    static func repairCommandVerbMishearing(_ text: String) -> String {
+        let stems = "[ÇçCc]al|[Aa][çc]|[Dd]urdur|[Kk]apat|[Gg]e[çc]|[Aa]tla|[Kk][ıi]s|[Yy][üu]kselt"
+            + "|[Aa]zalt|[Aa]rt[ıi]r|[Dd][üu][şs][üu]r|[Ii]ndir|[Bb]a[şs]lat|[Oo]ynat|[Dd]uraklat"
+        var repaired = text
+            .replacingOccurrences(
+                of: "\\b(\(stems))(?:[dt][ıiuü](?:k|m|n|n[ıiuü]z)?|[ıiuü]p)\\b",
+                with: "$1", options: .regularExpression
+            )
+            .replacingOccurrences(of: "\\b([Çç])ağırsana\\b", with: "$1alsana", options: .regularExpression)
+            .replacingOccurrences(of: "\\b([Şş])ark[aı][cç]\\b", with: "$1arkı aç", options: .regularExpression)
+            .replacingOccurrences(of: "\\b([Dd])ur([.!?]*)\\s*$", with: "$1urdur$2", options: .regularExpression)
+        repaired = digitizeSpelledPercent(repaired)
+        return repaired
+    }
+
+    /// "sesi yüzde elli yap" → "sesi yüzde 50 yap": volume targets are read as digits.
+    static func digitizeSpelledPercent(_ text: String) -> String {
+        let tens = ["on": 10, "yirmi": 20, "otuz": 30, "kırk": 40, "elli": 50, "altmış": 60,
+                    "yetmiş": 70, "seksen": 80, "doksan": 90, "yüz": 100]
+        let units = ["bir": 1, "iki": 2, "üç": 3, "dört": 4, "beş": 5, "altı": 6, "yedi": 7, "sekiz": 8, "dokuz": 9]
+        let locale = Locale(identifier: "tr_TR")
+        // A number word, optionally with a dative ending ("elliye", "yüze") and punctuation.
+        func number(_ word: String, in table: [String: Int]) -> (value: Int, rest: String)? {
+            let lower = word.lowercased(with: locale)
+            for (name, value) in table where lower.hasPrefix(name) {
+                let rest = String(lower.dropFirst(name.count))
+                let ending = rest.trimmingCharacters(in: CharacterSet(charactersIn: ".,!?"))
+                if ["", "ye", "ya", "e", "a", "'ye", "'ya", "'e", "'a"].contains(ending) { return (value, rest) }
+            }
+            return nil
+        }
+        var words = text.components(separatedBy: " ")
+        var index = 0
+        while index < words.count {
+            defer { index += 1 }
+            guard words[index].lowercased(with: locale) == "yüzde", index + 1 < words.count else { continue }
+            var value = 0, rest = "", end = index + 1
+            if let ten = number(words[end], in: tens) {
+                value = ten.value; rest = ten.rest; end += 1
+                if ten.rest.isEmpty, end < words.count, let unit = number(words[end], in: units) {
+                    value += unit.value; rest = unit.rest; end += 1
+                }
+            } else if let unit = number(words[end], in: units) {
+                value = unit.value; rest = unit.rest; end += 1
+            } else { continue }
+            guard value <= 100 else { continue }
+            let suffix = rest.first.map { ".,!?'".contains($0) } ?? true ? rest : "'" + rest
+            words.replaceSubrange((index + 1)..<end, with: ["\(value)\(suffix)"])
+        }
+        return words.joined(separator: " ")
+    }
+
     /// Short, not quoting or negating anything: what a voice-started session sends to Ollama.
     static func isCommandCandidate(_ text: String) -> Bool {
         let normalized = normalize(text)
@@ -763,7 +824,8 @@ final class SpotifyManager: @unchecked Sendable {
     ///
     /// `commandMode` marks a voice-started session: see `commandIntent`.
     static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false, commandMode: Bool = false) async -> Bool {
-        let text = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
+        let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
+        let text = commandMode ? repairCommandVerbMishearing(heard) : heard
         let rules = explicitIntent(in: text)
         let command = commandMode && rules == nil && ollamaAvailable && isCommandCandidate(text)
         let promotion = rules == nil && ollamaAvailable && isPromotionCandidate(text)

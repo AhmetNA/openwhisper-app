@@ -572,6 +572,24 @@ struct SettingsView: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Sesli cevap (yerel ses modeli)", systemImage: "speaker.wave.2")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.voiceRepliesEnabled },
+                                             set: { appState.voiceRepliesEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                Text("Komutlara kısa sesli cevap verir (“Saat 14:05, patron.”). Bu Mac'te çalışan OmniVoice modeliyle, internetsiz ve ücretsiz. Kurulum bir kez: app/tts_server/setup.sh")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+
+            Divider()
+
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Label("Hassasiyet", systemImage: "dial.medium")

@@ -168,6 +168,25 @@ final class AppState {
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
+    /// Jarvis answers voice commands out loud (`JarvisVoice`, local OmniVoice model).
+    var voiceRepliesEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(voiceRepliesEnabled, forKey: "voiceRepliesEnabled")
+            if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+        }
+    }
+    @ObservationIgnored private var jarvisReply = JarvisReply()
+    enum JarvisActivity: Sendable, Equatable {
+        case none, thinking, speaking
+    }
+    /// What Jarvis is doing after a command: the flow bar shows "thinking" / "speaking"
+    /// instead of "transcribing".
+    var jarvisActivity: JarvisActivity = .none {
+        didSet {
+            guard oldValue != jarvisActivity else { return }
+            syncFlowBarVisibility()
+        }
+    }
     var laughterToRandomEnabled: Bool {
         didSet { UserDefaults.standard.set(laughterToRandomEnabled, forKey: "laughterToRandomEnabled") }
     }
@@ -412,6 +431,11 @@ final class AppState {
     /// Present only for voice-triggered sessions; ends them after the speaker goes quiet.
     @ObservationIgnored private var voiceEndpointDetector: VoiceEndpointDetector?
     @ObservationIgnored private var lastVoiceEndpointTrace: TimeInterval = 0
+    /// Wake-word sessions with an enrolled voice: ends them when the user stops, even while
+    /// someone else keeps talking. See `OwnVoiceStopGate`.
+    @ObservationIgnored private var ownVoiceStopGate: OwnVoiceStopGate?
+    @ObservationIgnored private var ownVoiceCheckInFlight = false
+    @ObservationIgnored private var lastOwnVoiceCheck: TimeInterval = 0
     private var systemAudioCapture: SystemAudioCapture?
     private var systemAudioGeneration: UInt64 = 0
     private var systemAudioTranscriptionTail: Task<Void, Never>?
@@ -509,6 +533,7 @@ final class AppState {
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
+        voiceRepliesEnabled = defaults.object(forKey: "voiceRepliesEnabled") as? Bool ?? true
         let savedModel = defaults.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
         // Models dropped from the picker (the ByT5 normalizer, llama3.2:3b) fall back to the default
         // instead of leaving a selection Settings can't show.
@@ -558,6 +583,8 @@ final class AppState {
 
         loadTargetSpeakerProfile()
         startTargetSpeakerDiarizationPreparation()
+        // The voice model takes ~15 s to load; do it now rather than on the first reply.
+        if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -1008,6 +1035,8 @@ final class AppState {
         let tStart = CACurrentMediaTime()
         let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
         owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
+        // A new command cuts Jarvis off, and his voice must not end up in the recording.
+        JarvisVoice.shared.stop()
 
         if targetSpeakerEnrollmentActive {
             if targetSpeakerEnrollmentIsRecording {
@@ -1043,6 +1072,13 @@ final class AppState {
                 ignoreUntil: mediaPlaying ? sessionStart + 0.8 : nil
             )
             : nil
+        ownVoiceStopGate = armVoiceAutoStop && hotkey?.trigger == .wakeWord
+            && targetSpeakerEnabled && targetSpeakerProfile != nil
+            ? OwnVoiceStopGate(threshold: OwnVoiceStopGate.defaultThreshold)
+            : nil
+        ownVoiceCheckInFlight = false
+        lastOwnVoiceCheck = sessionStart
+        if ownVoiceStopGate != nil { owLog("[OwnVoiceStop] Armed for wake-word session") }
 
         if audioDuckingEnabled || armVoiceAutoStop {
             recordingMedia.begin()
@@ -1144,6 +1180,7 @@ final class AppState {
                 guard let self, self.recordingState == .recording else { return }
                 self.recordingDuration += 0.25
                 self.enqueueCompletedAudioSegments()
+                self.checkOwnVoiceEndpoint()
             }
         }
 
@@ -1167,6 +1204,7 @@ final class AppState {
     func stopRecordingWithTail(delay: TimeInterval = 0.40) {
         guard recordingState == .recording else { return }
         voiceEndpointDetector = nil
+        ownVoiceStopGate = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
         owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
@@ -1181,6 +1219,7 @@ final class AppState {
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
+        ownVoiceStopGate = nil
 
         if targetSpeakerEnrollmentIsRecording {
             stopTargetSpeakerEnrollmentRecording()
@@ -1806,12 +1845,16 @@ final class AppState {
                     guard let app = await AgentAppActivator.activate(target) else {
                         self.textInjector?.copyToClipboard(agent.body)
                         self.showFlowBarMessage("\(target.displayName) açılamadı, panoya kopyalandı")
+                        if session.isVoiceCommand {
+                            await self.speakReply(self.jarvisReply.failure("\(target.displayName) açılamadı"))
+                        }
                         return
                     }
                     targetApp = app
                     pasteContext = PasteContext.capture(targetApp: app)
                 }
                 await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
                 return
             }
 
@@ -1832,11 +1875,29 @@ final class AppState {
             if session.isVoiceCommand,
                let command = parseSystem(trimmed) ?? firstSentence.flatMap(parseSystem) {
                 owLog("[Route] system (\(command))")
+                // Going to sleep or locking: say it before the Mac stops listening.
+                let speaksFirst = ([.sleep, .displaySleep, .lockScreen] as [SystemCommand]).contains(command)
+                if speaksFirst { await self.speakReply("Görüşürüz.") }
                 let status = await SystemController.perform(command)
                 owLog("[Result] System command: \(status)")
                 self.lastTranscription = text
                 self.showFlowBarMessage(status, durationMs: status.count > 40 ? 6000 : 2500)
+                if !speaksFirst { await self.speakReply(self.jarvisReply.system(command, status: status)) }
                 return
+            }
+
+            // A "Jarvis" session that isn't a command is talk to Jarvis, unless Claude Code, Codex
+            // or a terminal running them is in front: then it's a prompt for them and is typed.
+            // Fn dictation is always typed.
+            @MainActor func dictateOrChat() async {
+                let front = session.targetApp?.bundleIdentifier
+                if session.isVoiceCommand, !AgentApp.isAgentFront(front) {
+                    owLog("[Route] chat (front: \(front ?? "none"))")
+                    self.lastTranscription = text
+                    await self.chatReply(to: trimmed)
+                } else {
+                    await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                }
             }
 
             let isReminderCommand = ReminderManager.isReminder(text)
@@ -1857,6 +1918,7 @@ final class AppState {
                 if self.ollamaAvailable {
                     let scheduled = await self.reminderManager?.handleReminder(text: text) ?? false
                     owLog("[Result] Reminder \(scheduled ? "scheduled" : "not scheduled")")
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.reminder(scheduled: scheduled)) }
                 } else {
                     owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
                 }
@@ -1871,6 +1933,10 @@ final class AppState {
                 if handled {
                     resumeMediaAfterCommand = resumesMedia
                     self.lastTranscription = text
+                    // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
+                    if session.isVoiceCommand {
+                        await self.speakReply(self.jarvisReply.spotify(handled: true))
+                    }
                     if !misheard.isEmpty {
                         owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
                         Task { @MainActor [weak self] in
@@ -1881,11 +1947,46 @@ final class AppState {
                     }
                 } else {
                     owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
-                    await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                    await dictateOrChat()
                 }
             } else {
-                await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                await dictateOrChat()
             }
+        }
+    }
+
+    // MARK: - Voice replies
+
+    /// Speaks Jarvis's reply and waits for it, so music paused for the command resumes only
+    /// after he is done. Silent when the setting is off or a new recording already started.
+    private func speakReply(_ reply: String?) async {
+        guard let reply, voiceRepliesEnabled, recordingState != .recording else { return }
+        owLog("[Voice] Reply: '\(reply)'")
+        await JarvisVoice.shared.speak(reply) { [weak self] in self?.jarvisActivity = .speaking }
+        jarvisActivity = .none
+    }
+
+    /// A "Jarvis" session that is no command and not meant for Claude Code / Codex: the user is
+    /// talking to Jarvis, so the local LLM answers out loud. The voice starts on the first
+    /// sentence while the rest is still being written. Without a voice the answer is shown.
+    private func chatReply(to text: String) async {
+        guard ollamaAvailable else {
+            owLog("[Chat] Ollama not available")
+            showFlowBarMessage("Ollama kapalı, sohbet edemiyorum")
+            await speakReply(jarvisReply.failure("yerel model şu an kapalı"))
+            return
+        }
+        jarvisActivity = .thinking
+        defer { jarvisActivity = .none }
+        let sentences = JarvisChat.shared.reply(to: text, model: ollamaModel)
+        var heard = false
+        if voiceRepliesEnabled, recordingState != .recording {
+            heard = await JarvisVoice.shared.speak(sentences: sentences) { [weak self] in self?.jarvisActivity = .speaking }
+        } else {
+            for await _ in sentences {}
+        }
+        if !heard, recordingState != .recording, let answer = JarvisChat.shared.lastReply, !answer.isEmpty {
+            showFlowBarMessage(answer, durationMs: min(max(answer.count * 60, 3000), 10000))
         }
     }
 
@@ -2086,7 +2187,7 @@ final class AppState {
             flowBarController?.hide()
             return
         }
-        if recordingState == .idle && flowBarMessage == nil {
+        if recordingState == .idle && flowBarMessage == nil && jarvisActivity == .none {
             flowBarController?.hide()
         } else {
             flowBarController?.show()
@@ -2353,6 +2454,7 @@ final class AppState {
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     private func discardActiveRecording(reason: String) {
         voiceEndpointDetector = nil
+        ownVoiceStopGate = nil
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         recordingTimer?.invalidate()
         recordingTimer = nil
@@ -3064,6 +3166,7 @@ final class AppState {
 
         owLog("[VoiceAutoStop] \(decision) — \(detector.summary)")
         voiceEndpointDetector = nil
+        ownVoiceStopGate = nil
         switch decision {
         case .stop, .stopMaxDuration:
             // No release tail: the speaker has already been quiet for `silenceToStop`.
@@ -3074,6 +3177,47 @@ final class AppState {
             discardActiveRecording(reason: "voice trigger, no speech")
         case .continueRecording:
             break
+        }
+    }
+
+    /// Scores the last 1.5 s against the enrolled voice (one check at a time, every 0.5 s) and
+    /// stops the session once the user's voice has gone missing, whoever else is still talking.
+    private func checkOwnVoiceEndpoint() {
+        guard recordingState == .recording, ownVoiceStopGate != nil, !ownVoiceCheckInFlight,
+              let profile = targetSpeakerProfile, let audioEngine else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastOwnVoiceCheck >= OwnVoiceStopGate.checkInterval else { return }
+        let samples = audioEngine.recentSamples(count: OwnVoiceStopGate.windowSamples)
+        guard samples.count >= OwnVoiceStopGate.windowSamples else { return }
+        lastOwnVoiceCheck = now
+        ownVoiceCheckInFlight = true
+        let filter = targetSpeakerFilter
+        let sessionID = activeTranscriptionSession?.id
+        Task { [weak self] in
+            let score: Float?
+            do {
+                score = try await filter.wakeSpeakerScore(samples: samples, profile: profile)
+            } catch {
+                owLog("[OwnVoiceStop] Speaker check failed, disarming: \(error)")
+                score = nil
+            }
+            guard let self else { return }
+            self.ownVoiceCheckInFlight = false
+            guard self.recordingState == .recording, self.activeTranscriptionSession?.id == sessionID,
+                  var gate = self.ownVoiceStopGate else { return }
+            guard let score else {
+                self.ownVoiceStopGate = nil
+                return
+            }
+            let shouldStop = gate.record(score: score, at: now)
+            self.ownVoiceStopGate = gate
+            owLog(String(format: "[OwnVoiceStop] score %.3f (threshold %.2f)%@", score, gate.threshold,
+                         shouldStop ? " — user's voice gone, stopping" : ""))
+            guard shouldStop else { return }
+            self.voiceEndpointDetector = nil
+            self.ownVoiceStopGate = nil
+            self.hotkey?.externalCancelHandsFree()
+            self.stopRecording()
         }
     }
 

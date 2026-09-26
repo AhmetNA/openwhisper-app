@@ -24,6 +24,12 @@ enum AgentApp: String, CaseIterable, Sendable {
     /// Apps where a trailing "gönder" presses Return even without naming a target: the agent
     /// apps themselves plus terminals and editors that run the Claude Code / Codex CLIs.
     /// Everywhere else (Slack, Mail, …) "gönder" stays plain dictation and nothing is sent.
+    /// Whether the user is probably talking to Claude Code / Codex rather than to Jarvis:
+    /// one of them, or a terminal / editor that runs their CLIs, is in front.
+    static func isAgentFront(_ bundleIdentifier: String?) -> Bool {
+        bundleIdentifier.map(sendCapableBundleIdentifiers.contains) ?? false
+    }
+
     static let sendCapableBundleIdentifiers: Set<String> = [
         "com.anthropic.claudefordesktop",
         "com.openai.codex",

@@ -1,0 +1,9 @@
+# Pinned: server.py uses OmniVoice internals of mlx-audio (create_voice_clone_prompt,
+# ref_tokens) that change between releases. Tested together on 2026-09-26.
+mlx-audio==0.5.6
+mlx==0.32.2
+mlx-metal==0.32.2
+numpy==2.5.3
+transformers==5.17.0
+huggingface-hub==1.33.0
+soundfile==0.14.0

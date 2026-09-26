@@ -32,7 +32,7 @@ struct FlowBarView: View {
             } else {
                 switch appState.recordingState {
                 case .idle:
-                    idleContent
+                    if appState.jarvisActivity != .none { jarvisContent } else { idleContent }
                 case .recording:
                     if appState.isTranscribing {
                         transcribingContent
@@ -44,7 +44,8 @@ struct FlowBarView: View {
                         recordingContent
                     }
                 case .transcribing:
-                    transcribingContent
+                    // The command already ran; while Jarvis answers, say so instead.
+                    if appState.jarvisActivity != .none { jarvisContent } else { transcribingContent }
                 }
             }
         }
@@ -67,6 +68,7 @@ struct FlowBarView: View {
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
         .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
+        .animation(.easeInOut(duration: 0.25), value: appState.jarvisActivity)
         .animation(.easeInOut(duration: 0.25), value: appState.systemAudioIsRecording)
     }
 
@@ -167,6 +169,16 @@ struct FlowBarView: View {
 
     private var transcribingContent: some View {
         Text("transcribing")
+            .font(.custom("Bradley Hand", size: 16).weight(.medium))
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 6)
+            .frame(height: 26)
+    }
+
+    // MARK: - Speaking
+
+    private var jarvisContent: some View {
+        Text(appState.jarvisActivity == .thinking ? "thinking" : "speaking")
             .font(.custom("Bradley Hand", size: 16).weight(.medium))
             .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 6)

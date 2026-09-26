@@ -537,6 +537,14 @@ final class AudioEngine: @unchecked Sendable {
         return segments
     }
 
+    /// The last `count` 16 kHz samples of the recording in progress (fewer right after start or a
+    /// batch boundary). Lets the own-voice auto-stop check who is speaking now.
+    func recentSamples(count: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        return trailingSamples(count: min(count, capturedSampleCount))
+    }
+
     // MARK: - Streaming conversion and storage
 
     /// Runs the one converter instance throughout a recording so resampling filter state is
