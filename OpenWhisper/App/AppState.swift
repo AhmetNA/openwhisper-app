@@ -437,6 +437,9 @@ final class AppState {
     @ObservationIgnored private var armVoiceAutoStopForNextRecording = false
     /// Present only for voice-triggered sessions; ends them after the speaker goes quiet.
     @ObservationIgnored private var voiceEndpointDetector: VoiceEndpointDetector?
+    /// Model-based endpointing for Jarvis sessions. The level detector above remains only as a
+    /// fail-open fallback when either local model is unavailable.
+    @ObservationIgnored private var smartTurnEndpointDetector: SmartTurnEndpointDetector?
     @ObservationIgnored private var lastVoiceEndpointTrace: TimeInterval = 0
     /// Wake-word sessions with an enrolled voice: ends them when the user stops, even while
     /// someone else keeps talking. See `OwnVoiceStopGate`.
@@ -1073,11 +1076,22 @@ final class AppState {
             return
         }
         let sessionStart = CACurrentMediaTime()
+        let useSmartTurnEndpoint = armVoiceAutoStop && hotkey?.trigger == .wakeWord
+        var endpointFallbackConfig: VoiceEndpointDetector.Config = resolvedInputIsBluetooth ? .closeTalk : .init()
+        // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
+        // incomplete-turn safety limit and also keeps a model failure bounded.
+        if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
                 startTime: sessionStart,
-                config: resolvedInputIsBluetooth ? .closeTalk : .init(),
+                config: endpointFallbackConfig,
                 ignoreUntil: mediaPlaying ? sessionStart + 0.8 : nil
+            )
+            : nil
+        smartTurnEndpointDetector = useSmartTurnEndpoint
+            ? SmartTurnEndpointDetector(
+                startTime: sessionStart,
+                ignoredLeadingSeconds: mediaPlaying ? 0.8 : 0
             )
             : nil
         ownVoiceStopGate = armVoiceAutoStop && hotkey?.trigger == .wakeWord
@@ -1099,12 +1113,17 @@ final class AppState {
         let recordingInputDeviceUID = resolvedInputDeviceUID
         let processingMode = audioProcessingMode
         let audioEngineRef = audioEngine
+        let smartEndpoint = smartTurnEndpointDetector
+        let endpointSampleCallback: (([Float]) -> Void)? = smartEndpoint.map { endpoint in
+            { samples in endpoint.feed(samples) }
+        }
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
                 audioProcessingMode: processingMode,
+                sampleCallback: endpointSampleCallback,
                 levelCallback: { rawLevel in
                     let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                     // Stamped here, on the audio thread, so main-thread stalls can't distort
@@ -1214,6 +1233,7 @@ final class AppState {
     func stopRecordingWithTail(delay: TimeInterval = 0.40) {
         guard recordingState == .recording else { return }
         voiceEndpointDetector = nil
+        smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
@@ -1229,6 +1249,7 @@ final class AppState {
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
+        smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
 
         if targetSpeakerEnrollmentIsRecording {
@@ -1788,6 +1809,11 @@ final class AppState {
                     }
                 }
 
+                initialText = TranscriptSanitizer.removeForbiddenArtifacts(from: initialText)
+                guard !initialText.isEmpty else {
+                    owLog("[OpenWhisper] Forbidden-only transcript blocked before output")
+                    return
+                }
                 self.lastTranscription = initialText
                 let misheard = self.misheardWords(in: initialText)
                 if !misheard.isEmpty {
@@ -2567,6 +2593,7 @@ final class AppState {
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     private func discardActiveRecording(reason: String) {
         voiceEndpointDetector = nil
+        smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         recordingTimer?.invalidate()
@@ -3285,17 +3312,42 @@ final class AppState {
 
     private func feedVoiceEndpoint(rawRMS: Float, at time: TimeInterval) {
         guard recordingState == .recording, var detector = voiceEndpointDetector else { return }
-        let decision = detector.process(rms: rawRMS, at: time)
+        let levelDecision = detector.process(rms: rawRMS, at: time)
         voiceEndpointDetector = detector
+        let smartDecision = smartTurnEndpointDetector?.decision(
+            at: time,
+            levelSpeechDetected: detector.speechDetected
+        ) ?? .useLevelFallback(reason: "not armed")
         // Tuning aid: once a second, the level against the floor and end threshold.
         if time - lastVoiceEndpointTrace >= 1 {
             lastVoiceEndpointTrace = time
-            owLog(String(format: "[VoiceAutoStop] level %.1f dBFS — ", VoiceEndpointDetector.dBFS(fromRMS: rawRMS)) + detector.summary)
+            let smartSummary = smartTurnEndpointDetector?.summary ?? "disabled"
+            owLog(String(format: "[VoiceAutoStop] level %.1f dBFS — ", VoiceEndpointDetector.dBFS(fromRMS: rawRMS)) + detector.summary + " smart={\(smartSummary)}")
         }
-        guard decision != .continueRecording else { return }
+
+        let decision: VoiceEndpointDetector.Decision
+        switch smartDecision {
+        case .continueRecording:
+            return
+        case .stop(let probability):
+            owLog(String(format: "[SmartTurn] complete %.3f — stopping", probability))
+            decision = .stop
+        case .stopAfterIncompleteTimeout:
+            owLog("[SmartTurn] incomplete turn stayed silent for 3 s — stopping")
+            decision = .stop
+        case .stopMaxDuration:
+            decision = .stopMaxDuration
+        case .cancelNoSpeech:
+            decision = .cancelNoSpeech
+        case .useLevelFallback(let reason):
+            guard levelDecision != .continueRecording else { return }
+            owLog("[SmartTurn] level fallback used: \(reason)")
+            decision = levelDecision
+        }
 
         owLog("[VoiceAutoStop] \(decision) — \(detector.summary)")
         voiceEndpointDetector = nil
+        smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
         switch decision {
         case .stop, .stopMaxDuration:
@@ -3345,6 +3397,7 @@ final class AppState {
                          shouldStop ? " — user's voice gone, stopping" : ""))
             guard shouldStop else { return }
             self.voiceEndpointDetector = nil
+            self.smartTurnEndpointDetector = nil
             self.ownVoiceStopGate = nil
             self.hotkey?.externalCancelHandsFree()
             self.stopRecording()

@@ -426,6 +426,7 @@ final class LLMCleanup: Sendable {
     /// Clean up transcribed text using local Ollama LLM. `misheard` are the words
     /// `MisheardWordDetector` found in `text`; only these may be replaced by other words.
     func cleanup(text: String, misheard: [MisheardWordDetector.Word] = []) async -> String {
+        let text = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
         guard let url = URL(string: "\(baseURL)/api/generate") else { return text }
 
         var request = URLRequest(url: url)
@@ -470,9 +471,11 @@ final class LLMCleanup: Sendable {
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let responseText = json["response"] as? String {
                 owLog("[LLMCleanup] Ollama (\(model), \(ms) ms) answered: \(responseText)")
-                let cleaned = responseText
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                let cleaned = TranscriptSanitizer.removeForbiddenArtifacts(
+                    from: responseText
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                )
 
                 // Sanity check: filter out Chinese characters or empty/huge outputs
                 let hasChinese = cleaned.unicodeScalars.contains { scalar in

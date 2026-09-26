@@ -47,6 +47,28 @@ final class WhisperHallucinationTests: XCTestCase {
         let text = Array(repeating: "hadi bakalım gel", count: 5).joined(separator: " ")
         XCTAssertEqual(AudioSegmentation.collapseRepetitionLoops(text), "hadi bakalım gel")
     }
+
+    func testSubtitleCreditIsHardDeniedInEveryPositionAndSpelling() {
+        for text in ["Altyazı M.K.", "ALTYAZI M K", "altyazı m.k…", "Altyazi M. K.!"] {
+            XCTAssertEqual(TranscriptSanitizer.removeForbiddenArtifacts(from: text), "", text)
+        }
+
+        XCTAssertEqual(
+            TranscriptSanitizer.removeForbiddenArtifacts(from: "Merhaba. Altyazı M.K. Yarın görüşürüz."),
+            "Merhaba. Yarın görüşürüz."
+        )
+        XCTAssertEqual(
+            TranscriptSanitizer.removeForbiddenArtifacts(from: "Notu aldım, Altyazı M.K."),
+            "Notu aldım"
+        )
+    }
+
+    func testJoinedTranscriptCannotReintroduceSubtitleCredit() {
+        XCTAssertEqual(
+            AudioSegmentation.joinTranscripts(["Merhaba", "Altyazı M.K.", "nasılsın?"]),
+            "Merhaba nasılsın?"
+        )
+    }
 }
 
 final class WhisperTrailingOutroTests: XCTestCase {

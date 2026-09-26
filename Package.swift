@@ -17,6 +17,10 @@ let package = Package(
             name: "CDeepFilter",
             path: "Vendor/DeepFilter"
         ),
+        .systemLibrary(
+            name: "CWebRTCAEC",
+            path: "Vendor/WebRTCAEC"
+        ),
         .executableTarget(
             name: "OpenWhisper",
             dependencies: [
@@ -24,18 +28,27 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "onnxruntime", package: "onnxruntime-swift-package-manager"),
                 "CDeepFilter",
+                "CWebRTCAEC",
             ],
             path: "OpenWhisper",
             exclude: ["Info.plist", "OpenWhisper.entitlements"],
             resources: [
-                .process("Resources")
+                .process("Resources"),
+                .copy("Models/smart_turn.mlmodelc"),
+                .copy("Models/SmartTurn-LICENSE.txt")
             ],
             linkerSettings: [
                 // libDF (DeepFilterNet 3's Rust core, `capi` feature) is vendored as a prebuilt
                 // dylib — see Vendor/DeepFilter/README.md for how it was built. It carries
                 // install name @rpath/libdf.dylib; build.sh copies it next to the executable,
                 // which is already on the linker-provided @loader_path rpath.
-                .unsafeFlags(["-L", "Vendor/DeepFilter/lib", "-ldf"])
+                .unsafeFlags([
+                    "-L", "Vendor/DeepFilter/lib", "-ldf",
+                    "-L", "Vendor/WebRTCAEC/lib", "-lwebrtc_aec"
+                ]),
+                .linkedLibrary("c++"),
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("Foundation")
             ]
         ),
         .testTarget(

@@ -6,6 +6,22 @@ import Foundation
 enum JarvisAddressee {
     private static let locale = Locale(identifier: "tr_TR")
 
+    /// Plain JSON mode can still return a differently named field or a string. This schema
+    /// matches `parseScore`'s preferred representation and keeps the value in the decision's
+    /// documented 0...100 range.
+    static let ollamaResponseSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "score": [
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+            ]
+        ],
+        "required": ["score"],
+        "additionalProperties": false
+    ]
+
     /// Chat only at or above this score (0–100). `defaults write com.openwhisper.app jarvisChatMinScore 60`
     static var minScore: Int {
         let stored = UserDefaults.standard.integer(forKey: "jarvisChatMinScore")
@@ -64,7 +80,7 @@ enum JarvisAddressee {
             "prompt": prompt(text: text, frontApp: frontApp, lastReply: lastReply),
             "stream": false,
             "think": false,
-            "format": "json",
+            "format": ollamaResponseSchema,
             "keep_alive": LLMCleanup.keepAlive,
             "options": ["temperature": 0.0, "num_predict": 16],
         ]

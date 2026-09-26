@@ -1,4 +1,5 @@
 import Accelerate
+import CWebRTCAEC
 import Foundation
 
 /// Removes the Mac's own output (music on the speakers) from the wake-word microphone, using
@@ -19,17 +20,41 @@ enum EchoCancellationSettings {
     static var dumpsAudio: Bool {
         UserDefaults.standard.bool(forKey: "wakeWordEchoDump")
     }
+    /// `linear` keeps the existing vDSP filter. `aec3` opts into WebRTC AEC3's linear output;
+    /// its residual suppressor is deliberately not used because it damages wake-word scores.
+    /// `defaults write com.openwhisper.app wakeWordEchoEngine aec3`
+    static var engine: EchoCancellationEngineKind {
+        let value = UserDefaults.standard.string(forKey: "wakeWordEchoEngine")?.lowercased()
+        return value.flatMap(EchoCancellationEngineKind.init(rawValue:)) ?? .linear
+    }
 }
 
 // MARK: - Adaptive filter
+
+enum EchoCancellationEngineKind: String, Equatable {
+    case linear
+    case aec3
+}
+
+protocol EchoCancellationEngine: AnyObject {
+    var kind: EchoCancellationEngineKind { get }
+    var blockSize: Int { get }
+    var filterLength: Int { get }
+    var handlesDelayInternally: Bool { get }
+    func reset()
+    func process(mic: [Float], reference: [Float], rate: Float) -> [Float]
+}
 
 /// Partitioned-block frequency-domain adaptive filter (overlap-save, constrained gradient):
 /// `blockSize * partitions` taps of echo path, normalized per bin by the reference power.
 /// All buffers are allocated once and the spectral math is vDSP: it shares the listener's
 /// queue with the wake-word model, in a debug build.
-final class PartitionedEchoFilter {
+final class PartitionedEchoFilter: EchoCancellationEngine {
+    let kind = EchoCancellationEngineKind.linear
     let blockSize: Int
     let partitions: Int
+    var filterLength: Int { blockSize * partitions }
+    let handlesDelayInternally = false
     private let n: Int
     private let forward: vDSP_DFT_Setup
     private let inverse: vDSP_DFT_Setup
@@ -172,6 +197,54 @@ final class PartitionedEchoFilter {
     }
 }
 
+/// WebRTC AEC3 v2.1 configured to return only its linear adaptive-filter output. AEC3 consumes
+/// 10 ms frames and estimates the remaining render/capture delay itself; the shared timestamp
+/// aligner still provides the reference 100 ms ahead, exactly as in the offline research harness.
+final class AEC3LinearEchoFilter: EchoCancellationEngine {
+    let kind = EchoCancellationEngineKind.aec3
+    let blockSize = 160
+    let filterLength = 0
+    let handlesDelayInternally = true
+    private var handle: OpaquePointer?
+
+    init?() {
+        handle = ow_aec3_create()
+        if handle == nil { return nil }
+    }
+
+    deinit {
+        ow_aec3_destroy(handle)
+    }
+
+    func reset() {
+        ow_aec3_destroy(handle)
+        handle = ow_aec3_create()
+    }
+
+    func process(mic: [Float], reference: [Float], rate: Float) -> [Float] {
+        guard let handle, mic.count == blockSize, reference.count == blockSize else { return mic }
+        let render = rate > 0 ? reference : [Float](repeating: 0, count: blockSize)
+        var output = [Float](repeating: 0, count: blockSize)
+        let status = mic.withUnsafeBufferPointer { micBuffer in
+            render.withUnsafeBufferPointer { renderBuffer in
+                output.withUnsafeMutableBufferPointer { outputBuffer in
+                    ow_aec3_process(
+                        handle,
+                        micBuffer.baseAddress,
+                        renderBuffer.baseAddress,
+                        outputBuffer.baseAddress,
+                        blockSize
+                    )
+                }
+            }
+        }
+        // Still feed zero render frames so AEC3's timeline advances across playback gaps, but
+        // never replace clean microphone audio with its internally delayed linear buffer when
+        // there is no echo reference to remove.
+        return rate > 0 && status == 0 ? output : mic
+    }
+}
+
 // MARK: - Bulk delay
 
 /// GCC-PHAT between mic and reference: how many samples the echo trails the reference.
@@ -245,7 +318,9 @@ final class EchoCanceller {
     /// The filter starts this far before the estimated delay (the echo builds up before its peak).
     private static let delayMargin = 480
 
-    private let filter = PartitionedEchoFilter()
+    private let filter: any EchoCancellationEngine
+    let activeEngine: EchoCancellationEngineKind
+    private var startupNotice: String?
     private var blockSize: Int { filter.blockSize }
     private var micPending: [Float] = []
     private var refPending: [Float] = []
@@ -268,7 +343,18 @@ final class EchoCanceller {
     private(set) var erleSamples: [Float] = []
     var log: (String) -> Void = { _ in }
 
-    init() {
+    init(engine requestedEngine: EchoCancellationEngineKind = EchoCancellationSettings.engine) {
+        if requestedEngine == .aec3, let aec3 = AEC3LinearEchoFilter() {
+            filter = aec3
+            activeEngine = .aec3
+            startupNotice = "[AEC] Engine: WebRTC AEC3 linear output"
+        } else {
+            filter = PartitionedEchoFilter()
+            activeEngine = .linear
+            startupNotice = requestedEngine == .aec3
+                ? "[AEC] AEC3 initialization failed — using linear vDSP engine"
+                : "[AEC] Engine: linear vDSP"
+        }
         filterDelay = Self.lookahead - Self.delayMargin
         referenceHistory = [Float](repeating: 0, count: Self.maxDelay + 2 * 256)
     }
@@ -287,6 +373,10 @@ final class EchoCanceller {
     /// so output may lag input by up to one block).
     func process(mic: [Float], reference: [Float]) -> [Float] {
         precondition(mic.count == reference.count)
+        if let startupNotice {
+            log(startupNotice)
+            self.startupNotice = nil
+        }
         micPending += mic
         refPending += reference
         collectForEstimate(mic: mic, reference: reference)
@@ -309,12 +399,18 @@ final class EchoCanceller {
     private func processBlock(mic: [Float], reference: [Float]) -> [Float] {
         referenceHistory.removeFirst(blockSize)
         referenceHistory += reference
-        // The block of reference `filterDelay` samples behind this mic block.
-        let end = referenceHistory.count - filterDelay
-        let delayed = Array(referenceHistory[(end - blockSize)..<end])
+        // The in-house filter uses the bulk delay estimate. AEC3 receives the aligner's paired
+        // reference unchanged and finds the remaining acoustic/device delay internally.
+        let workingReference: [Float]
+        if filter.handlesDelayInternally {
+            workingReference = reference
+        } else {
+            let end = referenceHistory.count - filterDelay
+            workingReference = Array(referenceHistory[(end - blockSize)..<end])
+        }
 
         var refEnergy: Float = 0, micEnergy: Float = 0
-        vDSP_svesq(delayed, 1, &refEnergy, vDSP_Length(blockSize))
+        vDSP_svesq(workingReference, 1, &refEnergy, vDSP_Length(blockSize))
         vDSP_svesq(mic, 1, &micEnergy, vDSP_Length(blockSize))
         let referenceActive = refEnergy > 1e-7
 
@@ -322,7 +418,7 @@ final class EchoCanceller {
         // (ERLE 8 dB vs 22 dB without) and never helped the wake score, even after 5 s of talking
         // over the music. The per-bin normalization keeps the voice's pull on the filter in
         // proportion to how loud the music is, which is exactly when cancelling matters.
-        let output = filter.process(mic: mic, reference: delayed, rate: referenceActive ? 1 : 0)
+        let output = filter.process(mic: mic, reference: workingReference, rate: referenceActive ? 1 : 0)
         var errorEnergy: Float = 0
         vDSP_svesq(output, 1, &errorEnergy, vDSP_Length(blockSize))
         let a: Float = 0.9
@@ -362,13 +458,15 @@ final class EchoCanceller {
         let latencyMs = Double(estimate.delay - Self.lookahead) / 16
         log(String(format: "[AEC] Delay estimate %.1f ms (confidence %.1f)", latencyMs, estimate.confidence))
         guard estimate.confidence >= 8 else { return }
+        // AEC3 owns delay tracking; retain the shared estimator for diagnostics only.
+        guard !filter.handlesDelayInternally else { return }
         // Two agreeing estimates in a row before moving the filter.
         defer { delayCandidate = estimate.delay }
         guard let previous = delayCandidate, abs(previous - estimate.delay) <= 48 else { return }
         // Resetting throws away seconds of adaptation: only move when the direct path is about
         // to fall outside the filter, or leaves it less than half its length for the tail.
         let target = max(0, estimate.delay - Self.delayMargin)
-        let taps = filter.blockSize * filter.partitions
+        let taps = filter.filterLength
         let covered = (filterDelay + 160)...(filterDelay + taps / 2)
         if !covered.contains(estimate.delay) {
             log(String(format: "[AEC] Filter delay %.1f → %.1f ms (reset)",

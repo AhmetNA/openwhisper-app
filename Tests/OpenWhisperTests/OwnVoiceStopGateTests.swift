@@ -9,7 +9,8 @@ final class OwnVoiceStopGateTests: XCTestCase {
         // A friend keeps talking: loud, but not the enrolled voice.
         XCTAssertFalse(gate.record(score: 0.1, at: 2.0))
         XCTAssertFalse(gate.record(score: 0.15, at: 2.5))
-        XCTAssertTrue(gate.record(score: 0.1, at: 3.0))
+        XCTAssertFalse(gate.record(score: 0.1, at: 4.0))
+        XCTAssertTrue(gate.record(score: 0.1, at: 4.5))
     }
 
     func testUserSpeakingAgainResetsThePause() {
@@ -18,7 +19,8 @@ final class OwnVoiceStopGateTests: XCTestCase {
         XCTAssertFalse(gate.record(score: 0.1, at: 2.0))
         XCTAssertFalse(gate.record(score: 0.5, at: 2.4))
         XCTAssertFalse(gate.record(score: 0.1, at: 3.5))
-        XCTAssertTrue(gate.record(score: 0.1, at: 3.9))
+        XCTAssertFalse(gate.record(score: 0.1, at: 5.0))
+        XCTAssertTrue(gate.record(score: 0.1, at: 5.4))
     }
 
     func testNeverStopsBeforeTheUsersVoiceMatchedOnce() {

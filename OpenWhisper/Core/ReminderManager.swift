@@ -165,6 +165,19 @@ final class ReminderManager {
         UserDefaults.standard.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
     }
 
+    /// Constrains Ollama to the two fields the parser accepts. Plain `"json"` mode only
+    /// guarantees syntactically valid JSON; a schema also prevents renamed/missing fields and
+    /// non-string values from reaching the defensive fallback parser below.
+    static let ollamaResponseSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "task": ["type": "string"],
+            "datetime": ["type": "string"]
+        ],
+        "required": ["task", "datetime"],
+        "additionalProperties": false
+    ]
+
     /// Ask Ollama to parse task description and target fireDate from voice text
     private func parseWithOllama(text: String) async -> ParsedReminder? {
         guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
@@ -233,10 +246,10 @@ final class ReminderManager {
             // qwen3 (and other "thinking" models) emit a <think>...</think> block by default,
             // which used to eat the whole num_predict budget and leave "response" empty
             // (done_reason "length") before any JSON was produced. "think": false skips that,
-            // and "format": "json" makes Ollama constrain the output to valid JSON.
+            // and a JSON schema makes Ollama constrain both the syntax and required fields.
             "think": false,
             "keep_alive": LLMCleanup.keepAlive,
-            "format": "json",
+            "format": Self.ollamaResponseSchema,
             "options": [
                 "temperature": 0.1,
                 "num_predict": 150

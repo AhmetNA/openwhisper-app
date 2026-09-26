@@ -64,9 +64,14 @@ final class EchoCancellerTests: XCTestCase {
 
     /// Runs the canceller the way the listener does: the paired reference is the raw reference
     /// shifted `lookahead` samples ahead of the mic.
-    private func cancel(mic: [Float], reference: [Float], chunk: Int = 480) -> [Float] {
+    private func cancel(
+        mic: [Float],
+        reference: [Float],
+        chunk: Int = 480,
+        engine: EchoCancellationEngineKind = .linear
+    ) -> [Float] {
         let ahead = Array(reference.dropFirst(EchoCanceller.lookahead)) + [Float](repeating: 0, count: EchoCanceller.lookahead)
-        let canceller = EchoCanceller()
+        let canceller = EchoCanceller(engine: engine)
         canceller.log = { print($0) }
         var out: [Float] = []
         var i = 0
@@ -81,6 +86,24 @@ final class EchoCancellerTests: XCTestCase {
     private func energy(_ x: ArraySlice<Float>) -> Float { x.reduce(0) { $0 + $1 * $1 } }
 
     // MARK: Tests
+
+    func testEngineSelectionDefaultsToLinearAndAEC3IsAvailable() {
+        XCTAssertEqual(EchoCanceller(engine: .linear).activeEngine, .linear)
+        XCTAssertEqual(EchoCanceller(engine: .aec3).activeEngine, .aec3)
+    }
+
+    func testAEC3SilentReferenceIsPassThrough() throws {
+        let wake = try wakePositive()
+        let out = cancel(
+            mic: wake,
+            reference: [Float](repeating: 0, count: wake.count),
+            chunk: 480,
+            engine: .aec3
+        )
+        XCTAssertEqual(out.count / 160 * 160, out.count)
+        let maxError = zip(out, wake).map { abs($0 - $1) }.max() ?? 0
+        XCTAssertLessThan(maxError, 1e-5)
+    }
 
     func testCancelsMusicEcho() throws {
         let ref = try music(seconds: 12)
@@ -142,6 +165,15 @@ final class EchoCancellerTests: XCTestCase {
 
     /// The point of the whole thing: "Jarvis" under loud speaker music.
     func testRestoresWakeScoreUnderMusic() throws {
+        try assertRestoresWakeScoreUnderMusic(engine: .linear)
+    }
+
+    /// AEC3 is accepted only if its linear output preserves the wake word under loud music.
+    func testAEC3LinearRestoresWakeScoreUnderMusic() throws {
+        try assertRestoresWakeScoreUnderMusic(engine: .aec3)
+    }
+
+    private func assertRestoresWakeScoreUnderMusic(engine: EchoCancellationEngineKind) throws {
         let wake = try wakePositive()
         let lead = 8 * rate // time for the filter to converge before the word
         let ref = try music(seconds: (lead + wake.count) / rate + 2)
@@ -154,7 +186,7 @@ final class EchoCancellerTests: XCTestCase {
 
         var mic = echo
         for (i, v) in wake.enumerated() { mic[lead + i] += v }
-        let cleaned = cancel(mic: mic, reference: ref)
+        let cleaned = cancel(mic: mic, reference: ref, engine: engine)
 
         func peak(_ audio: [Float]) throws -> Float {
             let slice = Array(audio[(lead - 2 * rate)..<min(audio.count, lead + wake.count)])
@@ -163,7 +195,8 @@ final class EchoCancellerTests: XCTestCase {
         let clean = try scores(wake.map { $0 * 32767 }).max() ?? 0
         let noisy = try peak(mic)
         let fixed = try peak(cleaned)
-        print(String(format: "Wake peak — clean %.2f, music %.2f, music + AEC %.2f", clean, noisy, fixed))
+        print(String(format: "Wake peak (%@) — clean %.2f, music %.2f, music + AEC %.2f",
+                     engine.rawValue, clean, noisy, fixed))
         XCTAssertGreaterThan(fixed, noisy + 0.2)
         XCTAssertGreaterThan(fixed, 0.5)
     }

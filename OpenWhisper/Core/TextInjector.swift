@@ -280,7 +280,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     private let backspaceKeyCode: CGKeyCode = 51
 
     private func cleanedText(_ text: String) -> String {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
         if cleaned.hasPrefix("[BLANK") || cleaned.hasPrefix("(BLANK") {
             return ""
         }

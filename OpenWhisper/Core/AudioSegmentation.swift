@@ -189,7 +189,7 @@ struct AudioSegmentation {
     /// Ambiguous or short repetitions are retained so intentional spoken repeats are never
     /// silently lost.
     static func joinTranscripts(_ texts: [String]) -> String {
-        texts.reduce("") { combined, next in
+        let joined = texts.reduce("") { combined, next in
             let next = next.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !combined.isEmpty else { return next }
             guard !next.isEmpty else { return combined }
@@ -211,6 +211,7 @@ struct AudioSegmentation {
             let remainder = right.dropFirst(overlap).joined(separator: " ")
             return overlap == 0 ? "\(combined) \(next)" : "\(combined) \(remainder)"
         }.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TranscriptSanitizer.removeForbiddenArtifacts(from: joined)
     }
 
     private static func normalize(_ word: String) -> String {

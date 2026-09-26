@@ -32,6 +32,13 @@ if [ ! -f "$DF_LIB_SRC" ] || [ ! -f "$DF_MODEL_SRC" ]; then
 fi
 cp "$DF_MODEL_SRC" "$APP_DIR/Resources/DeepFilterNet3_onnx.tar.gz"
 
+# WebRTC AEC3 and Abseil are statically linked. Keep their required notices in the app bundle.
+AEC_NOTICE_DIR="$APP_DIR/Resources/ThirdPartyLicenses"
+mkdir -p "$AEC_NOTICE_DIR"
+cp Vendor/WebRTCAEC/LICENSE.webrtc "$AEC_NOTICE_DIR/WebRTC-LICENSE.txt"
+cp Vendor/WebRTCAEC/PATENTS.webrtc "$AEC_NOTICE_DIR/WebRTC-PATENTS.txt"
+cp Vendor/WebRTCAEC/LICENSE.abseil "$AEC_NOTICE_DIR/Abseil-LICENSE.txt"
+
 # Copy executable
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
 # SwiftPM stamps the binary with sdk == deployment target (14.0), which makes macOS

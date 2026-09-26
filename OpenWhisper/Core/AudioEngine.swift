@@ -125,6 +125,10 @@ final class AudioEngine: @unchecked Sendable {
     )
     private var leadingOverlapSampleCount = 0
     private var levelCallback: ((Float) -> Void)?
+    /// Optional 16 kHz, mono, post-processing stream for lightweight online models. The array is
+    /// copied only when a voice-triggered session installs this callback; normal Fn recordings
+    /// keep the allocation-free path.
+    private var sampleCallback: (([Float]) -> Void)?
     private var lastLevelUpdate = Date.distantPast
     private let levelUpdateInterval: TimeInterval = 1.0 / 20.0
     private var didLogInputChannelSelection = false
@@ -242,6 +246,7 @@ final class AudioEngine: @unchecked Sendable {
     func startRecording(
         deviceUID: String?,
         audioProcessingMode: AudioProcessingMode,
+        sampleCallback: (([Float]) -> Void)? = nil,
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
         hasLoggedFirstBuffer = false
@@ -259,6 +264,7 @@ final class AudioEngine: @unchecked Sendable {
         // engine after an interrupted setup.
         segmentPreparationQueue.sync {}
         self.levelCallback = levelCallback
+        self.sampleCallback = sampleCallback
         lastLevelUpdate = .distantPast
         lock.lock()
         sampleChunks = []
@@ -469,6 +475,7 @@ final class AudioEngine: @unchecked Sendable {
         configuredDeviceUID = nil
         configuredAudioProcessingMode = nil
         levelCallback = nil
+        sampleCallback = nil
 
         lock.lock()
         flushConverter()
@@ -695,6 +702,12 @@ final class AudioEngine: @unchecked Sendable {
         // noise gate here: a gate would erase exactly the low-volume syllables this path is
         // intended to recover. The compressor prevents the modest gain from clipping.
         AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
+        if let sampleCallback {
+            sampleCallback(Array(UnsafeBufferPointer(
+                start: output,
+                count: Int(convertedBuffer.frameLength)
+            )))
+        }
         appendSamples(output, count: Int(convertedBuffer.frameLength))
         emitCompletedSegmentIfNeeded()
     }

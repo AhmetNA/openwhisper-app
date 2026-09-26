@@ -42,4 +42,17 @@ final class JarvisAddresseeTests: XCTestCase {
         XCTAssertFalse(JarvisAddressee.isForJarvis(score: 50, minScore: 70))
         XCTAssertFalse(JarvisAddressee.isForJarvis(score: nil, minScore: 70))
     }
+
+    func testOllamaResponseSchemaRequiresBoundedIntegerScore() throws {
+        let schema = JarvisAddressee.ollamaResponseSchema
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(schema))
+        XCTAssertEqual(schema["required"] as? [String], ["score"])
+        XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
+
+        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let score = try XCTUnwrap(properties["score"] as? [String: Any])
+        XCTAssertEqual(score["type"] as? String, "integer")
+        XCTAssertEqual(score["minimum"] as? Int, 0)
+        XCTAssertEqual(score["maximum"] as? Int, 100)
+    }
 }

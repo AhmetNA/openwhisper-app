@@ -1,0 +1,4 @@
+module CWebRTCAEC {
+    header "include/webrtc_aec.h"
+    export *
+}

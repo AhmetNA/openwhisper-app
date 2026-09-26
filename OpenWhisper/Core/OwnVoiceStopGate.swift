@@ -16,9 +16,11 @@ struct OwnVoiceStopGate {
     static let checkInterval: TimeInterval = 0.5
 
     let threshold: Float
-    /// Time since the last matching window before stopping. A window still holds 1.5 s of
-    /// audio, so the perceived pause after the user's last word is roughly 2–2.5 s.
-    var silenceToStop: TimeInterval = 1.5
+    /// Time since the last matching window before stopping. Similarity fluctuates on normal
+    /// speech (the live log has adjacent 0.505 / 0.350 scores), so 1.5 s treated a thinking pause
+    /// as the user leaving. Three seconds still ends a session held open by another speaker but
+    /// cannot win over the shorter, model-confirmed Smart Turn endpoint.
+    var silenceToStop: TimeInterval = 3
 
     private(set) var lastMatchTime: TimeInterval?
 
