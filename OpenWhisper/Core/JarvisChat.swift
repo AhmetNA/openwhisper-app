@@ -38,7 +38,11 @@ final class JarvisChat {
                 var buffer = ""
                 var firstSentenceMs: Int?
                 func emit(_ sentences: [String]) {
-                    for sentence in sentences.map(Self.speakable) where !sentence.isEmpty {
+                    for original in sentences.map(Self.speakable) where !original.isEmpty {
+                        let sentence = Self.preventUnsupportedActionClaim(original, for: text)
+                        if sentence != original {
+                            owLog("[Chat] Blocked unsupported action claim: '\(original)'")
+                        }
                         if firstSentenceMs == nil { firstSentenceMs = Int(Date().timeIntervalSince(started) * 1000) }
                         full += (full.isEmpty ? "" : " ") + sentence
                         continuation.yield(sentence)
@@ -121,7 +125,7 @@ final class JarvisChat {
         - Kullanıcı hangi dilde konuştuysa o dilde cevap ver; genelde Türkçe.
         - Kullanıcıya bazen "patron" ya da "efendim" de; bir cevapta en fazla bir kez, her cevapta değil.
         - Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle.
-        - Bilgisayarda bir işlem istenirse ve bu sohbetten yapamıyorsan bunu tek cümleyle söyle, yapmış gibi davranma.
+        - Bu sohbet yolu hiçbir bilgisayar işlemi yapamaz. Bir işlem istenirse "Bu sohbetten o işlemi gerçekleştiremedim" de. "Sildim", "silindi", "gönderdim", "oluşturdum" gibi başarı iddialarında bulunma.
         - Kendi adını ("Jarvis") söyleme.
         Şu an: \(formatter.string(from: now)).
         """
@@ -157,5 +161,33 @@ final class JarvisChat {
         var out = String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
         while let first = out.first, "-•".contains(first) { out = String(out.dropFirst()).trimmingCharacters(in: .whitespaces) }
         return out
+    }
+
+    /// Last line of defence for an action-like utterance that escaped the deterministic
+    /// command routers. Chat has no tools, so it must never speak a fabricated success claim.
+    nonisolated static func preventUnsupportedActionClaim(_ reply: String, for userText: String) -> String {
+        let locale = Locale(identifier: "tr_TR")
+        func folded(_ value: String) -> String {
+            value
+                .lowercased(with: locale)
+                .folding(options: [.diacriticInsensitive], locale: locale)
+                .replacingOccurrences(of: "ı", with: "i")
+        }
+
+        let user = folded(userText).trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestPattern = #"\b(?:sil|kaldir|iptal\s+et|gonder|yolla|ac|kapat|kur|olustur|ayarla|degistir)(?:er\s+misin|abilir\s+misin|sana|in)?(?:\s+lutfen)?[.!?]*$"#
+        guard user.range(of: requestPattern, options: .regularExpression) != nil else {
+            return reply
+        }
+
+        let answer = folded(reply)
+        let unsupportedClaims = [
+            "sildim", "silindi", "kaldirdim", "kaldirildi", "iptal ettim", "iptal edildi",
+            "gonderdim", "gonderildi", "yolladim", "actim", "acildi", "kapattim", "kapandi",
+            "kurdum", "kuruldu", "olusturdum", "olusturuldu", "ayarladim", "ayarlandi",
+            "degistirdim", "degistirildi", "hallettim", "tamamlandi"
+        ]
+        guard unsupportedClaims.contains(where: answer.contains) else { return reply }
+        return "Bu sohbetten o işlemi gerçekleştiremedim."
     }
 }

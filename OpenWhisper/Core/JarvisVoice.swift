@@ -149,14 +149,15 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     /// Speaks `text` and returns when it finished (or failed / was stopped), so the caller can
     /// hold back resuming music until Jarvis is done talking. `onStart` runs once the audio is
     /// actually playing, after the (possibly slow) synthesis.
-    func speak(_ text: String, onStart: () -> Void = {}) async {
+    @discardableResult
+    func speak(_ text: String, onStart: () -> Void = {}) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else { return false }
         stop()
         let myGeneration = generation
         let started = Date()
-        guard let audio = await audio(for: text) else { return }
-        _ = await play(audio, text: text, started: started, generation: myGeneration, onStart: onStart)
+        guard let audio = await audio(for: text) else { return false }
+        return await play(audio, text: text, started: started, generation: myGeneration, onStart: onStart)
     }
 
     /// Speaks sentences as they arrive, e.g. a chat reply the model is still writing: each one

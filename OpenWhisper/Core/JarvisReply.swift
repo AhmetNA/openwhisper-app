@@ -57,6 +57,35 @@ struct JarvisReply {
         scheduled ? addressing("Not ettim.") : failure("hatırlatıcıyı kuramadım")
     }
 
+    mutating func reminderDeletion(_ result: ReminderManager.DeletionResult) -> String {
+        switch result {
+        case .confirmationRequired(let matches):
+            if matches.count == 1, let name = matches.first {
+                return "\(name) hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?"
+            }
+            let names = matches.prefix(3).joined(separator: ", ")
+            return "\(matches.count) hatırlatıcıyı silmek üzereyim: \(names). Onaylıyor musunuz?"
+        case .deleted(let count, let appleVerified):
+            if appleVerified {
+                return addressing(count == 1 ? "Hatırlatıcıyı sildim." : "\(count) hatırlatıcıyı sildim.")
+            }
+            return failure("yerel hatırlatıcıyı sildim fakat Apple Hatırlatıcılar kaydını doğrulayamadım")
+        case .notFound:
+            return failure("eşleşen bir hatırlatıcı bulamadım")
+        case .ambiguous(let matches):
+            let names = matches.prefix(3).joined(separator: ", ")
+            return failure("birden fazla eşleşme buldum: \(names); hangisini sileceğinizi söyleyin")
+        case .cancelled:
+            return "İptal ettim. Hiçbir hatırlatıcı silinmedi."
+        case .notConfirmed:
+            return "Onay vermediğiniz için hiçbir hatırlatıcı silmedim."
+        case .confirmationExpired:
+            return "Onay süresi doldu. Hiçbir hatırlatıcı silmedim."
+        case .failed:
+            return failure("hatırlatıcıları kontrol edemedim")
+        }
+    }
+
     // MARK: - Building blocks
 
     mutating func ack() -> String {

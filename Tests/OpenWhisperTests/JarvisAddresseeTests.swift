@@ -3,6 +3,24 @@ import XCTest
 
 final class JarvisAddresseeTests: XCTestCase {
 
+    func testLeadingTypeOverride() {
+        XCTAssertEqual(JarvisAddressee.leadingTypeCommand("Buraya yaz: yarın toplantıya geç kalacağım"),
+                       "yarın toplantıya geç kalacağım")
+        XCTAssertEqual(JarvisAddressee.leadingTypeCommand("İmlece şunu yaz merhaba dünya"), "merhaba dünya")
+        XCTAssertEqual(JarvisAddressee.leadingTypeCommand("Alana bunu yazar mısın? selam"), "selam")
+        XCTAssertNil(JarvisAddressee.leadingTypeCommand("yaz bana bir şiir"))
+        XCTAssertNil(JarvisAddressee.leadingTypeCommand("buraya yazı yazmak zor"))
+    }
+
+    func testExplicitChatOverride() {
+        XCTAssertEqual(JarvisAddressee.explicitChatCommand("Bana cevap ver: sence bu mantıklı mı?"),
+                       "sence bu mantıklı mı?")
+        XCTAssertEqual(JarvisAddressee.explicitChatCommand("Jarvis'e sor yarın hava nasıl"), "yarın hava nasıl")
+        XCTAssertEqual(JarvisAddressee.explicitChatCommand("Seninle konuşuyorum, neden böyle oldu?"),
+                       "neden böyle oldu?")
+        XCTAssertNil(JarvisAddressee.explicitChatCommand("Bana yarın cevap ver"))
+    }
+
     func testTrailingYazVariants() {
         XCTAssertEqual(JarvisAddressee.trailingTypeCommand("Bluetooth'u kapat yaz"), "Bluetooth'u kapat")
         XCTAssertEqual(JarvisAddressee.trailingTypeCommand("Akşam geliyorum, bunu yaz."), "Akşam geliyorum")
@@ -41,6 +59,47 @@ final class JarvisAddresseeTests: XCTestCase {
         XCTAssertTrue(JarvisAddressee.isForJarvis(score: 70, minScore: 70))
         XCTAssertFalse(JarvisAddressee.isForJarvis(score: 50, minScore: 70))
         XCTAssertFalse(JarvisAddressee.isForJarvis(score: nil, minScore: 70))
+    }
+
+    func testKnownEditableFocusAlwaysTypesWithoutSemanticGuessing() {
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(
+                focusStatus: .editable,
+                score: 100,
+                minScore: 70
+            ),
+            .type
+        )
+    }
+
+    func testKnownNonEditableFocusAlwaysChatsWithoutSemanticGuessing() {
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(
+                focusStatus: .notEditable,
+                score: 0,
+                minScore: 70
+            ),
+            .chat
+        )
+    }
+
+    func testUnknownFocusUsesScoreFallback() {
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(
+                focusStatus: .unknown,
+                score: 80,
+                minScore: 70
+            ),
+            .chat
+        )
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(
+                focusStatus: .unknown,
+                score: nil,
+                minScore: 70
+            ),
+            .type
+        )
     }
 
     func testOllamaResponseSchemaRequiresBoundedIntegerScore() throws {

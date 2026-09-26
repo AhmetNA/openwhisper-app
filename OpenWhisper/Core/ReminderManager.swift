@@ -25,7 +25,61 @@ final class ReminderManager {
         let task: String
         let fireDate: Date
         let createdAt: Date
+        /// EventKit identifier of the Apple Reminders copy. Older persisted records decode
+        /// without it and are matched by exact title + due date during deletion.
+        let appleReminderIdentifier: String?
+
+        init(
+            id: String,
+            task: String,
+            fireDate: Date,
+            createdAt: Date,
+            appleReminderIdentifier: String? = nil
+        ) {
+            self.id = id
+            self.task = task
+            self.fireDate = fireDate
+            self.createdAt = createdAt
+            self.appleReminderIdentifier = appleReminderIdentifier
+        }
     }
+
+    struct DeletionRequest: Equatable, Sendable {
+        let query: String?
+        let deleteAll: Bool
+    }
+
+    enum DeletionResult: Equatable, Sendable {
+        case confirmationRequired(matches: [String])
+        case deleted(count: Int, appleVerified: Bool)
+        case notFound
+        case ambiguous(matches: [String])
+        case cancelled
+        case notConfirmed
+        case confirmationExpired
+        case failed
+    }
+
+    enum DeletionConfirmationDecision: Equatable, Sendable {
+        case approve
+        case reject
+        case unclear
+    }
+
+    private struct ResolvedDeletion {
+        let localMatches: [Reminder]
+        let appleMatches: [EKReminder]
+        let appleWasAvailable: Bool
+        let displayNames: [String]
+    }
+
+    private struct PendingDeletion {
+        let resolved: ResolvedDeletion
+        let expiresAt: Date
+    }
+
+    private var pendingDeletion: PendingDeletion?
+    private static let deletionConfirmationTimeout: TimeInterval = 45
 
     private(set) var reminders: [Reminder] = []
 
@@ -92,6 +146,96 @@ final class ReminderManager {
         return false
     }
 
+    /// Recognizes only explicit reminder deletion commands. Requiring both a reminder noun and
+    /// a deletion verb prevents ordinary phrases such as "dosyayı sil" from reaching EventKit.
+    nonisolated static func deletionRequest(_ text: String) -> DeletionRequest? {
+        let locale = Locale(identifier: "tr_TR")
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased(with: locale)
+        guard lowered.utf16.count == trimmed.utf16.count else { return nil }
+
+        let reminderWord = #"(?:hatırlatıcı|anımsatıcı|reminder)\p{L}*"#
+        let deletionVerb = #"(?:sil|kaldır|iptal\s+et)\p{L}*"#
+        let pattern = #"^\s*(.*?)\s*\b"# + reminderWord + #"\b\s*(?:\S+\s+){0,2}?"# + deletionVerb + #"\s*[.!?]*\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else {
+            return nil
+        }
+
+        let prefixRange = match.range(at: 1)
+        guard let range = Range(prefixRange, in: trimmed) else { return nil }
+        var query = String(trimmed[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        query = query.replacingOccurrences(
+            of: #"^(?:jarvis|hey\s+jarvis|selam\s+jarvis)\b[\s,:;-]*"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let folded = foldForMatching(query)
+        let wholeCommand = foldForMatching(trimmed)
+        let allWords: Set<String> = ["tum", "butun", "hepsi", "hepsini", "hepsini de", "all"]
+        let deleteAll = allWords.contains(folded)
+            || folded.hasPrefix("tum ")
+            || folded.hasPrefix("butun ")
+            || folded.hasSuffix(" hepsini")
+            || wholeCommand.contains("tum hatirlatici")
+            || wholeCommand.contains("butun hatirlatici")
+            || wholeCommand.contains("hatirlaticilarin hepsini")
+
+        if deleteAll { return DeletionRequest(query: nil, deleteAll: true) }
+        return DeletionRequest(query: query.isEmpty ? nil : query, deleteAll: false)
+    }
+
+    nonisolated static func reminderTitle(_ title: String, matches query: String) -> Bool {
+        let candidate = foldForMatching(title)
+        let wanted = foldForMatching(query)
+        guard !candidate.isEmpty, !wanted.isEmpty else { return false }
+        if candidate == wanted || candidate.contains(wanted) || wanted.contains(candidate) {
+            return true
+        }
+
+        let candidateWords = Set(candidate.split(separator: " ").map(String.init).filter { $0.count >= 3 })
+        let wantedWords = Set(wanted.split(separator: " ").map(String.init).filter { $0.count >= 3 })
+        guard !candidateWords.isEmpty, !wantedWords.isEmpty else { return false }
+        return wantedWords.allSatisfy { wantedWord in
+            candidateWords.contains { candidateWord in
+                candidateWord.hasPrefix(wantedWord) || wantedWord.hasPrefix(candidateWord)
+            }
+        }
+    }
+
+    /// Only a short, explicit answer can authorize a pending destructive action. Negative
+    /// forms are checked first so "onaylamıyorum" can never be mistaken for approval.
+    nonisolated static func deletionConfirmationDecision(_ text: String) -> DeletionConfirmationDecision {
+        var answer = foldForMatching(text)
+        if answer.hasPrefix("jarvis ") {
+            answer.removeFirst("jarvis ".count)
+        }
+
+        let rejections: Set<String> = [
+            "hayir", "hayir silme", "silme", "iptal", "iptal et", "vazgec", "vazgectim",
+            "onaylamiyorum", "onay vermiyorum", "reddediyorum"
+        ]
+        if rejections.contains(answer) { return .reject }
+
+        let approvals: Set<String> = [
+            "evet", "evet onayliyorum", "onayliyorum", "onay veriyorum", "tamam",
+            "tamam sil", "sil", "devam et"
+        ]
+        if approvals.contains(answer) { return .approve }
+        return .unclear
+    }
+
+    nonisolated private static func foldForMatching(_ text: String) -> String {
+        let locale = Locale(identifier: "tr_TR")
+        return text
+            .lowercased(with: locale)
+            .folding(options: [.diacriticInsensitive], locale: locale)
+            .replacingOccurrences(of: "ı", with: "i")
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Parse & Schedule
 
     /// Parse reminder text and schedule a notification. Tries the deterministic Turkish
@@ -120,17 +264,25 @@ final class ReminderManager {
         }
 
         // Schedule notification
-        let reminder = Reminder(
-            id: UUID().uuidString,
+        let reminderID = UUID().uuidString
+        let draft = Reminder(
+            id: reminderID,
             task: parsed.task,
             fireDate: parsed.fireDate,
             createdAt: Date()
         )
 
-        let scheduled = await scheduleNotification(reminder: reminder)
-        let savedApple = await createAppleReminder(reminder: reminder)
+        let scheduled = await scheduleNotification(reminder: draft)
+        let appleIdentifier = await createAppleReminder(reminder: draft)
+        let reminder = Reminder(
+            id: reminderID,
+            task: parsed.task,
+            fireDate: parsed.fireDate,
+            createdAt: draft.createdAt,
+            appleReminderIdentifier: appleIdentifier
+        )
 
-        if scheduled || savedApple {
+        if scheduled || appleIdentifier != nil {
             reminders.append(reminder)
             saveReminders()
 
@@ -141,12 +293,12 @@ final class ReminderManager {
                 title: "✓ Hatırlatıcı Kuruldu",
                 body: "\(reminder.task) — \(formatter.string(from: reminder.fireDate))"
             )
-            owLog("[Reminders] Scheduled: \(reminder.task) at \(reminder.fireDate) (Apple Reminders: \(savedApple))")
+            owLog("[Reminders] Scheduled: \(reminder.task) at \(reminder.fireDate) (Apple Reminders: \(appleIdentifier != nil))")
         }
         // A reminder is a success if EITHER the local notification was scheduled or it landed
         // in Apple Reminders — previously this only checked `scheduled`, so a successful Apple
         // Reminders save with a failed/denied notification was silently reported as failure.
-        return scheduled || savedApple
+        return scheduled || appleIdentifier != nil
     }
 
     // MARK: - Ollama Parsing
@@ -376,7 +528,7 @@ final class ReminderManager {
 
     // MARK: - EventKit (Apple Reminders App)
 
-    private func createAppleReminder(reminder: Reminder) async -> Bool {
+    private func createAppleReminder(reminder: Reminder) async -> String? {
         // Reuse the single shared eventStore instance rather than creating a fresh
         // EKEventStore() per call — a new store has to re-establish its authorization state
         // with the OS on every call, which can spuriously appear unauthorized/denied.
@@ -390,12 +542,12 @@ final class ReminderManager {
 
         guard granted else {
             owLog("[Reminders] EventKit permission not granted")
-            return false
+            return nil
         }
 
         guard let calendar = store.defaultCalendarForNewReminders() else {
             owLog("[Reminders] No default calendar found in Apple Reminders")
-            return false
+            return nil
         }
 
         let ekReminder = EKReminder(eventStore: store)
@@ -411,11 +563,230 @@ final class ReminderManager {
         do {
             try store.save(ekReminder, commit: true)
             owLog("[Reminders] Successfully created Apple Reminder: \(reminder.task)")
-            return true
+            return ekReminder.calendarItemIdentifier
         } catch {
             owLog("[Reminders] Failed to save Apple Reminder: \(error)")
+            return nil
+        }
+    }
+
+    // MARK: - Deletion
+
+    /// Resolves the exact records first but does not mutate anything. The returned plan is kept
+    /// for a short, single-use confirmation window so later records cannot enter the deletion.
+    func beginDeletion(_ request: DeletionRequest) async -> DeletionResult {
+        pendingDeletion = nil
+        let resolution = await resolveDeletion(request)
+        switch resolution {
+        case .success(let resolved):
+            pendingDeletion = PendingDeletion(
+                resolved: resolved,
+                expiresAt: Date().addingTimeInterval(Self.deletionConfirmationTimeout)
+            )
+            owLog("[Reminders] Deletion awaiting confirmation for: \(resolved.displayNames.joined(separator: ", "))")
+            return .confirmationRequired(matches: resolved.displayNames)
+        case .failure(let result):
+            return result
+        }
+    }
+
+    /// Consumes the pending plan. Any answer other than an explicit approval prevents deletion;
+    /// approvals after the timeout are also rejected.
+    func handleDeletionConfirmation(_ text: String) async -> DeletionResult? {
+        guard let pending = pendingDeletion else { return nil }
+        let decision = Self.deletionConfirmationDecision(text)
+
+        guard pending.expiresAt > Date() else {
+            pendingDeletion = nil
+            owLog("[Reminders] Deletion confirmation expired")
+            return decision == .approve ? .confirmationExpired : nil
+        }
+
+        pendingDeletion = nil
+        switch decision {
+        case .approve:
+            owLog("[Reminders] Deletion explicitly approved")
+            return await executeDeletion(pending.resolved)
+        case .reject:
+            owLog("[Reminders] Deletion explicitly cancelled")
+            return .cancelled
+        case .unclear:
+            owLog("[Reminders] Deletion not confirmed; pending plan discarded")
+            return .notConfirmed
+        }
+    }
+
+    /// Called when the dedicated confirmation recording closes without a usable answer. This
+    /// makes the three-second listening window authoritative: a later unrelated "evet" can
+    /// never approve an old deletion plan.
+    @discardableResult
+    func cancelPendingDeletion() -> Bool {
+        guard pendingDeletion != nil else { return false }
+        pendingDeletion = nil
+        owLog("[Reminders] Pending deletion discarded without confirmation")
+        return true
+    }
+
+    private enum DeletionResolution {
+        case success(ResolvedDeletion)
+        case failure(DeletionResult)
+    }
+
+    /// A non-"all" request never guesses between multiple local or Apple reminders.
+    private func resolveDeletion(_ request: DeletionRequest) async -> DeletionResolution {
+        if !request.deleteAll, request.query == nil, reminders.count > 1 {
+            return .failure(.ambiguous(matches: reminders.map(\.task)))
+        }
+
+        let localMatches: [Reminder]
+        if request.deleteAll {
+            localMatches = reminders
+        } else if let query = request.query {
+            localMatches = reminders.filter { Self.reminderTitle($0.task, matches: query) }
+        } else if reminders.count == 1 {
+            localMatches = reminders
+        } else {
+            localMatches = []
+        }
+
+        if !request.deleteAll, localMatches.count > 1 {
+            return .failure(.ambiguous(matches: localMatches.map(\.task)))
+        }
+
+        let appleFetch = await matchingAppleReminders(for: request, localMatches: localMatches)
+        if !request.deleteAll, localMatches.isEmpty,
+           case .available(let appleMatches) = appleFetch,
+           appleMatches.count > 1 {
+            return .failure(.ambiguous(matches: appleMatches.compactMap(\.title)))
+        }
+
+        let appleMatches: [EKReminder]
+        let appleWasAvailable: Bool
+        switch appleFetch {
+        case .available(let matches):
+            appleMatches = matches
+            appleWasAvailable = true
+        case .unavailable:
+            appleMatches = []
+            appleWasAvailable = false
+        }
+
+        guard !localMatches.isEmpty || !appleMatches.isEmpty else {
+            return .failure(appleWasAvailable ? .notFound : .failed)
+        }
+
+        let names = Array(Set(
+            localMatches.map(\.task) + appleMatches.compactMap(\.title)
+        )).sorted()
+        return .success(ResolvedDeletion(
+            localMatches: localMatches,
+            appleMatches: appleMatches,
+            appleWasAvailable: appleWasAvailable,
+            displayNames: names
+        ))
+    }
+
+    private func executeDeletion(_ resolved: ResolvedDeletion) async -> DeletionResult {
+        let localMatches = resolved.localMatches
+        let appleMatches = resolved.appleMatches
+        let appleWasAvailable = resolved.appleWasAvailable
+
+        var appleDeleteSucceeded = appleWasAvailable
+        if !appleMatches.isEmpty {
+            do {
+                for reminder in appleMatches {
+                    try eventStore.remove(reminder, commit: false)
+                }
+                try eventStore.commit()
+                owLog("[Reminders] Deleted \(appleMatches.count) Apple reminder(s)")
+            } catch {
+                appleDeleteSucceeded = false
+                owLog("[Reminders] Failed to delete Apple reminder: \(error)")
+            }
+        }
+
+        let localIDs = localMatches.map(\.id)
+        if !localIDs.isEmpty {
+            notificationCenter.removePendingNotificationRequests(withIdentifiers: localIDs)
+            let idSet = Set(localIDs)
+            reminders.removeAll { idSet.contains($0.id) }
+            saveReminders()
+            owLog("[Reminders] Deleted \(localIDs.count) local reminder(s)")
+        }
+
+        let logicalCount = max(localMatches.count, appleMatches.count)
+        let appleVerified = appleWasAvailable && appleDeleteSucceeded
+        let body = appleVerified
+            ? "\(logicalCount) hatırlatıcı silindi."
+            : "Yerel hatırlatıcı silindi; Apple Hatırlatıcılar kontrol edilemedi."
+        sendConfirmation(title: "Hatırlatıcı Silindi", body: body)
+        return .deleted(count: logicalCount, appleVerified: appleVerified)
+    }
+
+    private enum AppleReminderFetch {
+        case available([EKReminder])
+        case unavailable
+    }
+
+    private func matchingAppleReminders(
+        for request: DeletionRequest,
+        localMatches: [Reminder]
+    ) async -> AppleReminderFetch {
+        var granted = false
+        if #available(macOS 14.0, *) {
+            granted = (try? await eventStore.requestFullAccessToReminders()) ?? false
+        } else {
+            granted = (try? await eventStore.requestAccess(to: .reminder)) ?? false
+        }
+        guard granted else {
+            owLog("[Reminders] Cannot verify Apple reminder deletion — EventKit permission unavailable")
+            return .unavailable
+        }
+
+        let predicate = eventStore.predicateForIncompleteReminders(
+            withDueDateStarting: nil,
+            ending: nil,
+            calendars: nil
+        )
+        let all: [EKReminder] = await withCheckedContinuation { continuation in
+            eventStore.fetchReminders(matching: predicate) { reminders in
+                continuation.resume(returning: reminders ?? [])
+            }
+        }
+
+        let matches: [EKReminder]
+        if request.deleteAll {
+            // "Tümünü sil" is deliberately scoped to Jarvis-managed reminders; it must
+            // never wipe unrelated personal reminders from Apple Reminders.
+            matches = all.filter { appleReminder in
+                localMatches.contains { self.sameReminder($0, appleReminder) }
+            }
+        } else if !localMatches.isEmpty {
+            matches = all.filter { appleReminder in
+                localMatches.contains { self.sameReminder($0, appleReminder) }
+            }
+        } else if let query = request.query {
+            matches = all.filter { Self.reminderTitle($0.title ?? "", matches: query) }
+        } else {
+            matches = []
+        }
+        return .available(matches)
+    }
+
+    private func sameReminder(_ local: Reminder, _ apple: EKReminder) -> Bool {
+        if let identifier = local.appleReminderIdentifier,
+           identifier == apple.calendarItemIdentifier {
+            return true
+        }
+        guard Self.reminderTitle(apple.title ?? "", matches: local.task),
+              Self.reminderTitle(local.task, matches: apple.title ?? "") else {
             return false
         }
+        guard let components = apple.dueDateComponents,
+              let appleDate = Calendar.current.date(from: components) else {
+            return false
+        }
+        return abs(appleDate.timeIntervalSince(local.fireDate)) <= 120
     }
 
     // MARK: - Instant Confirmation Notification

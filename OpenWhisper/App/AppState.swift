@@ -1066,6 +1066,7 @@ final class AppState {
 
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
         armVoiceAutoStopForNextRecording = false
+        let recordingTrigger = hotkey?.trigger ?? .fnHold
 
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
@@ -1076,11 +1077,21 @@ final class AppState {
             return
         }
         let sessionStart = CACurrentMediaTime()
-        let useSmartTurnEndpoint = armVoiceAutoStop && hotkey?.trigger == .wakeWord
+        let useSmartTurnEndpoint = armVoiceAutoStop && recordingTrigger == .wakeWord
+        let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
         var endpointFallbackConfig: VoiceEndpointDetector.Config = resolvedInputIsBluetooth ? .closeTalk : .init()
         // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
         // incomplete-turn safety limit and also keeps a model failure bounded.
         if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
+        if isDeletionConfirmation {
+            // Jarvis has just finished asking for confirmation: wait up to three seconds for
+            // speech, then close automatically. Once speech begins, leave enough room for a
+            // natural answer and stop quickly after it ends.
+            endpointFallbackConfig.noSpeechTimeout = 3
+            endpointFallbackConfig.maxDuration = 8
+            endpointFallbackConfig.silenceToStop = min(endpointFallbackConfig.silenceToStop, 0.8)
+            owLog("[Reminders] Listening for deletion confirmation (3 s response window)")
+        }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
                 startTime: sessionStart,
@@ -1094,7 +1105,7 @@ final class AppState {
                 ignoredLeadingSeconds: mediaPlaying ? 0.8 : 0
             )
             : nil
-        ownVoiceStopGate = armVoiceAutoStop && hotkey?.trigger == .wakeWord
+        ownVoiceStopGate = armVoiceAutoStop && recordingTrigger == .wakeWord
             && targetSpeakerEnabled && targetSpeakerProfile != nil
             ? OwnVoiceStopGate(threshold: OwnVoiceStopGate.defaultThreshold)
             : nil
@@ -1171,7 +1182,7 @@ final class AppState {
             pasteContext: initialContext
         )
         session.isVoiceCommand = armVoiceAutoStop
-        session.trigger = hotkey?.trigger ?? .fnHold
+        session.trigger = recordingTrigger
         session.wakeSpeakerVerified = session.trigger == .wakeWord && pendingWakeSpeakerVerified
         pendingWakeSpeakerVerified = false
         activeTranscriptionSession = session
@@ -1668,6 +1679,9 @@ final class AppState {
         owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
 
         defer {
+            if session.trigger == .confirmation {
+                self.reminderManager?.cancelPendingDeletion()
+            }
             // Break the session ↔ worker reference cycle once the worker has drained the
             // session's stream and the final output step is complete.
             session.task = nil
@@ -1945,7 +1959,10 @@ final class AppState {
             // Spotify so a prompt that mentions them is still typed, not executed. A bare
             // trailing "gönder" only counts in agent apps and terminals.
             if let agent = AgentCommandParser.parse(trimmed),
-               agent.target != nil || AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "") {
+               agent.target != nil || (
+                   session.pasteContext.focusStatus == .editable
+                       && AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "")
+               ) {
                 owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send))")
                 guard !agent.body.isEmpty else {
                     owLog("[Agent] Nothing to write after the command words, skipping")
@@ -1971,18 +1988,41 @@ final class AppState {
                 return
             }
 
-            // A "Jarvis" session ending in "yaz" ("… bunu yaz", "… yazsana") is always typed, even
-            // when it reads like a command. A trailing "gönder" outside agent apps is typed too,
-            // without Return, so Slack / Mail are never sent by voice.
+            // An explicit "buraya yaz …" or trailing "… bunu yaz" always means the captured
+            // text field, even when the words themselves resemble a Jarvis command. A trailing
+            // "gönder" outside agent apps is typed without Return, so Slack / Mail are never sent.
             if session.isVoiceCommand {
-                let typed = JarvisAddressee.trailingTypeCommand(trimmed)
+                let typed = JarvisAddressee.leadingTypeCommand(trimmed)
+                    ?? JarvisAddressee.trailingTypeCommand(trimmed)
                     ?? AgentCommandParser.parse(trimmed).flatMap { $0.send && !$0.body.isEmpty ? $0.body : nil }
                 if let typed {
-                    owLog("[Route] typed by trailing command: '\(typed)'")
+                    owLog("[Route] explicit dictation override: '\(typed)'")
                     await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
                     await self.speakReply(self.jarvisReply.agent(sent: false))
                     return
                 }
+            }
+
+            // An editable field normally routes to dictation. This explicit phrase lets the
+            // user talk to Jarvis without first clicking away from the field.
+            if session.isVoiceCommand,
+               let chatText = JarvisAddressee.explicitChatCommand(trimmed) {
+                owLog("[Route] explicit Jarvis chat: '\(chatText)'")
+                self.lastTranscription = text
+                await self.chatReply(to: chatText)
+                return
+            }
+
+            // A destructive reminder action is always two-step. While a deletion confirmation
+            // is pending, only an explicit approval can execute the already-resolved plan; any
+            // other ordinary voice response discards it without touching reminders.
+            if session.isVoiceCommand,
+               let confirmation = await self.reminderManager?.handleDeletionConfirmation(trimmed) {
+                owLog("[Route] reminder deletion confirmation")
+                owLog("[Result] Reminder deletion confirmation: \(String(describing: confirmation))")
+                self.lastTranscription = text
+                await self.speakReply(self.jarvisReply.reminderDeletion(confirmation))
+                return
             }
 
             // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": only in a
@@ -2013,14 +2053,15 @@ final class AppState {
                 return
             }
 
-            // A "Jarvis" session that isn't a command is talk to Jarvis only when the LLM is
-            // fairly sure it was said to him; talk to someone else, a message being dictated, or
-            // anything in between is typed. With Claude Code, Codex or a terminal running them in
-            // front it's a prompt for them and is typed. Fn dictation is always typed.
+            // For a Jarvis session that is not a command, keyboard focus is the primary signal:
+            // editable means dictation, known non-editable means chat. The LLM is only a fallback
+            // when Accessibility could not determine the focus. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
                 let front = session.targetApp?.bundleIdentifier
-                if session.isVoiceCommand, !AgentApp.isAgentFront(front) {
-                    let score = self.ollamaAvailable
+                if session.isVoiceCommand {
+                    let focusStatus = session.pasteContext.focusStatus
+                    let needsScore = focusStatus == .unknown
+                    let score = needsScore && self.ollamaAvailable
                         ? await JarvisAddressee.score(
                             text: trimmed,
                             frontApp: session.targetApp?.localizedName,
@@ -2028,9 +2069,13 @@ final class AppState {
                             model: self.ollamaModel)
                         : nil
                     let minScore = JarvisAddressee.minScore
-                    let forJarvis = JarvisAddressee.isForJarvis(score: score, minScore: minScore)
-                    owLog("[Addressee] score \(score.map(String.init) ?? "none") / threshold \(minScore) → \(forJarvis ? "chat" : "type") (front: \(front ?? "none"))")
-                    if forJarvis {
+                    let route = JarvisAddressee.defaultRoute(
+                        focusStatus: focusStatus,
+                        score: score,
+                        minScore: minScore
+                    )
+                    owLog("[Addressee] focus \(focusStatus.rawValue), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
+                    if route == .chat {
                         self.lastTranscription = text
                         await self.chatReply(to: trimmed)
                         return
@@ -2039,7 +2084,10 @@ final class AppState {
                 await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
 
-            let isReminderCommand = ReminderManager.isReminder(text)
+            let reminderDeletion = session.isVoiceCommand
+                ? ReminderManager.deletionRequest(trimmed)
+                : nil
+            let isReminderCommand = reminderDeletion == nil && ReminderManager.isReminder(text)
             var commandText = text
             var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
                 text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
@@ -2050,8 +2098,17 @@ final class AppState {
                 commandText = firstSentence
                 isSpotifyCommand = true
             }
-            owLog("[Route] \(isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
-            if isReminderCommand {
+            owLog("[Route] \(reminderDeletion != nil ? "reminder deletion" : isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
+            if let reminderDeletion {
+                owLog("[OpenWhisper] Reminder deletion detected: \(text)")
+                self.lastTranscription = text
+                let result = await self.reminderManager?.beginDeletion(reminderDeletion) ?? .failed
+                owLog("[Result] Reminder deletion request: \(String(describing: result))")
+                let promptWasHeard = await self.speakReply(self.jarvisReply.reminderDeletion(result))
+                if case .confirmationRequired = result, promptWasHeard {
+                    self.startVoiceSession(trigger: .confirmation)
+                }
+            } else if isReminderCommand {
                 owLog("[OpenWhisper] Reminder detected: \(text)")
                 self.lastTranscription = text
                 if self.ollamaAvailable {
@@ -2098,11 +2155,13 @@ final class AppState {
 
     /// Speaks Jarvis's reply and waits for it, so music paused for the command resumes only
     /// after he is done. Silent when the setting is off or a new recording already started.
-    private func speakReply(_ reply: String?) async {
-        guard let reply, voiceRepliesEnabled, recordingState != .recording else { return }
+    @discardableResult
+    private func speakReply(_ reply: String?) async -> Bool {
+        guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
         owLog("[Voice] Reply: '\(reply)'")
-        await JarvisVoice.shared.speak(reply) { [weak self] in self?.jarvisActivity = .speaking }
+        let heard = await JarvisVoice.shared.speak(reply) { [weak self] in self?.jarvisActivity = .speaking }
         jarvisActivity = .none
+        return heard
     }
 
     /// A "Jarvis" session that is no command and not meant for Claude Code / Codex: the user is
@@ -2596,6 +2655,9 @@ final class AppState {
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
+        if session.trigger == .confirmation {
+            reminderManager?.cancelPendingDeletion()
+        }
         recordingTimer?.invalidate()
         recordingTimer = nil
         session.isCancelled = true

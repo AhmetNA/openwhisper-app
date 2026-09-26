@@ -72,6 +72,7 @@ final class TextInjectorVerificationTests: XCTestCase {
             bundleIdentifier: nil,
             applicationName: nil,
             focusedElement: nil,
+            focusStatus: .unknown,
             valueAtCapture: value,
             selectedRangeAtCapture: range,
             selectedTextAtCapture: nil

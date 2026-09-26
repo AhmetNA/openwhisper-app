@@ -1,6 +1,15 @@
 import AppKit
 import ApplicationServices
 
+/// What Accessibility could prove about the keyboard focus when recording began. `unknown`
+/// deliberately differs from `notEditable`: a missing permission or failed cross-process AX
+/// request must not make Jarvis assume the user intentionally focused a non-text control.
+enum TextFocusStatus: String, Sendable, Equatable {
+    case editable
+    case notEditable
+    case unknown
+}
+
 /// The destination captured while recording is active.  AXUIElement is a Core Foundation
 /// reference whose lifetime is managed by the system; it is intentionally carried through
 /// the asynchronous delivery path as an unchecked Sendable value.
@@ -9,6 +18,7 @@ struct PasteContext: @unchecked Sendable {
     let bundleIdentifier: String?
     let applicationName: String?
     let focusedElement: AXUIElement?
+    let focusStatus: TextFocusStatus
     let valueAtCapture: String?
     let selectedRangeAtCapture: CFRange?
     let selectedTextAtCapture: String?
@@ -21,6 +31,7 @@ struct PasteContext: @unchecked Sendable {
             bundleIdentifier: app?.bundleIdentifier,
             applicationName: app?.localizedName,
             focusedElement: nil,
+            focusStatus: .unknown,
             valueAtCapture: nil,
             selectedRangeAtCapture: nil,
             selectedTextAtCapture: nil
@@ -48,6 +59,7 @@ struct PasteContext: @unchecked Sendable {
             bundleIdentifier: bundleIdentifier,
             applicationName: applicationName,
             focusedElement: focusedElement,
+            focusStatus: focusStatus,
             valueAtCapture: afterValue,
             selectedRangeAtCapture: insertedRange,
             selectedTextAtCapture: text
@@ -67,6 +79,7 @@ struct PasteContext: @unchecked Sendable {
             bundleIdentifier: bundleIdentifier,
             applicationName: applicationName,
             focusedElement: focusedElement,
+            focusStatus: focusStatus,
             valueAtCapture: afterValue,
             selectedRangeAtCapture: replacementRange,
             selectedTextAtCapture: text
@@ -97,6 +110,12 @@ struct PasteContext: @unchecked Sendable {
 /// (tapDisabledByTimeout), dropping Fn/Space/Option+Z events meanwhile.
 enum AXTextAccess {
 
+    private enum FocusLookup {
+        case found(AXUIElement)
+        case absent
+        case unavailable(AXError)
+    }
+
     struct TextState {
         let value: String?
         let selectedRange: CFRange?
@@ -115,16 +134,28 @@ enum AXTextAccess {
         var value: String?
         var selectedRange: CFRange?
         var selectedText: String?
+        var focusStatus: TextFocusStatus = .unknown
 
-        if AXIsProcessTrusted(), let pid, let focused = focusedElement(matchingPID: pid),
-           isSafeEditableElement(focused, matchingPID: pid) {
-            element = focused
-            let valueResult = readString(focused, kAXValueAttribute as CFString)
-            value = valueResult.value
-            let rangeResult = readSelectedRange(focused)
-            selectedRange = rangeResult.range
-            if let value, let range = selectedRange {
-                selectedText = utf16Substring(value, range: range)
+        if AXIsProcessTrusted(), let pid {
+            switch lookupFocusedElement(matchingPID: pid) {
+            case .found(let focused):
+                if isSafeEditableElement(focused, matchingPID: pid) {
+                    focusStatus = .editable
+                    element = focused
+                    let valueResult = readString(focused, kAXValueAttribute as CFString)
+                    value = valueResult.value
+                    let rangeResult = readSelectedRange(focused)
+                    selectedRange = rangeResult.range
+                    if let value, let range = selectedRange {
+                        selectedText = utf16Substring(value, range: range)
+                    }
+                } else {
+                    focusStatus = .notEditable
+                }
+            case .absent:
+                focusStatus = .notEditable
+            case .unavailable:
+                focusStatus = .unknown
             }
         }
 
@@ -133,6 +164,7 @@ enum AXTextAccess {
             bundleIdentifier: app?.bundleIdentifier,
             applicationName: app?.localizedName,
             focusedElement: element,
+            focusStatus: focusStatus,
             valueAtCapture: value,
             selectedRangeAtCapture: selectedRange,
             selectedTextAtCapture: selectedText
@@ -146,15 +178,25 @@ enum AXTextAccess {
     /// callers can use this to reacquire the replacement without accidentally reading a
     /// different frontmost app.
     static func focusedElement(matchingPID: pid_t? = nil) -> AXUIElement? {
+        guard case .found(let element) = lookupFocusedElement(matchingPID: matchingPID) else {
+            return nil
+        }
+        return element
+    }
+
+    private static func lookupFocusedElement(matchingPID: pid_t? = nil) -> FocusLookup {
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedAppRef: AnyObject?
         let focusedAppErr = AXUIElementCopyAttributeValue(
             systemWide, kAXFocusedApplicationAttribute as CFString, &focusedAppRef
         )
-        guard focusedAppErr == .success, let focusedAppRef,
+        guard focusedAppErr == .success else {
+            return .unavailable(focusedAppErr)
+        }
+        guard let focusedAppRef,
               CFGetTypeID(focusedAppRef) == AXUIElementGetTypeID() else {
-            return nil
+            return .absent
         }
         let focusedApp = focusedAppRef as! AXUIElement
 
@@ -162,19 +204,27 @@ enum AXTextAccess {
         let focusedElementErr = AXUIElementCopyAttributeValue(
             focusedApp, kAXFocusedUIElementAttribute as CFString, &focusedElementRef
         )
-        guard focusedElementErr == .success, let focusedElementRef,
+        guard focusedElementErr == .success else {
+            if focusedElementErr == .noValue || focusedElementErr == .attributeUnsupported {
+                return .absent
+            }
+            return .unavailable(focusedElementErr)
+        }
+        guard let focusedElementRef,
               CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID() else {
-            return nil
+            return .absent
         }
         let focusedElement = focusedElementRef as! AXUIElement
         if let matchingPID {
             var focusedPID: pid_t = 0
             guard AXUIElementGetPid(focusedElement, &focusedPID) == .success,
                   focusedPID == matchingPID else {
-                return nil
+                // Focus changed while this cross-process query was running. Do not turn that
+                // race into a confident "no text field" decision.
+                return .unavailable(.cannotComplete)
             }
         }
-        return focusedElement
+        return .found(focusedElement)
     }
 
     /// Returns the currently focused element only when it is a safe text destination for a
@@ -196,14 +246,19 @@ enum AXTextAccess {
             return false
         }
 
+        // Voice dictation must never target a password/secure field.
+        let subrole = readString(element, kAXSubroleAttribute as CFString).value
+        if subrole == "AXSecureTextField" {
+            return false
+        }
+
         let roleResult = readString(element, kAXRoleAttribute as CFString)
         if let role = roleResult.value {
             let editableRoles: Set<String> = [
                 "AXTextField",
                 "AXTextArea",
                 "AXComboBox",
-                "AXSearchField",
-                "AXWebArea"
+                "AXSearchField"
             ]
             if editableRoles.contains(role) {
                 return true

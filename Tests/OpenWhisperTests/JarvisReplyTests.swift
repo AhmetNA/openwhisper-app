@@ -65,6 +65,24 @@ final class JarvisReplyTests: XCTestCase {
         XCTAssertEqual(reply.agent(sent: false), "Yazdım.")
     }
 
+    func testReminderDeletionRepliesReflectRealOutcome() {
+        var reply = quietReply()
+        XCTAssertEqual(
+            reply.reminderDeletion(.confirmationRequired(matches: ["Toplantı"])),
+            "Toplantı hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?"
+        )
+        XCTAssertEqual(reply.reminderDeletion(.deleted(count: 1, appleVerified: true)), "Hatırlatıcıyı sildim.")
+        XCTAssertEqual(reply.reminderDeletion(.notFound), "Maalesef, eşleşen bir hatırlatıcı bulamadım.")
+        XCTAssertEqual(
+            reply.reminderDeletion(.deleted(count: 1, appleVerified: false)),
+            "Maalesef, yerel hatırlatıcıyı sildim fakat Apple Hatırlatıcılar kaydını doğrulayamadım."
+        )
+        XCTAssertEqual(
+            reply.reminderDeletion(.notConfirmed),
+            "Onay vermediğiniz için hiçbir hatırlatıcı silmedim."
+        )
+    }
+
     func testAddressIsOccasionalAndNeverTwiceInARow() {
         var reply = JarvisReply(rng: SeededRNG(state: 42))
         var addressed: [Bool] = []

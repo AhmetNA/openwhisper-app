@@ -6,6 +6,11 @@ import Foundation
 enum JarvisAddressee {
     private static let locale = Locale(identifier: "tr_TR")
 
+    enum DefaultRoute: String, Equatable, Sendable {
+        case type
+        case chat
+    }
+
     /// Plain JSON mode can still return a differently named field or a string. This schema
     /// matches `parseScore`'s preferred representation and keeps the value in the decision's
     /// documented 0...100 range.
@@ -31,6 +36,67 @@ enum JarvisAddressee {
     static func isForJarvis(score: Int?, minScore: Int) -> Bool {
         guard let score else { return false }
         return score >= minScore
+    }
+
+    /// Context is the primary signal. The language model is consulted only when Accessibility
+    /// could not determine whether the recording began in an editable field.
+    static func defaultRoute(
+        focusStatus: TextFocusStatus,
+        score: Int?,
+        minScore: Int
+    ) -> DefaultRoute {
+        switch focusStatus {
+        case .editable:
+            return .type
+        case .notEditable:
+            return .chat
+        case .unknown:
+            return isForJarvis(score: score, minScore: minScore) ? .chat : .type
+        }
+    }
+
+    // MARK: - Explicit destination overrides
+
+    // "buraya/imlece/alana yaz ..." is intentionally narrower than a bare leading "yaz".
+    // "yaz bana bir şiir" is a request to Jarvis, while "buraya yaz bana bir şiir" is
+    // an unambiguous request to type those words into the focused field.
+    private static let leadingTypeRegex: NSRegularExpression = {
+        let pattern = #"^\s*(?:buraya|imlece|alana|şuraya)\s+(?:şunu\s+|bunu\s+|onu\s+)?yaz(?:sana|abilir\s+m[iı]s[iı]n|ar\s+m[iı]s[iı]n)?\b[\s:,.;-]*"#
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    // An editable field normally means dictation. These phrases are the escape hatch for
+    // talking to Jarvis without moving focus away from that field.
+    private static let explicitChatRegex: NSRegularExpression = {
+        let pattern = #"^\s*(?:bana\s+cevap\s+ver|cevapla|jarvis(?:['’`]?\s*[ae])?\s+sor|seninle\s+konuşuyorum|sohbet\s+edelim)\b[\s:,.;-]*"#
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    static func leadingTypeCommand(_ text: String) -> String? {
+        body(afterLeadingMatch: leadingTypeRegex, in: text)
+    }
+
+    static func explicitChatCommand(_ text: String) -> String? {
+        body(afterLeadingMatch: explicitChatRegex, in: text)
+    }
+
+    private static func body(afterLeadingMatch regex: NSRegularExpression, in text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased(with: locale)
+        guard lowered.utf16.count == trimmed.utf16.count,
+              let match = regex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else {
+            return nil
+        }
+        let cut = String.Index(utf16Offset: match.range.upperBound, in: trimmed)
+        var body = String(trimmed[cut...])
+        let leadingSeparators = CharacterSet.whitespacesAndNewlines.union(
+            CharacterSet(charactersIn: ",;:.!?-\"'“”‘’«»`")
+        )
+        while let scalar = body.unicodeScalars.first, leadingSeparators.contains(scalar) {
+            body.removeFirst()
+        }
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body
     }
 
     // MARK: - Trailing "yaz"
