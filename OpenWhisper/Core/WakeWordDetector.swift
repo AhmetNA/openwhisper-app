@@ -194,6 +194,9 @@ struct WakeWordActivityGate {
     /// Blocks kept open after the last loud one (~1 s); the score peaks at the end of the word.
     var hangoverBlocks = 13
     var mediaPlaying = false
+    /// Silero VAD's verdict (`WakeVoiceActivity`): false keeps loud blocks without speech
+    /// (typing, trackpad clicks, a door) from opening the gate. nil = no VAD, energy alone.
+    var voice: Bool?
 
     private(set) var floor: Float?
     private var hangover = 0
@@ -216,7 +219,7 @@ struct WakeWordActivityGate {
             floor = levelDB
         }
         guard let floor else { return true }
-        if levelDB >= floor + margin {
+        if levelDB >= floor + margin, voice != false {
             hangover = hangoverBlocks
             return true
         }

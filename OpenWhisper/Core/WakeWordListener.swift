@@ -4,7 +4,7 @@ import os
 /// Listens for "(Hey) Jarvis" with the bundled openWakeWord model.
 ///
 /// Power: the embedding model is ~90% of the cost, so `WakeWordActivityGate` skips it while the
-/// room is quiet (scores stay exact, see `WakeWordDetector`), and inference runs at utility QoS
+/// room is quiet or the sound is not speech (`WakeVoiceActivity`; scores stay exact, see `WakeWordDetector`), and inference runs at utility QoS
 /// so it lands on the efficiency cores. Pinned to the built-in mic: holding a Bluetooth headset's
 /// mic open would switch it to call-quality audio.
 ///
@@ -68,6 +68,12 @@ final class WakeWordListener {
     private var blocksAtLog = 0
     private var levelsSinceLog: [Float] = []
     private var mediaPlaying = false
+    /// Whether the echo reference (what the Mac is actually playing) carries sound. Apps like
+    /// Vorssaint or Safari keep their output open while silent; without this the gate would
+    /// treat the room as music for hours and never close.
+    private var referenceAudibility = ReferenceAudibility()
+    /// Silero VAD in front of the gate; nil if disabled. Queue-confined.
+    private var voiceActivity: WakeVoiceActivity?
     /// Echo cancellation while something plays (see `EchoCanceller`); queue-confined state.
     private var aecActive = false
     private var aecAligner = EchoReferenceAligner()
@@ -106,6 +112,7 @@ final class WakeWordListener {
             do {
                 self.detector = try WakeWordDetector(modelDirectory: dir)
                 self.detector?.gate = WakeWordActivityGate()
+                if WakeVoiceActivity.isEnabled { self.voiceActivity = WakeVoiceActivity() }
                 owLog(String(format: "[WakeWord] Models loaded in %.0f ms", Date().timeIntervalSince(t0) * 1000))
             } catch {
                 owLog("[WakeWord] Model load failed: \(error)")
@@ -163,6 +170,7 @@ final class WakeWordListener {
         guard generation == acceptedReference else { return }
         if !aecActive {
             aecActive = true
+            referenceAudibility = ReferenceAudibility()
             loggedMicTiming = false
             aecAligner = EchoReferenceAligner()
             echoCanceller = EchoCanceller()
@@ -174,6 +182,7 @@ final class WakeWordListener {
             }
             owLog("[AEC] Echo cancellation active")
         }
+        referenceAudibility.add(samples, at: ProcessInfo.processInfo.systemUptime)
         aecAligner.appendReference(samples, startIndex: Int((pts * Double(EchoCanceller.sampleRate)).rounded()))
     }
 
@@ -221,6 +230,7 @@ final class WakeWordListener {
             guard let self else { return }
             self.recentAudio.removeAll(keepingCapacity: true)
             self.pendingCandidate = nil
+            self.voiceActivity?.reset()
             guard let detector = self.detector else { return }
             try? detector.reset()
             var gate = detector.gate ?? WakeWordActivityGate()
@@ -386,6 +396,16 @@ final class WakeWordListener {
         pendingCandidate?.remaining -= raw.count
 
         guard let detector else { return }
+        // Media counts only while it is audible; with no reference (other mic, no Screen
+        // Recording permission, AEC off) there is no way to tell, so the flag stands.
+        let now = ProcessInfo.processInfo.systemUptime
+        let mediaAudible = mediaPlaying && (!aecActive || referenceAudibility.isAudible(at: now))
+        detector.gate?.mediaPlaying = mediaAudible
+        // Speech under music is unproven for Silero: while media is audible, energy alone decides.
+        if let voiceActivity {
+            voiceActivity.feed(raw.map { min(max($0 * Self.inputGain, -1), 1) })
+            detector.gate?.voice = mediaAudible ? nil : voiceActivity.voice(at: now)
+        }
         let scores: [Float]
         do { scores = try detector.process(samples) } catch {
             owLog("[WakeWord] Inference failed: \(error)")
@@ -426,8 +446,10 @@ final class WakeWordListener {
             let blocks = detector.blockCount - blocksAtLog
             let embeddings = detector.embeddingCount - embeddingsAtLog
             let median = levelsSinceLog.isEmpty ? Float.nan : levelsSinceLog.sorted()[levelsSinceLog.count / 2]
-            owLog(String(format: "[WakeWord] peak score last 10s: %.2f, embeddings %d/%d blocks, level median %.0f dB, floor %.0f dB",
-                         peakSinceLog, embeddings, blocks, median, detector.gate?.floor ?? .nan))
+            let media = !mediaPlaying ? "none" : (detector.gate?.mediaPlaying == true ? "audible" : "silent")
+            let vad = voiceActivity?.takeSummary(at: ProcessInfo.processInfo.systemUptime) ?? "off"
+            owLog(String(format: "[WakeWord] peak score last 10s: %.2f, embeddings %d/%d blocks, level median %.0f dB, floor %.0f dB, media %@, vad %@",
+                         peakSinceLog, embeddings, blocks, median, detector.gate?.floor ?? .nan, media, vad))
             levelsSinceLog.removeAll(keepingCapacity: true)
             blocksAtLog = detector.blockCount
             embeddingsAtLog = detector.embeddingCount
@@ -443,5 +465,27 @@ final class WakeWordListener {
         guard peak > 0 else { return audio }
         let gain = min(0.5 / peak, 30)
         return audio.map { $0 * gain }
+    }
+}
+
+/// Tracks whether the system output reference had real sound in the last few seconds. A hold
+/// covers gaps between songs and fades so the gate floor is not relearned mid-playlist.
+struct ReferenceAudibility {
+    /// Quieter than this is an open-but-silent output (UI clicks aside).
+    static let audibleDBFS: Float = -60
+    var holdSeconds: TimeInterval = 3
+    private var lastAudible: TimeInterval?
+
+    mutating func add(_ samples: [Float], at now: TimeInterval) {
+        guard !samples.isEmpty else { return }
+        var sum: Float = 0
+        for x in samples { sum += x * x }
+        let db = 10 * log10(max(sum / Float(samples.count), 1e-12))
+        if db >= Self.audibleDBFS { lastAudible = now }
+    }
+
+    func isAudible(at now: TimeInterval) -> Bool {
+        guard let lastAudible else { return false }
+        return now - lastAudible <= holdSeconds
     }
 }
