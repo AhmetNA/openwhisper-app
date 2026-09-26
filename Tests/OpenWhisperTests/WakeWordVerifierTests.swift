@@ -18,6 +18,10 @@ final class WakeWordVerifierTests: XCTestCase {
     func testBareCallNeedsNoLLM() {
         XCTAssertTrue(WakeWordVerifier.isBareCall("Jarvis."))
         XCTAssertTrue(WakeWordVerifier.isBareCall("Hey, Cervis!"))
+        XCTAssertTrue(WakeWordVerifier.isBareCall("Selam Jarvis."))
+        XCTAssertTrue(WakeWordVerifier.isBareCall("Merhaba, Carvis!"))
+        XCTAssertTrue(WakeWordVerifier.isBareCall("Günaydın Jarvis"))
+        XCTAssertFalse(WakeWordVerifier.isBareCall("Selam Jarvis sesi kıs"))
         XCTAssertFalse(WakeWordVerifier.isBareCall("Jarvis şarkıyı durdur"))
         XCTAssertFalse(WakeWordVerifier.isBareCall("I am Jarvis tonight"))
     }

@@ -60,7 +60,9 @@ enum WakeWordVerifier {
         return rest.isEmpty
     }
 
-    private static let fillers = Set(["hey", "hi", "ah", "eh", "ee", "hadi", "ok", "okay", "alo", "şey"].map(fold))
+    /// Greetings count too: "Selam Jarvis", "Merhaba Jarvis", "Günaydın Jarvis" are calls.
+    private static let fillers = Set(["hey", "hi", "hello", "ah", "eh", "ee", "hadi", "ok", "okay", "alo", "şey",
+                                      "selam", "selamlar", "merhaba", "günaydın", "naber", "iyi", "akşamlar", "geceler"].map(fold))
 
     static func editDistance(_ a: String, _ b: String) -> Int {
         let a = Array(a), b = Array(b)
@@ -134,7 +136,7 @@ enum WakeWordVerifier {
             Music or video playing on the Mac right now: \(mediaPlaying ? "yes" : "no").
 
             Answer YES if a person in the room is calling the assistant, for example "Jarvis", \
-            "hey Jarvis", "Jarvis şarkıyı durdur", "Jarvis bir dakika", "Jarvis sesi kıs".
+            "hey Jarvis", "selam Jarvis", "merhaba Jarvis", "Jarvis şarkıyı durdur", "Jarvis bir dakika", "Jarvis sesi kıs".
             Answer NO if it sounds like song lyrics, a video or film, or someone talking about \
             Jarvis to another person, for example "Jarvis'i dün kurdum", "Iron Man'deki Jarvis".
 

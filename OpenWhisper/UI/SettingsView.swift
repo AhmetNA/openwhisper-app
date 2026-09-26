@@ -564,7 +564,7 @@ struct SettingsView: View {
                 Text(appState.wakeWordStatus)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text("“Jarvis” veya “Hey Jarvis” dediğinizde kayıt başlar; susunca kendiliğinden biter ve komut (Spotify, hatırlatıcı…) ya da yazı olarak işlenir.")
+                Text("“Jarvis”, “Hey Jarvis” veya “Selam Jarvis” dediğinizde kayıt başlar; susunca kendiliğinden biter ve komut (Spotify, hatırlatıcı…) ya da yazı olarak işlenir.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
