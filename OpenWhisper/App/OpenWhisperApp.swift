@@ -31,11 +31,15 @@ private let owLogDateFormatter: DateFormatter = {
     return df
 }()
 
+/// `swift test` logs elsewhere: its fake sessions ("test transcript", synthetic enrollments)
+/// in the app's log were mistaken for real use while diagnosing wake-word failures.
+private let owLogPath = NSClassFromString("XCTestCase") != nil ? "/tmp/openwhisper-tests.log" : "/tmp/openwhisper.log"
+
 func owLog(_ msg: String) {
     VoiceEventLog.shared.appendToCurrent(msg)
     let timestamp = owLogDateFormatter.string(from: Date())
     let line = "[\(timestamp)] \(msg)\n"
-    let path = "/tmp/openwhisper.log"
+    let path = owLogPath
     if let fh = FileHandle(forWritingAtPath: path) {
         fh.seekToEndOfFile()
         if let data = line.data(using: .utf8) { fh.write(data) }

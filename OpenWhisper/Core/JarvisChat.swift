@@ -16,6 +16,12 @@ final class JarvisChat {
     private(set) var lastReply: String?
     private var lastTurn = Date.distantPast
 
+    /// The last reply while the conversation is still remembered, so a short follow-up
+    /// ("peki neden?") can be recognised as talk to Jarvis.
+    var recentReply: String? {
+        Date().timeIntervalSince(lastTurn) <= Self.memory ? history.last(where: { $0["role"] == "assistant" })?["content"] : nil
+    }
+
     /// Sentences of the reply as they are written. Ends early (possibly empty) when Ollama is
     /// unreachable or slow; the finished reply is added to the conversation history.
     func reply(to text: String, model: String) -> AsyncStream<String> {

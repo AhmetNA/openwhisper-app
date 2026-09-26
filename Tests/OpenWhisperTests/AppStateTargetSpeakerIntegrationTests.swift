@@ -148,6 +148,59 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertFalse(appState.lastTranscription.isEmpty)
     }
 
+    /// 26 Sep 2026: "Hey Jarvis, sesi %100 yap" matched the voice at the wake word, then the
+    /// recording's single coherent voice scored just under the threshold and the command waited
+    /// for a "Bu benim sesimdi" tap. After a wake-time match that voice now counts as the user.
+    func testSingleUncertainSpeakerIsAcceptedAfterWakeWordMatchedTheVoice() async throws {
+        let (appState, whisper, session, segment) = try makeUncertainSingleSpeakerSession(verifiedAtWake: true)
+        await appState.transcribeStreamingSegment(segment, session: session)
+        XCTAssertEqual(whisper.requests.count, 1)
+        XCTAssertEqual(session.segmentTexts.count, 1)
+        XCTAssertFalse(session.hadSingleSpeakerUncertain)
+    }
+
+    func testSingleUncertainSpeakerStillWaitsForConfirmationWithoutWakeMatch() async throws {
+        let (appState, _, session, segment) = try makeUncertainSingleSpeakerSession(verifiedAtWake: false)
+        await appState.transcribeStreamingSegment(segment, session: session)
+        XCTAssertTrue(session.segmentTexts.isEmpty)
+        XCTAssertTrue(session.hadSingleSpeakerUncertain)
+    }
+
+    private func makeUncertainSingleSpeakerSession(verifiedAtWake: Bool) throws
+        -> (AppState, RecordingWhisperService, RecordingTranscriptionSession, CompletedAudioSegment) {
+        let cosine: Float = 0.43
+        let uncertain = [cosine, (1 - cosine * cosine).squareRoot()] + [Float](repeating: 0, count: 254)
+        let whisper = RecordingWhisperService()
+        let appState = AppState(
+            profileStore: InMemoryTargetSpeakerProfileStore(),
+            targetSpeakerModel: ScriptedWindowSpeakerModel(
+                voiceFrames: Array(repeating: true, count: 12),
+                embeddings: Array(repeating: uncertain, count: 3)
+            ),
+            transcriptionService: whisper
+        )
+        appState.autoPasteEnabled = false
+        appState.llmCleanupEnabled = false
+        let profile = try TargetSpeakerProfile(
+            modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
+            embeddings: [[1] + [Float](repeating: 0, count: 255)]
+        )
+        let session = RecordingTranscriptionSession(
+            id: 11,
+            targetApp: nil,
+            targetSpeakerEnabled: true,
+            targetSpeakerProfile: profile
+        )
+        session.trigger = .wakeWord
+        session.wakeSpeakerVerified = verifiedAtWake
+        let segment = CompletedAudioSegment(
+            samples: Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples),
+            overlapSampleCount: 0
+        )
+        session.enqueue(segment)
+        return (appState, whisper, session, segment)
+    }
+
     func testMixedVoicesInsideOneSegmentPasteOnlyStrongTargetWindows() async throws {
         let whisper = RecordingWhisperService()
         let store = InMemoryTargetSpeakerProfileStore()

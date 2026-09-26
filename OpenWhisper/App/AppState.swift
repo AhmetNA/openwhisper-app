@@ -51,6 +51,9 @@ final class RecordingTranscriptionSession {
     var confirmationCandidate: TargetSpeakerConfirmationCandidate?
     var confirmationTranscriptTexts: [String] = []
     var hadSingleSpeakerUncertain = false
+    /// The "Jarvis" that started this session already matched the user's voice. A recording
+    /// with one coherent speaker is then the user, even if its absolute score is borderline.
+    var wakeSpeakerVerified = false
     var hadDiarizationAttempt = false
     var hadDiarizationTargetSpeech = false
     var hadDiarizationFailure = false
@@ -420,6 +423,8 @@ final class AppState {
     @ObservationIgnored private var wakeCandidateVerifying = false
     /// Bumped per weak direct detection so a late verdict never discards a newer session.
     @ObservationIgnored private var wakeConfirmationID = 0
+    /// The wake speaker check finished before the session it belongs to was created.
+    @ObservationIgnored private var pendingWakeSpeakerVerified = false
     @ObservationIgnored private var mediaActivityMonitor: SystemMediaActivityMonitor?
     @ObservationIgnored private var mediaPlaying = false
     @ObservationIgnored private var systemAsleep = false
@@ -1145,6 +1150,8 @@ final class AppState {
         )
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = hotkey?.trigger ?? .fnHold
+        session.wakeSpeakerVerified = session.trigger == .wakeWord && pendingWakeSpeakerVerified
+        pendingWakeSpeakerVerified = false
         activeTranscriptionSession = session
         pendingTranscriptionCount += 1
 
@@ -1292,12 +1299,28 @@ final class AppState {
         let filtered: TargetSpeakerFilterResult
         if session.targetSpeakerEnabled {
             owLog("[TargetSpeaker] Batch \(segmentNumber) filtering segment: samples=\(segment.samples.count), targetSpeakerEnabled=true, profileEmbeddings=\(session.targetSpeakerProfile?.embeddings.count ?? 0)")
-            filtered = await targetSpeakerFilter.filter(
+            let result = await targetSpeakerFilter.filter(
                 samples: segment.samples,
                 profile: session.targetSpeakerProfile,
                 enabled: true,
                 audioProcessingMode: audioProcessingMode
             )
+            // One coherent voice in a session whose "Jarvis" already matched the user: that
+            // voice is the user. Holding it for a "Bu benim sesimdi" tap only lost commands.
+            if session.wakeSpeakerVerified, result.decision == .singleSpeakerUncertain, !result.wasFailClosed {
+                owLog("[TargetSpeaker] Batch \(segmentNumber) single speaker, voice already matched at the wake word — accepting")
+                filtered = TargetSpeakerFilterResult(
+                    samples: segment.samples,
+                    acceptedSampleCount: segment.samples.count,
+                    hadVoiceActivity: result.hadVoiceActivity,
+                    decision: .accepted,
+                    wasFailClosed: false,
+                    errorDescription: nil,
+                    acceptedSampleRanges: [TargetSpeakerAcceptedRange(start: 0, end: segment.samples.count)]
+                )
+            } else {
+                filtered = result
+            }
             owLog("[TargetSpeaker] Batch \(segmentNumber) filter result: decision=\(filtered.decision), acceptedSamples=\(filtered.acceptedSampleCount)/\(segment.samples.count), hadVoice=\(filtered.hadVoiceActivity), wasFailClosed=\(filtered.wasFailClosed)")
             if filtered.wasFailClosed, let error = filtered.errorDescription {
                 lastError = error
@@ -1858,6 +1881,20 @@ final class AppState {
                 return
             }
 
+            // A "Jarvis" session ending in "yaz" ("… bunu yaz", "… yazsana") is always typed, even
+            // when it reads like a command. A trailing "gönder" outside agent apps is typed too,
+            // without Return, so Slack / Mail are never sent by voice.
+            if session.isVoiceCommand {
+                let typed = JarvisAddressee.trailingTypeCommand(trimmed)
+                    ?? AgentCommandParser.parse(trimmed).flatMap { $0.send && !$0.body.isEmpty ? $0.body : nil }
+                if let typed {
+                    owLog("[Route] typed by trailing command: '\(typed)'")
+                    await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                    await self.speakReply(self.jarvisReply.agent(sent: false))
+                    return
+                }
+            }
+
             // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": only in a
             // Jarvis session, so dictating the same words with the hotkey still types them.
             // A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
@@ -1886,18 +1923,30 @@ final class AppState {
                 return
             }
 
-            // A "Jarvis" session that isn't a command is talk to Jarvis, unless Claude Code, Codex
-            // or a terminal running them is in front: then it's a prompt for them and is typed.
-            // Fn dictation is always typed.
+            // A "Jarvis" session that isn't a command is talk to Jarvis only when the LLM is
+            // fairly sure it was said to him; talk to someone else, a message being dictated, or
+            // anything in between is typed. With Claude Code, Codex or a terminal running them in
+            // front it's a prompt for them and is typed. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
                 let front = session.targetApp?.bundleIdentifier
                 if session.isVoiceCommand, !AgentApp.isAgentFront(front) {
-                    owLog("[Route] chat (front: \(front ?? "none"))")
-                    self.lastTranscription = text
-                    await self.chatReply(to: trimmed)
-                } else {
-                    await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                    let score = self.ollamaAvailable
+                        ? await JarvisAddressee.score(
+                            text: trimmed,
+                            frontApp: session.targetApp?.localizedName,
+                            lastReply: JarvisChat.shared.recentReply,
+                            model: self.ollamaModel)
+                        : nil
+                    let minScore = JarvisAddressee.minScore
+                    let forJarvis = JarvisAddressee.isForJarvis(score: score, minScore: minScore)
+                    owLog("[Addressee] score \(score.map(String.init) ?? "none") / threshold \(minScore) → \(forJarvis ? "chat" : "type") (front: \(front ?? "none"))")
+                    if forJarvis {
+                        self.lastTranscription = text
+                        await self.chatReply(to: trimmed)
+                        return
+                    }
                 }
+                await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
 
             let isReminderCommand = ReminderManager.isReminder(text)
@@ -2990,19 +3039,37 @@ final class AppState {
         prepareWakeSpeakerModel()
     }
 
-    /// Score above the direct threshold: wake at once, unless "Yalnızca Benim Sesim" guards the
-    /// wake word and the voice isn't the user's.
+    /// Score above the direct threshold: start listening at once, so words right after
+    /// "Jarvis" aren't lost. With "Yalnızca Benim Sesim" the speaker check runs meanwhile: a
+    /// match lets the recording through as the user's; no match doesn't end the session (the
+    /// wake-time check scored the real user 0.11–0.38 about half the time, 26 Sep 2026), the
+    /// recording's own speaker filter decides, and a weak "Jarvis" must still be confirmed by
+    /// Whisper.
     private func handleDirectWake(audio: [Float], score: Float) {
+        owLog("[OpenWhisper] Voice session requested (wake word)")
+        pendingWakeSpeakerVerified = false
+        startVoiceSession(trigger: .wakeWord)
         guard targetSpeakerGuardsWakeWord else {
-            owLog("[OpenWhisper] Voice session requested (wake word)")
-            startVoiceSession(trigger: .wakeWord)
             if score < WakeWordListener.confirmedScore { confirmDirectWake(audio: audio, score: score) }
             return
         }
         Task { [weak self] in
-            guard let self, await self.wakeSpeakerMatches(audio: audio) else { return }
-            owLog("[OpenWhisper] Voice session requested (wake word, speaker matched)")
-            self.startVoiceSession(trigger: .wakeWord)
+            guard let self else { return }
+            if await self.wakeSpeakerMatches(audio: audio) {
+                self.markWakeSpeakerVerified()
+            } else if score < WakeWordListener.confirmedScore {
+                self.confirmDirectWake(audio: audio, score: score)
+            } else {
+                owLog("[WakeWord] Voice not matched at the wake word; the recording's speaker filter decides")
+            }
+        }
+    }
+
+    private func markWakeSpeakerVerified() {
+        if recordingState == .recording, let session = activeTranscriptionSession, session.trigger == .wakeWord {
+            session.wakeSpeakerVerified = true
+        } else {
+            pendingWakeSpeakerVerified = true
         }
     }
 
@@ -3074,11 +3141,9 @@ final class AppState {
         let started = Date()
         Task { [weak self] in
             guard let self else { return }
-            guard await self.wakeSpeakerMatches(audio: audio) else {
-                self.wakeCandidateVerifying = false
-                owLog(String(format: "[WakeWord] Candidate %.2f rejected — not the enrolled voice", peak))
-                return
-            }
+            // A voice mismatch alone no longer drops the call (see `handleDirectWake`); Whisper
+            // and the LLM below still have to hear a real "Jarvis".
+            let speakerMatched = self.targetSpeakerGuardsWakeWord ? await self.wakeSpeakerMatches(audio: audio) : false
             let verdict = await WakeWordVerifier.verify(
                 audio: audio, transcriber: transcriber, mediaPlaying: mediaPlaying,
                 ollamaAvailable: ollama, model: model
@@ -3088,6 +3153,7 @@ final class AppState {
             switch verdict {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f accepted in %d ms — %@", peak, ms, why))
+                self.pendingWakeSpeakerVerified = speakerMatched
                 self.startVoiceSession(trigger: .wakeWord)
             case .rejected(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f rejected in %d ms — %@", peak, ms, why))
