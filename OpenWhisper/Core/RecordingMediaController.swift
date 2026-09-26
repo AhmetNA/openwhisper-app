@@ -29,19 +29,33 @@ final class RecordingMediaController {
     static let shared = RecordingMediaController()
     private let queue = DispatchQueue(label: "com.openwhisper.recording-media", qos: .userInitiated)
     private let transport: RecordingMediaTransport
+    private let pauseDelay: TimeInterval
     private var active = false
+    private var pendingPause: DispatchWorkItem?
     private var receipts: [MediaPlaybackSnapshot] = []
 
-    init(transport: RecordingMediaTransport = NowPlayingTransport()) {
+    init(transport: RecordingMediaTransport = NowPlayingTransport(), pauseDelay: TimeInterval = 2) {
         self.transport = transport
+        self.pauseDelay = pauseDelay
     }
 
     func begin() {
         queue.async { [self] in
             guard !active else { return }
             active = true
-            receipts = transport.pausePlayingItems()
-            owLog("[RecordingMedia] Tracking \(receipts.count) paused player(s)")
+
+            let pause = DispatchWorkItem { [weak self] in
+                guard let self, self.active else { return }
+                self.pendingPause = nil
+                self.receipts = self.transport.pausePlayingItems()
+                owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)")
+            }
+            pendingPause = pause
+            if pauseDelay > 0 {
+                queue.asyncAfter(deadline: .now() + pauseDelay, execute: pause)
+            } else {
+                pause.perform()
+            }
         }
     }
 
@@ -51,6 +65,8 @@ final class RecordingMediaController {
         queue.async { [self] in
             guard active else { return }
             active = false
+            pendingPause?.cancel()
+            pendingPause = nil
             if resuming {
                 // Receipt order matters: MediaRemote players come first, while the one paused
                 // over the global route still holds it; scripted players can't steal it then.

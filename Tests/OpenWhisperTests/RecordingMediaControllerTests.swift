@@ -18,7 +18,7 @@ final class RecordingMediaControllerTests: XCTestCase {
 
     func testResumesOnlyOneConfirmedPauseDespiteDuplicateEvents() {
         let transport = Transport()
-        let controller = RecordingMediaController(transport: transport)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
         controller.begin()
         controller.begin()
         controller.end()
@@ -30,7 +30,7 @@ final class RecordingMediaControllerTests: XCTestCase {
     func testAlreadyPausedOrFailedPauseNeverSendsPlay() {
         let transport = Transport()
         transport.nextReceipt = nil
-        let controller = RecordingMediaController(transport: transport)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
         controller.begin()
         controller.end()
         controller.waitUntilIdle()
@@ -43,7 +43,7 @@ final class RecordingMediaControllerTests: XCTestCase {
         let release = DispatchSemaphore(value: 0)
         transport.pauseEntered = entered
         transport.releasePause = release
-        let controller = RecordingMediaController(transport: transport)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
         controller.begin()
         XCTAssertEqual(entered.wait(timeout: .now() + 2), .success)
         controller.end()
@@ -57,7 +57,7 @@ final class RecordingMediaControllerTests: XCTestCase {
 
     func testEndWithoutResumingReleasesPausedPlayers() {
         let transport = Transport()
-        let controller = RecordingMediaController(transport: transport)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
         controller.begin()
         controller.end(resuming: false)
         controller.begin()
@@ -68,9 +68,35 @@ final class RecordingMediaControllerTests: XCTestCase {
 
     func testStopWithoutRecordingDoesNotStartMedia() {
         let transport = Transport()
-        let controller = RecordingMediaController(transport: transport)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
         controller.end()
         controller.waitUntilIdle()
         XCTAssertTrue(transport.events.isEmpty)
+    }
+
+    func testRecordingEndingDuringGracePeriodNeverPausesMedia() {
+        let transport = Transport()
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0.05)
+
+        controller.begin()
+        controller.end()
+        Thread.sleep(forTimeInterval: 0.1)
+        controller.waitUntilIdle()
+
+        XCTAssertTrue(transport.events.isEmpty)
+    }
+
+    func testRecordingStillActiveAfterGracePeriodPausesAndResumesMedia() {
+        let transport = Transport()
+        let pauseEntered = DispatchSemaphore(value: 0)
+        transport.pauseEntered = pauseEntered
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0.01)
+
+        controller.begin()
+        XCTAssertEqual(pauseEntered.wait(timeout: .now() + 1), .success)
+        controller.end()
+        controller.waitUntilIdle()
+
+        XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
     }
 }
