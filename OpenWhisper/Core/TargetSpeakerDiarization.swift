@@ -127,8 +127,34 @@ struct TargetSpeakerDiarizationResult: Sendable, Equatable {
     let hadOverlap: Bool
     let rejectedWordCount: Int
     let uncertainWordCount: Int
+    /// The words attributed to other speakers / left undecided, in order. For the recording trace.
+    var rejectedWords: [WhisperTimedWord] = []
+    var uncertainWords: [WhisperTimedWord] = []
 
     var acceptedWordCount: Int { words.count }
+
+    /// Joins Whisper word tokens back into text, keeping punctuation attached.
+    static func render(words: [WhisperTimedWord]) -> String {
+        let punctuationWithoutLeadingSpace: Set<Character> = [
+            ",", ".", "!", "?", ":", ";", "%", ")", "]", "}", "…"
+        ]
+        let punctuationWithoutTrailingSpace: Set<Character> = ["(", "[", "{", "“"]
+        var result = ""
+        for word in words {
+            let token = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            guard let first = token.first else { continue }
+            if result.isEmpty || punctuationWithoutLeadingSpace.contains(first)
+                || (result.last.map { punctuationWithoutTrailingSpace.contains($0) } ?? false)
+            {
+                result.append(contentsOf: token)
+            } else {
+                result.append(" ")
+                result.append(contentsOf: token)
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 /// Optional target-speaker diarization contract. It is deliberately separate from
@@ -599,8 +625,8 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         }
 
         var acceptedWords: [WhisperTimedWord] = []
-        var rejectedWordCount = 0
-        var uncertainWordCount = 0
+        var rejectedWords: [WhisperTimedWord] = []
+        var uncertainWords: [WhisperTimedWord] = []
         // A dropped-word count alone cannot be acted on: a word can be dropped because
         // Sortformer never marked the target slot active over it, or because its re-scored
         // embedding fell short — and those need opposite fixes. Record which one applied.
@@ -641,7 +667,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
             }
 
             guard hasTargetActivity else {
-                rejectedWordCount += 1
+                rejectedWords.append(word)
                 noteDropped(word, "rejected(noTargetSlotActivity)")
                 continue
             }
@@ -671,7 +697,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 Int(((center + halfDuration) * Double(TargetSpeakerDiarizationConfiguration.sampleRate)).rounded())
             )
             guard sampleEnd > sampleStart else {
-                uncertainWordCount += 1
+                uncertainWords.append(word)
                 noteDropped(word, "uncertain(emptyWindow)")
                 continue
             }
@@ -681,7 +707,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                   let score = bestProfileSimilarity(embedding, profile: profile),
                   score.isFinite
             else {
-                uncertainWordCount += 1
+                uncertainWords.append(word)
                 noteDropped(word, "uncertain(embeddingUnavailable)")
                 continue
             }
@@ -689,10 +715,10 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
             if score >= configuration.wordSimilarityThreshold {
                 acceptedWords.append(word)
             } else if score >= configuration.wordUncertainFloor {
-                uncertainWordCount += 1
+                uncertainWords.append(word)
                 noteDropped(word, String(format: "uncertain(score=%.3f<%.2f)", score, configuration.wordSimilarityThreshold))
             } else {
-                rejectedWordCount += 1
+                rejectedWords.append(word)
                 noteDropped(word, String(format: "rejected(score=%.3f<%.2f)", score, configuration.wordUncertainFloor))
             }
         }
@@ -703,14 +729,16 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
 
         let hadOverlap = frames.contains(where: { $0.isOverlap })
         return TargetSpeakerDiarizationResult(
-            text: render(words: acceptedWords),
+            text: TargetSpeakerDiarizationResult.render(words: acceptedWords),
             words: acceptedWords,
             activityFrames: frames,
             activityIntervals: intervals,
             targetSpeakerSlot: targetSlot,
             hadOverlap: hadOverlap,
-            rejectedWordCount: rejectedWordCount,
-            uncertainWordCount: uncertainWordCount
+            rejectedWordCount: rejectedWords.count,
+            uncertainWordCount: uncertainWords.count,
+            rejectedWords: rejectedWords,
+            uncertainWords: uncertainWords
         )
     }
 
@@ -733,28 +761,6 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         }
         guard lhsNorm > 0, rhsNorm > 0 else { return -.greatestFiniteMagnitude }
         return dot / (sqrt(lhsNorm) * sqrt(rhsNorm))
-    }
-
-    private func render(words: [WhisperTimedWord]) -> String {
-        let punctuationWithoutLeadingSpace: Set<Character> = [
-            ",", ".", "!", "?", ":", ";", "%", ")", "]", "}", "…"
-        ]
-        let punctuationWithoutTrailingSpace: Set<Character> = ["(", "[", "{", "“"]
-        var result = ""
-        for word in words {
-            let token = word.word.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty else { continue }
-            guard let first = token.first else { continue }
-            if result.isEmpty || punctuationWithoutLeadingSpace.contains(first)
-                || (result.last.map { punctuationWithoutTrailingSpace.contains($0) } ?? false)
-            {
-                result.append(contentsOf: token)
-            } else {
-                result.append(" ")
-                result.append(contentsOf: token)
-            }
-        }
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
 }

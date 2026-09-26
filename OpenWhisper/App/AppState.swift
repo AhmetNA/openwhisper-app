@@ -34,6 +34,8 @@ final class RecordingTranscriptionSession {
     /// model/profile failure). Kept separate from `segmentTexts` so it cannot enter the normal
     /// paste path without explicit user confirmation.
     var unmatchedSegmentTexts: [String] = []
+    /// Per batch: own-voice vs other-voice words and levels, for the recording's trace header.
+    var speakerBatches: [SpeakerBatchLog] = []
     /// Original (unfiltered) samples from segments the gate rejected as below-threshold --
     /// accumulated across the whole recording so that, if the *entire* recording is rejected,
     /// the user can explicitly copy the salvaged transcription. Capped at
@@ -1002,7 +1004,8 @@ final class AppState {
                 "Source: system audio",
                 String(format: "Duration: %.1f s", Double(samples.count) / 16_000),
                 "Whisper segments: \(session.allSegmentTexts)",
-            ] + (savedRecordings.first { $0.id == traceID }?.stats?.logLines ?? []))
+            ] + (savedRecordings.first { $0.id == traceID }?.stats?.logLines ?? [])
+              + ["Speakers: not split (system audio)"])
         }
         await VoiceTrace.$current.withValue(traceID) {
             await finishSystemAudioClip(session)
@@ -1297,6 +1300,17 @@ final class AppState {
         }
 
         let filtered: TargetSpeakerFilterResult
+        // The batch's entry in `session.speakerBatches`; written to /tmp/openwhisper.log on every exit.
+        var speakerLogIndex: Int?
+        func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
+            guard let speakerLogIndex else { return }
+            update(&session.speakerBatches[speakerLogIndex])
+        }
+        defer {
+            if let speakerLogIndex {
+                owLog("[Speakers] " + session.speakerBatches[speakerLogIndex].lines.joined(separator: " /"))
+            }
+        }
         if session.targetSpeakerEnabled {
             owLog("[TargetSpeaker] Batch \(segmentNumber) filtering segment: samples=\(segment.samples.count), targetSpeakerEnabled=true, profileEmbeddings=\(session.targetSpeakerProfile?.embeddings.count ?? 0)")
             let result = await targetSpeakerFilter.filter(
@@ -1329,6 +1343,17 @@ final class AppState {
                 owLog("[OpenWhisper] Target speaker filter failed closed: \(error)")
             }
             session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
+            let ownRanges: [TargetSpeakerAcceptedRange]?
+            switch filtered.decision {
+            case .accepted, .partial, .rejected, .noVoice: ownRanges = filtered.wasFailClosed ? nil : filtered.acceptedSampleRanges
+            default: ownRanges = nil
+            }
+            session.speakerBatches.append(SpeakerBatchLog(
+                batch: segmentNumber,
+                decision: filtered.wasFailClosed ? "filter error" : "\(filtered.decision)",
+                levels: SpeakerSplitLevels.measure(samples: segment.samples, overlapSampleCount: segment.overlapSampleCount, ownRanges: ownRanges)
+            ))
+            speakerLogIndex = session.speakerBatches.count - 1
         } else {
             owLog("[TargetSpeaker] Batch \(segmentNumber) targetSpeakerEnabled=false, bypassing filter")
             filtered = TargetSpeakerFilterResult(
@@ -1384,10 +1409,12 @@ final class AppState {
             session.hadAmbiguousTargetSpeech = true
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
+                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
                 return
             }
             guard shouldUseDiarization else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) ambiguous speech withheld because diarization is not ready")
+                noteSpeakers { $0.notes.append("ambiguous speech withheld, not transcribed (diarization not ready)") }
                 return
             }
             owLog("[OpenWhisper] Batch \(segmentNumber) has unresolved target-speaker ambiguity; trying timed overlap filtering")
@@ -1395,6 +1422,7 @@ final class AppState {
             session.hadSingleSpeakerUncertain = true
             guard let candidate = filtered.confirmationCandidate else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) was single-speaker uncertain without a candidate")
+                noteSpeakers { $0.notes.append("single speaker, uncertain, no candidate — not transcribed") }
                 return
             }
             if session.confirmationCandidate == nil {
@@ -1402,6 +1430,7 @@ final class AppState {
             }
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; confirmation transcription skipped")
+                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
                 return
             }
             do {
@@ -1416,9 +1445,14 @@ final class AppState {
                       !trimmedCandidateText.hasPrefix("[BLANK"),
                       !trimmedCandidateText.hasPrefix("(BLANK") else { return }
                 session.confirmationTranscriptTexts.append(trimmedCandidateText)
+                noteSpeakers {
+                    $0.uncertainText = trimmedCandidateText
+                    $0.notes.append("single speaker, not matched to profile — held for \"Bu benim sesimdi\" confirmation")
+                }
                 owLog("[OpenWhisper] Batch \(segmentNumber) retained a single-speaker confirmation candidate")
             } catch {
                 owLog("[OpenWhisper] Batch \(segmentNumber) confirmation transcription failed: \(error)")
+                noteSpeakers { $0.notes.append("confirmation transcription failed: \(error)") }
             }
             return
         } else if isBelowThresholdRejection {
@@ -1448,6 +1482,7 @@ final class AppState {
             }
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
+                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
                 return
             }
             owLog("[OpenWhisper] Batch \(segmentNumber) below target-speaker threshold; transcribing for clipboard salvage only")
@@ -1458,12 +1493,14 @@ final class AppState {
         do {
             let segmentText: String
             if shouldUseDiarization {
+                var timedTranscription: TimedTranscriptionResult?
                 do {
-                    let timedTranscription = try await transcriber.transcribeTimed(
+                    let timed = try await transcriber.transcribeTimed(
                         audioData: segment.samples,
                         language: language,
                         overlapSampleCount: segment.overlapSampleCount
                     )
+                    timedTranscription = timed
                     guard let profile = session.targetSpeakerProfile else {
                         throw TargetSpeakerDiarizationError.incompatibleProfile(
                             expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
@@ -1473,12 +1510,19 @@ final class AppState {
                     session.hadDiarizationAttempt = true
                     let diarized = try await targetSpeakerDiarization.diarizeAndFilter(
                         audioData: segment.samples,
-                        transcription: timedTranscription,
+                        transcription: timed,
                         profile: profile,
                         audioProcessingMode: audioProcessingMode,
                         segmentAcceptedRanges: filtered.acceptedSampleRanges
                     )
                     let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    noteSpeakers {
+                        let others = TargetSpeakerDiarizationResult.render(words: diarized.rejectedWords)
+                        let uncertain = TargetSpeakerDiarizationResult.render(words: diarized.uncertainWords)
+                        $0.othersText = others.isEmpty ? nil : others
+                        $0.uncertainText = uncertain.isEmpty ? nil : uncertain
+                        $0.notes.append("word-level diarization: own \(diarized.acceptedWordCount), others \(diarized.rejectedWordCount), uncertain \(diarized.uncertainWordCount) words, overlap=\(diarized.hadOverlap)")
+                    }
                     if diarized.acceptedWordCount > 0,
                        !diarizedText.isEmpty,
                        !diarizedText.hasPrefix("[BLANK"),
@@ -1501,6 +1545,11 @@ final class AppState {
                     session.hadDiarizationFailure = true
                     lastError = error.localizedDescription
                     owLog("[OpenWhisper] Batch \(segmentNumber) diarization failed; preserving masked target-speaker safety: \(error)")
+                    noteSpeakers {
+                        let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        if !heard.isEmpty { $0.uncertainText = heard }
+                        $0.notes.append("diarization failed, words not split: \(error)")
+                    }
                     // A partial result still has a safe identity-masked path. An ambiguous result
                     // has no accepted target samples, so never transcribe its original mixed audio
                     // and never offer it for confirmation.
@@ -1531,6 +1580,19 @@ final class AppState {
             owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
             guard !segmentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             session.allSegmentTexts.append(segmentText)
+            let trimmedSegmentText = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            noteSpeakers { entry in
+                if isBelowThresholdRejection {
+                    entry.othersText = trimmedSegmentText
+                } else {
+                    entry.ownText = trimmedSegmentText
+                    if isFailClosedPassthrough {
+                        entry.notes.append("filter error — whole text kept as normal dictation, not split")
+                    } else if !shouldUseDiarization && entry.levels.others.seconds >= 0.3 {
+                        entry.notes.append("other voices masked out, their words not transcribed (diarization not ready)")
+                    }
+                }
+            }
             if isBelowThresholdRejection {
                 session.unmatchedSegmentTexts.append(segmentText)
             } else {
@@ -1539,6 +1601,7 @@ final class AppState {
         } catch {
             guard !session.isCancelled else { return }
             owLog("[OpenWhisper] Background batch \(segmentNumber) failed: \(error)")
+            noteSpeakers { $0.notes.append("Whisper failed: \(error)") }
             lastError = error.localizedDescription
         }
     }
@@ -1578,7 +1641,8 @@ final class AppState {
                 "Target app: \(session.targetApp?.bundleIdentifier ?? "unknown")",
                 String(format: "Duration: %.1f s", Double(session.queuedSampleCount) / 16_000),
                 "Whisper segments: \(session.allSegmentTexts)",
-            ] + (savedRecordings.first { $0.id == traceID }?.stats?.logLines ?? []))
+            ] + (savedRecordings.first { $0.id == traceID }?.stats?.logLines ?? [])
+              + SpeakerBatchLog.headerLines(targetSpeakerEnabled: session.targetSpeakerEnabled, batches: session.speakerBatches))
         }
         owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
 
