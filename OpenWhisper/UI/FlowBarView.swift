@@ -32,7 +32,7 @@ struct FlowBarView: View {
             } else {
                 switch appState.recordingState {
                 case .idle:
-                    if appState.jarvisActivity != .none { jarvisContent } else { idleContent }
+                    if appState.jarvisActivity == .speaking { jarvisContent } else { idleContent }
                 case .recording:
                     if appState.isTranscribing {
                         transcribingContent
@@ -45,7 +45,7 @@ struct FlowBarView: View {
                     }
                 case .transcribing:
                     // The command already ran; while Jarvis answers, say so instead.
-                    if appState.jarvisActivity != .none { jarvisContent } else { transcribingContent }
+                    if appState.jarvisActivity == .speaking { jarvisContent } else { transcribingContent }
                 }
             }
         }
@@ -178,7 +178,7 @@ struct FlowBarView: View {
     // MARK: - Speaking
 
     private var jarvisContent: some View {
-        Text(appState.jarvisActivity == .thinking ? "thinking" : "speaking")
+        Text("speaking")
             .font(.custom("Bradley Hand", size: 16).weight(.medium))
             .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 6)
