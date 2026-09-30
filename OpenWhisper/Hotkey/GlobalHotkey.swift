@@ -53,42 +53,25 @@ final class GlobalHotkey {
 
     private let onPress: () -> Void
     private let onRelease: () -> Void
-    /// Fired the instant a valid Fn+Z swap gesture is recognized (Z tapped within
-    /// the Fn keyDown while holding). This is the moment to silently
-    /// cancel whatever recording started on this Fn-down — it involves no synthetic
-    /// keystrokes, so it's safe to run immediately, Fn still physically down or not.
-    private let onSwapRequest: () -> Void
-    /// Fired once Fn is physically released *after* a swap was requested. The actual
-    /// text replacement (backspace + paste) is deferred to this point so it never races
-    /// a still-held Fn: posting synthetic Delete/Cmd+V while Fn is down risks the OS
-    /// merging live Fn into the event (Fn+Delete is Forward Delete on macOS, not Backspace).
+    /// Fired on Option+Z to swap the last pasted text between its raw and cleaned version.
     private let onSwapCommit: () -> Void
     /// Fired on Option+Shift+C to compare the active pasted text with its current field text.
     private let onCorrectionReview: () -> Void
 
-    /// Timestamp of the most recent Fn keyDown (idle → holding transition); the swap
-    /// gesture's 2s window is measured from here.
-    private var fnPressTime: Date?
     /// Whether AppState currently has a stored dictation pair to swap between. Mirrored
     /// here (rather than read live from AppState) so the CGEventTap callback — which must
     /// stay synchronous and cheap — can decide to swallow the Z key without touching
     /// MainActor-isolated state.
     private var swapAvailable = false
-    /// Set true the instant a swap gesture is recognized; cleared when the deferred
-    /// Fn-up commit fires. While true, any further Z keyDowns (autorepeat from the still-held
-    /// key) are also swallowed rather than leaking into the focused app.
-    private var pendingSwap = false
 
     init(
         onPress: @escaping () -> Void,
         onRelease: @escaping () -> Void,
-        onSwapRequest: @escaping () -> Void,
         onSwapCommit: @escaping () -> Void,
         onCorrectionReview: @escaping () -> Void = {}
     ) {
         self.onPress = onPress
         self.onRelease = onRelease
-        self.onSwapRequest = onSwapRequest
         self.onSwapCommit = onSwapCommit
         self.onCorrectionReview = onCorrectionReview
     }
@@ -157,13 +140,7 @@ final class GlobalHotkey {
                 owLog("[Perf] [FnKeyDown] Fn key pressed down at t=\(String(format: "%.3f", now))")
                 trigger = .fnHold
                 mode = .holding
-                fnPressTime = Date()
                 onPress()
-            } else if pendingSwap {
-                // Fn released after a recognized swap gesture — safe now to post the
-                // synthetic backspace/paste keystrokes without a live Fn modifier around.
-                pendingSwap = false
-                onSwapCommit()
             }
         case .holding:
             if !isPressed {

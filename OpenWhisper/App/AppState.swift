@@ -551,7 +551,7 @@ final class AppState {
     // MARK: - Output Swap State
 
     /// The raw Whisper transcript and LLM-cleaned text from the most recently completed
-    /// (and actually pasted) dictation, kept around so Fn+Z can swap between them.
+    /// (and actually pasted) dictation, kept around so Option+Z can swap between them.
     private struct DictationPair {
         let raw: String
         let cleaned: String
@@ -733,9 +733,6 @@ final class AppState {
             },
             onRelease: { [weak self] in
                 DispatchQueue.main.async { self?.stopRecordingWithTail() }
-            },
-            onSwapRequest: { [weak self] in
-                DispatchQueue.main.async { self?.cancelRecordingForSwap() }
             },
             onSwapCommit: { [weak self] in
                 DispatchQueue.main.async { self?.commitSwap() }
@@ -2880,14 +2877,7 @@ final class AppState {
         }
     }
 
-    // MARK: - Output Swap (Fn+Z)
-
-    /// Fired the instant a valid Fn+Z gesture is recognized. The recording that started on
-    /// this Fn-down is discarded here: no transcription, no injection from it, and the UI
-    /// returns to the previous background-transcription state, if any.
-    private func cancelRecordingForSwap() {
-        discardActiveRecording(reason: "Fn+Z swap")
-    }
+    // MARK: - Output Swap (Option+Z)
 
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     private func discardActiveRecording(reason: String) {
