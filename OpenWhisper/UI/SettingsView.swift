@@ -1351,12 +1351,6 @@ struct SettingsView: View {
             checkpointsInput = DictationSnapshot.shared.checkpointsString
         }
     }
-
-    private func openSystemSettings(_ url: String) {
-        if let url = URL(string: url) {
-            NSWorkspace.shared.open(url)
-        }
-    }
 }
 
 // MARK: - Corrections tab (settings + approvals)

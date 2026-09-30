@@ -363,10 +363,6 @@ enum CorrectionEngine {
         "life", "world", "school", "house", "car", "food", "water", "money", "book", "phone",
     ]
 
-    static func containsBlacklistedWrongWord(_ phrase: String) -> Bool {
-        phrase.split(separator: " ").contains { blacklist.contains(trLower(String($0))) }
-    }
-
     /// Public gate used by `CorrectionStore` (and by `applyCorrections`'s suffix-symmetric
     /// matching below) to check whether a single word is a protected real word that a learned
     /// correction's "wrong" side must never be allowed to shadow.

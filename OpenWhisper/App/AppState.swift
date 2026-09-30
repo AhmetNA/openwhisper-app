@@ -740,16 +740,6 @@ final class AppState {
             onSwapCommit: { [weak self] in
                 DispatchQueue.main.async { self?.commitSwap() }
             },
-            onDiagnosticProbe: {
-                // TEMPORARY: AX-readability diagnostic. Dispatched off the CGEventTap callback
-                // thread (same reasoning as TextInjector's backspace burst): cross-process AX
-                // calls to a slow/unresponsive target app can block for a while, and running
-                // that inline in the tap callback risks macOS force-disabling the tap
-                // (tapDisabledByTimeout), which would drop Fn/Space/Option+Z events meanwhile.
-                DispatchQueue.global(qos: .userInitiated).async {
-                    AXProbe.run()
-                }
-            },
             onCorrectionReview: { [weak self] in
                 Task { @MainActor in
                     guard self != nil else { return }
@@ -2891,10 +2881,6 @@ final class AppState {
     }
 
     // MARK: - Output Swap (Fn+Z)
-
-    /// Whether there's currently a raw/cleaned pair available to swap between — exposed for
-    /// UI hinting (e.g. FlowBarView).
-    var hasSwappablePair: Bool { swapPair != nil }
 
     /// Fired the instant a valid Fn+Z gesture is recognized. The recording that started on
     /// this Fn-down is discarded here: no transcription, no injection from it, and the UI

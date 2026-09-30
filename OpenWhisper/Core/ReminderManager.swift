@@ -1087,12 +1087,6 @@ final class ReminderManager {
 
     // MARK: - Cleanup
 
-    func cancelReminder(id: String) {
-        notificationCenter.removePendingNotificationRequests(withIdentifiers: [id])
-        reminders.removeAll { $0.id == id }
-        saveReminders()
-    }
-
     func cancelAll() {
         notificationCenter.removeAllPendingNotificationRequests()
         reminders.removeAll()

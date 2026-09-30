@@ -46,10 +46,7 @@ final class GlobalHotkey {
     /// NX_SYSDEFINED — has no case in Swift's CGEventType.
     fileprivate static let systemDefinedEventType: UInt32 = 14
     private let fnKeyCode: UInt16 = 63
-    private let spaceKeyCode: Int64 = 49
     private let zKeyCode: Int64 = 6
-    /// TEMPORARY diagnostic shortcut (Option+Shift+D) — triggers AXProbe. Remove along with
-    /// AXProbe.swift once the AX-readability measurement is done.
     private let dKeyCode: Int64 = 2
     /// Manual correction review shortcut: Option+Shift+C.
     private let cKeyCode: Int64 = 8
@@ -57,7 +54,7 @@ final class GlobalHotkey {
     private let onPress: () -> Void
     private let onRelease: () -> Void
     /// Fired the instant a valid Fn+Z swap gesture is recognized (Z tapped within
-    /// `swapWindow` of the Fn keyDown while holding). This is the moment to silently
+    /// the Fn keyDown while holding). This is the moment to silently
     /// cancel whatever recording started on this Fn-down — it involves no synthetic
     /// keystrokes, so it's safe to run immediately, Fn still physically down or not.
     private let onSwapRequest: () -> Void
@@ -66,15 +63,12 @@ final class GlobalHotkey {
     /// a still-held Fn: posting synthetic Delete/Cmd+V while Fn is down risks the OS
     /// merging live Fn into the event (Fn+Delete is Forward Delete on macOS, not Backspace).
     private let onSwapCommit: () -> Void
-    /// TEMPORARY: fired on Option+Shift+D to run the AX-readability diagnostic probe.
-    private let onDiagnosticProbe: () -> Void
     /// Fired on Option+Shift+C to compare the active pasted text with its current field text.
     private let onCorrectionReview: () -> Void
 
     /// Timestamp of the most recent Fn keyDown (idle → holding transition); the swap
     /// gesture's 2s window is measured from here.
     private var fnPressTime: Date?
-    private let swapWindow: TimeInterval = 2.0
     /// Whether AppState currently has a stored dictation pair to swap between. Mirrored
     /// here (rather than read live from AppState) so the CGEventTap callback — which must
     /// stay synchronous and cheap — can decide to swallow the Z key without touching
@@ -90,14 +84,12 @@ final class GlobalHotkey {
         onRelease: @escaping () -> Void,
         onSwapRequest: @escaping () -> Void,
         onSwapCommit: @escaping () -> Void,
-        onDiagnosticProbe: @escaping () -> Void = {},
         onCorrectionReview: @escaping () -> Void = {}
     ) {
         self.onPress = onPress
         self.onRelease = onRelease
         self.onSwapRequest = onSwapRequest
         self.onSwapCommit = onSwapCommit
-        self.onDiagnosticProbe = onDiagnosticProbe
         self.onCorrectionReview = onCorrectionReview
     }
 
@@ -146,16 +138,6 @@ final class GlobalHotkey {
 
     func unregister() {
         removeSpaceEventTap()
-    }
-
-    /// Ensures the global key-down event tap is installed. The tap is also installed during
-    /// register(), but keeping this call makes the recording path resilient if macOS or another
-    /// component temporarily removes the tap.
-    ///
-    /// This is idempotent so AppState may call it alongside the automatic Fn/Globe path
-    /// without creating a second tap.
-    func beginActiveKeyDownCapture() {
-        installSpaceEventTap()
     }
 
     /// Kept as a compatibility hook for recording paths. The tap must remain installed after
@@ -311,24 +293,6 @@ final class GlobalHotkey {
         return false
     }
 
-    // MARK: - Option + Shift + D (TEMPORARY: AX-readability diagnostic probe)
-
-    /// Called from the CGEventTap callback on every 'D' keyDown.
-    /// Returns `true` if Option+Shift+D is pressed, swallowing the key event. The probe itself
-    /// only fires once per physical keypress — `isRepeat` (autorepeat from holding the chord)
-    /// still swallows the key so 'ﬂ'/'∂' etc. never leaks into the focused app, but skips
-    /// re-running the probe (and its AX calls) on every repeat tick.
-    fileprivate func handleDiagnosticProbeKeyDown(flags: CGEventFlags, isRepeat: Bool) -> Bool {
-        let optionDown = flags.contains(.maskAlternate)
-        let shiftDown = flags.contains(.maskShift)
-        let noCmdOrCtrl = !flags.contains(.maskCommand) && !flags.contains(.maskControl)
-        guard optionDown && shiftDown && noCmdOrCtrl else { return false }
-        if !isRepeat {
-            onDiagnosticProbe()
-        }
-        return true
-    }
-
     // MARK: - Vocal Shortcuts recognition (undocumented system event)
 
     /// When Vocal Shortcuts recognizes *any* of the user's phrases, the system posts an
@@ -477,8 +441,7 @@ final class GlobalHotkey {
                 }
             } else if keyCode == me.dKeyCode {
                 let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-                if me.handleCommandOptionControlDKeyDown(flags: event.flags, isRepeat: isRepeat)
-                    || me.handleDiagnosticProbeKeyDown(flags: event.flags, isRepeat: isRepeat) {
+                if me.handleCommandOptionControlDKeyDown(flags: event.flags, isRepeat: isRepeat) {
                     return nil
                 }
             } else if keyCode == me.cKeyCode {

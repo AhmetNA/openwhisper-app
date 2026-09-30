@@ -1015,12 +1015,6 @@ final class AudioEngine: @unchecked Sendable {
         return availableInputDevices().first { $0.id == id }
     }
 
-    /// True when the system's current default input is the Mac's own microphone.
-    static func systemDefaultInputIsBuiltIn() -> Bool {
-        guard let id = defaultInputDeviceID() else { return false }
-        return isBuiltInTransport(deviceID: id)
-    }
-
     /// Format for an input-node tap, taken from the hardware side. After `setDeviceID` the
     /// node's output format still describes the previous device (measured: Bluetooth default
     /// at 16 kHz, built-in mic selected, output still 16 kHz while the hardware runs 48 kHz),

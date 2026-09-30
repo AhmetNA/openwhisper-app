@@ -99,11 +99,10 @@ struct PasteContext: @unchecked Sendable {
     }
 }
 
-/// Shared Accessibility (AX) read helpers, extracted from AXProbe so both the diagnostic
-/// probe (Option+Shift+D) and the real "learning correction" snapshot/reread machinery
-/// (DictationSnapshot.swift) share one implementation instead of drifting apart.
+/// Shared Accessibility (AX) read helpers used by the "learning correction" snapshot/reread
+/// machinery (DictationSnapshot.swift).
 ///
-/// IMPORTANT: like AXProbe, every function here does cross-process AX calls that can block
+/// IMPORTANT: every function here does cross-process AX calls that can block
 /// for a noticeable time against a slow/unresponsive target app. Callers MUST dispatch off
 /// the CGEventTap callback thread (background queue) — never call these synchronously from
 /// GlobalHotkey's tap callback, or a slow app risks macOS force-disabling the tap
@@ -172,7 +171,7 @@ enum AXTextAccess {
     }
 
     /// The currently focused AX element system-wide, if any (walks systemWide ->
-    /// focused application -> focused UI element, same path as AXProbe).
+    /// focused application -> focused UI element).
     /// When `matchingPID` is supplied, the focused element must belong to that
     /// application. Electron/WebKit apps can replace their text element after an edit;
     /// callers can use this to reacquire the replacement without accidentally reading a
@@ -351,15 +350,6 @@ enum AXTextAccess {
             return (nil, err)
         }
         return (cfRange, err)
-    }
-
-    static func readNumberOfCharacters(_ element: AXUIElement) -> (value: Int?, error: AXError) {
-        var ref: AnyObject?
-        let err = AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &ref)
-        if err == .success, let n = ref as? Int {
-            return (n, err)
-        }
-        return (nil, err)
     }
 
     private static func utf16Substring(_ value: String, range: CFRange) -> String? {

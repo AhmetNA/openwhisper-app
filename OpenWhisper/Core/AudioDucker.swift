@@ -269,15 +269,6 @@ final class AudioDucker: @unchecked Sendable {
         }
     }
 
-    /// Resolves and caches the current default output device's volume-control capability so
-    /// the first real `duck()` — on the Fn-press critical path — only has to write, not probe.
-    func prewarmOutputDeviceCapability() {
-        queue.async { [self] in
-            guard let deviceID = volumeController.defaultOutputDeviceID() else { return }
-            _ = volumeController.currentVolume(deviceID: deviceID)
-        }
-    }
-
     #if DEBUG
     func flushQueueForTesting() {
         queue.sync {}

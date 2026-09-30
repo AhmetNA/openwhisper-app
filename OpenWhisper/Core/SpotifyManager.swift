@@ -9,98 +9,11 @@ final class SpotifyManager: @unchecked Sendable {
 
     private init() {}
 
-    // MARK: - Shared Command Table
-    //
-    // NOTE: only the gate (`isSpotifyCommand`, via `hasCommandPrefix`) reads this table.
-    // `handleCommand` routes through `explicitIntent(in:)`, which matches on its own `normalized.contains(...)`
-    // checks in each numbered step below — it does NOT consult `transportPrefixes`. Adding a
-    // row here only affects whether `isSpotifyCommand` accepts the utterance as a candidate;
-    // it does nothing to route it once inside `handleCommand`. Order still matters here for the
-    // gate's own leading-prefix matching: more specific / longer phrases must come before shorter
-    // ones they contain (e.g. "müziği durdur" before bare "durdur").
-
-    private enum TransportCommand {
-        case pause
-        case play
-        case next
-        case previous
-        /// "beğenilenleri çal" and friends — play a random track from the user's Liked
-        /// Songs. Listed first in `transportPrefixes` purely so the gate (`isSpotifyCommand`)
-        /// accepts these phrases unambiguously. `handleCommand` does NOT read this table (see
-        /// the note above `transportPrefixes`) — its own liked-songs routing lives in step 3a.
-        case playLiked
-    }
-
-    private static let transportPrefixes: [(String, TransportCommand)] = [
-        ("spotify'da beğenilenleri çal", .playLiked),
-        ("spotifyda beğenilenleri çal", .playLiked),
-        ("spotify'da beğendiklerimi çal", .playLiked),
-        ("spotifyda beğendiklerimi çal", .playLiked),
-        ("spotify'da beğenilen şarkılar", .playLiked),
-        ("spotifyda beğenilen şarkılar", .playLiked),
-        ("spotify'da beğenilenler", .playLiked),
-        ("spotifyda beğenilenler", .playLiked),
-        ("spotify'da beğendiklerim", .playLiked),
-        ("spotifyda beğendiklerim", .playLiked),
-        ("beğenilenleri çal", .playLiked),
-        ("beğendiklerimi çal", .playLiked),
-        ("beğenilen şarkılar", .playLiked),
-        ("beğenilenler", .playLiked),
-        ("beğendiklerim", .playLiked),
-        ("liked songs", .playLiked),
-
-        ("müziği durdur", .pause),
-        ("müzik durdur", .pause),
-        ("müziği kapat", .pause),
-        ("müzik kapat", .pause),
-        ("spotify pause", .pause),
-        ("spotify durdur", .pause),
-        ("durdur", .pause),
-        ("kapat", .pause),
-
-        ("müziği başlat", .play),
-        ("müzik başlat", .play),
-        ("müziği çal", .play),
-        ("müzik çal", .play),
-        ("müziği aç", .play),
-        ("müzik aç", .play),
-        ("müziği oynat", .play),
-        ("müzik oynat", .play),
-        ("şarkı çal", .play),
-        ("şarkı aç", .play),
-        ("spotify play", .play),
-        ("play music", .play),
-        ("başlat", .play),
-
-        ("sonraki şarkı", .next),
-        ("sonraki parça", .next),
-        ("sonraki", .next),
-        ("next song", .next),
-        ("next track", .next),
-
-        ("önceki şarkı", .previous),
-        ("önceki parça", .previous),
-        ("önceki", .previous),
-        ("previous song", .previous),
-        ("prev track", .previous)
-    ]
-
-    /// Play-family prefixes whose trailing residue should be treated as a search query
-    /// rather than a plain "resume playback" instruction — e.g. "müzik çal Tarkan" means
-    /// search+play "Tarkan", not a bare resume. Pause/next/prev never do this: residue
-    /// after those is just noise ("durdur lütfen") and is ignored.
-    private static let playFamilyPrefixes: Set<String> = [
-        "müziği başlat", "müzik başlat", "müziği çal", "müzik çal",
-        "müziği aç", "müzik aç", "müziği oynat", "müzik oynat",
-        "şarkı çal", "şarkı aç", "spotify play", "play music", "başlat"
-    ]
-
     /// Content-based (not prefix-based) matching for "play my Liked Songs" used by
-    /// `handleCommand` step 3a. Prefix matching via `hasCommandPrefix`/`transportPrefixes`
-    /// doesn't work here: `hasCommandPrefix` requires a space right after the prefix, so a
-    /// prefix like "beğenilen şarkılar" never matches "beğenilen şarkıları aç" (next char is
-    /// "ı", not a space). A noun (what) + verb (do) combination checked with plain
-    /// `.contains` against `Self.normalize`d text sidesteps that entirely.
+    /// `handleCommand` step 3a. A word-boundary prefix like "beğenilen şarkılar" would never
+    /// match "beğenilen şarkıları aç" (next char is "ı", not a space); a noun (what) + verb
+    /// (do) combination checked with plain `.contains` against `Self.normalize`d text
+    /// sidesteps that entirely.
     private static let likedSongsNouns: Set<String> = [
         "beğenilen", "beğenilenler", "beğendiklerim", "beğenilerim", "liked songs"
     ]
@@ -120,15 +33,6 @@ final class SpotifyManager: @unchecked Sendable {
     }
 
     private static let maxCommandWordCount = 8
-
-    /// Prefix match with a word-boundary check, so "durdur" doesn't also match
-    /// "durdurma şarkısını çal" or "kapat" match "kapatma...".
-    private static func hasCommandPrefix(_ normalized: String, _ prefix: String) -> Bool {
-        guard normalized.hasPrefix(prefix) else { return false }
-        if normalized.count == prefix.count { return true }
-        let indexAfterPrefix = normalized.index(normalized.startIndex, offsetBy: prefix.count)
-        return normalized[indexAfterPrefix] == " "
-    }
 
     // MARK: - Normalization
 
