@@ -452,7 +452,9 @@ enum SpotifyRequestParser {
             owLog("[SpotifyParser] Ollama (\(model), \(ms) ms) answered: \(responseText)")
             return decodeOllamaResponse(responseText)
         } catch {
-            owLog("[SpotifyParser] Ollama request failed: \(error)")
+            // Cancelled on purpose when SetFit answered first (SpotifyManager.isSpotifyCommand).
+            owLog(Task.isCancelled ? "[SpotifyParser] Ollama skipped: SetFit answered first"
+                                   : "[SpotifyParser] Ollama request failed: \(error)")
             return nil
         }
     }

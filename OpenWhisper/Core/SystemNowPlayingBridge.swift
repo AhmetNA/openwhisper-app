@@ -14,8 +14,7 @@ struct SystemNowPlayingBridge: MediaRemoteAccess {
                 guard let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return nil }
                 return Candidate(pid: pid, bundle: bundle)
             }
-        guard let data = try? JSONEncoder().encode(candidates), let json = String(data: data, encoding: .utf8),
-              let result = run(["list", json]), let resultData = result.data(using: .utf8),
+        guard let json = Self.asciiJSON(candidates), let result = run(["list", json]), let resultData = result.data(using: .utf8),
               let states = try? JSONDecoder().decode([State].self, from: resultData) else {
             owLog("[RecordingMedia] Now Playing list failed for \(candidates.map(\.bundle))")
             return []
@@ -32,9 +31,7 @@ struct SystemNowPlayingBridge: MediaRemoteAccess {
     }
 
     func send(_ command: MediaTransportCommand, to expected: MediaPlaybackSnapshot) -> Bool {
-        guard expected.route != nil,
-              let data = try? JSONEncoder().encode(State(expected)),
-              let json = String(data: data, encoding: .utf8) else { return false }
+        guard expected.route != nil, let json = Self.asciiJSON(State(expected)) else { return false }
         return run([String(command.rawValue), json]) == "true"
     }
 
@@ -52,6 +49,22 @@ struct SystemNowPlayingBridge: MediaRemoteAccess {
         var snapshot: MediaPlaybackSnapshot {
             .init(playerID: playerID, isPlaying: playing, itemID: itemID, position: position, route: route)
         }
+    }
+
+    /// `Process` passes arguments in decomposed form (NFD), so "İpek" arrived as "I\u{307}pek"
+    /// and never equalled the item ID read back in the script: every Turkish-titled video
+    /// refused to pause. Escaped JSON is plain ASCII and decodes to the exact string.
+    static func asciiJSON<T: Encodable>(_ value: T) -> String? {
+        guard let data = try? JSONEncoder().encode(value), let json = String(data: data, encoding: .utf8) else { return nil }
+        var result = ""
+        for unit in json.utf16 {
+            if unit < 0x80 {
+                result.unicodeScalars.append(Unicode.Scalar(UInt8(unit)))
+            } else {
+                result += String(format: "\\u%04x", unit)
+            }
+        }
+        return result
     }
 
     private func run(_ arguments: [String]) -> String? {
@@ -310,13 +323,18 @@ struct AppleScriptMediaPlayer: ScriptedMediaPlayer {
     }
 
     func pause() -> ScriptedPauseResult {
-        guard isRunning else { return .unavailable }
+        guard isRunning, !Self.failures.isRecent(name) else { return .unavailable }
         guard let token = OSAScriptRunner.run(["-e", pauseSource]) else {
-            owLog("[RecordingMedia] \(name) script unavailable; falling back to Now Playing")
+            Self.failures.record(name)
+            owLog("[RecordingMedia] \(name) script unavailable; falling back to Now Playing (retry in \(Int(ScriptFailureCache.retryAfter / 60)) min)")
             return .unavailable
         }
         return token.isEmpty ? .notPlaying : .paused(token: token)
     }
+
+    /// A failing script (Safari without "Allow JavaScript from Apple Events") costs ~0.4 s,
+    /// paid by every recording before the Now Playing fallback could pause anything.
+    private static let failures = ScriptFailureCache()
 
     func resume(token: String) -> Bool {
         guard isRunning else { return false }
@@ -325,5 +343,24 @@ struct AppleScriptMediaPlayer: ScriptedMediaPlayer {
 
     private var isRunning: Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+    }
+}
+
+final class ScriptFailureCache {
+    static let retryAfter: TimeInterval = 300
+    private let lock = NSLock()
+    private var failedAt: [String: TimeInterval] = [:]
+    private let now: () -> TimeInterval
+
+    init(now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+    }
+
+    func record(_ name: String) {
+        lock.withLock { failedAt[name] = now() }
+    }
+
+    func isRecent(_ name: String) -> Bool {
+        lock.withLock { failedAt[name].map { now() - $0 < Self.retryAfter } ?? false }
     }
 }

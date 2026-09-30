@@ -785,6 +785,8 @@ struct TargetSpeakerFilterResult: Sendable {
     /// The (padded, merged) sample ranges this segment gate accepted as the target speaker. Empty
     /// when the gate made no per-range identity decision (disabled, fail-closed, no voice).
     let acceptedSampleRanges: [TargetSpeakerAcceptedRange]
+    /// Accepted without identity scoring: every voice run was shorter than the scoring window.
+    var shortBypass = false
 
     var hasAcceptedTargetSpeech: Bool { acceptedSampleCount > 0 }
     var candidateSamples: [Float]? { confirmationCandidate?.samples }
@@ -1087,7 +1089,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 decision: decisionText, wasFailClosed: false,
                 failClosedReason: nil, tuning: tuning, startTime: startTime
             )
-            return TargetSpeakerFilterResult(
+            var result = TargetSpeakerFilterResult(
                 samples: masked,
                 acceptedSampleCount: acceptedSampleCount,
                 hadVoiceActivity: true,
@@ -1097,6 +1099,8 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 confirmationCandidate: confirmationCandidate,
                 acceptedSampleRanges: paddedAccepted.map { TargetSpeakerAcceptedRange(start: $0.start, end: $0.end) }
             )
+            result.shortBypass = shortBypassApplies
+            return result
         } catch {
             Self.logSummary(
                 samples: samples, voiceRunCount: 0, scoredRunCount: 0, acceptedSampleCount: 0,

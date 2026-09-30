@@ -76,11 +76,17 @@ final class WakeWordListener {
     private var voiceActivity: WakeVoiceActivity?
     /// Echo cancellation while something plays (see `EchoCanceller`); queue-confined state.
     private var aecActive = false
+    /// A reference stream may stay open for hours while its app is paused. Keep the stream so a
+    /// resume is noticed, but do not run the aligner/AEC while its samples are actually silent.
+    private var aecReferenceAudible: Bool?
     private var aecAligner = EchoReferenceAligner()
     private var echoCanceller = EchoCanceller()
     private var aecDump: EchoDebugWriter?
     private var lastAECLog = Date()
     private var loggedMicTiming = false
+    /// Queue: host sample index (16 kHz) just past the last mic samples scored unprocessed; nil
+    /// on the echo-cancelled path, whose aligner delays and re-chunks them.
+    private var scoredEndHostIndex: Int?
     /// Main-thread: the reference stream, running while media plays on the built-in mic path.
     private var echoReference: SystemOutputReference?
     /// Main-thread copy of `mediaPlaying` (that one belongs to `queue`).
@@ -91,10 +97,31 @@ final class WakeWordListener {
     private var acceptedReference = 0
     private var configObserver: NSObjectProtocol?
     private var watchdog: DispatchSourceTimer?
+    /// Native-rate channel-0 audio of the last `nativeRingSeconds`, host-timed, filled on the audio
+    /// thread. Touched only inside the capture's handler lock (the callback, and the handoff's
+    /// `beforeSwap`), so it needs no lock of its own.
+    private let nativeRing = NativeAudioRing(seconds: 1.5)
+    /// Host time where the command after the last direct wake begins (see `score`).
+    private let wakeAudioHostTime = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
     /// Uptime of the last buffer from the tap: the only reliable sign the mic is still flowing.
     private let lastAudio = OSAllocatedUnfairLock(initialState: ProcessInfo.processInfo.systemUptime)
 
     private(set) var isRunning = false
+
+    /// Why the listener is wanted but can't hear "Jarvis"; nil while it works.
+    enum Problem: Equatable {
+        case modelMissing, modelLoadFailed, bluetoothOnly, micUnavailable, noAudio
+    }
+    /// Main thread.
+    private(set) var problem: Problem? {
+        didSet { if problem != oldValue { onProblemChange?() } }
+    }
+    var onProblemChange: (() -> Void)?
+
+    /// From the model queue: `problem` lives on the main thread.
+    private func report(_ problem: Problem?) {
+        if Thread.isMainThread { self.problem = problem } else { DispatchQueue.main.async { self.problem = problem } }
+    }
 
     init(onWake: @escaping ([Float], Float) -> Void) {
         self.onWake = onWake
@@ -106,6 +133,7 @@ final class WakeWordListener {
             guard let self, self.detector == nil else { return }
             guard let dir = WakeWordDetector.bundledModelDirectory() else {
                 owLog("[WakeWord] Model files missing from bundle — listener disabled")
+                self.report(.modelMissing)
                 return
             }
             let t0 = Date()
@@ -116,6 +144,7 @@ final class WakeWordListener {
                 owLog(String(format: "[WakeWord] Models loaded in %.0f ms", Date().timeIntervalSince(t0) * 1000))
             } catch {
                 owLog("[WakeWord] Model load failed: \(error)")
+                self.report(.modelLoadFailed)
             }
         }
     }
@@ -170,6 +199,7 @@ final class WakeWordListener {
         guard generation == acceptedReference else { return }
         if !aecActive {
             aecActive = true
+            aecReferenceAudible = nil
             referenceAudibility = ReferenceAudibility()
             loggedMicTiming = false
             aecAligner = EchoReferenceAligner()
@@ -182,7 +212,26 @@ final class WakeWordListener {
             }
             owLog("[AEC] Echo cancellation active")
         }
-        referenceAudibility.add(samples, at: ProcessInfo.processInfo.systemUptime)
+        let now = ProcessInfo.processInfo.systemUptime
+        referenceAudibility.add(samples, at: now)
+        let audible = referenceAudibility.isAudible(at: now)
+        if audible != aecReferenceAudible {
+            aecReferenceAudible = audible
+            let held = aecAligner.drain()
+            aecAligner = EchoReferenceAligner()
+            echoCanceller = EchoCanceller()
+            echoCanceller.log = { owLog($0) }
+            if audible {
+                loggedMicTiming = false
+                owLog("[AEC] Audible reference — processing resumed")
+            } else {
+                owLog("[AEC] Silent reference — processing suspended")
+                // The aligner can be holding the newest mic samples while waiting for reference
+                // lookahead. They are raw microphone audio, so score them unchanged.
+                if !held.isEmpty { score(held) }
+            }
+        }
+        guard audible else { return }
         aecAligner.appendReference(samples, startIndex: Int((pts * Double(EchoCanceller.sampleRate)).rounded()))
     }
 
@@ -190,6 +239,7 @@ final class WakeWordListener {
     private func deactivateAEC() {
         guard aecActive else { return }
         aecActive = false
+        aecReferenceAudible = nil
         let held = aecAligner.drain()
         aecAligner = EchoReferenceAligner()
         echoCanceller = EchoCanceller()
@@ -216,15 +266,43 @@ final class WakeWordListener {
         watchdog = nil
         stopEngine()
         isRunning = false
+        clearMicProblem()
+    }
+
+    /// Main thread. Gives the running built-in-mic stream to a recording on the same device
+    /// instead of stopping it: the hardware keeps running, so nothing is lost to a restart
+    /// (~0.45 s, then a near-silent first buffer, measured 28 Sep 2026). With `wakePreroll`, the
+    /// audio since the last direct wake is passed on too, so "Hey Jarvis, <command>" in one
+    /// breath keeps the command's start. The listener stops as if `stop()` was called.
+    func handOffCapture(toDeviceID deviceID: AudioDeviceID?, wakePreroll: Bool) -> WakeCaptureHandoff? {
+        guard isRunning, let capture, let deviceID, capture.deviceID == deviceID else { return nil }
+        let ring = nativeRing
+        let since = wakePreroll ? wakeAudioHostTime.withLock { $0 } : nil
+        // A wake older than the ring (or none) has nothing left worth prepending.
+        let handoff = WakeCaptureHandoff(capture: capture) {
+            guard let since, mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: 3) else { return [] }
+            return ring.buffers(since: since)
+        }
+        self.capture = nil
+        stop()
+        owLog("[WakeWord] Handed the microphone stream to the recording")
+        return handoff
+    }
+
+    /// Model problems outlive a restart; microphone ones don't.
+    private func clearMicProblem() {
+        if problem != .modelMissing && problem != .modelLoadFailed { problem = nil }
     }
 
     private func startEngine() {
         let builtIn = AudioEngine.availableInputDevices().first(where: \.isBuiltIn)
         if builtIn == nil && AudioEngine.systemDefaultInputIsBluetooth() {
             owLog("[WakeWord] Only a Bluetooth mic available — not listening (would force call-quality audio)")
+            problem = .bluetoothOnly
             return
         }
         lastAudio.withLock { $0 = ProcessInfo.processInfo.systemUptime }
+        wakeAudioHostTime.withLock { $0 = nil }
         // Cheap now (seed features are cached); queued so it lands before the first audio.
         queue.async { [weak self] in
             guard let self else { return }
@@ -245,7 +323,10 @@ final class WakeWordListener {
                 let capture = try HALInputCapture(deviceID: builtIn.id)
                 let monoFormat = AVAudioFormat(standardFormatWithSampleRate: capture.format.sampleRate, channels: 1)!
                 converter = AVAudioConverter(from: monoFormat, to: targetFormat)
+                let ring = nativeRing
+                ring.reset(sampleRate: capture.format.sampleRate)
                 try capture.start { [weak self] buffer, time in
+                    ring.append(buffer, time: time)
                     self?.handle(buffer, monoFormat: monoFormat, time: time)
                 }
                 self.capture = capture
@@ -253,8 +334,10 @@ final class WakeWordListener {
                 peakSinceLog = 0
                 lastPeakLog = Date()
                 owLog("[WakeWord] Listening on \(builtIn.name) (\(Int(capture.format.sampleRate)) Hz), threshold \(Self.threshold)")
+                if problem == .bluetoothOnly || problem == .micUnavailable { clearMicProblem() }
             } catch {
                 owLog("[WakeWord] Failed to start: \(error)")
+                problem = .micUnavailable
                 stopEngine()
             }
             return
@@ -265,6 +348,7 @@ final class WakeWordListener {
             let format = input.outputFormat(forBus: 0)
             guard format.sampleRate > 0, format.channelCount > 0 else {
                 owLog("[WakeWord] No usable input format")
+                problem = .micUnavailable
                 return
             }
             let monoFormat = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: 1)!
@@ -293,8 +377,10 @@ final class WakeWordListener {
                 }
             }
             owLog("[WakeWord] Listening on default input, threshold \(Self.threshold)")
+            if problem == .bluetoothOnly || problem == .micUnavailable { clearMicProblem() }
         } catch {
             owLog("[WakeWord] Failed to start: \(error)")
+            problem = .micUnavailable
             stopEngine()
         }
     }
@@ -322,7 +408,12 @@ final class WakeWordListener {
     private func checkAudioFlow() {
         guard isRunning else { return }
         let silentFor = ProcessInfo.processInfo.systemUptime - lastAudio.withLock { $0 }
-        guard silentFor > 4 else { return }
+        guard silentFor > 4 else {
+            if problem == .noAudio { problem = nil }
+            return
+        }
+        // A start that failed for a known reason keeps that reason.
+        if problem == nil { problem = .noAudio }
         owLog(String(format: "[WakeWord] No audio for %.0f s — rebuilding engine", silentFor))
         stopEngine()
         startEngine()
@@ -366,10 +457,12 @@ final class WakeWordListener {
             owLog(hostIndex.map { String(format: "[AEC] Mic timestamps valid: mic time − host now = %.1f ms", (Double($0) - now) / 16) }
                   ?? "[AEC] Mic buffers have no valid host time — echo cancellation bypassed")
         }
-        guard aecActive, let hostIndex else {
+        guard aecActive, aecReferenceAudible == true, let hostIndex else {
+            scoredEndHostIndex = hostIndex.map { $0 + raw.count }
             score(raw)
             return
         }
+        scoredEndHostIndex = nil
         guard let pair = aecAligner.appendMic(raw, startIndex: hostIndex) else { return }
         let cleaned = echoCanceller.process(mic: pair.mic, reference: pair.reference)
         // The paired inputs; offline tuning re-runs the canceller on them.
@@ -425,6 +518,24 @@ final class WakeWordListener {
                              s, detector.lastLevelDB, detector.gate?.floor ?? .nan))
                 if pendingCandidate != nil { owLog("[WakeWord] Candidate superseded by direct detection") }
                 pendingCandidate = nil
+                // The command starts where the scored audio ends, less what the detector may
+                // still hold unscored (up to one 80 ms frame). On the plain path that point is on
+                // the audio clock; behind the echo aligner only the wall clock is known, less
+                // its lookahead too. Most "…vis" tails that slip in are removed from the
+                // transcript (`WakeWordVerifier.strippingLeadingWakeWord`).
+                let now = mach_absolute_time()
+                let start: UInt64
+                if let end = scoredEndHostIndex {
+                    let endHost = AVAudioTime.hostTime(forSeconds: Double(end) / Double(EchoCanceller.sampleRate))
+                    start = endHost - AVAudioTime.hostTime(forSeconds: 0.08)
+                    let lag = now >= endHost ? AVAudioTime.seconds(forHostTime: now - endHost) : 0
+                    owLog(String(format: "[WakeWord] Command audio anchored on the audio clock (scoring %.0f ms behind the mic)", lag * 1000))
+                } else {
+                    let held = 0.08 + Double(EchoCanceller.lookahead) / Double(EchoCanceller.sampleRate)
+                    start = now - AVAudioTime.hostTime(forSeconds: held)
+                    owLog("[WakeWord] Command audio anchored on the wall clock (echo-cancelled path)")
+                }
+                wakeAudioHostTime.withLock { $0 = start }
                 let audio = Self.normalizedForWhisper(recentAudio)
                 DispatchQueue.main.async { [weak self] in self?.onWake(audio, s) }
             } else if pendingCandidate != nil {
@@ -468,6 +579,69 @@ final class WakeWordListener {
         guard peak > 0 else { return audio }
         let gain = min(0.5 / peak, 30)
         return audio.map { $0 * gain }
+    }
+}
+
+/// A running `HALInputCapture` passed from the wake listener to `AudioEngine`, with the audio
+/// it held since the wake (`preroll`, only callable inside `replaceHandler`'s `beforeSwap`).
+final class WakeCaptureHandoff {
+    let capture: HALInputCapture
+    let preroll: () -> [(AVAudioPCMBuffer, AVAudioTime)]
+
+    init(capture: HALInputCapture, preroll: @escaping () -> [(AVAudioPCMBuffer, AVAudioTime)]) {
+        self.capture = capture
+        self.preroll = preroll
+    }
+}
+
+/// Channel 0 of the last few seconds of native-rate input, with each buffer's host time. Not
+/// thread-safe: the owner serializes access (see `WakeWordListener.nativeRing`).
+final class NativeAudioRing: @unchecked Sendable {
+    private let seconds: Double
+    private var sampleRate: Double = 48_000
+    private var chunks: [(samples: [Float], hostTime: UInt64)] = []
+    private var count = 0
+
+    init(seconds: Double) { self.seconds = seconds }
+
+    func reset(sampleRate: Double) {
+        self.sampleRate = sampleRate
+        chunks.removeAll()
+        count = 0
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        guard time.isHostTimeValid, let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
+        chunks.append((Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), time.hostTime))
+        count += Int(buffer.frameLength)
+        while let first = chunks.first, count - first.samples.count >= Int(seconds * sampleRate) {
+            count -= first.samples.count
+            chunks.removeFirst()
+        }
+    }
+
+    /// Mono buffers covering host time `since` onward; the first one is cut at `since`.
+    func buffers(since: UInt64) -> [(AVAudioPCMBuffer, AVAudioTime)] {
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return [] }
+        var out: [(AVAudioPCMBuffer, AVAudioTime)] = []
+        for chunk in chunks {
+            let duration = AVAudioTime.hostTime(forSeconds: Double(chunk.samples.count) / sampleRate)
+            guard chunk.hostTime + duration > since else { continue }
+            var skip = 0
+            var hostTime = chunk.hostTime
+            if chunk.hostTime < since {
+                skip = min(Int((AVAudioTime.seconds(forHostTime: since - chunk.hostTime) * sampleRate).rounded()), chunk.samples.count)
+                hostTime = since
+            }
+            let frames = chunk.samples.count - skip
+            guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)) else { continue }
+            buffer.frameLength = AVAudioFrameCount(frames)
+            chunk.samples.withUnsafeBufferPointer { src in
+                buffer.floatChannelData![0].update(from: src.baseAddress! + skip, count: frames)
+            }
+            out.append((buffer, AVAudioTime(hostTime: hostTime)))
+        }
+        return out
     }
 }
 

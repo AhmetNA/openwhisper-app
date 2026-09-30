@@ -6,6 +6,7 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Bluetooth'u kapat."), .bluetooth(on: false))
         XCTAssertEqual(SystemCommandParser.parse("Bluetooth'u aç"), .bluetooth(on: true))
         XCTAssertEqual(SystemCommandParser.parse("Blututu kapat"), .bluetooth(on: false))
+        XCTAssertEqual(SystemCommandParser.parse("Blüttel kapat."), .bluetooth(on: false))
         XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis bluetooth'u açar mısın"), .bluetooth(on: true))
     }
 
@@ -21,6 +22,20 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Kulaklıktan bağlantıyı kes"), .headset(connect: false))
         XCTAssertEqual(SystemCommandParser.parse("Kulaklığı bağla"), .headset(connect: true))
         XCTAssertEqual(SystemCommandParser.parse("Kulaklığı ayır"), .headset(connect: false))
+    }
+
+    func testDeveloperMode() {
+        XCTAssertEqual(SystemCommandParser.parse("Dev modu aç."), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, developer modunu aç."), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Developer mode'u aç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Geliştirici modunu başlat"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Jarvis dev modunu açar mısın?"), .developerMode)
+        XCTAssertNil(SystemCommandParser.parse("Developer modu açınca ne oluyor"))
+        XCTAssertNil(SystemCommandParser.parse("Yarın dev modu açmayı düşünüyorum"))
+        XCTAssertNil(SystemCommandParser.parse("Developer modu aç ve sonra bana bir mail yaz"))
+        XCTAssertNil(SystemCommandParser.parse("Dev modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Karanlık modu aç"), .darkMode(on: true))
     }
 
     func testNotCommands() {
@@ -40,6 +55,19 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Karanlık modu aç"), .darkMode(on: true))
         XCTAssertEqual(SystemCommandParser.parse("Karanlık modu kapat"), .darkMode(on: false))
         XCTAssertEqual(SystemCommandParser.parse("Aydınlık moda geç"), .darkMode(on: false))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı aşağı kaydır"), .scroll(up: false, large: false))
+        XCTAssertEqual(SystemCommandParser.parse("Sayfayı yukarı kaydır"), .scroll(up: true, large: false))
+        XCTAssertEqual(SystemCommandParser.parse("Aşağı scroll"), .scroll(up: false, large: false))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı kaydır yukarı"), .scroll(up: true, large: false))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı aşşağı kaydır"), .scroll(up: false, large: false))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı baya bir yukarı kaydır"), .scroll(up: true, large: true))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı baya bir yukarı kaydırır"), .scroll(up: true, large: true))
+        XCTAssertEqual(SystemCommandParser.parse("Ekranı baya bir yukarı kaydı"), .scroll(up: true, large: true))
+        XCTAssertEqual(SystemCommandParser.parse("Sayfayı çok aşağı kaydır"), .scroll(up: false, large: true))
+        XCTAssertEqual(SystemCommandParser.parse("Epey yukarı scroll"), .scroll(up: true, large: true))
+        XCTAssertNil(SystemCommandParser.parse("Yukarı kaydı"))
+        XCTAssertNil(SystemCommandParser.parse("Ekranı aşağı kaydırmak istiyorum"))
+        XCTAssertNil(SystemCommandParser.parse("Aşağıda güzel bir sayfa var"))
         XCTAssertEqual(SystemCommandParser.parse("Ekranı kilitle."), .lockScreen)
         // 26 Sep 2026: Whisper heard "Ekranı kilitle" as "Ekranı kilitli".
         XCTAssertEqual(SystemCommandParser.parse("Ekranı kilitli."), .lockScreen)
@@ -62,6 +90,28 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Chrome'u aç", installedApps: apps), .openApp("Google Chrome"))
         XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ı kapat", installedApps: apps), .quitApp("WhatsApp"))
         XCTAssertEqual(SystemCommandParser.parse("Terminal uygulamasını aç", installedApps: apps), .openApp("Terminal"))
+    }
+
+    func testMisheardAppCommands() {
+        // Whisper: case ending glued onto the verb, vowels misheard.
+        XCTAssertEqual(SystemCommandParser.parse("Saferi Yaç", installedApps: apps), .openApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safer iyaç.", installedApps: apps), .openApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari yaç", installedApps: apps), .openApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Chrome uaç", installedApps: apps), .openApp("Google Chrome"))
+        XCTAssertEqual(SystemCommandParser.parse("Saferi ykapat", installedApps: apps), .quitApp("Safari"))
+        XCTAssertNil(SystemCommandParser.parse("Kapıyı aç", installedApps: apps))
+        XCTAssertNil(SystemCommandParser.parse("Pencere yaç", installedApps: apps))
+    }
+
+    func testForceQuitApps() {
+        XCTAssertEqual(SystemCommandParser.parse("Chrome'u zorla kapat", installedApps: apps), .forceQuitApp("Google Chrome"))
+        XCTAssertEqual(SystemCommandParser.parse("Jarvis Safari'yi öldür", installedApps: apps), .forceQuitApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ı sonlandır", installedApps: apps), .forceQuitApp("WhatsApp"))
+        XCTAssertEqual(SystemCommandParser.parse("Terminal uygulamasını zorla kapat", installedApps: apps), .forceQuitApp("Terminal"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari'yi kill et", installedApps: apps), .forceQuitApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari'yi tamamen kapat", installedApps: apps), .forceQuitApp("Safari"))
+        XCTAssertNil(SystemCommandParser.parse("Safari'yi zorla aç", installedApps: apps))
+        XCTAssertNil(SystemCommandParser.parse("Spotify'ı öldür", installedApps: apps))
     }
 
     func testAppLookalikesStayWithOtherHandlers() {

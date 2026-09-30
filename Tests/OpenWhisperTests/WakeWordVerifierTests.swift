@@ -15,6 +15,31 @@ final class WakeWordVerifierTests: XCTestCase {
         }
     }
 
+    func testNearMissesAfterHeyMatch() {
+        // Real calls Whisper misheard (wake clips, 27 Sep 2026).
+        for text in ["Hey Jars", "Hey Jaws", "Hey Jairz.", "Hey Jairus", "Hecaviz.", "Hey, Cavis", "Hey Javis"] {
+            XCTAssertTrue(WakeWordVerifier.containsWakeWord(text), text)
+            XCTAssertTrue(WakeWordVerifier.isBareCall(text), text)
+        }
+        XCTAssertFalse(WakeWordVerifier.isBareCall("Hey Jars şarkıyı durdur"))
+    }
+
+    func testNearMissesWithoutHeyDoNotMatch() {
+        for text in ["Canis", "Jale geldi", "Jars", "Hey Jale", "Hey Can", "Hey Cansu nasılsın", "Hey canım", "Hayırdır abi"] {
+            XCTAssertFalse(WakeWordVerifier.containsWakeWord(text), text)
+        }
+    }
+
+    func testLeadingWakeWordIsStripped() {
+        XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord("Hey Jarvis, şarkıyı durdur."), "Şarkıyı durdur.")
+        XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord("Jarvis. İyi misin?"), "İyi misin?")
+        XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord("Cervis saat kaç"), "Saat kaç")
+        XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord("Jarvis"), "")
+        for kept in ["Jarvis'e bir şey sorayım", "Servis geldi mi", "Spotify'da şarkı aç", "Hey abi naber", ""] {
+            XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord(kept), kept)
+        }
+    }
+
     func testBareCallNeedsNoLLM() {
         XCTAssertTrue(WakeWordVerifier.isBareCall("Jarvis."))
         XCTAssertTrue(WakeWordVerifier.isBareCall("Hey, Cervis!"))

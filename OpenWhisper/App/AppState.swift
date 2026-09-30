@@ -12,6 +12,7 @@ import QuartzCore
 final class RecordingTranscriptionSession {
     let id: UInt64
     let startedAt = Date()
+    let latency = VoiceLatencyTracker()
     let targetApp: NSRunningApplication?
     var pasteContext: PasteContext
     let stream: AsyncStream<CompletedAudioSegment>
@@ -23,6 +24,12 @@ final class RecordingTranscriptionSession {
     var isVoiceCommand = false
     /// How the recording was started; upgraded to `.fnSpace` when Space locks a Fn hold.
     var trigger: RecordingTrigger = .fnHold
+    /// Commands (system, Spotify, reminders, "… bunu yaz") run for voice sessions and for the
+    /// dictation keys (Fn, Fn+Space, the recording shortcut) alike. Chat, the first-sentence
+    /// split and spoken replies stay voice-only: at the keyboard a non-command is typed.
+    var acceptsCommands: Bool {
+        isVoiceCommand || [.fnHold, .fnSpace, .keyboardShortcut].contains(trigger)
+    }
 
     var task: Task<Void, Never>?
     var segmentTexts: [String] = []
@@ -52,10 +59,15 @@ final class RecordingTranscriptionSession {
     var hadPartialTargetSpeech = false
     var confirmationCandidate: TargetSpeakerConfirmationCandidate?
     var confirmationTranscriptTexts: [String] = []
+    /// Every transcription of a deletion-confirmation answer, including the unmasked one,
+    /// so the judge sees "Olaylıyorum" even when the masked re-decode says "Ona iliyorum".
+    var heardVariants: [String] = []
     var hadSingleSpeakerUncertain = false
     /// The "Jarvis" that started this session already matched the user's voice. A recording
     /// with one coherent speaker is then the user, even if its absolute score is borderline.
     var wakeSpeakerVerified = false
+    /// The `WakeClipLog` record of the "Jarvis" that started this session.
+    var wakeClipID: UUID?
     var hadDiarizationAttempt = false
     var hadDiarizationTargetSpeech = false
     var hadDiarizationFailure = false
@@ -173,11 +185,66 @@ final class AppState {
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
-    /// Jarvis answers voice commands out loud (`JarvisVoice`, local OmniVoice model).
+    /// Jarvis answers voice commands out loud (`JarvisVoice`, with the provider below).
     var voiceRepliesEnabled: Bool {
         didSet {
             UserDefaults.standard.set(voiceRepliesEnabled, forKey: "voiceRepliesEnabled")
             if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+        }
+    }
+    /// Who makes the voice (`SpeechProviders.all`): only how a reply sounds, never what it says.
+    var voiceProviderID: String {
+        didSet {
+            guard voiceProviderID != oldValue else { return }
+            SpeechSettingsStore.standard.providerID = voiceProviderID
+            voiceModelID = SpeechSettingsStore.standard.modelID(for: voiceProviderID)
+            voiceID = SpeechSettingsStore.standard.voiceID(for: voiceProviderID)
+            applyVoiceProvider()
+        }
+    }
+    /// Model of `voiceProviderID`; each provider remembers its own.
+    var voiceModelID: String {
+        didSet {
+            guard voiceModelID != oldValue else { return }
+            SpeechSettingsStore.standard.setModelID(voiceModelID, for: voiceProviderID)
+            applyVoiceProvider()
+        }
+    }
+
+    /// Voice of `voiceProviderID` ("" when it has no choice); each provider remembers its own.
+    var voiceID: String {
+        didSet {
+            guard voiceID != oldValue else { return }
+            SpeechSettingsStore.standard.setVoiceID(voiceID, for: voiceProviderID)
+            applyVoiceProvider()
+        }
+    }
+
+    private func applyVoiceProvider() {
+        JarvisVoice.shared.reloadProvider()
+        if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+    }
+    /// Who makes the classification decisions (Spotify intent, wake-word check, "talking to
+    /// Jarvis?"): Ollama, or the local SetFit models with Ollama as the fallback (`SetFitDecider`).
+    var decisionEngine: SetFitDecider.Engine {
+        didSet {
+            UserDefaults.standard.set(decisionEngine.rawValue, forKey: SetFitDecider.defaultsKey)
+            applyDecisionEngine()
+        }
+    }
+    /// Settings shows this under the engine picker.
+    var setFitStatus = "Kapalı"
+
+    private func applyDecisionEngine() {
+        guard decisionEngine == .setfit else {
+            SetFitDecider.shared.stop()
+            setFitStatus = SetFitDecider.shared.status
+            return
+        }
+        setFitStatus = "Başlatılıyor…"
+        Task {
+            await SetFitDecider.shared.prepare()
+            setFitStatus = SetFitDecider.shared.status
         }
     }
     @ObservationIgnored private var jarvisReply = JarvisReply()
@@ -306,7 +373,9 @@ final class AppState {
     var lastTranscription: String = ""
     var lastError: String?
     var accessibilityGranted: Bool = false
-    var microphoneGranted: Bool = false
+    var microphoneGranted: Bool = false {
+        didSet { updateWakeWordListener() }
+    }
     var targetSpeakerProfileStatus: String = "Henüz kayıt yok"
     var targetSpeakerPreparationProgress: Double?
     var targetSpeakerPreparationMessage: String = ""
@@ -419,14 +488,37 @@ final class AppState {
             updateWakeWordListener()
         }
     }
+    /// Settings › Jarvis: a key that starts the same session as "Hey Jarvis" (nil = not set).
+    var jarvisHotkey: JarvisHotkey? = JarvisHotkey.load() {
+        didSet {
+            JarvisHotkey.save(jarvisHotkey)
+            if !jarvisHotkeyCapturing { hotkey?.jarvisKey = jarvisHotkey }
+        }
+    }
+    /// While Settings records a new Jarvis key the old one is unbound, so pressing it there
+    /// doesn't start a session.
+    var jarvisHotkeyCapturing = false {
+        didSet {
+            hotkey?.jarvisKey = jarvisHotkeyCapturing ? nil : jarvisHotkey
+            hotkey?.fnSuppressed = jarvisHotkeyCapturing
+        }
+    }
+    /// A media/brightness key pressed while Settings records the Jarvis key: macOS keeps it
+    /// for itself (no keyDown), so the recorder explains why it can't be bound.
+    private(set) var jarvisCaptureSystemKey: JarvisHotkey.SystemKeyPress?
     private(set) var wakeWordListening = false
     private(set) var wakeWordStatus = "Kapalı"
+    /// Enabled but can't hear "Jarvis" for a reason the user can fix: the menu bar icon
+    /// and the status line turn orange so it's visible without opening the log.
+    private(set) var wakeWordBlocked = false
     @ObservationIgnored private var wakeWordListener: WakeWordListener?
     @ObservationIgnored private var wakeCandidateVerifying = false
     /// Bumped per weak direct detection so a late verdict never discards a newer session.
     @ObservationIgnored private var wakeConfirmationID = 0
     /// The wake speaker check finished before the session it belongs to was created.
     @ObservationIgnored private var pendingWakeSpeakerVerified = false
+    /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
+    @ObservationIgnored private var pendingWakeClipID: UUID?
     @ObservationIgnored private var mediaActivityMonitor: SystemMediaActivityMonitor?
     @ObservationIgnored private var mediaPlaying = false
     @ObservationIgnored private var systemAsleep = false
@@ -481,7 +573,7 @@ final class AppState {
 
     var menuBarIcon: String {
         switch recordingState {
-        case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : "mic.fill"
+        case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : wakeWordBlocked ? "mic.badge.xmark" : "mic.fill"
         case .recording: "waveform"
         case .transcribing: "waveform.path.ecg"
         }
@@ -489,7 +581,7 @@ final class AppState {
 
     var menuBarIconColor: Color {
         switch recordingState {
-        case .idle: systemAudioIsRecording ? .red : .white
+        case .idle: systemAudioIsRecording ? .red : wakeWordBlocked ? .orange : .white
         case .recording: .red
         case .transcribing: .orange
         }
@@ -544,6 +636,10 @@ final class AppState {
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
         voiceRepliesEnabled = defaults.object(forKey: "voiceRepliesEnabled") as? Bool ?? true
+        voiceProviderID = SpeechSettingsStore.standard.providerID
+        voiceModelID = SpeechSettingsStore.standard.modelID(for: SpeechSettingsStore.standard.providerID)
+        voiceID = SpeechSettingsStore.standard.voiceID(for: SpeechSettingsStore.standard.providerID)
+        decisionEngine = defaults.string(forKey: SetFitDecider.defaultsKey).flatMap(SetFitDecider.Engine.init(rawValue:)) ?? .ollama
         let savedModel = defaults.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
         // Models dropped from the picker (the ByT5 normalizer, llama3.2:3b) fall back to the default
         // instead of leaving a selection Settings can't show.
@@ -593,8 +689,10 @@ final class AppState {
 
         loadTargetSpeakerProfile()
         startTargetSpeakerDiarizationPreparation()
-        // The voice model takes ~15 s to load; do it now rather than on the first reply.
+        // The local voice model takes ~15 s to load; do it now rather than on the first reply.
         if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+        // SetFit models load in ~5 s; start them with the app rather than on the first decision.
+        if decisionEngine == .setfit { applyDecisionEngine() }
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -665,6 +763,18 @@ final class AppState {
                 owLog("[OpenWhisper] Voice session requested (Vocal Shortcut)")
                 self?.startVoiceSession()
             }
+        }
+        hotkey?.jarvisKey = jarvisHotkey
+        hotkey?.onSystemKeyDuringCapture = { [weak self] nxKeyType in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.jarvisCaptureSystemKey = .init(nxKeyType: nxKeyType,
+                                                    sequence: (self.jarvisCaptureSystemKey?.sequence ?? 0) + 1)
+            }
+        }
+        // Main queue, like onPress: a Fn hold's startRecording dispatch runs before this.
+        hotkey?.onJarvisKey = { [weak self] cancelledFnHold in
+            DispatchQueue.main.async { self?.handleJarvisKey(cancelledFnHold: cancelledFnHold) }
         }
         hotkey?.onHandsFreeChange = { [weak self] active in
             Task { @MainActor in
@@ -1077,20 +1187,21 @@ final class AppState {
             return
         }
         let sessionStart = CACurrentMediaTime()
-        let useSmartTurnEndpoint = armVoiceAutoStop && recordingTrigger == .wakeWord
+        let wakeLikeSession = recordingTrigger == .wakeWord || recordingTrigger == .jarvisKey
+        let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession
         let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
         var endpointFallbackConfig: VoiceEndpointDetector.Config = resolvedInputIsBluetooth ? .closeTalk : .init()
         // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
         // incomplete-turn safety limit and also keeps a model failure bounded.
         if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
         if isDeletionConfirmation {
-            // Jarvis has just finished asking for confirmation: wait up to three seconds for
+            // Jarvis has just finished asking for confirmation: wait up to five seconds for
             // speech, then close automatically. Once speech begins, leave enough room for a
             // natural answer and stop quickly after it ends.
-            endpointFallbackConfig.noSpeechTimeout = 3
-            endpointFallbackConfig.maxDuration = 8
+            endpointFallbackConfig.noSpeechTimeout = 5
+            endpointFallbackConfig.maxDuration = 10
             endpointFallbackConfig.silenceToStop = min(endpointFallbackConfig.silenceToStop, 0.8)
-            owLog("[Reminders] Listening for deletion confirmation (3 s response window)")
+            owLog("[Reminders] Listening for deletion confirmation (5 s response window)")
         }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
@@ -1105,15 +1216,16 @@ final class AppState {
                 ignoredLeadingSeconds: mediaPlaying ? 0.8 : 0
             )
             : nil
-        ownVoiceStopGate = armVoiceAutoStop && recordingTrigger == .wakeWord
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession
             && targetSpeakerEnabled && targetSpeakerProfile != nil
-            ? OwnVoiceStopGate(threshold: OwnVoiceStopGate.defaultThreshold)
+            ? OwnVoiceStopGate()
             : nil
         ownVoiceCheckInFlight = false
         lastOwnVoiceCheck = sessionStart
         if ownVoiceStopGate != nil { owLog("[OwnVoiceStop] Armed for wake-word session") }
 
-        if audioDuckingEnabled || armVoiceAutoStop {
+        // The Settings switch decides for every trigger, voice sessions included.
+        if audioDuckingEnabled {
             recordingMedia.begin()
         }
 
@@ -1123,18 +1235,31 @@ final class AppState {
         // dispatch itself has zero main-thread work between it and the guards above.
         let recordingInputDeviceUID = resolvedInputDeviceUID
         let processingMode = audioProcessingMode
+        let echoCancellation = recordingEchoCancellationWanted
         let audioEngineRef = audioEngine
         let smartEndpoint = smartTurnEndpointDetector
         let endpointSampleCallback: (([Float]) -> Void)? = smartEndpoint.map { endpoint in
             { samples in endpoint.feed(samples) }
         }
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
+        // Voice sessions continue the wake listener's running mic stream (same device only)
+        // instead of restarting the hardware; after "Hey Jarvis" the audio since the wake comes
+        // along, so a command said without a pause keeps its first words. Taken here, before
+        // `recordingState` below stops the listener.
+        let captureHandoff: WakeCaptureHandoff? = wakeLikeSession && processingMode != .appleVoiceProcessing
+            ? wakeWordListener?.handOffCapture(
+                toDeviceID: recordingInputDeviceUID.flatMap(AudioEngine.audioDeviceID(forUID:)) ?? AudioEngine.defaultInputDeviceID(),
+                wakePreroll: recordingTrigger == .wakeWord)
+            : nil
+        if audioEngineRef == nil { captureHandoff?.capture.stop() }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
                 audioProcessingMode: processingMode,
                 sampleCallback: endpointSampleCallback,
+                echoCancellation: echoCancellation,
+                handoff: captureHandoff,
                 levelCallback: { rawLevel in
                     let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                     // Stamped here, on the audio thread, so main-thread stalls can't distort
@@ -1183,16 +1308,24 @@ final class AppState {
         )
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
-        session.wakeSpeakerVerified = session.trigger == .wakeWord && pendingWakeSpeakerVerified
+        // A key press means the user is at the Mac: treat the voice like a matched "Jarvis".
+        session.wakeSpeakerVerified = session.trigger == .jarvisKey
+            || (session.trigger == .wakeWord && pendingWakeSpeakerVerified)
         pendingWakeSpeakerVerified = false
+        if session.trigger == .wakeWord {
+            session.wakeClipID = pendingWakeClipID
+            pendingWakeClipID = nil
+        }
         activeTranscriptionSession = session
         pendingTranscriptionCount += 1
 
         let previousTask = transcriptionQueueTail
         let transcriptionTask = Task { @MainActor [weak self] in
+            let queueStartedAt = session.latency.timestamp()
             if let previousTask {
                 await previousTask.value
             }
+            session.latency.record(.queueWait, since: queueStartedAt)
 
             guard let self else { return }
             for await segment in session.stream {
@@ -1279,6 +1412,7 @@ final class AppState {
             return
         }
         let segments = audioEngine.stopRecording()
+        session.latency.markRecordingStopped()
         // A voice command keeps media paused until it has run (see finishTranscription).
         if !session.isVoiceCommand {
             recordingMedia.end()
@@ -1323,6 +1457,8 @@ final class AppState {
         session: RecordingTranscriptionSession
     ) async {
         guard !session.isCancelled else { return }
+        let transcriptionStartedAt = session.latency.timestamp()
+        defer { session.latency.record(.transcription, since: transcriptionStartedAt) }
         session.nextSegmentNumber += 1
         let segmentNumber = session.nextSegmentNumber
 
@@ -1351,6 +1487,10 @@ final class AppState {
                 enabled: true,
                 audioProcessingMode: audioProcessingMode
             )
+            // The filter's own verdict, before the wake-verified override below.
+            WakeClipLog.shared.update(session.wakeClipID) {
+                $0.filterDecisions.append(result.shortBypass ? "shortBypass" : "\(result.decision)")
+            }
             // One coherent voice in a session whose "Jarvis" already matched the user: that
             // voice is the user. Holding it for a "Bu benim sesimdi" tap only lost commands.
             if session.wakeSpeakerVerified, result.decision == .singleSpeakerUncertain, !result.wasFailClosed {
@@ -1587,11 +1727,23 @@ final class AppState {
                     // and never offer it for confirmation.
                     guard !isAmbiguousTargetMatch,
                           filtered.hasAcceptedTargetSpeech else { return }
-                    segmentText = try await transcriber.transcribe(
+                    let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if session.trigger == .confirmation, !heard.isEmpty {
+                        // A one-word answer is too short for diarization; masking its gaps turns
+                        // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
+                        session.heardVariants.append(heard)
+                    }
+                    let maskedText = try await transcriber.transcribe(
                         audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
                         language: language,
                         overlapSampleCount: segment.overlapSampleCount
                     )
+                    if session.trigger == .confirmation, !heard.isEmpty {
+                        session.heardVariants.append(maskedText)
+                        segmentText = heard
+                    } else {
+                        segmentText = maskedText
+                    }
                 }
             } else {
                 // Fail-closed and below-threshold results transcribe the original only in their
@@ -1645,8 +1797,11 @@ final class AppState {
         // (or dictation) is done, on every exit path below. A recording started meanwhile
         // owns the pause now and releases it when it stops.
         var resumeMediaAfterCommand = true
+        // A follow-up question (deletion confirmation) keeps the music paused through the
+        // answer; that session's own finish resumes it.
+        var holdMediaForFollowUp = false
         defer {
-            if session.isVoiceCommand && recordingState != .recording {
+            if session.isVoiceCommand && recordingState != .recording && !holdMediaForFollowUp {
                 recordingMedia.end(resuming: resumeMediaAfterCommand)
             }
         }
@@ -1677,9 +1832,15 @@ final class AppState {
               + SpeakerBatchLog.headerLines(targetSpeakerEnabled: session.targetSpeakerEnabled, batches: session.speakerBatches))
         }
         owLog("[TargetSpeaker] finishTranscription starting for session \(session.id): targetSpeakerEnabled=\(session.targetSpeakerEnabled), acceptedSamples=\(session.acceptedTargetSpeechSamples), hadSingleSpeakerUncertain=\(session.hadSingleSpeakerUncertain), hadFailClosed=\(session.hadFailClosedPassthrough), segmentTextsCount=\(session.segmentTexts.count), unmatchedSegmentTextsCount=\(session.unmatchedSegmentTexts.count)")
+        WakeClipLog.shared.finish(
+            session.wakeClipID,
+            outcome: session.isCancelled ? "discarded" : "transcribed",
+            transcript: AudioSegmentation.joinTranscripts(session.allSegmentTexts)
+        )
 
         defer {
-            if session.trigger == .confirmation {
+            // A re-asked confirmation (holdMediaForFollowUp) keeps its plan for the next answer.
+            if session.trigger == .confirmation && !holdMediaForFollowUp {
                 self.reminderManager?.cancelPendingDeletion()
             }
             // Break the session ↔ worker reference cycle once the worker has drained the
@@ -1696,6 +1857,7 @@ final class AppState {
         }
 
         await VoiceTrace.$current.withValue(traceID) {
+            defer { session.latency.finishIfNeeded() }
             guard !session.isCancelled else { return }
             if !session.hadFailClosedPassthrough &&
                 (session.hadSingleSpeakerUncertain ||
@@ -1753,10 +1915,11 @@ final class AppState {
 
             // Mangled names ("Sputfayda" → "Spotify'da") fixed before routing, so a command is
             // still recognized; the list is the user's ses-benzerleri.txt.
-            let (text, soundAlikes) = SoundAlikeCorrector.correct(
-                AudioSegmentation.joinTranscripts(session.segmentTexts),
-                entries: SoundAlikeCorrector.loadEntries()
-            )
+            // Wake sessions now start at the wake itself, so the tail of "Jarvis" can be heard.
+            let joined = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined) : joined
+            if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
+            let (text, soundAlikes) = SoundAlikeCorrector.correct(spoken, entries: SoundAlikeCorrector.loadEntries())
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
@@ -1771,6 +1934,7 @@ final class AppState {
             }
 
             owLog("[OpenWhisper] Raw: \(text)")
+            session.latency.beginDecision()
             correctionGeneration &+= 1
             let generation = correctionGeneration
 
@@ -1784,6 +1948,8 @@ final class AppState {
                 pasteContext: PasteContext,
                 send: Bool
             ) async {
+                session.latency.finishDecision(route: send ? "agent yazma" : "dikte")
+                let preprocessingStartedAt = session.latency.timestamp()
                 var initialText = rawText
 
                 // Tracks which learned pairs actually fired for THIS dictation, so the paste
@@ -1824,6 +1990,7 @@ final class AppState {
                 }
 
                 initialText = TranscriptSanitizer.removeForbiddenArtifacts(from: initialText)
+                session.latency.record(.preprocessing, since: preprocessingStartedAt)
                 guard !initialText.isEmpty else {
                     owLog("[OpenWhisper] Forbidden-only transcript blocked before output")
                     return
@@ -1835,8 +2002,14 @@ final class AppState {
                 }
 
                 if self.autoPasteEnabled {
+                    let pasteStartedAt = session.latency.timestamp()
+                    session.latency.expectAsyncOutput()
+                    guard let textInjector = self.textInjector else {
+                        session.latency.markOutput("metin enjektörü kullanılamıyor")
+                        return
+                    }
                     // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
-                    self.textInjector?.pasteTextResult(
+                    textInjector.pasteTextResult(
                         initialText,
                         targetApp: targetApp,
                         context: pasteContext
@@ -1845,6 +2018,8 @@ final class AppState {
                         // cleanup below (and everything it logs) still lands in it.
                         Task { @MainActor in VoiceTrace.$current.withValue(traceID) {
                             guard let self else { return }
+                            session.latency.record(.paste, since: pasteStartedAt, detail: "\(outcome)")
+                            session.latency.markOutput("\(outcome)")
                             owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
                             switch outcome {
                             case .pastedVerified where send, .pastedUnverified where send:
@@ -1888,7 +2063,9 @@ final class AppState {
                                 if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
                                     Task { @MainActor [weak self] in
                                         guard let self else { return }
+                                        let cleanupStartedAt = session.latency.timestamp()
                                         let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
+                                        session.latency.record(.cleanup, since: cleanupStartedAt)
                                         let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                         guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
@@ -1949,56 +2126,75 @@ final class AppState {
                             }
                         } }
                     }
+                    // Destination resolution and AX verification are bounded well below this.
+                    // Keep a trace even if an unexpected integration path loses its callback.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(2))
+                        session.latency.markOutput("yapıştırma sonucu zaman aşımı")
+                    }
                 } else {
                     self.textInjector?.copyToClipboard(initialText)
                     owLog("[Result] Auto-paste off, copied to clipboard: '\(initialText)'")
+                    session.latency.markOutput("panoya kopyalandı")
                 }
             }
 
-            // "Claude Code'a / Codex'e şunu yaz … gönder": checked before reminders and
-            // Spotify so a prompt that mentions them is still typed, not executed. A bare
-            // trailing "gönder" only counts in agent apps and terminals.
-            if let agent = AgentCommandParser.parse(trimmed),
-               agent.target != nil || (
-                   session.pasteContext.focusStatus == .editable
-                       && AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "")
-               ) {
-                owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send))")
-                guard !agent.body.isEmpty else {
-                    owLog("[Agent] Nothing to write after the command words, skipping")
+            // A named target wins; otherwise a Jarvis send goes to the app that was frontmost
+            // when recording began. TextInjector still verifies that the destination is safe.
+            if let agent = AgentCommandParser.parse(trimmed) {
+                if session.isVoiceCommand, agent.send, agent.target == nil, session.targetApp == nil {
+                    let status = "Önde bir uygulama bulamadım; mesaj gönderilmedi."
+                    owLog("[Agent] Send skipped: no foreground application")
+                    self.showFlowBarMessage(status, durationMs: 4500)
+                    await self.speakReply(status)
                     return
                 }
-                var targetApp = session.targetApp
-                var pasteContext = session.pasteContext
-                if let target = agent.target,
-                   !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false) {
-                    guard let app = await AgentAppActivator.activate(target) else {
-                        self.textInjector?.copyToClipboard(agent.body)
-                        self.showFlowBarMessage("\(target.displayName) açılamadı, panoya kopyalandı")
-                        if session.isVoiceCommand {
-                            await self.speakReply(self.jarvisReply.failure("\(target.displayName) açılamadı"))
-                        }
+                let routeToAgent = agent.target != nil || (
+                    agent.send && session.targetApp != nil && (
+                        session.isVoiceCommand || (
+                            session.pasteContext.focusStatus == .editable
+                                && AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "")
+                        )
+                    )
+                )
+                if routeToAgent {
+                    owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send))")
+                    guard !agent.body.isEmpty else {
+                        owLog("[Agent] Nothing to write after the command words, skipping")
                         return
                     }
-                    targetApp = app
-                    pasteContext = PasteContext.capture(targetApp: app)
+                    var targetApp = session.targetApp
+                    var pasteContext = session.pasteContext
+                    if let target = agent.target,
+                       !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false) {
+                        guard let app = await AgentAppActivator.activate(target) else {
+                            self.textInjector?.copyToClipboard(agent.body)
+                            self.showFlowBarMessage("\(target.displayName) açılamadı, panoya kopyalandı")
+                            if session.isVoiceCommand {
+                                await self.speakReply(self.jarvisReply.failure("\(target.displayName) açılamadı"))
+                            }
+                            return
+                        }
+                        targetApp = app
+                        pasteContext = PasteContext.capture(targetApp: app)
+                    }
+                    await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
+                    return
                 }
-                await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
-                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
-                return
             }
 
             // An explicit "buraya yaz …" or trailing "… bunu yaz" always means the captured
             // text field, even when the words themselves resemble a Jarvis command. A trailing
             // "gönder" outside agent apps is typed without Return, so Slack / Mail are never sent.
-            if session.isVoiceCommand {
+            if session.acceptsCommands {
                 let typed = JarvisAddressee.leadingTypeCommand(trimmed)
                     ?? JarvisAddressee.trailingTypeCommand(trimmed)
                     ?? AgentCommandParser.parse(trimmed).flatMap { $0.send && !$0.body.isEmpty ? $0.body : nil }
                 if let typed {
                     owLog("[Route] explicit dictation override: '\(typed)'")
                     await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
-                    await self.speakReply(self.jarvisReply.agent(sent: false))
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
                     return
                 }
             }
@@ -2007,9 +2203,13 @@ final class AppState {
             // user talk to Jarvis without first clicking away from the field.
             if session.isVoiceCommand,
                let chatText = JarvisAddressee.explicitChatCommand(trimmed) {
+                session.latency.finishDecision(route: "Jarvis sohbet")
                 owLog("[Route] explicit Jarvis chat: '\(chatText)'")
                 self.lastTranscription = text
+                let actionStartedAt = session.latency.timestamp()
                 await self.chatReply(to: chatText)
+                session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
+                session.latency.markOutput("Jarvis cevabı")
                 return
             }
 
@@ -2017,17 +2217,31 @@ final class AppState {
             // is pending, only an explicit approval can execute the already-resolved plan; any
             // other ordinary voice response discards it without touching reminders.
             if session.isVoiceCommand,
-               let confirmation = await self.reminderManager?.handleDeletionConfirmation(trimmed) {
+               let confirmation = await self.reminderManager?.handleDeletionConfirmation(
+                   trimmed, alternatives: session.heardVariants
+               ) {
+                session.latency.finishDecision(route: "hatırlatıcı silme onayı")
                 owLog("[Route] reminder deletion confirmation")
                 owLog("[Result] Reminder deletion confirmation: \(String(describing: confirmation))")
                 self.lastTranscription = text
-                await self.speakReply(self.jarvisReply.reminderDeletion(confirmation))
+                let reply = self.jarvisReply.reminderDeletion(confirmation)
+                let heard = await self.speakReply(reply)
+                if confirmation == .confirmationUnclear {
+                    holdMediaForFollowUp = true
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(20))
+                        guard let self, self.recordingState != .recording else { return }
+                        self.recordingMedia.end(resuming: true)
+                    }
+                    if !heard { self.showFlowBarMessage(reply, durationMs: 6000) }
+                    self.startVoiceSession(trigger: .confirmation)
+                }
                 return
             }
 
-            // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": only in a
-            // Jarvis session, so dictating the same words with the hotkey still types them.
-            // A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
+            // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": in a Jarvis
+            // session and with the dictation keys (`acceptsCommands`); "… bunu yaz" above types
+            // them instead. A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
             // when the user turns to someone else): if the whole transcript is no command, the
             // first sentence alone may be.
             let firstSentence = session.isVoiceCommand ? Self.leadingSentence(of: trimmed) : nil
@@ -2039,17 +2253,27 @@ final class AppState {
                         ? SystemController.shortcutNames() : []
                 )
             }
-            if session.isVoiceCommand,
-               let command = parseSystem(trimmed) ?? firstSentence.flatMap(parseSystem) {
+            // Developer mode opens apps and starts music: only when it is the whole transcript.
+            if session.acceptsCommands,
+               let command = parseSystem(trimmed)
+                ?? firstSentence.flatMap(parseSystem).flatMap({ $0 == .developerMode ? nil : $0 }) {
+                session.latency.finishDecision(route: "sistem komutu")
                 owLog("[Route] system (\(command))")
                 // Going to sleep or locking: say it before the Mac stops listening.
                 let speaksFirst = ([.sleep, .displaySleep, .lockScreen] as [SystemCommand]).contains(command)
-                if speaksFirst { await self.speakReply("Görüşürüz.") }
+                if speaksFirst && session.isVoiceCommand { await self.speakReply("Görüşürüz.") }
+                // The local model takes several seconds on a long page.
+                if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
+                let actionStartedAt = session.latency.timestamp()
                 let status = await SystemController.perform(command)
+                // Liked Songs now play; don't resume what the session paused over them.
+                if command == .developerMode { resumeMediaAfterCommand = false }
+                session.latency.record(.action, since: actionStartedAt, detail: "sistem komutu")
+                session.latency.markOutput("sistem komutu tamamlandı")
                 owLog("[Result] System command: \(status)")
                 self.lastTranscription = text
                 self.showFlowBarMessage(status, durationMs: status.count > 40 ? 6000 : 2500)
-                if !speaksFirst { await self.speakReply(self.jarvisReply.system(command, status: status)) }
+                if !speaksFirst && session.isVoiceCommand { await self.speakReply(self.jarvisReply.system(command, status: status)) }
                 return
             }
 
@@ -2061,7 +2285,7 @@ final class AppState {
                 if session.isVoiceCommand {
                     let focusStatus = session.pasteContext.focusStatus
                     let needsScore = focusStatus == .unknown
-                    let score = needsScore && self.ollamaAvailable
+                    let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
                             text: trimmed,
                             frontApp: session.targetApp?.localizedName,
@@ -2076,21 +2300,25 @@ final class AppState {
                     )
                     owLog("[Addressee] focus \(focusStatus.rawValue), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
                     if route == .chat {
+                        session.latency.finishDecision(route: "Jarvis sohbet")
                         self.lastTranscription = text
+                        let actionStartedAt = session.latency.timestamp()
                         await self.chatReply(to: trimmed)
+                        session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
+                        session.latency.markOutput("Jarvis cevabı")
                         return
                     }
                 }
                 await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
 
-            let reminderDeletion = session.isVoiceCommand
+            let reminderDeletion = session.acceptsCommands
                 ? ReminderManager.deletionRequest(trimmed)
                 : nil
             let isReminderCommand = reminderDeletion == nil && ReminderManager.isReminder(text)
             var commandText = text
             var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
-                text, ollamaAvailable: self.ollamaAvailable, commandMode: session.isVoiceCommand
+                text, ollamaAvailable: self.ollamaAvailable, commandMode: session.acceptsCommands
             )
             if !isSpotifyCommand, !isReminderCommand, let firstSentence,
                await SpotifyManager.isSpotifyCommand(firstSentence, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
@@ -2100,31 +2328,57 @@ final class AppState {
             }
             owLog("[Route] \(reminderDeletion != nil ? "reminder deletion" : isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
             if let reminderDeletion {
+                session.latency.finishDecision(route: "hatırlatıcı silme")
                 owLog("[OpenWhisper] Reminder deletion detected: \(text)")
                 self.lastTranscription = text
+                let actionStartedAt = session.latency.timestamp()
                 let result = await self.reminderManager?.beginDeletion(reminderDeletion) ?? .failed
+                session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı silme")
+                session.latency.markOutput("hatırlatıcı silme sonucu")
                 owLog("[Result] Reminder deletion request: \(String(describing: result))")
-                let promptWasHeard = await self.speakReply(self.jarvisReply.reminderDeletion(result))
-                if case .confirmationRequired = result, promptWasHeard {
+                let prompt = self.jarvisReply.reminderDeletion(result)
+                let promptWasHeard = await self.speakReply(prompt)
+                if case .confirmationRequired = result {
+                    holdMediaForFollowUp = true
+                    Task { @MainActor [weak self] in
+                        // Safety net if the confirmation recording never starts.
+                        try? await Task.sleep(for: .seconds(20))
+                        guard let self, self.recordingState != .recording else { return }
+                        self.recordingMedia.end(resuming: true)
+                    }
+                    if !promptWasHeard {
+                        // The voice failed; show the question so the listening window isn't a mystery.
+                        owLog("[Reminders] Confirmation prompt not heard; showing it on screen")
+                        self.showFlowBarMessage(prompt, durationMs: 6000)
+                    }
                     self.startVoiceSession(trigger: .confirmation)
                 }
             } else if isReminderCommand {
+                session.latency.finishDecision(route: "hatırlatıcı")
                 owLog("[OpenWhisper] Reminder detected: \(text)")
                 self.lastTranscription = text
                 if self.ollamaAvailable {
+                    let actionStartedAt = session.latency.timestamp()
                     let scheduled = await self.reminderManager?.handleReminder(text: text) ?? false
+                    session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı")
+                    session.latency.markOutput(scheduled ? "hatırlatıcı kuruldu" : "hatırlatıcı kurulamadı")
                     owLog("[Result] Reminder \(scheduled ? "scheduled" : "not scheduled")")
                     if session.isVoiceCommand { await self.speakReply(self.jarvisReply.reminder(scheduled: scheduled)) }
                 } else {
                     owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
+                    session.latency.markOutput("hatırlatıcı modeli kullanılamıyor")
                 }
             } else if isSpotifyCommand {
+                session.latency.finishDecision(route: "Spotify")
                 owLog("[OpenWhisper] Spotify command detected: \(commandText)")
                 let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: commandText)
                 let misheard = self.cleanupAvailable ? self.misheardWords(in: commandText) : []
+                let actionStartedAt = session.latency.timestamp()
                 let handled = await SpotifyManager.shared.handleCommand(
                     text: commandText, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
                 )
+                session.latency.record(.action, since: actionStartedAt, detail: "Spotify")
+                if handled { session.latency.markOutput("Spotify komutu tamamlandı") }
                 owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
                 if handled {
                     resumeMediaAfterCommand = resumesMedia
@@ -2227,7 +2481,7 @@ final class AppState {
         owLog("[Misheard] Command corrected: '\(text)' → '\(corrected)'")
         guard correctionIsCurrent(generation),
               await SpotifyManager.isSpotifyCommand(
-                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.isVoiceCommand
+                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.acceptsCommands
               ),
               correctionIsCurrent(generation) else { return }
         if await SpotifyManager.shared.rerunIfCorrected(original: text, corrected: corrected, targetApp: session.targetApp) {
@@ -2248,7 +2502,7 @@ final class AppState {
         guard correctionIsCurrent(generation),
               let injector = textInjector as? TextInjector,
               await SpotifyManager.isSpotifyCommand(
-                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.isVoiceCommand
+                corrected, ollamaAvailable: ollamaAvailable, commandMode: session.acceptsCommands
               ),
               correctionIsCurrent(generation) else { return false }
         let deleted = await withCheckedContinuation { continuation in
@@ -3168,6 +3422,25 @@ final class AppState {
         }
     }
 
+    /// Jarvis key: idle → start a session like "Hey Jarvis"; during a hands-free recording
+    /// (the one it started, or any other) → finish it like Enter. A live Fn hold is left alone.
+    private func handleJarvisKey(cancelledFnHold: Bool) {
+        guard let hotkey else { return }
+        if cancelledFnHold {
+            // fn+F5: the Fn half already started a dictation; drop it and run Jarvis instead.
+            discardActiveRecording(reason: "Fn hold → Jarvis key")
+        }
+        if hotkey.isIdle {
+            guard recordingState != .recording else { return }
+            owLog("[OpenWhisper] Voice session requested (Jarvis key)")
+            pendingWakeSpeakerVerified = false
+            startVoiceSession(trigger: .jarvisKey)
+        } else {
+            // No-op during a Fn hold.
+            hotkey.externalStopHandsFree()
+        }
+    }
+
     // MARK: - Wake word
 
     private func setupWakeWordListener() {
@@ -3177,6 +3450,7 @@ final class AppState {
         listener.onCandidate = { [weak self] audio, peak in
             MainActor.assumeIsolated { self?.verifyWakeCandidate(audio: audio, peak: peak) }
         }
+        listener.onProblemChange = { [weak self] in self?.updateWakeWordListener() }
         listener.prepare()
         wakeWordListener = listener
         let mediaMonitor = SystemMediaActivityMonitor { [weak self] playing in
@@ -3201,20 +3475,43 @@ final class AppState {
     private func handleDirectWake(audio: [Float], score: Float) {
         owLog("[OpenWhisper] Voice session requested (wake word)")
         pendingWakeSpeakerVerified = false
+        let clipID = beginWakeClip(audio: audio, score: score, kind: "direct")
         startVoiceSession(trigger: .wakeWord)
         guard targetSpeakerGuardsWakeWord else {
-            if score < WakeWordListener.confirmedScore { confirmDirectWake(audio: audio, score: score) }
+            if score < WakeWordListener.confirmedScore { confirmDirectWake(audio: audio, score: score, clipID: clipID) }
+            recordWakeSpeakerScoreOnly(audio: audio, clipID: clipID)
             return
         }
         Task { [weak self] in
             guard let self else { return }
-            if await self.wakeSpeakerMatches(audio: audio) {
+            if await self.wakeSpeakerMatches(audio: audio, clipID: clipID) {
                 self.markWakeSpeakerVerified()
+                if score < WakeWordListener.confirmedScore { self.shadowWakeWordCheck(audio: audio, clipID: clipID) }
             } else if score < WakeWordListener.confirmedScore {
-                self.confirmDirectWake(audio: audio, score: score)
+                self.confirmDirectWake(audio: audio, score: score, clipID: clipID)
             } else {
                 owLog("[WakeWord] Voice not matched at the wake word; the recording's speaker filter decides")
             }
+        }
+    }
+
+    /// Opens the `WakeClipLog` record for a trigger about to start a session. A previous clip
+    /// whose session never started (hotkey busy) is closed first.
+    private func beginWakeClip(audio: [Float], score: Float, kind: String) -> UUID? {
+        WakeClipLog.shared.finish(pendingWakeClipID, outcome: "not started")
+        let id = WakeClipLog.shared.begin(audio: audio, wakeScore: score, kind: kind)
+        pendingWakeClipID = hotkey?.isIdle == true ? id : nil
+        if pendingWakeClipID == nil { WakeClipLog.shared.finish(id, outcome: "not started") }
+        return id
+    }
+
+    /// With the voice guard off but a profile enrolled, the wake clip is still scored for the log.
+    private func recordWakeSpeakerScoreOnly(audio: [Float], clipID: UUID?) {
+        guard clipID != nil, let profile = targetSpeakerProfile else { return }
+        let filter = targetSpeakerFilter
+        Task { [weak self] in
+            guard let score = try? await filter.wakeSpeakerScore(samples: audio, profile: profile), self != nil else { return }
+            WakeClipLog.shared.update(clipID) { $0.speakerScore = score }
         }
     }
 
@@ -3228,7 +3525,7 @@ final class AppState {
 
     /// A weak direct detection: the session is already recording (no added latency) while
     /// Whisper checks the clip for "Jarvis"; without it the recording is dropped untranscribed.
-    private func confirmDirectWake(audio: [Float], score: Float) {
+    private func confirmDirectWake(audio: [Float], score: Float, clipID: UUID?) {
         guard let transcriber = activeTranscriptionService else { return }
         wakeConfirmationID &+= 1
         let id = wakeConfirmationID
@@ -3237,6 +3534,7 @@ final class AppState {
             let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             guard let self else { return }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
+            WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(verdict) }
             switch verdict {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Weak detection %.2f confirmed in %d ms — %@", score, ms, why))
@@ -3252,15 +3550,30 @@ final class AppState {
         }
     }
 
+    /// A weak "Jarvis" whose voice matched skips `confirmDirectWake`. Whether Whisper would have
+    /// heard the word is only recorded (`shadow:` in the wake clip log), never acted on, until the
+    /// clips show that enforcing it doesn't drop the user's own calls (WAKE-SPEAKER-PLANI.md).
+    private func shadowWakeWordCheck(audio: [Float], clipID: UUID?) {
+        guard clipID != nil, let transcriber = activeTranscriptionService else { return }
+        Task {
+            let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
+            WakeClipLog.shared.update(clipID) { $0.wordCheck = "shadow " + Self.wakeClipWordCheck(verdict) }
+        }
+    }
+
     /// Whether the wake clip sounds like the enrolled user; true when the check is off. A model
     /// error lets the wake through: a failed download must not silence "Jarvis" altogether.
-    private func wakeSpeakerMatches(audio: [Float]) async -> Bool {
+    private func wakeSpeakerMatches(audio: [Float], clipID: UUID? = nil) async -> Bool {
         guard targetSpeakerGuardsWakeWord, let profile = targetSpeakerProfile else { return true }
         let threshold = TargetSpeakerFilter.wakeThreshold
         let started = Date()
         do {
             let score = try await targetSpeakerFilter.wakeSpeakerScore(samples: audio, profile: profile)
             let matched = score >= threshold
+            WakeClipLog.shared.update(clipID) {
+                $0.speakerScore = score
+                $0.speakerThreshold = threshold
+            }
             owLog(String(format: "[WakeWord] Speaker %@ (score %.3f, threshold %.2f, %d ms)",
                          matched ? "matched" : "rejected", score, threshold,
                          Int(Date().timeIntervalSince(started) * 1000)))
@@ -3288,6 +3601,8 @@ final class AppState {
         guard !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
               let hotkey, hotkey.isIdle else { return }
         wakeCandidateVerifying = true
+        // Not yet a session: opened directly, handed to one only if the candidate is accepted.
+        let clipID = WakeClipLog.shared.begin(audio: audio, wakeScore: peak, kind: "candidate")
         let mediaPlaying = self.mediaPlaying
         let ollama = ollamaAvailable
         let model = SpotifyManager.selectedOllamaModel
@@ -3296,21 +3611,34 @@ final class AppState {
             guard let self else { return }
             // A voice mismatch alone no longer drops the call (see `handleDirectWake`); Whisper
             // and the LLM below still have to hear a real "Jarvis".
-            let speakerMatched = self.targetSpeakerGuardsWakeWord ? await self.wakeSpeakerMatches(audio: audio) : false
+            let speakerMatched = self.targetSpeakerGuardsWakeWord ? await self.wakeSpeakerMatches(audio: audio, clipID: clipID) : false
+            if !self.targetSpeakerGuardsWakeWord { self.recordWakeSpeakerScoreOnly(audio: audio, clipID: clipID) }
             let verdict = await WakeWordVerifier.verify(
                 audio: audio, transcriber: transcriber, mediaPlaying: mediaPlaying,
                 ollamaAvailable: ollama, model: model
             )
             self.wakeCandidateVerifying = false
             let ms = Int(Date().timeIntervalSince(started) * 1000)
+            WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(verdict) }
             switch verdict {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f accepted in %d ms — %@", peak, ms, why))
                 self.pendingWakeSpeakerVerified = speakerMatched
+                WakeClipLog.shared.finish(self.pendingWakeClipID, outcome: "not started")
+                self.pendingWakeClipID = self.hotkey?.isIdle == true ? clipID : nil
+                if self.pendingWakeClipID == nil { WakeClipLog.shared.finish(clipID, outcome: "not started") }
                 self.startVoiceSession(trigger: .wakeWord)
             case .rejected(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f rejected in %d ms — %@", peak, ms, why))
+                WakeClipLog.shared.finish(clipID, outcome: "candidate rejected")
             }
+        }
+    }
+
+    private static func wakeClipWordCheck(_ verdict: WakeWordVerifier.Verdict) -> String {
+        switch verdict {
+        case .accepted(let why): "accepted: \(why)"
+        case .rejected(let why): "rejected: \(why)"
         }
     }
 
@@ -3349,12 +3677,27 @@ final class AppState {
         } else if !shouldRun && listener.isRunning {
             listener.stop()
         }
-        wakeWordListening = listener.isRunning
+        let micDenied = [.denied, .restricted].contains(AVCaptureDevice.authorizationStatus(for: .audio))
+        let problem = listener.isRunning ? listener.problem : nil
+        wakeWordListening = listener.isRunning && problem == nil && !micDenied
+        let blocked: String? = if !wakeWordEnabled { nil }
+            else if micDenied { "Mikrofon izni yok — Sistem Ayarları › Gizlilik ve Güvenlik › Mikrofon'dan Jarvis'i açın" }
+            else if listener.problem == .modelMissing { "Uyandırma modeli bulunamadı — uygulamayı yeniden kurun" }
+            else if listener.problem == .modelLoadFailed { "Uyandırma modeli yüklenemedi — Jarvis'i yeniden başlatın" }
+            else if problem == .bluetoothOnly { "Yalnızca Bluetooth mikrofon var — Mac'in kendi mikrofonu gerekli" }
+            else if problem == .micUnavailable { "Mikrofon açılamadı — başka bir uygulama kullanıyor olabilir, tekrar deneniyor" }
+            else if problem == .noAudio { "Mikrofondan ses gelmiyor — tekrar deneniyor" }
+            else if !listener.isRunning && !busy && !paused && modelLoaded { "Mikrofon açılamadı" }
+            else if systemAudioEnabled { "“Bilgisayar sesini yazıya dök” açık — kapatınca dinler" }
+            else { nil }
+        wakeWordBlocked = blocked != nil
         wakeWordStatus = if !wakeWordEnabled { "Kapalı" }
+            else if let blocked { blocked }
+            else if listener.isRunning && mediaPlaying { "Dinliyor — müzik çalarken daha yüksek sesle söyleyin" }
             else if listener.isRunning { "“Jarvis” deyince dinlemeye başlar" }
-            else if paused { "Uykuda — duraklatıldı" }
+            else if paused { "Mac uykuda — duraklatıldı" }
             else if busy { "Kayıt sırasında duraklatıldı" }
-            else if !modelLoaded { "Model bekleniyor" }
+            else if !modelLoaded { "Konuşma modeli yükleniyor — birazdan dinlemeye başlar" }
             else { "Mikrofon açılamadı" }
     }
 
@@ -3376,6 +3719,11 @@ final class AppState {
         guard recordingState == .recording, var detector = voiceEndpointDetector else { return }
         let levelDecision = detector.process(rms: rawRMS, at: time)
         voiceEndpointDetector = detector
+        // Relative to the room, not to the user's loudness: a quieter second voice still counts.
+        if ownVoiceStopGate != nil, let floor = detector.floorDB {
+            let loud = VoiceEndpointDetector.dBFS(fromRMS: rawRMS) >= floor + detector.config.onsetMarginDB
+            ownVoiceStopGate?.noteLevel(loud: loud, at: time)
+        }
         let smartDecision = smartTurnEndpointDetector?.decision(
             at: time,
             levelSpeechDetected: detector.speechDetected
@@ -3425,7 +3773,8 @@ final class AppState {
     }
 
     /// Scores the last 1.5 s against the enrolled voice (one check at a time, every 0.5 s) and
-    /// stops the session once the user's voice has gone missing, whoever else is still talking.
+    /// stops the session once someone other than the user has been talking for about 2 s.
+    /// Pauses are Smart Turn's call, not this gate's.
     private func checkOwnVoiceEndpoint() {
         guard recordingState == .recording, ownVoiceStopGate != nil, !ownVoiceCheckInFlight,
               let profile = targetSpeakerProfile, let audioEngine else { return }
@@ -3455,8 +3804,10 @@ final class AppState {
             }
             let shouldStop = gate.record(score: score, at: now)
             self.ownVoiceStopGate = gate
-            owLog(String(format: "[OwnVoiceStop] score %.3f (threshold %.2f)%@", score, gate.threshold,
-                         shouldStop ? " — user's voice gone, stopping" : ""))
+            WakeClipLog.shared.update(self.activeTranscriptionSession?.wakeClipID) { $0.ownVoiceScores.append(score) }
+            owLog(String(format: "[OwnVoiceStop] score %.3f speech %.1fs (user ≥%.2f, other <%.2f)%@",
+                         score, gate.speechDuration(endingAt: now), gate.userThreshold, gate.otherThreshold,
+                         shouldStop ? " — someone else is talking, stopping" : ""))
             guard shouldStop else { return }
             self.voiceEndpointDetector = nil
             self.smartTurnEndpointDetector = nil
@@ -3500,6 +3851,20 @@ final class AppState {
     }
 
     /// Returns true when the resolved dictation input is a Bluetooth device.
+    /// Echo-cancel this recording against what the Mac plays (`RecordingEchoCanceller`): only
+    /// when opted in, something is playing, and there is a way to get the reference. Bluetooth
+    /// mics sit in the ear (no speaker echo); voice processing already cancels echo itself.
+    private var recordingEchoCancellationWanted: Bool {
+        guard EchoCancellationSettings.recordingIsEnabled else { return false }
+        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && !resolvedInputIsBluetooth
+        guard wanted else { return false }
+        guard SystemOutputReference.hasPermission else {
+            owLog("[AEC] No Screen Recording permission — recording without echo cancellation")
+            return false
+        }
+        return true
+    }
+
     var resolvedInputIsBluetooth: Bool {
         guard let uid = resolvedInputDeviceUID else { return false }
         return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false

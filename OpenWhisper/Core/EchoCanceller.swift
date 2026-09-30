@@ -20,6 +20,12 @@ enum EchoCancellationSettings {
     static var dumpsAudio: Bool {
         UserDefaults.standard.bool(forKey: "wakeWordEchoDump")
     }
+    /// The same cancellation on dictation / wake-session recordings (`RecordingEchoCanceller`),
+    /// so the flow bar and Whisper get the cleaned mic. Off until measured on real recordings.
+    /// `defaults write com.openwhisper.app recordingEchoCancellation -bool YES`
+    static var recordingIsEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "recordingEchoCancellation")
+    }
     /// `linear` keeps the existing vDSP filter. `aec3` opts into WebRTC AEC3's linear output;
     /// its residual suppressor is deliberately not used because it damages wake-word scores.
     /// `defaults write com.openwhisper.app wakeWordEchoEngine aec3`
@@ -389,6 +395,12 @@ final class EchoCanceller {
             out += processBlock(mic: micBlock, reference: refBlock)
         }
         return out
+    }
+
+    /// The mic samples still short of a whole block, unprocessed; a recording's last few ms.
+    func flushPending() -> [Float] {
+        defer { micPending.removeAll(); refPending.removeAll() }
+        return micPending
     }
 
     func takeERLESamples() -> [Float] {

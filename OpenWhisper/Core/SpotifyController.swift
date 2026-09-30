@@ -112,6 +112,62 @@ final class SpotifyController: @unchecked Sendable {
         )
     }
 
+    /// Developer mode: Liked Songs (up to 100, shuffled) as a real queue, with Spotify
+    /// launched in the background if it was closed. A freshly launched client takes a few
+    /// seconds to appear as a Connect device, so the device list is polled. If playback
+    /// can't start (not connected, no Premium, endpoint refused), the Liked Songs page is
+    /// at least opened in the background.
+    func playLikedSongs() async -> SpotifyActionResult {
+        let wasRunning = isSpotifyRunning
+        if !wasRunning { await launchInBackground() }
+        if webAPIConnected {
+            do {
+                let uris = try await SpotifyWebAPI.shared.fetchLikedTrackURIs()
+                let deviceID = try await waitForDevice(timeout: wasRunning ? 2 : 8)
+                try await SpotifyWebAPI.shared.startPlayback(uris: uris.shuffled(), deviceID: deviceID)
+                owLog("[SpotifyController] Playing \(uris.count) liked songs")
+                return .success("beğenilen şarkılar çalıyor")
+            } catch {
+                owLog("[SpotifyController] Liked songs playback failed: \(error)")
+            }
+        }
+        openLikedSongsPage()
+        return .failure("beğenilen şarkılar açıldı ama çalınamadı")
+    }
+
+    private func launchInBackground() async {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.spotifyBundleID) else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        configuration.hides = true
+        _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+    }
+
+    /// The device to play on: the active one, else this Mac, else any. Polls until one
+    /// shows up or `timeout` seconds pass.
+    private func waitForDevice(timeout: TimeInterval) async throws -> String? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let devices = (try? await SpotifyWebAPI.shared.fetchAvailableDevices()) ?? []
+            if let device = devices.first(where: { $0.isActive })
+                ?? devices.first(where: { $0.type == "Computer" })
+                ?? devices.first {
+                return device.id
+            }
+            guard Date() < deadline else { throw SpotifyWebAPI.SpotifyAPIError.noActiveDevice }
+            try await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
+    private func openLikedSongsPage() {
+        guard let url = URL(string: "spotify:collection:tracks") else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.open(url, configuration: configuration) { _, error in
+            if let error { owLog("[SpotifyController] Opening Liked Songs failed: \(error)") }
+        }
+    }
+
     /// Whether the Spotify app on this Mac is running and playing right now. Natural
     /// phrasing ("bu şarkıdan sıkıldım") only counts as a command while this holds, so
     /// the same sentence is still dictation when no music is on. Requires the local app

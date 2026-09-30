@@ -31,9 +31,9 @@ struct MenuBarContentView: View {
             Divider()
 
             HStack(spacing: 10) {
-                Image(systemName: appState.wakeWordListening ? "ear.fill" : "ear")
+                Image(systemName: appState.wakeWordBlocked ? "ear.trianglebadge.exclamationmark" : appState.wakeWordListening ? "ear.fill" : "ear")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(appState.wakeWordListening ? Color.accentColor : .secondary)
+                    .foregroundStyle(appState.wakeWordBlocked ? Color.orange : appState.wakeWordListening ? Color.accentColor : .secondary)
                     .frame(width: 30, height: 30)
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -42,8 +42,10 @@ struct MenuBarContentView: View {
                         .lineLimit(1)
                     Text(appState.wakeWordStatus)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(appState.wakeWordBlocked ? Color.orange : .secondary)
+                        .lineLimit(appState.wakeWordBlocked ? 3 : 1)
+                        .fixedSize(horizontal: false, vertical: appState.wakeWordBlocked)
+                        .help(appState.wakeWordStatus)
                 }
                 Spacer(minLength: 4)
                 Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))

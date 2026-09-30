@@ -136,6 +136,25 @@ enum JarvisAddressee {
     /// 0–100: how likely the user is talking to Jarvis. nil when the model is unreachable,
     /// slow or answers nonsense, which the caller treats as "type it".
     static func score(text: String, frontApp: String?, lastReply: String?, model: String) async -> Int? {
+        // SetFit reads the sentence alone (no front app or last reply), so only a confident
+        // answer skips the LLM; its probability of "jarvis" becomes the same 0–100 score. In a
+        // messaging app the app itself is the strongest signal, so the LLM (which sees it) decides.
+        let messaging = ["whatsapp", "slack", "mail", "messages", "mesajlar", "telegram", "discord", "signal"]
+        let inMessagingApp = frontApp.map { name in messaging.contains { name.lowercased().contains($0) } } ?? false
+        guard !inMessagingApp, SetFitDecider.isActive else {
+            return await llmScore(text: text, frontApp: frontApp, lastReply: lastReply, model: model)
+        }
+        // Both start together; a confident SetFit answer cancels the LLM, otherwise its answer
+        // arrives no later than it would have alone.
+        let llm = Task { await llmScore(text: text, frontApp: frontApp, lastReply: lastReply, model: model) }
+        if let decision = await SetFitDecider.decide(.addressee, text: text), decision.confident {
+            llm.cancel()
+            return Int(((decision.probabilities["jarvis"] ?? 0) * 100).rounded())
+        }
+        return await llm.value
+    }
+
+    private static func llmScore(text: String, frontApp: String?, lastReply: String?, model: String) async -> Int? {
         guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

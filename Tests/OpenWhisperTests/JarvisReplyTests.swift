@@ -111,7 +111,7 @@ final class JarvisVoiceTests: XCTestCase {
     }
 
     func testCacheKeyDependsOnVoice() {
-        XCTAssertNotEqual(JarvisVoice.cacheKey(text: "Tamam.", voice: "a"), JarvisVoice.cacheKey(text: "Tamam.", voice: "b"))
+        XCTAssertNotEqual(JarvisVoice.cacheKey(text: "Tamam.", identity: "a"), JarvisVoice.cacheKey(text: "Tamam.", identity: "b"))
     }
 
     func testSpellsOutTimes() {

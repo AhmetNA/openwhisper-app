@@ -15,6 +15,7 @@ enum SystemController {
         case .mute(let mute): return setMute(mute)
         case .brightness(let up, let level): return setBrightness(up: up, level: level)
         case .darkMode(let on): return setDarkMode(on)
+        case .scroll(let up, let large): return scroll(up: up, large: large)
         case .lockScreen: return lockScreen()
         case .displaySleep: return run("/usr/bin/pmset", ["displaysleepnow"], done: "Ekran kapatıldı")
         case .sleep: return run("/usr/bin/pmset", ["sleepnow"], done: "Uyku moduna geçiliyor")
@@ -24,6 +25,7 @@ enum SystemController {
         case .time: return timeNow()
         case .openApp(let name): return openApp(name)
         case .quitApp(let name): return quitApp(name)
+        case .forceQuitApp(let name): return forceQuitApp(name)
         case .mailCount: return await mailCount()
         case .mailCheck:
             await MailController.checkForNewMail()
@@ -39,7 +41,38 @@ enum SystemController {
             return summary.headline
         case .mailMarkAllRead:
             return await MailController.markAllRead() ? "Tüm mailler okundu işaretlendi" : "Mail'e erişilemedi"
+        case .developerMode: return await startDeveloperMode()
+        case .calendarEvent(let event): return await CalendarController.add(event)
+        case .browser(let action): return await BrowserController.perform(action)
         }
+    }
+
+    // MARK: - Developer mode
+
+    /// Claude, then ChatGPT. On this Mac ChatGPT.app is the merged ChatGPT + Codex app
+    /// (bundle ID com.openai.codex); the older com.openai.chat is tried too, each app once.
+    private static let developerAppBundleIDs = ["com.anthropic.claudefordesktop", "com.openai.codex", "com.openai.chat"]
+    private static let developerModeVolume = 40
+
+    /// Volume first, so the music starts at 40%; the apps come to the front, Spotify stays behind.
+    private static func startDeveloperMode() async -> String {
+        let volume = SystemVolume.set(developerModeVolume)
+        var opened: [String] = []
+        var seen = Set<URL>()
+        for bundleID in developerAppBundleIDs {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
+                  seen.insert(url.standardizedFileURL).inserted else { continue }
+            let name = FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error { owLog("[System] Developer mode: open \(name) failed: \(error)") }
+            }
+            opened.append(name)
+        }
+        let music = await SpotifyController.shared.playLikedSongs()
+        owLog("[System] Developer mode: apps \(opened), volume \(volume.message), music \(music.message)")
+        let apps = opened.isEmpty ? "Claude ve ChatGPT bulunamadı" : opened.joined(separator: ", ") + " açıldı"
+        let sound = volume.succeeded ? "ses %\(developerModeVolume)" : volume.message
+        return "Developer modu: \(apps) · \(sound) · \(music.message)"
     }
 
     // MARK: - Shortcuts
@@ -142,7 +175,77 @@ enum SystemController {
         return "\(name) kapatılıyor"
     }
 
+    /// Kills the app with SIGKILL together with everything that belongs to it: helper processes
+    /// whose executable lives inside the .app bundle (Chrome/Electron renderers, crash
+    /// reporters) and every descendant the app spawned. Unsaved work is lost.
+    private static func forceQuitApp(_ name: String) -> String {
+        guard let url = appURL(name) else { return "\(name) bulunamadı" }
+        let bundlePath = url.resolvingSymlinksInPath().path + "/"
+        let processes = allProcesses()
+        var targets = Set(processes.filter { $0.path.hasPrefix(bundlePath) }.map(\.pid))
+        // Descendants: a child may live outside the bundle (a shell, a node server, …).
+        var grew = true
+        while grew {
+            let children = processes.filter { targets.contains($0.ppid) && !targets.contains($0.pid) }
+            targets.formUnion(children.map(\.pid))
+            grew = !children.isEmpty
+        }
+        // Never Jarvis itself, or whatever it runs inside of.
+        var protected: Set<pid_t> = [getpid()]
+        var ancestor = getppid()
+        while ancestor > 1, protected.insert(ancestor).inserted {
+            ancestor = processes.first { $0.pid == ancestor }?.ppid ?? 1
+        }
+        targets.subtract(protected)
+        guard !targets.isEmpty else { return "\(name) zaten kapalı" }
+        let killed = targets.filter { kill($0, SIGKILL) == 0 }
+        owLog("[System] Force quit \(name): killed \(killed.count)/\(targets.count) processes")
+        return killed.isEmpty ? "\(name) kapatılamadı" : "\(name) zorla kapatıldı"
+    }
+
+    private struct ProcessEntry { let pid: pid_t; let ppid: pid_t; let path: String }
+
+    private static func allProcesses() -> [ProcessEntry] {
+        let capacity = proc_listallpids(nil, 0) + 64
+        guard capacity > 64 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(capacity))
+        let count = proc_listallpids(&pids, capacity * Int32(MemoryLayout<pid_t>.size))
+        guard count > 0 else { return [] }
+        var pathBuffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        return pids.prefix(Int(count)).compactMap { pid in
+            guard pid > 0 else { return nil }
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+            let length = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+            let path = length > 0 ? String(cString: pathBuffer) : ""
+            return ProcessEntry(pid: pid, ppid: pid_t(info.pbi_ppid), path: path)
+        }
+    }
+
     // MARK: - Display and session
+
+    /// Sends a real scroll-wheel event without changing the frontmost app or pointer position.
+    /// Line-based scrolling follows the target app's own scrolling behavior and works in both
+    /// native views and Chromium/Electron content such as Codex.
+    private static func scroll(up: Bool, large: Bool) -> String {
+        guard AXIsProcessTrusted() else {
+            return "Ekran kaydırılamadı: Erişilebilirlik izni gerekli"
+        }
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 1,
+            wheel1: up ? (large ? 21 : 7) : (large ? -21 : -7),
+            wheel2: 0,
+            wheel3: 0
+        ) else {
+            return "Ekran kaydırılamadı"
+        }
+        event.post(tap: .cghidEventTap)
+        owLog("[System] Scroll \(up ? "up" : "down") \(large ? "large" : "normal")")
+        return up ? "Yukarı kaydırıldı" : "Aşağı kaydırıldı"
+    }
 
     private typealias GetBrightness = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
     private typealias SetBrightness = @convention(c) (CGDirectDisplayID, Float) -> Int32

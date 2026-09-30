@@ -12,5 +12,9 @@
     <true/>
     <key>com.apple.security.device.bluetooth</key>
     <true/>
+    <!-- The app bundles DeepFilterNet's vendored libdf.dylib. Local ad-hoc builds have no
+         Team ID to satisfy Hardened Runtime library validation, so permit the bundled dylib. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

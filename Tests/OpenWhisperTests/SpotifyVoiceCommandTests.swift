@@ -114,4 +114,12 @@ final class SpotifyVoiceCommandTests: XCTestCase {
         XCTAssertFalse(AudioSegmentation.isRepetitionHallucination("Hayır hayır"))
         XCTAssertFalse(AudioSegmentation.isRepetitionHallucination("evet evet evet tamam"))
     }
+
+    /// Logged 28 Sep 2026: Ollama said play, but the filler words read as a search query, so it
+    /// fell through to chat ("Bu sohbet üzerinden müzik çalma işlemini gerçekleştiremedim").
+    func testPlayWithFillerWordsAddressingSpotifyResumes() {
+        let play = Parse(intent: .play)
+        XCTAssertEqual(decide("Şimdi de testimiz şu anda arkada Spotify'da şarkı aç.", play, commandMode: true), .play)
+        XCTAssertEqual(decide("Spotify'da şarkı aç.", play, commandMode: true), .play)
+    }
 }

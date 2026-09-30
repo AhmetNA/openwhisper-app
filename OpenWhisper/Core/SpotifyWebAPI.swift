@@ -531,6 +531,54 @@ actor SpotifyWebAPI {
         }
     }
 
+    /// Track URIs from the user's Liked Songs, newest first (`GET /v1/me/tracks`, pages of
+    /// 50, needs `user-library-read`). Spotify moved several `/me/tracks*` endpoints to
+    /// `/me/library*` in February 2026, so a refusal is logged with its body before throwing.
+    func fetchLikedTrackURIs(limit: Int = 100) async throws -> [String] {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+        var uris: [String] = []
+        var offset = 0
+        while uris.count < limit {
+            var components = URLComponents(string: "https://api.spotify.com/v1/me/tracks")!
+            components.queryItems = [
+                URLQueryItem(name: "limit", value: String(min(50, limit - uris.count))),
+                URLQueryItem(name: "offset", value: String(offset)),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = requestTimeout
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await URLSession.shared.data(for: request)
+            } catch {
+                throw SpotifyAPIError.network(error)
+            }
+            guard let http = response as? HTTPURLResponse else {
+                throw SpotifyAPIError.unexpected("no HTTP response")
+            }
+            guard http.statusCode == 200 else {
+                owLog("[Spotify] liked tracks HTTP \(http.statusCode), body: \(String(data: data, encoding: .utf8) ?? "<empty>")")
+                switch http.statusCode {
+                case 401: throw SpotifyAPIError.invalidCredentials
+                case 403: throw SpotifyAPIError.scopeInsufficient
+                case 429: throw SpotifyAPIError.rateLimited
+                default: throw SpotifyAPIError.unexpected("liked tracks HTTP \(http.statusCode)")
+                }
+            }
+            let items = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+            uris += items.compactMap { ($0["track"] as? [String: Any])?["uri"] as? String }
+                .filter { $0.hasPrefix("spotify:track:") }
+            guard items.count == 50 else { break }
+            offset += items.count
+        }
+        guard !uris.isEmpty else { throw SpotifyAPIError.noResults }
+        return uris
+    }
+
     /// Lists the user's available Spotify Connect devices via `GET
     /// /v1/me/player/devices`. Needed because "Spotify is open" is not the same thing as
     /// "there's an active device" — a freshly opened desktop client that hasn't played

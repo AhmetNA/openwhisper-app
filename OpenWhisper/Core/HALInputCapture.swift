@@ -1,5 +1,6 @@
 import AVFoundation
 import AudioToolbox
+import os
 
 /// Captures one input device through a bare AUHAL unit, bound to that device before it is
 /// initialized.
@@ -13,7 +14,12 @@ final class HALInputCapture {
     typealias Handler = (AVAudioPCMBuffer, AVAudioTime) -> Void
 
     let format: AVAudioFormat
+    let deviceID: AudioDeviceID
     private let unit: AUAudioUnit
+    /// Who receives the audio. Swappable while running (`replaceHandler`), so the wake listener
+    /// can hand its live stream to the recording without restarting the hardware. Held for the
+    /// whole callback, so after a swap returns the old handler never runs again.
+    private let handler = OSAllocatedUnfairLock<Handler?>(uncheckedState: nil)
     private let buffer: AVAudioPCMBuffer
     private let maxFrames: AVAudioFrameCount
 
@@ -43,6 +49,7 @@ final class HALInputCapture {
         try unit.outputBusses[1].setFormat(format)
         unit.maximumFramesToRender = maxFrames
         self.format = format
+        self.deviceID = deviceID
         self.buffer = buffer
         self.maxFrames = maxFrames
     }
@@ -50,11 +57,13 @@ final class HALInputCapture {
     /// Starts the hardware; `handler` runs on the real-time I/O thread with a buffer that is
     /// reused for the next callback (copy what you keep).
     func start(handler: @escaping Handler) throws {
+        self.handler.withLockUnchecked { $0 = handler }
         try unit.allocateRenderResources()
         let render = unit.renderBlock
         let buffer = self.buffer
         let maxFrames = self.maxFrames
         let sampleRate = format.sampleRate
+        let current = self.handler
         unit.inputHandler = { _, timestamp, frameCount, bus in
             guard frameCount <= maxFrames else { return }
             buffer.frameLength = frameCount
@@ -66,14 +75,26 @@ final class HALInputCapture {
             var flags = AudioUnitRenderActionFlags()
             let status = render(&flags, timestamp, frameCount, bus, buffer.mutableAudioBufferList, nil)
             guard status == noErr else { return }
-            handler(buffer, AVAudioTime(audioTimeStamp: timestamp, sampleRate: sampleRate))
+            let time = AVAudioTime(audioTimeStamp: timestamp, sampleRate: sampleRate)
+            current.withLockUnchecked { $0?(buffer, time) }
         }
         try unit.startHardware()
+    }
+
+    /// Points the running stream at `newHandler`. `beforeSwap` runs under the same lock as the
+    /// audio callback: no buffer is delivered while it runs, so audio the old handler kept can
+    /// be passed on in order before the first buffer reaches the new one.
+    func replaceHandler(_ newHandler: @escaping Handler, beforeSwap: () -> Void = {}) {
+        handler.withLockUnchecked {
+            beforeSwap()
+            $0 = newHandler
+        }
     }
 
     func stop() {
         unit.stopHardware()
         unit.inputHandler = nil
+        handler.withLockUnchecked { $0 = nil }
         unit.deallocateRenderResources()
     }
 }

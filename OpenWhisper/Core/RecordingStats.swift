@@ -137,6 +137,7 @@ struct RecordingStatsAccumulator: Sendable {
 /// How a recording was started. A Fn hold that Space locks into hands-free counts as `fnSpace`.
 enum RecordingTrigger: String, Codable, Sendable {
     case wakeWord
+    case jarvisKey
     case confirmation
     case fnHold
     case fnSpace
@@ -146,6 +147,7 @@ enum RecordingTrigger: String, Codable, Sendable {
     var title: String {
         switch self {
         case .wakeWord: "Sesle (Hey Jarvis)"
+        case .jarvisKey: "Jarvis tuşu"
         case .confirmation: "Jarvis onay cevabı"
         case .fnHold: "Fn basılı tutularak"
         case .fnSpace: "Fn + Space"

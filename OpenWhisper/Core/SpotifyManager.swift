@@ -444,8 +444,14 @@ final class SpotifyManager: @unchecked Sendable {
             return !wordSet.isDisjoint(with: ["durdur", "kapat", "duraklat", "pause"])
                 || (natural && !Set(cues).isDisjoint(with: naturalPauseCues))
         case .play:
+            guard !wordSet.isDisjoint(with: playVerbs) else { return false }
             // Nothing left to search for; otherwise this is a search, not a resume.
-            return !wordSet.isDisjoint(with: playVerbs) && shared.extractSearchQuery(normalized).isEmpty
+            if shared.extractSearchQuery(normalized).isEmpty { return true }
+            // A voice command naming Spotify with a play verb, where Ollama found no title:
+            // the leftover words are filler ("şimdi de şu anda arkada Spotify'da şarkı aç").
+            return natural && addressesSpotify(text)
+                && SpotifyRequestParser.cleanOllamaName(parse.title).isEmpty
+                && SpotifyRequestParser.cleanOllamaName(parse.artist).isEmpty
         case .next:
             return !wordSet.isDisjoint(with: ["sonraki", "next", "atla", "skip"])
                 || (natural && (!Set(cues).isDisjoint(with: naturalNextWords)
@@ -827,29 +833,49 @@ final class SpotifyManager: @unchecked Sendable {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let text = commandMode ? repairCommandVerbMishearing(heard) : heard
         let rules = explicitIntent(in: text)
-        let command = commandMode && rules == nil && ollamaAvailable && isCommandCandidate(text)
-        let promotion = rules == nil && ollamaAvailable && isPromotionCandidate(text)
+        // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down.
+        let modelAvailable = ollamaAvailable || SetFitDecider.isActive
+        let command = commandMode && rules == nil && modelAvailable && isCommandCandidate(text)
+        let promotion = rules == nil && modelAvailable && isPromotionCandidate(text)
         // Cheapest checks first: the word test, then the playback query (which never
         // launches Spotify), and only then Ollama.
-        let natural = rules == nil && ollamaAvailable && isNaturalCandidate(text)
+        let natural = rules == nil && modelAvailable && isNaturalCandidate(text)
         var spotifyPlaying = false
         if natural {
             spotifyPlaying = await SpotifyController.shared.isPlayingLocally()
         }
         guard rules != nil || command || promotion || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
 
-        var parse: SpotifyRequestParser.OllamaParse?
-        if ollamaAvailable {
-            // A voice session warms the model when it starts, but a cold load still takes
-            // several seconds; dictation keeps the short timeout so pasting isn't held up.
-            parse = await SpotifyRequestParser.queryOllama(
-                transcript: text, model: selectedOllamaModel, timeout: commandMode ? 15 : 3
-            )
+        // Ollama starts at the same time as SetFit, so a search or an unsure SetFit answer costs
+        // one Ollama round trip, not SetFit + Ollama. A confident SetFit answer cancels it.
+        // A voice session warms the model when it starts, but a cold load still takes
+        // several seconds; dictation keeps the short timeout so pasting isn't held up.
+        let model = selectedOllamaModel
+        let ollama: Task<SpotifyRequestParser.OllamaParse?, Never>? = ollamaAvailable
+            ? Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: commandMode ? 15 : 3) }
+            : nil
+        var parse = SetFitDecider.isActive ? await setFitParse(text, ollamaAvailable: ollamaAvailable) : nil
+        if parse != nil {
+            ollama?.cancel()
+        } else if let ollama {
+            parse = await ollama.value
             if let parse { owLog("[Spotify] Ollama parse for '\(text)': \(parse)") }
         }
         let decision = decide(rules: rules, parse: parse, text: text, spotifyPlaying: spotifyPlaying, commandMode: commandMode)
         if let decision { decisionCache.store(decision, for: transcript) }
         return decision != nil
+    }
+
+    /// SetFit's intent as an `OllamaParse`, so `decide` applies the same evidence rules to it as
+    /// to Ollama's. Nil (→ ask Ollama) when SetFit is off, unsure, or says "search" while
+    /// Ollama is up: SetFit only classifies, and a search still needs Ollama's title/artist split.
+    /// Without Ollama a search goes ahead with the rule-based split.
+    private static func setFitParse(_ text: String, ollamaAvailable: Bool) async -> SpotifyRequestParser.OllamaParse? {
+        guard let decision = await SetFitDecider.decide(.spotifyIntent, text: text), decision.confident,
+              let intent = SpotifyRequestParser.OllamaIntent(rawValue: decision.label)
+        else { return nil }
+        if intent == .search && ollamaAvailable { return nil }
+        return SpotifyRequestParser.OllamaParse(intent: intent)
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key

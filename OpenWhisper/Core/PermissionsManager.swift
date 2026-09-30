@@ -51,7 +51,7 @@ final class PermissionsManager {
         var purpose: String {
             switch self {
             case .microphone: "\"Hey Jarvis\" dinleme ve dikte"
-            case .accessibility: "Kısayol tuşları ve metni yapıştırma"
+            case .accessibility: "Kısayol tuşları, metni yapıştırma ve ekranı kaydırma"
             case .screenRecording: "Bilgisayarda çalan sesi yazıya dökme"
             case .calendars: "\"Bugün ne var?\" özetindeki etkinlikler"
             case .reminders: "Sesle hatırlatıcı ekleme ve özetteki hatırlatıcılar"

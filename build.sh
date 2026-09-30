@@ -91,6 +91,16 @@ else
     echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run tts_server/setup.sh"
 fi
 
+# SetFit decision models (Settings › Karar motoru): keep the installed server script in sync.
+# The venv and the trained models come from decision_model/install.sh (retrain.sh runs it).
+DECIDER_DEST="$HOME/Library/Application Support/OpenWhisper/decider"
+if [ -x "$DECIDER_DEST/.venv/bin/python" ]; then
+    cp ../decision_model/server.py "$DECIDER_DEST/"
+    echo "==> Updated SetFit decision server in $DECIDER_DEST"
+else
+    echo "NOTE: SetFit decision models not installed; 'Karar motoru: SetFit' needs decision_model/install.sh"
+fi
+
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then
         echo "==> Installing to /Applications..."

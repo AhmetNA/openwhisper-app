@@ -152,4 +152,25 @@ final class NowPlayingTransportTests: XCTestCase {
         transport(remote).resume(receipt)
         XCTAssertEqual(remote.commands, [.play])
     }
+
+    /// Process passes arguments as NFD; an item ID with "İ" or "ş" must reach the script
+    /// as ASCII and decode to the exact precomposed string.
+    func testBridgeJSONIsASCIIAndRoundTrips() throws {
+        let itemID = "[\"14805407\",\"Rakibini Tanıttı İpek şarkı 🎵\"]"
+        let json = try XCTUnwrap(SystemNowPlayingBridge.asciiJSON(["itemID": itemID]))
+        XCTAssertTrue(json.unicodeScalars.allSatisfy(\.isASCII), json)
+        let decoded = try JSONDecoder().decode([String: String].self, from: Data(json.utf8))
+        XCTAssertEqual(decoded["itemID"].map { Array($0.unicodeScalars) }, Array(itemID.unicodeScalars))
+    }
+
+    func testFailedScriptIsSkippedUntilRetryWindowPasses() {
+        var clock: TimeInterval = 100
+        let cache = ScriptFailureCache(now: { clock })
+        XCTAssertFalse(cache.isRecent("Safari"))
+        cache.record("Safari")
+        XCTAssertTrue(cache.isRecent("Safari"))
+        XCTAssertFalse(cache.isRecent("Spotify"))
+        clock += ScriptFailureCache.retryAfter
+        XCTAssertFalse(cache.isRecent("Safari"))
+    }
 }

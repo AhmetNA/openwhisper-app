@@ -47,10 +47,23 @@ final class ReminderManager {
     struct DeletionRequest: Equatable, Sendable {
         let query: String?
         let deleteAll: Bool
+        /// Due-time filter spoken in the command ("bugün saat 9'daki"). Title and time must
+        /// both match when both are given.
+        var time: DeletionTime? = nil
+    }
+
+    struct DeletionTime: Equatable, Sendable {
+        /// Days from today ("bugün" = 0, "yarın" = 1); nil matches any day.
+        let dayOffset: Int?
+        /// Spoken hour; nil when only a day was given. "9" also matches 21:00.
+        let hour: Int?
+        let minute: Int?
     }
 
     enum DeletionResult: Equatable, Sendable {
         case confirmationRequired(matches: [String])
+        /// The answer couldn't be understood; the plan stays pending for one more try.
+        case confirmationUnclear
         case deleted(count: Int, appleVerified: Bool)
         case notFound
         case ambiguous(matches: [String])
@@ -76,6 +89,7 @@ final class ReminderManager {
     private struct PendingDeletion {
         let resolved: ResolvedDeletion
         let expiresAt: Date
+        var retried = false
     }
 
     private var pendingDeletion: PendingDeletion?
@@ -156,7 +170,9 @@ final class ReminderManager {
 
         let reminderWord = #"(?:hatırlatıcı|anımsatıcı|reminder)\p{L}*"#
         let deletionVerb = #"(?:sil|kaldır|iptal\s+et)\p{L}*"#
-        let pattern = #"^\s*(.*?)\s*\b"# + reminderWord + #"\b\s*(?:\S+\s+){0,2}?"# + deletionVerb + #"\s*[.!?]*\s*$"#
+        // "siler misin", "silebilir misin lütfen" are still explicit deletion commands.
+        let politeTail = #"(?:\s+(?:m[iıuü]s[iıuü]n(?:\p{L}*)|lütfen))*"#
+        let pattern = #"^\s*(.*?)\s*\b"# + reminderWord + #"\b\s*(?:\S+\s+){0,2}?"# + deletionVerb + politeTail + #"\s*[.!?]*\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
               let match = regex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else {
             return nil
@@ -183,7 +199,103 @@ final class ReminderManager {
             || wholeCommand.contains("hatirlaticilarin hepsini")
 
         if deleteAll { return DeletionRequest(query: nil, deleteAll: true) }
-        return DeletionRequest(query: query.isEmpty ? nil : query, deleteAll: false)
+        let (time, residual) = extractDeletionTime(query)
+        let meaningful = meaningfulTokens(foldForMatching(residual))
+        return DeletionRequest(
+            query: meaningful.isEmpty ? nil : residual,
+            deleteAll: false,
+            time: time
+        )
+    }
+
+    /// Pulls "bugün / yarın / öbür gün" and "saat 9", "9'daki", "9:30'da" out of a deletion
+    /// query. A bare number needs "saat" or an apostrophe suffix so "8 saniye" stays in the title.
+    nonisolated static func extractDeletionTime(_ query: String) -> (DeletionTime?, String) {
+        var working = query.lowercased(with: Locale(identifier: "tr_TR"))
+        func take(_ pattern: String) -> [String?]? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: working, range: NSRange(working.startIndex..., in: working)),
+                  let whole = Range(match.range, in: working) else { return nil }
+            let groups = (1..<match.numberOfRanges).map { index -> String? in
+                Range(match.range(at: index), in: working).map { String(working[$0]) }
+            }
+            working.replaceSubrange(whole, with: " ")
+            return groups
+        }
+
+        var dayOffset: Int?
+        if take(#"\b(?:öbür|obur)\s+g[üu]n\p{L}*"#) != nil {
+            dayOffset = 2
+        } else if take(#"\byar[ıi]n\p{L}*"#) != nil {
+            dayOffset = 1
+        } else if take(#"\bbug[üu]n\p{L}*"#) != nil {
+            dayOffset = 0
+        }
+
+        let suffix = #"(?:'\s*|’\s*)?(?:de|da|te|ta|ye|ya|e|a)?(?:ki)?\b"#
+        var hour: Int?
+        var minute: Int?
+        if let groups = take(#"\bsaat\s+(\d{1,2})(?:[:.](\d{2}))?"# + suffix)
+            ?? take(#"\b(\d{1,2})(?:[:.](\d{2}))?\s*['’]\s*(?:de|da|te|ta|ye|ya|e|a)(?:ki)?\b"#) {
+            hour = groups.first.flatMap { $0 }.flatMap { Int($0) }
+            minute = groups.dropFirst().first.flatMap { $0 }.flatMap { Int($0) } ?? 0
+            if let value = hour, value > 23 { hour = nil; minute = nil }
+        }
+
+        guard dayOffset != nil || hour != nil else { return (nil, query) }
+        let residual = working
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        return (DeletionTime(dayOffset: dayOffset, hour: hour, minute: minute), residual)
+    }
+
+    nonisolated static func dueDate(
+        _ date: Date?,
+        matches time: DeletionTime,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard let date else { return false }
+        if let offset = time.dayOffset {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: now),
+                  calendar.isDate(date, inSameDayAs: day) else { return false }
+        }
+        if let hour = time.hour {
+            let parts = calendar.dateComponents([.hour, .minute], from: date)
+            let hourMatches = parts.hour == hour || (hour < 12 && parts.hour == hour + 12)
+            guard hourMatches, parts.minute == (time.minute ?? 0) else { return false }
+        }
+        return true
+    }
+
+    /// Words that describe the reminder rather than name it ("bir … diye bir hatırlatıcı var").
+    nonisolated private static let queryFillers: Set<String> = [
+        "bir", "diye", "olan", "adli", "isimli", "adinda", "var", "onu", "bunu", "sunu",
+        "su", "bu", "o", "ki", "hani", "sey", "seyi", "icin", "the", "a"
+    ]
+
+    nonisolated private static func meaningfulTokens(_ folded: String) -> [String] {
+        folded.split(separator: " ").map(String.init).filter { !queryFillers.contains($0) }
+    }
+
+    /// Small edit distance tolerates Whisper misspellings such as "çarvis" for "Jarvis".
+    nonisolated private static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        guard !a.isEmpty else { return b.count }
+        guard !b.isEmpty else { return a.count }
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                current[j] = min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)
+                )
+            }
+            previous = current
+        }
+        return previous[b.count]
     }
 
     nonisolated static func reminderTitle(_ title: String, matches query: String) -> Bool {
@@ -194,14 +306,23 @@ final class ReminderManager {
             return true
         }
 
-        let candidateWords = Set(candidate.split(separator: " ").map(String.init).filter { $0.count >= 3 })
-        let wantedWords = Set(wanted.split(separator: " ").map(String.init).filter { $0.count >= 3 })
+        let candidateWords = Set(candidate.split(separator: " ").map(String.init))
+        // Numbers must match exactly; words may carry Turkish suffixes or a one-letter mishearing.
+        let wantedWords = Set(meaningfulTokens(wanted).filter { $0.count >= 3 || $0.allSatisfy(\.isNumber) })
         guard !candidateWords.isEmpty, !wantedWords.isEmpty else { return false }
-        return wantedWords.allSatisfy { wantedWord in
+        let matched = wantedWords.filter { wantedWord in
             candidateWords.contains { candidateWord in
-                candidateWord.hasPrefix(wantedWord) || wantedWord.hasPrefix(candidateWord)
+                if wantedWord.allSatisfy(\.isNumber) || candidateWord.allSatisfy(\.isNumber) {
+                    return wantedWord == candidateWord
+                }
+                guard candidateWord.count >= 3 else { return false }
+                return candidateWord.hasPrefix(wantedWord) || wantedWord.hasPrefix(candidateWord)
+                    || (min(wantedWord.count, candidateWord.count) >= 4 && editDistance(wantedWord, candidateWord) <= 1)
             }
         }
+        // Long spoken titles may contain one misheard word; deletion is still confirmed by voice.
+        let required = wantedWords.count >= 4 ? wantedWords.count - 1 : wantedWords.count
+        return matched.count >= required
     }
 
     /// Only a short, explicit answer can authorize a pending destructive action. Negative
@@ -212,6 +333,10 @@ final class ReminderManager {
             answer.removeFirst("jarvis ".count)
         }
 
+        // Polite endings don't change the answer: "evet silebilirsin efendim".
+        for ending in [" efendim", " jarvis", " lutfen", " patron"] where answer.hasSuffix(ending) {
+            answer.removeLast(ending.count)
+        }
         let rejections: Set<String> = [
             "hayir", "hayir silme", "silme", "iptal", "iptal et", "vazgec", "vazgectim",
             "onaylamiyorum", "onay vermiyorum", "reddediyorum"
@@ -219,8 +344,10 @@ final class ReminderManager {
         if rejections.contains(answer) { return .reject }
 
         let approvals: Set<String> = [
-            "evet", "evet onayliyorum", "onayliyorum", "onay veriyorum", "tamam",
-            "tamam sil", "sil", "devam et"
+            "evet", "evet onayliyorum", "onayliyorum", "onay veriyorum", "onayla", "tamam",
+            "tamam sil", "sil", "devam et", "evet sil", "silebilirsin", "evet silebilirsin",
+            "tamam silebilirsin", "sil gitsin", "evet sil gitsin", "olur", "evet olur",
+            "tabii", "evet tabii", "tabii sil", "evet eminim", "eminim", "evet devam et"
         ]
         if approvals.contains(answer) { return .approve }
         return .unclear
@@ -592,9 +719,29 @@ final class ReminderManager {
 
     /// Consumes the pending plan. Any answer other than an explicit approval prevents deletion;
     /// approvals after the timeout are also rejected.
-    func handleDeletionConfirmation(_ text: String) async -> DeletionResult? {
+    func handleDeletionConfirmation(_ text: String, alternatives: [String] = []) async -> DeletionResult? {
         guard let pending = pendingDeletion else { return nil }
-        let decision = Self.deletionConfirmationDecision(text)
+        // A fresh delete command (often the user repeating it after not hearing the
+        // question) is a new request, not an answer to the old plan.
+        if Self.deletionRequest(text) != nil {
+            pendingDeletion = nil
+            owLog("[Reminders] New deletion command replaces pending plan")
+            return nil
+        }
+        let decision: DeletionConfirmationDecision
+        // Ollama starts together with SetFit; a SetFit answer that `setFitConfirmation` accepts
+        // cancels it, otherwise Ollama's answer costs no more than it did alone.
+        let names = pending.resolved.displayNames
+        let ollama = Task { await classifyConfirmationWithOllama(answer: text, alternatives: alternatives, names: names) }
+        if let fast = await Self.setFitConfirmation(text) {
+            ollama.cancel()
+            decision = fast
+        } else if let judged = await ollama.value {
+            decision = judged
+        } else {
+            decision = Self.deletionConfirmationDecision(text)
+            owLog("[Reminders] Confirmation judged by word list (Ollama unavailable): \(decision)")
+        }
 
         guard pending.expiresAt > Date() else {
             pendingDeletion = nil
@@ -610,9 +757,111 @@ final class ReminderManager {
         case .reject:
             owLog("[Reminders] Deletion explicitly cancelled")
             return .cancelled
+        case .unclear where !pending.retried:
+            // Short answers are often misheard ("Olaylıyorum"); ask once more instead of
+            // silently dropping the plan. Still nothing is deleted without a clear yes.
+            var again = pending
+            again.retried = true
+            pendingDeletion = again
+            owLog("[Reminders] Confirmation unclear; asking once more")
+            return .confirmationUnclear
         case .unclear:
             owLog("[Reminders] Deletion not confirmed; pending plan discarded")
             return .notConfirmed
+        }
+    }
+
+    /// SetFit's reading of the answer, or nil when Ollama should decide. SetFit only hears
+    /// the first decode (Ollama sees every alternative) and once approved a misheard word at
+    /// 0.96 ("Olaylı."), so it may only take the safe shortcuts: a confident "reject", or a
+    /// confident "approve" that the exact word list also approves. "unclear" goes to Ollama,
+    /// which may still recover an approval from the other decodes.
+    nonisolated static func setFitConfirmation(_ text: String) async -> DeletionConfirmationDecision? {
+        guard let decision = await SetFitDecider.decide(.reminderConfirm, text: text) else { return nil }
+        return setFitConfirmation(label: decision.label, confident: decision.confident, text: text)
+    }
+
+    nonisolated static func setFitConfirmation(label: String, confident: Bool, text: String) -> DeletionConfirmationDecision? {
+        guard confident else { return nil }
+        switch label {
+        case "reject":
+            return .reject
+        case "approve" where deletionConfirmationDecision(text) == .approve:
+            return .approve
+        case "approve":
+            owLog("[Reminders] SetFit approve not backed by the word list → Ollama")
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    static let confirmationResponseSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "decision": ["type": "string", "enum": ["approve", "reject", "unclear"]]
+        ],
+        "required": ["decision"],
+        "additionalProperties": false
+    ]
+
+    /// Lets the local model read the spoken answer, so any natural "yes" works. Nil when
+    /// Ollama can't answer; the caller then falls back to the fixed word list.
+    private func classifyConfirmationWithOllama(
+        answer: String,
+        alternatives: [String] = [],
+        names: [String]
+    ) async -> DeletionConfirmationDecision? {
+        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
+        let variants = ([answer] + alternatives).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+        let heard = variants.map { "\"\($0)\"" }.joined(separator: " / ")
+        let prompt = """
+            A voice assistant asked the user (in Turkish): "\(names.joined(separator: ", ")) hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?"
+            The user's short spoken answer, as heard by speech-to-text (one or more decodes of the same audio): \(heard)
+            Speech-to-text often garbles short Turkish answers into similar-sounding words (e.g. "onaylıyorum" → "olaylıyorum", "ona iliyorum"; "evet" → "e vet", "hevet"). Judge what the user most likely SAID given the question.
+
+            Decide what the answer means:
+            - "approve": the user clearly agrees to delete it (e.g. "evet", "silebilirsin", "olur, sil", "tabii").
+            - "reject": the user refuses or cancels (e.g. "hayır", "silme", "vazgeçtim", "dur").
+            - "unclear": anything else — a condition or hesitation ("evet ama…", "emin değilim"), a question, or unrelated speech.
+            Deleting is irreversible: when in doubt, answer "unclear", never "approve".
+            Return ONLY JSON: {"decision": "approve" | "reject" | "unclear"}
+            """
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 8
+        let body: [String: Any] = [
+            "model": selectedOllamaModel,
+            "prompt": prompt,
+            "stream": false,
+            "think": false,
+            "keep_alive": LLMCleanup.keepAlive,
+            "format": Self.confirmationResponseSchema,
+            "options": ["temperature": 0, "num_predict": 20]
+        ]
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let started = Date()
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let responseText = json["response"] as? String,
+                  let decision = Self.extractJSONObject(from: responseText)?["decision"] else {
+                owLog("[Reminders] Ollama confirmation check gave no usable answer")
+                return nil
+            }
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            owLog("[Reminders] Ollama judged confirmation \(heard) → \(decision) (\(ms) ms)")
+            switch decision {
+            case "approve": return .approve
+            case "reject": return .reject
+            default: return .unclear
+            }
+        } catch {
+            owLog(Task.isCancelled ? "[Reminders] Ollama confirmation skipped: SetFit answered first"
+                                   : "[Reminders] Ollama confirmation check failed: \(error)")
+            return nil
         }
     }
 
@@ -634,15 +883,16 @@ final class ReminderManager {
 
     /// A non-"all" request never guesses between multiple local or Apple reminders.
     private func resolveDeletion(_ request: DeletionRequest) async -> DeletionResolution {
-        if !request.deleteAll, request.query == nil, reminders.count > 1 {
+        let hasFilter = request.query != nil || request.time != nil
+        if !request.deleteAll, !hasFilter, reminders.count > 1 {
             return .failure(.ambiguous(matches: reminders.map(\.task)))
         }
 
         let localMatches: [Reminder]
         if request.deleteAll {
             localMatches = reminders
-        } else if let query = request.query {
-            localMatches = reminders.filter { Self.reminderTitle($0.task, matches: query) }
+        } else if hasFilter {
+            localMatches = reminders.filter { Self.request(request, matchesTitle: $0.task, due: $0.fireDate) }
         } else if reminders.count == 1 {
             localMatches = reminders
         } else {
@@ -765,12 +1015,26 @@ final class ReminderManager {
             matches = all.filter { appleReminder in
                 localMatches.contains { self.sameReminder($0, appleReminder) }
             }
-        } else if let query = request.query {
-            matches = all.filter { Self.reminderTitle($0.title ?? "", matches: query) }
+        } else if request.query != nil || request.time != nil {
+            matches = all.filter { reminder in
+                let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
+                return Self.request(request, matchesTitle: reminder.title ?? "", due: due)
+            }
         } else {
             matches = []
         }
         return .available(matches)
+    }
+
+    nonisolated static func request(
+        _ request: DeletionRequest,
+        matchesTitle title: String,
+        due: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        if let time = request.time, !dueDate(due, matches: time, now: now) { return false }
+        if let query = request.query, !reminderTitle(title, matches: query) { return false }
+        return request.query != nil || request.time != nil
     }
 
     private func sameReminder(_ local: Reminder, _ apple: EKReminder) -> Bool {

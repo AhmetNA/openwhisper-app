@@ -32,6 +32,15 @@ struct JarvisReply {
             return nil
         case .time, .battery, .mailCount, .mailCheck, .mailLatest, .mailReadUnread, .mailOpen, .briefing:
             return answer(Self.speakable(Self.shortened(status, for: command)))
+        case .calendarEvent:
+            // Say the date and time back, so a wrong hour is caught right away.
+            if Self.isFailure(status) { return failure(Self.speakable(status)) }
+            return answer(Self.speakable(status.replacingOccurrences(of: "Takvime eklendi:", with: "Takvime ekledim:")))
+        case .browser(let action):
+            // A summary or a search query may contain "yok"; only the fixed statuses are failures.
+            if BrowserController.failures.contains(status) { return failure(Self.speakable(status)) }
+            if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
+            return ack()
         default:
             if Self.isFailure(status) { return failure(Self.speakable(status)) }
             // "Safari zaten kapalı": worth saying instead of a plain ack.
@@ -77,6 +86,8 @@ struct JarvisReply {
             return failure("birden fazla eşleşme buldum: \(names); hangisini sileceğinizi söyleyin")
         case .cancelled:
             return "İptal ettim. Hiçbir hatırlatıcı silinmedi."
+        case .confirmationUnclear:
+            return "Anlayamadım. Silmemi onaylıyor musunuz? Evet ya da hayır deyin."
         case .notConfirmed:
             return "Onay vermediğiniz için hiçbir hatırlatıcı silmedim."
         case .confirmationExpired:
@@ -129,6 +140,10 @@ struct JarvisReply {
             return "\(items.count) okunmamış mail, ilki \(items[0])"
         case .briefing:
             return status.count > 140 ? (status.components(separatedBy: " — ").first ?? status) : status
+        case .browser(.summarize):
+            // The whole summary is in the notification; three sentences are enough to hear.
+            let sentences = status.components(separatedBy: ". ")
+            return sentences.count > 3 ? sentences.prefix(3).joined(separator: ". ") + "." : status
         default:
             return status
         }

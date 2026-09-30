@@ -27,6 +27,21 @@ final class GlobalHotkey {
     /// Fired on a Vocal Shortcuts recognition: start a voice session (hands-free recording that
     /// ends itself on silence).
     var onVoiceSessionRequest: (() -> Void)?
+    /// User-chosen Jarvis key (Settings › Jarvis); nil while unset or while Settings records a new one.
+    var jarvisKey: JarvisHotkey? {
+        didSet { jarvisModifierArmed = false }
+    }
+    /// Fired when the Jarvis key is pressed; AppState starts or finishes the voice session.
+    /// `true` when the press came during a Fn hold (fn+F5 on a MacBook): the hold has been
+    /// dropped here without `onRelease`, and its recording must be discarded, not transcribed.
+    var onJarvisKey: ((_ cancelledFnHold: Bool) -> Void)?
+    /// Settings is recording a new Jarvis key: Fn must not start dictation meanwhile (fn+F5).
+    var fnSuppressed = false
+    /// While `fnSuppressed`: a special key (F5 as brightness/media…) reached us only as a
+    /// system-defined event, with its NX_KEYTYPE.
+    var onSystemKeyDuringCapture: ((Int) -> Void)?
+    /// A bound lone modifier key is down and no other key has been pressed since.
+    private var jarvisModifierArmed = false
 
     /// NX_SYSDEFINED — has no case in Swift's CGEventType.
     fileprivate static let systemDefinedEventType: UInt32 = 14
@@ -326,6 +341,13 @@ final class GlobalHotkey {
     private var lastVocalShortcutTrigger = Date.distantPast
 
     fileprivate func handleSystemDefinedEvent(_ event: CGEvent) {
+        if fnSuppressed, let ns = NSEvent(cgEvent: event) {
+            owLog("[GlobalHotkey] Jarvis key capture: system-defined subtype \(ns.subtype.rawValue) data1 \(ns.data1)")
+            // NX_SUBTYPE_AUX_CONTROL_BUTTONS: data1 = keyType << 16 | state << 8; 0xA = down.
+            if ns.subtype.rawValue == 8, (ns.data1 & 0xFF00) >> 8 == 0xA {
+                onSystemKeyDuringCapture?((ns.data1 & 0xFFFF_0000) >> 16)
+            }
+        }
         guard let ns = NSEvent(cgEvent: event),
               ns.subtype.rawValue == Self.vocalShortcutSubtype,
               ns.data1 == Self.vocalShortcutData1 else { return }
@@ -353,12 +375,54 @@ final class GlobalHotkey {
         return true
     }
 
+    // MARK: - Jarvis key (user-chosen, starts a "Hey Jarvis" session)
+
+    /// Returns `true` if the event should be swallowed. A lone modifier fires on release only if
+    /// nothing else was pressed meanwhile; its events always pass through.
+    fileprivate func handleJarvisKey(type: CGEventType, keyCode: Int64, event: CGEvent) -> Bool {
+        guard let key = jarvisKey else { return false }
+        if key.isModifierKey {
+            if type != .flagsChanged {
+                // A key or ⌘/⌥-click while the modifier is down: it's a chord.
+                jarvisModifierArmed = false
+            } else {
+                let flags = event.flags
+                if keyCode == Int64(key.keyCode), let flag = JarvisHotkey.flag(forModifierKey: key.keyCode) {
+                    if flags.contains(flag) {
+                        // Only a clean press: no other modifier already held.
+                        let others = flags.intersection(JarvisHotkey.relevantModifiers).subtracting(flag)
+                        jarvisModifierArmed = others.isEmpty && !flags.contains(.maskSecondaryFn)
+                    } else if jarvisModifierArmed {
+                        jarvisModifierArmed = false
+                        owLog("[GlobalHotkey] Jarvis key (\(key.label)) tapped")
+                        onJarvisKey?(false)
+                    }
+                } else {
+                    // Another modifier changed while ours is down: it's a chord.
+                    jarvisModifierArmed = false
+                }
+            }
+            return false
+        }
+        guard type == .keyDown, key.matchesKeyDown(keyCode: keyCode, flags: event.flags) else { return false }
+        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            let cancelledFnHold = mode == .holding
+            if cancelledFnHold { mode = .idle }
+            owLog("[GlobalHotkey] Jarvis key (\(key.label)) pressed\(cancelledFnHold ? " during Fn hold" : "")")
+            onJarvisKey?(cancelledFnHold)
+        }
+        return true
+    }
+
     private func installSpaceEventTap() {
         guard eventTap == nil else { return }
 
         let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
             | (1 << CGEventType.flagsChanged.rawValue)
             | (1 << GlobalHotkey.systemDefinedEventType)
+            | (1 << CGEventType.leftMouseDown.rawValue)
+            | (1 << CGEventType.rightMouseDown.rawValue)
+            | (1 << CGEventType.otherMouseDown.rawValue)
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
         let callback: CGEventTapCallBack = { proxy, type, event, refcon in
@@ -374,18 +438,26 @@ final class GlobalHotkey {
                 return Unmanaged.passUnretained(event)
             }
 
+            if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
+                _ = me.handleJarvisKey(type: type, keyCode: 0, event: event)
+                return Unmanaged.passUnretained(event)
+            }
+
             if type.rawValue == GlobalHotkey.systemDefinedEventType {
                 me.handleSystemDefinedEvent(event)
                 return Unmanaged.passUnretained(event)
             }
 
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            if me.handleJarvisKey(type: type, keyCode: keyCode, event: event) {
+                return nil
+            }
             if type == .flagsChanged {
                 // Fn/Globe is key code 63. Its press/release state is represented by
                 // maskSecondaryFn on the CGEvent, which is also what the working Fn+Space
                 // path uses. Handle it in this tap so a bare Fn press starts recording even
                 // when the focused app does not deliver a modifier event to NSEvent monitors.
-                if keyCode == Int64(me.fnKeyCode) {
+                if keyCode == Int64(me.fnKeyCode), !me.fnSuppressed {
                     me.handleFunctionKeyChanged(isPressed: event.flags.contains(.maskSecondaryFn))
                 }
                 return Unmanaged.passUnretained(event)

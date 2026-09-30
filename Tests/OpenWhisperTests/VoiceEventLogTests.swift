@@ -68,3 +68,44 @@ final class VoiceEventLogTests: XCTestCase {
         XCTAssertFalse(log.read(b)?.contains("from A") ?? true)
     }
 }
+
+final class VoiceLatencyTrackerTests: XCTestCase {
+    func testSummaryReportsStagesCriticalTimeAndBottleneck() {
+        final class Clock: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: TimeInterval = 10
+            func now() -> TimeInterval { lock.withLock { value } }
+            func advance(_ seconds: TimeInterval) { lock.withLock { value += seconds } }
+        }
+
+        let clock = Clock()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let log = VoiceEventLog(directory: directory)
+        let id = UUID()
+        log.begin(id, header: ["Latency"])
+        let tracker = VoiceLatencyTracker(
+            now: { clock.now() },
+            logger: { log.append(id, $0) }
+        )
+        clock.advance(2)
+        tracker.markRecordingStopped()
+        let transcription = tracker.timestamp()
+        clock.advance(0.8)
+        tracker.record(.transcription, since: transcription)
+        tracker.beginDecision()
+        clock.advance(0.2)
+        tracker.finishDecision(route: "dikte")
+        let paste = tracker.timestamp()
+        clock.advance(0.1)
+        tracker.record(.paste, since: paste)
+
+        tracker.markOutput("pastedVerified")
+        log.flush()
+        let text = log.read(id) ?? ""
+        XCTAssertTrue(text.contains("Transkripsiyon hattı: 800 ms"), text)
+        XCTAssertTrue(text.contains("Karar / yönlendirme: 200 ms"), text)
+        XCTAssertTrue(text.contains("Mikrofon durdu → sonuç: 1.10 sn"), text)
+        XCTAssertTrue(text.contains("Darboğaz: Transkripsiyon hattı 800 ms"), text)
+        try? FileManager.default.removeItem(at: directory)
+    }
+}

@@ -8,8 +8,16 @@ final class JarvisChatSafetyTests: XCTestCase {
                 "Toplantı hatırlatıcısı silindi.",
                 for: "Toplantı hatırlatıcısını sil."
             ),
-            "Bu sohbetten o işlemi gerçekleştiremedim."
+            JarvisChat.unrecognizedCommandReply
         )
+    }
+
+    func testRecognisesModelRefusalWordings() {
+        XCTAssertTrue(JarvisChat.isCapabilityRefusal("Bu sohbet üzerinden müzik çalma işlemini gerçekleştiremedim."))
+        XCTAssertTrue(JarvisChat.isCapabilityRefusal("Üzgünüm, bu sohbet üzerinden günlük özet veya kısayol oluşturma yeteneğim bulunmuyor."))
+        XCTAssertTrue(JarvisChat.isCapabilityRefusal("Üzgünüm patron, bu sohbetten herhangi bir işlemi gerçekleştiremiyorum."))
+        XCTAssertFalse(JarvisChat.isCapabilityRefusal("Kara delikler ışığı bile kaçırmaz."))
+        XCTAssertFalse(JarvisChat.isCapabilityRefusal("Bu sohbet çok keyifliydi patron."))
     }
 
     func testLeavesOrdinaryConversationUntouched() {

@@ -1,6 +1,7 @@
 import AVFoundation
 import Accelerate
 import CoreAudio
+import os
 
 struct AudioInputDevice: Identifiable, Hashable, Sendable {
     let id: AudioDeviceID
@@ -130,6 +131,10 @@ final class AudioEngine: @unchecked Sendable {
     /// keep the allocation-free path.
     private var sampleCallback: (([Float]) -> Void)?
     private var lastLevelUpdate = Date.distantPast
+    /// Non-nil while this recording is echo-cancelled (`RecordingEchoCanceller`): the 16 kHz
+    /// samples, the level and `sampleCallback` then come from its queue instead of the input
+    /// callback. Guarded by `lock`.
+    private var recordingEcho: RecordingEchoCanceller?
     private let levelUpdateInterval: TimeInterval = 1.0 / 20.0
     private var didLogInputChannelSelection = false
     private var pinnedInputChannelIndex: Int? = nil
@@ -247,6 +252,8 @@ final class AudioEngine: @unchecked Sendable {
         deviceUID: String?,
         audioProcessingMode: AudioProcessingMode,
         sampleCallback: (([Float]) -> Void)? = nil,
+        echoCancellation: Bool = false,
+        handoff: WakeCaptureHandoff? = nil,
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
         hasLoggedFirstBuffer = false
@@ -275,19 +282,39 @@ final class AudioEngine: @unchecked Sendable {
         pinnedInputChannelIndex = nil
         lock.unlock()
 
-        // Any named mic while Bluetooth buds are the system default (the buds' own mic or the
-        // Mac's): record through a bare AUHAL unit bound to exactly that device. The engine's
-        // input node, even pinned with setDeviceID, fell back to the buds and delivered nothing
+        // Record through a bare AUHAL unit bound to the chosen device (or the system default)
+        // whenever voice processing is off. It runs at the device's own rate (48 kHz on the
+        // built-in mic, where the engine's input node reported 44.1 kHz and DeepFilterNet then
+        // resampled back to 48 kHz), delivers the device's small I/O buffers instead of the
+        // tap's 16384 frames, and never falls back to Bluetooth buds that are the system default
         // (see `HALInputCapture`). Voice processing still needs the engine.
         var capture: HALInputCapture?
-        if audioProcessingMode != .appleVoiceProcessing, let uid = deviceUID,
-           let deviceID = Self.audioDeviceID(forUID: uid),
-           Self.systemDefaultInputIsBluetooth() {
-            do {
-                capture = try HALInputCapture(deviceID: deviceID, maxFrames: Self.maxInputFrameCount)
-            } catch {
-                owLog("[AudioEngine] AUHAL capture unavailable (\(error)); using the engine")
+        var adoptedHandoff: WakeCaptureHandoff?
+        let deviceID = deviceUID.flatMap(Self.audioDeviceID(forUID:)) ?? Self.defaultInputDeviceID()
+        if audioProcessingMode != .appleVoiceProcessing, let deviceID {
+            if let handoff, handoff.capture.deviceID == deviceID {
+                capture = handoff.capture
+                adoptedHandoff = handoff
+            } else {
+                do {
+                    capture = try HALInputCapture(deviceID: deviceID, maxFrames: Self.maxInputFrameCount)
+                } catch {
+                    owLog("[AudioEngine] AUHAL capture unavailable (\(error)); using the engine")
+                }
             }
+        }
+        // Every early return below must not leave the handed-over stream running on the
+        // listener's old handler (mic on, never stopped, its ring raced by the next start).
+        var handoffAttached = false
+        defer {
+            if let adoptedHandoff, !handoffAttached {
+                adoptedHandoff.capture.stop()
+                owLog("[AudioEngine] Recording setup failed; stopped the wake listener stream")
+            }
+        }
+        if let handoff, adoptedHandoff == nil {
+            handoff.capture.stop()
+            owLog("[AudioEngine] Wake listener stream not usable for this recording; stopped it")
         }
 
         // Only rebuild the AudioEngine graph if device/mode changed or engine is unconfigured
@@ -297,7 +324,7 @@ final class AudioEngine: @unchecked Sendable {
         }
 
         let format = capture?.format ?? Self.tapFormat(for: engine.inputNode)
-        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch\(capture == nil ? "" : " (AUHAL)")")
+        owLog("[AudioEngine] Recording format: \(format.sampleRate)Hz, \(format.channelCount)ch\(capture == nil ? "" : adoptedHandoff == nil ? " (AUHAL)" : " (AUHAL, taken over from the wake listener)")")
 
         lock.lock()
         let loadedDeepFilter = deepFilterProcessor
@@ -376,10 +403,16 @@ final class AudioEngine: @unchecked Sendable {
         // Sized to this recording's actual worst-case denoised-frame count so the real-time
         // callback never needs to grow this array; harmless no-op if already large enough.
         deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
+        let echo = echoCancellation ? RecordingEchoCanceller() : nil
+        recordingEcho = echo
         lock.unlock()
+        if let echo {
+            echo.start()
+            owLog("[AEC] Recording echo cancellation on")
+        }
 
         if capture == nil { engine.inputNode.removeTap(onBus: 0) }
-        let tapBlock: AVAudioNodeTapBlock = { [weak self] buffer, _ in
+        let tapBlock: AVAudioNodeTapBlock = { [weak self] buffer, time in
             guard let self else { return }
             let frameLength = Int(buffer.frameLength)
             guard frameLength > 0 else { return }
@@ -414,6 +447,7 @@ final class AudioEngine: @unchecked Sendable {
             if bufferPeak > self.inputLevelPeak {
                 self.inputLevelPeak = bufferPeak
             }
+            let echoCancelling = self.recordingEcho != nil
             self.lock.unlock()
 
             let tNow = CACurrentMediaTime()
@@ -428,20 +462,56 @@ final class AudioEngine: @unchecked Sendable {
             }
 
             // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
-            // microphone sample for transcription.
-            let now = Date()
-            if now.timeIntervalSince(self.lastLevelUpdate) >= self.levelUpdateInterval {
-                self.lastLevelUpdate = now
-                self.levelCallback?(rms)
+            // microphone sample for transcription. While echo-cancelling, the level comes from the
+            // cleaned samples instead (`storeEchoCancelled`), so the speakers don't move it.
+            if !echoCancelling {
+                self.reportLevel(rms)
             }
 
+            // 16 kHz sample index on the host clock, for pairing with the echo reference.
+            let hostIndex = time.isHostTimeValid
+                ? Int((AVAudioTime.seconds(forHostTime: time.hostTime) * Self.targetSampleRate).rounded())
+                : nil
             self.lock.lock()
-            self.convert(buffer, channelIndex: channelIndex)
+            self.convert(buffer, channelIndex: channelIndex, hostIndex: hostIndex)
             self.lock.unlock()
         }
 
         do {
-            if let capture {
+            if let adoptedHandoff {
+                // Already running: the audio held since the wake goes through the same chain
+                // first, then live buffers follow with no gap and no overlap.
+                var prerollFrames = 0
+                var prerollEnd: UInt64?
+                var blockedMs = 0.0
+                let continuity = OSAllocatedUnfairLock<Bool>(initialState: false)
+                let sampleRate = format.sampleRate
+                // Logs once how the first live buffer lines up with the end of the preroll
+                // (≈0 ms: seamless; positive: a hole; negative: overlap).
+                let liveBlock: AVAudioNodeTapBlock = { buffer, time in
+                    if let prerollEnd, time.isHostTimeValid, !continuity.withLock({ done in defer { done = true }; return done }) {
+                        let gap = time.hostTime >= prerollEnd
+                            ? AVAudioTime.seconds(forHostTime: time.hostTime - prerollEnd)
+                            : -AVAudioTime.seconds(forHostTime: prerollEnd - time.hostTime)
+                        owLog(String(format: "[AudioEngine] First live buffer after the wake preroll: gap %.1f ms (%d frames)",
+                                     gap * 1000, Int(buffer.frameLength)))
+                    }
+                    tapBlock(buffer, time)
+                }
+                adoptedHandoff.capture.replaceHandler(liveBlock) {
+                    let t0 = CACurrentMediaTime()
+                    for (buffer, time) in adoptedHandoff.preroll() {
+                        prerollFrames += Int(buffer.frameLength)
+                        tapBlock(buffer, time)
+                        prerollEnd = time.hostTime + AVAudioTime.hostTime(forSeconds: Double(buffer.frameLength) / sampleRate)
+                    }
+                    blockedMs = (CACurrentMediaTime() - t0) * 1000
+                }
+                handoffAttached = true
+                halCapture = adoptedHandoff.capture
+                owLog(String(format: "[AudioEngine] Continued the wake listener stream with %.0f ms of audio since the wake (processed in %.1f ms with input held)",
+                             Double(prerollFrames) / sampleRate * 1000, blockedMs))
+            } else if let capture {
                 try capture.start(handler: tapBlock)
                 halCapture = capture
             } else {
@@ -454,6 +524,11 @@ final class AudioEngine: @unchecked Sendable {
         } catch {
             owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
             isEnginePrepared = false
+            lock.lock()
+            let echo = recordingEcho
+            recordingEcho = nil
+            lock.unlock()
+            if let echo { echo.queue.async { _ = echo.finish() } }
             return false
         }
         return didFallBackFromDeepFilter
@@ -474,11 +549,33 @@ final class AudioEngine: @unchecked Sendable {
         isEnginePrepared = false
         configuredDeviceUID = nil
         configuredAudioProcessingMode = nil
+        // Let the echo queue finish the input callbacks' samples while the callbacks are still
+        // set; nothing new reaches it now that capture has stopped.
+        lock.lock()
+        let pendingEcho = recordingEcho
+        lock.unlock()
+        pendingEcho?.queue.sync {}
         levelCallback = nil
         sampleCallback = nil
 
         lock.lock()
-        flushConverter()
+        let echo = recordingEcho
+        recordingEcho = nil
+        if echo == nil {
+            flushConverter()
+        }
+        let converterTail = echo == nil ? [] : drainConverter()
+        lock.unlock()
+        // Echo-cancelled recordings: the canceller holds up to 0.5 s waiting for the reference.
+        // Everything it holds, then the converter tail, goes out raw so no sample is lost. The
+        // callbacks are nil by now, so this adds no level or sample-callback traffic after stop.
+        if let echo {
+            echo.queue.sync {
+                storeEchoCancelled(echo.finish() + converterTail)
+            }
+        }
+
+        lock.lock()
         let stoppedDeepFilter = activeDeepFilter
         activeDeepFilter = nil
         df3NativeTo48kConverter = nil
@@ -649,7 +746,7 @@ final class AudioEngine: @unchecked Sendable {
         return outputBuffer
     }
 
-    private func convert(_ inputBuffer: AVAudioPCMBuffer, channelIndex: Int) {
+    private func convert(_ inputBuffer: AVAudioPCMBuffer, channelIndex: Int, hostIndex: Int?) {
         guard let converter, let monoInputBuffer, let convertedBuffer,
               let sourceChannels = inputBuffer.floatChannelData,
               let monoChannel = monoInputBuffer.floatChannelData?[0] else { return }
@@ -698,6 +795,15 @@ final class AudioEngine: @unchecked Sendable {
         guard error == nil,
               let output = convertedBuffer.floatChannelData?[0],
               convertedBuffer.frameLength > 0 else { return }
+        // Echo cancellation needs the un-gained signal (the compressor below is nonlinear) and
+        // allocates, so it runs on its own queue, which then stores the samples.
+        if let recordingEcho {
+            let raw = Array(UnsafeBufferPointer(start: output, count: Int(convertedBuffer.frameLength)))
+            recordingEcho.queue.async { [weak self] in
+                self?.storeEchoCancelled(recordingEcho.process(mic: raw, hostIndex: hostIndex))
+            }
+            return
+        }
         // Preserve quiet speech before storing the Whisper input. There is deliberately no
         // noise gate here: a gate would erase exactly the low-volume syllables this path is
         // intended to recover. The compressor prevents the modest gain from clipping.
@@ -714,8 +820,22 @@ final class AudioEngine: @unchecked Sendable {
 
     /// Drains converter delay after the tap is removed, preserving the tail of the recording.
     private func flushConverter() {
-        guard let converter, let convertedBuffer else { return }
+        var tail = drainConverter()
+        guard !tail.isEmpty else { return }
+        // The live path gains every buffer before storing it; this drain has to match or the
+        // converter tail lands at a different level than the body of the same recording.
+        // That tail is exactly where trailing words sit.
+        tail.withUnsafeMutableBufferPointer { buffer in
+            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count)
+            appendSamples(buffer.baseAddress!, count: buffer.count)
+        }
+    }
 
+    /// The converter's delayed tail, un-gained. Caller holds `lock`.
+    private func drainConverter() -> [Float] {
+        guard let converter, let convertedBuffer else { return [] }
+
+        var tail: [Float] = []
         while true {
             convertedBuffer.frameLength = 0
             var error: NSError?
@@ -727,14 +847,37 @@ final class AudioEngine: @unchecked Sendable {
             guard error == nil,
                   let output = convertedBuffer.floatChannelData?[0],
                   convertedBuffer.frameLength > 0 else { break }
-            // The live path gains every buffer before storing it; this drain has to match or the
-            // converter tail lands at a different level than the body of the same recording.
-            // That tail is exactly where trailing words sit.
-            AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
-            appendSamples(output, count: Int(convertedBuffer.frameLength))
+            tail += UnsafeBufferPointer(start: output, count: Int(convertedBuffer.frameLength))
 
             if status == .endOfStream { break }
         }
+        return tail
+    }
+
+    /// Rate-limited level for the flow bar and the voice auto-stop.
+    private func reportLevel(_ rms: Float) {
+        let now = Date()
+        guard now.timeIntervalSince(lastLevelUpdate) >= levelUpdateInterval else { return }
+        lastLevelUpdate = now
+        levelCallback?(rms)
+    }
+
+    /// The echo queue's half of `convert`: level from the cleaned signal, then the same gain,
+    /// sample callback and storage as the direct path. Must not be called holding `lock`.
+    private func storeEchoCancelled(_ cleaned: [Float]) {
+        guard !cleaned.isEmpty else { return }
+        var rms: Float = 0
+        vDSP_rmsqv(cleaned, 1, &rms, vDSP_Length(cleaned.count))
+        reportLevel(rms)
+        var samples = cleaned
+        samples.withUnsafeMutableBufferPointer { buffer in
+            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count)
+        }
+        sampleCallback?(samples)
+        lock.lock()
+        samples.withUnsafeBufferPointer { appendSamples($0.baseAddress!, count: $0.count) }
+        emitCompletedSegmentIfNeeded()
+        lock.unlock()
     }
 
     private func appendSamples(_ source: UnsafePointer<Float>, count: Int) {
@@ -951,7 +1094,7 @@ final class AudioEngine: @unchecked Sendable {
         return ids
     }
 
-    private static func defaultInputDeviceID() -> AudioDeviceID? {
+    static func defaultInputDeviceID() -> AudioDeviceID? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,

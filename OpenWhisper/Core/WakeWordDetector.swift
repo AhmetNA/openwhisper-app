@@ -23,8 +23,6 @@ final class WakeWordDetector {
     private static let melContext = 160 * 3
     private static let melWindow = 76
     private static let featureWindow = 16
-    private static let melMaxFrames = 10 * 97
-    private static let featureMaxFrames = 120
 
     private let melSession: ORTSession
     private let embeddingSession: ORTSession
@@ -107,7 +105,10 @@ final class WakeWordDetector {
         if raw.count > keep { raw.removeFirst(raw.count - keep) }
 
         mel.append(contentsOf: try melFrames(raw))
-        if mel.count > Self.melMaxFrames { mel.removeFirst(mel.count - Self.melMaxFrames) }
+        // No later calculation reads beyond this suffix. Keeping openWakeWord's much larger
+        // Python history made Swift shift hundreds of nested arrays every 80 ms for no change
+        // in the model input or scores.
+        if mel.count > Self.melWindow { mel.removeFirst(mel.count - Self.melWindow) }
 
         let window = Array(mel.suffix(Self.melWindow))
         predictionCount += 1
@@ -133,7 +134,8 @@ final class WakeWordDetector {
     private func appendFeature(_ melWindow: [[Float]]) throws {
         features.append(try embedding(melWindow))
         embeddingCount += 1
-        if features.count > Self.featureMaxFrames { features.removeFirst(features.count - Self.featureMaxFrames) }
+        // The wake model consumes exactly the latest 16 embeddings.
+        if features.count > Self.featureWindow { features.removeFirst(features.count - Self.featureWindow) }
     }
 
     /// Block RMS in dB (int16 scale, so absolute values only matter relative to each other).

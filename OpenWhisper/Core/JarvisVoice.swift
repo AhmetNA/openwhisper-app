@@ -2,142 +2,117 @@ import AVFoundation
 import CryptoKit
 import Foundation
 
-/// Speaks Jarvis's replies with a local text-to-speech model: OmniVoice on MLX, served by
-/// `tts_server/server.py` on 127.0.0.1. `tts_server/setup.sh` installs it once into
-/// `~/Library/Application Support/OpenWhisper/tts`; the app starts the server itself and the
-/// server quits when the app does. Until it is installed and warm Jarvis stays silent.
-/// Repeated short phrases ("Tamamdır.") are cached on disk, and the acks are synthesized into
-/// that cache as soon as the server is up, so they play without delay.
+/// Speaks Jarvis's replies. The audio comes from the `SpeechSynthesisProvider` picked in
+/// Settings (local OmniVoice by default, or the Gemini API); this class owns everything else:
+/// playback, stop/interrupt, the timeout safety net, the disk cache and the Turkish spoken form.
+/// Repeated short phrases ("Tamamdır.") are cached on disk per provider/model/voice, and for the
+/// local voice the acks are synthesized into that cache as soon as it is up.
 /// Playback uses `AVAudioPlayer`, never an `AVAudioEngine`, so it can't disturb mic capture.
 @MainActor
 final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     static let shared = JarvisVoice()
 
-    nonisolated static let port = 8767
-    /// Part of the cache key: changing the model or its settings in server.py must bump this.
-    nonisolated static let voiceModel = "omnivoice-bf16-steps32"
-
-    static var supportDirectory: URL {
+    nonisolated static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenWhisper")
     }
-    static var serverDirectory: URL { supportDirectory.appendingPathComponent("tts") }
-    private static var python: URL { serverDirectory.appendingPathComponent(".venv/bin/python") }
-    private static var serverScript: URL { serverDirectory.appendingPathComponent("server.py") }
-    private static var referenceClip: URL { serverDirectory.appendingPathComponent("jarvis_ref.wav") }
-    private static var cacheDirectory: URL { supportDirectory.appendingPathComponent("tts-cache") }
-    private static let baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
+    private let settings: SpeechSettingsStore
+    private let cacheDirectory: URL
+    private var provider: SpeechSynthesisProvider
     private var player: AVAudioPlayer?
     private var finished: CheckedContinuation<Void, Never>?
     /// Bumped by `stop()` so a reply still being synthesized doesn't start playing afterwards.
     private var generation: UInt64 = 0
     private var synthesis: Task<Data?, Never>?
     private var sentenceProducer: Task<Void, Never>?
-    private var serverProcess: Process?
-    private var serverReady = false
-    private var preparing = false
-    /// Hash of the reference clip, so a new voice doesn't replay the old one from the cache.
-    private var voiceID: String?
+    /// Cache identities whose acks were already prefetched this run.
+    private var prefetched: Set<String> = []
+
+    init(settings: SpeechSettingsStore = .standard,
+         provider: SpeechSynthesisProvider? = nil,
+         cacheDirectory: URL = JarvisVoice.supportDirectory.appendingPathComponent("tts-cache")) {
+        self.settings = settings
+        self.cacheDirectory = cacheDirectory
+        self.provider = provider ?? settings.makeProvider()
+        super.init()
+    }
 
     var isSpeaking: Bool { player?.isPlaying ?? false }
 
-    // MARK: - Server
+    // MARK: - Provider
 
-    /// Starts the voice server if needed, waits until the model is loaded (~15 s from the
-    /// cache), then fills the cache with the acks. Safe to call repeatedly.
+    /// Picks up a provider/model change from Settings. A reply from the old provider that is
+    /// still being synthesized is dropped rather than played.
+    func reloadProvider() {
+        let next = settings.makeProvider()
+        guard next.cacheIdentity != provider.cacheIdentity else { return }
+        stop()
+        if next !== provider { provider.suspend() }
+        provider = next
+        owLog("[Voice] Speaking with \(next.displayName)")
+    }
+
+    static let testPhrase = "Merhaba, ben Jarvis. Sesim böyle duyulacak."
+
+    /// Settings' "Anahtarı test et": one fresh request with the chosen model and voice, played
+    /// at once and never cached. nil when it was heard; otherwise why not.
+    func speakTest() async -> SpeechSynthesisError? {
+        stop()
+        let myGeneration = generation
+        let provider = self.provider
+        guard provider.isReady else { return .notReady(provider.notReadyReason) }
+        let started = Date()
+        let task = Task { () -> Result<Data, SpeechSynthesisError> in
+            do { return .success(try await provider.synthesize(Self.spokenForm(Self.testPhrase))) }
+            catch let error as SpeechSynthesisError { return .failure(error) }
+            catch { return .failure(.failed("unexpected error")) }
+        }
+        // Held as `synthesis` so `stop()` (a new recording) cancels the request too.
+        let wrapped = Task { () -> Data? in
+            await withTaskCancellationHandler { try? await task.value.get() } onCancel: { task.cancel() }
+        }
+        synthesis = wrapped
+        let result = await task.value
+        if synthesis == wrapped { synthesis = nil }
+        guard myGeneration == generation else { return .cancelled }
+        switch result {
+        case .failure(let error):
+            owLog("[Voice] \(provider.displayName) test failed: \(error)")
+            return error
+        case .success(let audio):
+            owLog("[Voice] \(provider.displayName) test OK")
+            _ = await play(audio, text: Self.testPhrase, started: started, generation: myGeneration)
+            return nil
+        }
+    }
+
+    /// Gets the current provider ready (the local server takes ~15 s to load), then fills the
+    /// cache with the acks where the provider allows it. Safe to call repeatedly.
     func prepare() async {
-        guard !serverReady, !preparing else { return }
-        preparing = true
-        defer { preparing = false }
-
-        if await health() == nil {
-            guard FileManager.default.isExecutableFile(atPath: Self.python.path),
-                  FileManager.default.fileExists(atPath: Self.serverScript.path)
-            else {
-                owLog("[Voice] Local voice not installed — run app/tts_server/setup.sh. Replies stay silent")
-                return
-            }
-            guard startServer() else { return }
-        }
-
-        let deadline = Date().addingTimeInterval(180)
-        while Date() < deadline {
-            switch await health() {
-            case .ready:
-                serverReady = true
-                owLog("[Voice] Local voice ready")
-                removeOldCache()
-                await prefetchAcks()
-                return
-            case .failed(let error):
-                owLog("[Voice] Local voice failed to load: \(error). Log: \(Self.serverDirectory.path)/server.log")
-                return
-            case .loading, nil:
-                if let serverProcess, !serverProcess.isRunning {
-                    owLog("[Voice] Voice server exited (\(serverProcess.terminationStatus)). Log: \(Self.serverDirectory.path)/server.log")
-                    self.serverProcess = nil
-                    return
-                }
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-        owLog("[Voice] Local voice did not become ready within 180 s")
-    }
-
-    private func startServer() -> Bool {
-        let logURL = Self.serverDirectory.appendingPathComponent("server.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let process = Process()
-        process.executableURL = Self.python
-        process.arguments = [Self.serverScript.path, "--port", "\(Self.port)",
-                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-        process.currentDirectoryURL = Self.serverDirectory
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        // setup.sh downloaded the model; don't ask the Hub for updates on every launch.
-        environment["HF_HUB_OFFLINE"] = "1"
-        process.environment = environment
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            process.standardOutput = log
-            process.standardError = log
-        }
-        do {
-            try process.run()
-        } catch {
-            owLog("[Voice] Could not start voice server: \(error)")
-            return false
-        }
-        serverProcess = process
-        owLog("[Voice] Started local voice server (pid \(process.processIdentifier))")
-        return true
-    }
-
-    private enum Health { case loading, ready, failed(String) }
-
-    private func health() async -> Health? {
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("health"), timeoutInterval: 1)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        if json["ready"] as? Bool == true { return .ready }
-        if let error = json["error"] as? String { return .failed(error) }
-        return .loading
+        let provider = self.provider
+        await provider.prepare()
+        guard provider === self.provider, provider.isReady else { return }
+        let identity = provider.cacheIdentity
+        guard provider.prefetchesAcks, !prefetched.contains(identity) else { return }
+        prefetched.insert(identity)
+        removeOldCache()
+        await prefetchAcks(with: provider, identity: identity)
     }
 
     /// Every ack `JarvisReply` can produce, with and without an address, exactly as spoken.
-    private func prefetchAcks() async {
+    private func prefetchAcks(with provider: SpeechSynthesisProvider, identity: String) async {
         var phrases = JarvisReply.acks + JarvisReply.fixedPhrases
         for ack in JarvisReply.acks + JarvisReply.fixedPhrases {
             let body = ack.hasSuffix(".") ? String(ack.dropLast()) : ack
             phrases += JarvisReply.addresses.map { "\(body), \($0)." }
         }
         var made = 0
-        for phrase in phrases where cachedAudio(for: phrase) == nil {
+        for phrase in phrases where cachedAudio(for: phrase, identity: identity) == nil {
+            guard provider === self.provider else { break }
             guard !isSpeaking, synthesis == nil else { continue }
-            if let data = await requestSpeech(Self.spokenForm(phrase)) {
-                store(data, for: phrase)
+            if let data = try? await provider.synthesize(Self.spokenForm(phrase)) {
+                store(data, for: phrase, identity: identity)
                 made += 1
             }
         }
@@ -194,12 +169,25 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             return false
         }
         do {
-            let player = try AVAudioPlayer(data: audio)
-            player.delegate = self
-            self.player = player
-            guard player.play() else {
-                owLog("[Voice] Playback did not start")
+            // play() can return false while the output device is still switching (e.g. the
+            // headset leaving call mode right after a recording), so retry briefly.
+            var playing: AVAudioPlayer?
+            for attempt in 1...4 {
+                let candidate = try AVAudioPlayer(data: audio)
+                candidate.delegate = self
+                self.player = candidate
+                candidate.prepareToPlay()
+                if candidate.play() {
+                    playing = candidate
+                    if attempt > 1 { owLog("[Voice] Playback started on attempt \(attempt)") }
+                    break
+                }
                 self.player = nil
+                try? await Task.sleep(for: .milliseconds(300))
+                guard myGeneration == generation else { return false }
+            }
+            guard let player = playing else {
+                owLog("[Voice] Playback did not start after 4 attempts")
                 return false
             }
             owLog("[Voice] Speaking '\(text)' (\(Int(Date().timeIntervalSince(started) * 1000)) ms to start)")
@@ -258,70 +246,57 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     // MARK: - Audio
 
     private func audio(for text: String) async -> Data? {
-        if let data = cachedAudio(for: text) { return data }
-        guard serverReady else {
-            owLog("[Voice] Local voice not ready, reply stays silent: '\(text)'")
+        // Captured now, so a clip still in flight when the provider changes is filed under
+        // the provider that made it.
+        let provider = self.provider
+        let identity = provider.cacheIdentity
+        if let data = cachedAudio(for: text, identity: identity) {
+            owLog("[Voice] From cache, no request: '\(text)'")
+            return data
+        }
+        guard provider.isReady else {
+            owLog("[Voice] \(provider.displayName): \(provider.notReadyReason), reply stays silent")
             Task { await prepare() }
             return nil
         }
-        let task = Task { await requestSpeech(Self.spokenForm(text)) }
+        let spoken = Self.spokenForm(text)
+        let task = Task { () -> Data? in
+            do {
+                return try await provider.synthesize(spoken)
+            } catch SpeechSynthesisError.cancelled {
+                return nil
+            } catch {
+                // Never the text or a key: the error is a status summary.
+                owLog("[Voice] \(provider.displayName) synthesis failed: \(error)")
+                return nil
+            }
+        }
         synthesis = task
         let data = await task.value
         if synthesis == task { synthesis = nil }
-        if let data, Self.isCacheable(text) { store(data, for: text) }
+        if let data, Self.isCacheable(text) { store(data, for: text, identity: identity) }
         return data
-    }
-
-    /// Synthesizing takes ~1–3 s; the music stays paused meanwhile, so the wait is bounded.
-    private func requestSpeech(_ text: String) async -> Data? {
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("speak"), timeoutInterval: 10)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "language": "tr"])
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard status == 200 else {
-                owLog("[Voice] Voice server HTTP \(status): \(String(decoding: data.prefix(300), as: UTF8.self))")
-                if status == 503 { serverReady = false }
-                return nil
-            }
-            return data
-        } catch is CancellationError {
-            return nil
-        } catch let error as URLError where error.code == .cancelled {
-            return nil
-        } catch {
-            owLog("[Voice] Voice server request failed: \(error.localizedDescription)")
-            // The server may have died; the next reply restarts it.
-            if (error as? URLError)?.code == .cannotConnectToHost { serverReady = false }
-            return nil
-        }
     }
 
     // MARK: - Cache
 
-    private func cachedAudio(for text: String) -> Data? {
+    private func cachedAudio(for text: String, identity: String) -> Data? {
         guard Self.isCacheable(text) else { return nil }
-        return try? Data(contentsOf: cacheFile(for: text))
+        return try? Data(contentsOf: cacheFile(for: text, identity: identity))
     }
 
-    private func store(_ data: Data, for text: String) {
-        try? FileManager.default.createDirectory(at: Self.cacheDirectory, withIntermediateDirectories: true)
-        try? data.write(to: cacheFile(for: text), options: .atomic)
+    private func store(_ data: Data, for text: String, identity: String) {
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        try? data.write(to: cacheFile(for: text, identity: identity), options: .atomic)
     }
 
-    private func cacheFile(for text: String) -> URL {
-        if voiceID == nil {
-            let clip = (try? Data(contentsOf: Self.referenceClip)) ?? Data()
-            voiceID = SHA256.hash(data: clip).map { String(format: "%02x", $0) }.joined()
-        }
-        return Self.cacheDirectory.appendingPathComponent(Self.cacheKey(text: text, voice: voiceID ?? "") + ".wav")
+    private func cacheFile(for text: String, identity: String) -> URL {
+        cacheDirectory.appendingPathComponent(Self.cacheKey(text: text, identity: identity) + ".wav")
     }
 
     /// ElevenLabs replies were cached as .mp3; they are never read again.
     private func removeOldCache() {
-        let files = (try? FileManager.default.contentsOfDirectory(at: Self.cacheDirectory, includingPropertiesForKeys: nil)) ?? []
+        let files = (try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil)) ?? []
         for file in files where file.pathExtension == "mp3" { try? FileManager.default.removeItem(at: file) }
     }
 
@@ -330,8 +305,9 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         text.count <= 60 && !text.contains(where: \.isNumber)
     }
 
-    nonisolated static func cacheKey(text: String, voice: String) -> String {
-        let digest = SHA256.hash(data: Data("\(voiceModel)|\(voice)|\(text)".utf8))
+    /// `identity` is the provider's `cacheIdentity` (provider, model, voice, style).
+    nonisolated static func cacheKey(text: String, identity: String) -> String {
+        let digest = SHA256.hash(data: Data("\(identity)|\(text)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
