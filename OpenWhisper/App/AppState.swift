@@ -236,14 +236,14 @@ final class AppState {
     var setFitStatus = "Kapalı"
 
     private func applyDecisionEngine() {
-        guard decisionEngine == .setfit else {
+        guard decisionEngine.usesSetFit else {
             SetFitDecider.shared.stop()
             setFitStatus = SetFitDecider.shared.status
             return
         }
         setFitStatus = "Başlatılıyor…"
         Task {
-            await SetFitDecider.shared.prepare()
+            await SetFitDecider.shared.prepare(engine: decisionEngine)
             setFitStatus = SetFitDecider.shared.status
         }
     }
@@ -266,6 +266,10 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel")
             llmCleanup = LLMCleanup(model: ollamaModel)
+            if oldValue != ollamaModel {
+                let previous = oldValue
+                Task.detached(priority: .utility) { await LLMCleanup.unload(model: previous) }
+            }
             Task { [weak self] in
                 guard let self else { return }
                 await self.refreshOllamaStatus()
@@ -692,7 +696,7 @@ final class AppState {
         // The local voice model takes ~15 s to load; do it now rather than on the first reply.
         if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
         // SetFit models load in ~5 s; start them with the app rather than on the first decision.
-        if decisionEngine == .setfit { applyDecisionEngine() }
+        if decisionEngine.usesSetFit { applyDecisionEngine() }
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -961,6 +965,12 @@ final class AppState {
             lastError = "Seçili konuşma modeli bulunamadı: \(transcriptionModel)"
             owLog("[OpenWhisper] Model provider not found: \(transcriptionModel)")
             return
+        }
+        // Only one speech model stays in memory: Qwen runs in its own server, Whisper in-process.
+        if LocalQwenASRProvider.isQwen(provider.descriptor.id) {
+            await transcriptionModelRegistry.unloadWhisperKit()
+        } else {
+            await QwenASRServer.shared.stop()
         }
         modelIsDownloading = !provider.isDownloaded
         owLog("[OpenWhisper] Loading model: \(provider.descriptor.id) (download needed: \(modelIsDownloading))...")

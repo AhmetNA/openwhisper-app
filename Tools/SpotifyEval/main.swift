@@ -10,13 +10,13 @@ import Foundation
 //     OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
 //     OpenWhisper/Core/SystemVolume.swift OpenWhisper/Core/AudioDucker.swift \
 //     OpenWhisper/Core/MisheardWordDetector.swift OpenWhisper/Core/SetFitDecider.swift \
-//     -o /tmp/spotify_eval && /tmp/spotify_eval [-v] [model ...]   # "off" = Ollama unavailable
+//     OpenWhisper/Core/TranscriptSanitizer.swift -o /tmp/spotify_eval && /tmp/spotify_eval [-v] [model ...]   # "off" = Ollama unavailable
 //
 // Nothing is sent to Spotify: only the decision is computed.
 
 /// Expected outcome: "dictation", an intent name, or "search <kind> <display text>" (a
 /// prefix of the result; "|" separates acceptable alternatives).
-let golden: [(text: String, expected: String)] = [
+var golden: [(text: String, expected: String)] = [
     // Transport / narrow intents
     ("Spotify'ı durdur", "pause"),
     ("müziği durdur", "pause"),
@@ -146,7 +146,22 @@ func fold(_ s: String) -> String {
     s.lowercased(with: Locale(identifier: "tr_TR")).folding(options: .diacriticInsensitive, locale: nil)
 }
 
-let modelArgs = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
+/// `--real <tsv>`: your own labelled sentences (decision_model/data/labels/spotify_intent.tsv,
+/// `label<TAB>text`) instead of the built-in set. "none" means dictation.
+var realFile: String?
+if let i = CommandLine.arguments.firstIndex(of: "--real"), i + 1 < CommandLine.arguments.count {
+    realFile = CommandLine.arguments[i + 1]
+}
+if let realFile {
+    golden = try! String(contentsOfFile: realFile, encoding: .utf8)
+        .split(separator: "\n")
+        .filter { !$0.hasPrefix("#") && $0.contains("\t") }
+        .map { line in
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            return (text: parts[1], expected: parts[0] == "none" ? "dictation" : parts[0])
+        }
+}
+let modelArgs = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") && $0 != realFile }
 let models = modelArgs.isEmpty ? [SpotifyManager.selectedOllamaModel] : Array(modelArgs)
 for model in models {
     print("=== \(model) ===")

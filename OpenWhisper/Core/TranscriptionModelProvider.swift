@@ -54,6 +54,10 @@ final class WhisperKitTranscriptionProvider: @unchecked Sendable {
     func loadModel(progress: @escaping @Sendable (Double) -> Void) async throws {
         try await transcriber.loadModel(name: modelName, progress: progress)
     }
+
+    func unload() async {
+        await transcriber.unloadModel()
+    }
 }
 
 extension WhisperKitTranscriptionProvider: TranscriptionModelProvider {
@@ -101,6 +105,10 @@ final class TranscriptionModelRegistry: @unchecked Sendable {
             owLog("[TranscriptionModelRegistry] WhisperKit model manifesti bulunamadı")
         }
 
+        // Deneysel alternatif (asr_server/setup.sh ile kurulur); iki seçenek aynı sunucuyu kullanır.
+        register(LocalQwenASRProvider(useGlossary: false))
+        register(LocalQwenASRProvider(useGlossary: true))
+
         // Paket içi manifestler uygulamanın kendi koduyla aynı güvene sahip (.bundled): imzalı
         // app bundle'ının parçası, kullanıcı tarafından değiştirilemez.
         let bundledManifestURLs = Bundle.module.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
@@ -136,6 +144,13 @@ final class TranscriptionModelRegistry: @unchecked Sendable {
     }
 
     func provider(for id: String) -> (any TranscriptionModelProvider)? { providers[id] }
+
+    /// All WhisperKit variants share one `WhisperTranscriber`, so unloading one frees it.
+    func unloadWhisperKit() async {
+        if let whisper = providers.values.lazy.compactMap({ $0 as? WhisperKitTranscriptionProvider }).first {
+            await whisper.unload()
+        }
+    }
 
     private func register(_ provider: any TranscriptionModelProvider) {
         guard providers[provider.descriptor.id] == nil else {

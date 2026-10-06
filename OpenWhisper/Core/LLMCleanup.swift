@@ -21,7 +21,13 @@ final class LLMCleanup: Sendable {
     static let supportedModels: [(tag: String, label: String)] = [
         ("gemma4:e2b-it-qat", "⚡ Hızlı (Gemma 4 E2B)"),
         ("gemma4:e4b-it-qat", "⭐ Önerilen (Gemma 4 E4B)"),
-        ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)")
+        ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)"),
+        // Candidates from the 2026-09-30 model survey, not yet measured on the Turkish eval
+        // sets (Tools/compare_llms.sh). None has published Turkish numbers.
+        ("ministral-3:3b", "🧪 Ministral 3 3B (deneysel)"),
+        ("ministral-3:8b", "🧪 Ministral 3 8B (deneysel)"),
+        ("granite4.2:8b", "🧪 Granite 4.2 8B (deneysel)"),
+        ("lfm2.5:8b", "🧪 LFM2.5 8B-A1B (deneysel)")
     ]
 
     /// How long Ollama keeps the model resident after a request. Every request to the model
@@ -420,6 +426,18 @@ final class LLMCleanup: Sendable {
         let body: [String: Any] = ["model": model, "prompt": "", "keep_alive": keepAlive]
         guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return }
         request.httpBody = requestData
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    /// Drops `model` from memory right away (keep_alive 0) instead of after `keepAlive`, so a
+    /// model switch in Settings doesn't leave two models sharing the 16 GB for half an hour.
+    static func unload(model: String) async {
+        guard let url = URL(string: "http://localhost:11434/api/generate") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model, "keep_alive": 0])
         _ = try? await URLSession.shared.data(for: request)
     }
 

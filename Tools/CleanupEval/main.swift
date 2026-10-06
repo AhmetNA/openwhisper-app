@@ -6,7 +6,7 @@ import Foundation
 //
 //   swiftc Tools/CleanupEval/main.swift Tools/SpotifyEval/Stubs.swift \
 //     OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
-//     OpenWhisper/Core/MisheardWordDetector.swift \
+//     OpenWhisper/Core/MisheardWordDetector.swift OpenWhisper/Core/TranscriptSanitizer.swift \
 //     -o /tmp/cleanup_eval && /tmp/cleanup_eval [-v] model ...
 
 /// Raw transcript → expected words after cleanup (case and punctuation are scored separately).
@@ -54,8 +54,55 @@ func warmUp(_ model: String) async -> Double {
 }
 
 let verbose = CommandLine.arguments.contains("-v")
-let models = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
+
+/// `--real <file> --out <dir>`: real Whisper transcripts (one per line) with no expected
+/// answer. Scores what can be measured without one (kept as raw, words removed, speed) and
+/// writes every output to <dir>/<model>.tsv so the models can be compared sentence by sentence.
+func argument(after flag: String) -> String? {
+    guard let i = CommandLine.arguments.firstIndex(of: flag), i + 1 < CommandLine.arguments.count else { return nil }
+    return CommandLine.arguments[i + 1]
+}
+let realFile = argument(after: "--real")
+let outDir = argument(after: "--out")
+let flagValues = Set([realFile, outDir].compactMap { $0 })
+let models = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") && !flagValues.contains($0) }
 var summary: [String] = []
+
+if let realFile {
+    let lines = try! String(contentsOfFile: realFile, encoding: .utf8)
+        .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+    for model in models {
+        guard await LLMCleanup.isModelInstalled(model) else { print("\(model): not installed"); continue }
+        let load = await warmUp(model)
+        let cleaner = LLMCleanup(model: model)
+        var rows: [String] = []
+        var keptRaw = 0, changed = 0, removed = 0
+        var latencies: [Double] = []
+        for raw in lines {
+            let misheard = await MainActor.run { MisheardWordDetector.find(in: raw) }
+            let start = Date()
+            let out = await cleaner.cleanup(text: raw, misheard: misheard)
+            let t = Date().timeIntervalSince(start)
+            latencies.append(t)
+            if out == raw { keptRaw += 1 }
+            if words(out) != words(raw) { changed += 1 }
+            removed += max(0, words(raw).count - words(out).count)
+            rows.append("\(String(format: "%.2f", t))\t\(raw)\t\(out.replacingOccurrences(of: "\n", with: " "))")
+        }
+        if let outDir {
+            let safe = model.replacingOccurrences(of: ":", with: "_").replacingOccurrences(of: "/", with: "_")
+            try! (rows.joined(separator: "\n") + "\n").write(toFile: "\(outDir)/cleanup-real-\(safe).tsv", atomically: true, encoding: .utf8)
+        }
+        let sorted = latencies.sorted()
+        let line = String(format: "%@ | real %d | words changed in %d | returned unchanged %d | words removed %d | load %.1fs | median %.2fs max %.2fs",
+                          model, lines.count, changed, keptRaw, removed, load, sorted[sorted.count / 2], sorted.last!)
+        print(line)
+        summary.append(line)
+    }
+    print("=== SUMMARY ===")
+    summary.forEach { print($0) }
+    exit(0)
+}
 
 for model in models {
     print("=== \(model) ===")

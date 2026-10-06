@@ -1,0 +1,8 @@
+# Same mlx-audio as tts_server (its Qwen3-ASR code was tested with it on 2026-09-30).
+mlx-audio==0.5.6
+mlx==0.32.2
+mlx-metal==0.32.2
+numpy==2.5.3
+transformers==5.17.0
+huggingface-hub==1.33.0
+soundfile==0.14.0

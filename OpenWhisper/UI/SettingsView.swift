@@ -280,7 +280,7 @@ struct SettingsView: View {
             Text("Spotify komutu mu, gerçek \"Jarvis\" çağrısı mı, Jarvis'e mi konuşuluyor, hatırlatıcı silme onaylandı mı kararları. SetFit Jarvis verisiyle eğitilmiş yerel modellerle ~10 ms'de karar verir; emin olmadığında Ollama'ya sorar. Metin temizleme her zaman Ollama'da kalır.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if appState.decisionEngine == .setfit {
+            if appState.decisionEngine.usesSetFit {
                 Text("SetFit: \(appState.setFitStatus)")
                     .font(.caption)
                     .foregroundStyle(appState.setFitStatus.hasPrefix("Hazır") ? Color.secondary : Color.orange)
@@ -417,7 +417,7 @@ struct SettingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 210)
+                .frame(width: 280)
                 .disabled(switching)
             }
 
@@ -426,6 +426,14 @@ struct SettingsView: View {
                  : "İnmiş modeller: \(downloaded.sorted().joined(separator: ", ")). ☁️ = henüz inmedi, seçince indirilir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+            if LocalQwenASRProvider.isQwen(appState.transcriptionModel) {
+                Text(QwenASRServer.isInstalled
+                     ? "Qwen3-ASR ayrı bir yerel sunucuda (MLX) çalışır, ~2,5 GB bellek. \"+ sözlük\" sözlüğü ipucu olarak verir; kısa kayıtlarda sözlük kelimelerini uydurabilir."
+                     : "Qwen3-ASR kurulu değil — terminalde: app/asr_server/setup.sh (bir kez, ~2,5 GB indirir), sonra modeli yeniden seç.")
+                    .font(.caption2)
+                    .foregroundStyle(QwenASRServer.isInstalled ? Color.secondary : Color.orange)
+            }
 
             if !pendingApprovals.isEmpty {
                 providerApprovalRows(pendingApprovals)

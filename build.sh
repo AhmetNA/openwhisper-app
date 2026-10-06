@@ -91,6 +91,14 @@ else
     echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run tts_server/setup.sh"
 fi
 
+# Alternative speech model (Settings › Konuşma modeli › Qwen3-ASR): keep the installed server
+# script in sync. The venv and the model come from asr_server/setup.sh (once).
+ASR_DEST="$HOME/Library/Application Support/OpenWhisper/asr"
+if [ -x "$ASR_DEST/.venv/bin/python" ]; then
+    cp asr_server/server.py "$ASR_DEST/"
+    echo "==> Updated Qwen3-ASR server in $ASR_DEST"
+fi
+
 # SetFit decision models (Settings › Karar motoru): keep the installed server script in sync.
 # The venv and the trained models come from decision_model/install.sh (retrain.sh runs it).
 DECIDER_DEST="$HOME/Library/Application Support/OpenWhisper/decider"

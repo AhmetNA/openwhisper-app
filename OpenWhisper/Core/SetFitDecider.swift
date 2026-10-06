@@ -19,13 +19,20 @@ final class SetFitDecider {
 
     enum Engine: String, CaseIterable, Identifiable {
         case ollama, setfit
+        /// Experiment: EmbeddingGemma-300M base (`train.py --base embeddinggemma`). Tasks that
+        /// have no such model yet use the MiniLM one.
+        case setfitGemma = "setfit-embeddinggemma"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .ollama: return "Ollama (LLM)"
             case .setfit: return "SetFit (hızlı) + Ollama yedek"
+            case .setfitGemma: return "SetFit EmbeddingGemma (deneysel)"
             }
         }
+        var usesSetFit: Bool { self != .ollama }
+        /// `server.py --variant`.
+        var serverVariant: String { self == .setfitGemma ? "embeddinggemma" : "minilm" }
     }
 
     enum Task: String, Sendable {
@@ -66,7 +73,7 @@ final class SetFitDecider {
     private nonisolated static let readyFlag = OSAllocatedUnfairLock(initialState: false)
     nonisolated static var isReady: Bool { readyFlag.withLock { $0 } }
     nonisolated static var isEnabled: Bool {
-        UserDefaults.standard.string(forKey: defaultsKey) == Engine.setfit.rawValue
+        UserDefaults.standard.string(forKey: defaultsKey).flatMap(Engine.init(rawValue:))?.usesSetFit ?? false
     }
     /// SetFit is selected and its server answered /health.
     nonisolated static var isActive: Bool { isEnabled && isReady }
@@ -74,12 +81,17 @@ final class SetFitDecider {
     private(set) var status = "Kapalı"
     private var serverProcess: Process?
     private var preparing = false
+    private var variant = Engine.setfit.serverVariant
 
     // MARK: - Server
 
     /// Starts the server if needed and waits until the models are loaded (~5 s). Safe to call
     /// repeatedly; `status` describes the outcome for Settings.
-    func prepare() async {
+    func prepare(engine: Engine = .setfit) async {
+        if variant != engine.serverVariant {
+            stop()
+            variant = engine.serverVariant
+        }
         guard !Self.isReady, !preparing else { return }
         preparing = true
         defer { preparing = false }
@@ -98,7 +110,12 @@ final class SetFitDecider {
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             switch await health() {
-            case .ready(let models):
+            case .ready(_, let served) where served != variant:
+                // A server left from another run serves the other base model.
+                status = "Model değiştiriliyor…"
+                owLog("[Decider] SetFit server has \(served), reloading as \(variant)")
+                await reload()
+            case .ready(let models, _):
                 Self.readyFlag.withLock { $0 = true }
                 status = "Hazır — \(models)"
                 owLog("[Decider] SetFit ready: \(models)")
@@ -135,7 +152,8 @@ final class SetFitDecider {
         let process = Process()
         process.executableURL = Self.python
         process.arguments = [Self.serverScript.path, "--port", "\(Self.port)",
-                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
+                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)",
+                             "--variant", variant]
         process.currentDirectoryURL = Self.supportDirectory
         // A menu-bar app's child otherwise runs at background QoS: efficiency cores and
         // coalesced timers made ~1 in 3 decisions take 300–400 ms instead of ~10 ms.
@@ -160,7 +178,14 @@ final class SetFitDecider {
         return true
     }
 
-    private enum Health { case loading, ready(String), failed(String) }
+    private enum Health { case loading, ready(String, variant: String), failed(String) }
+
+    private func reload() async {
+        var request = URLRequest(url: Self.baseURL.appendingPathComponent("reload"), timeoutInterval: 90)
+        request.httpMethod = "POST"
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["variant": variant])
+        _ = try? await URLSession.shared.data(for: request)
+    }
 
     private func health() async -> Health? {
         var request = URLRequest(url: Self.baseURL.appendingPathComponent("health"), timeoutInterval: 1)
@@ -173,10 +198,11 @@ final class SetFitDecider {
                 .sorted { $0.key < $1.key }
                 .map { name, meta in
                     let accuracy = (meta["accuracy"] as? Double).map { String(format: "%%%.0f", $0 * 100) } ?? "?"
-                    return "\(name) \(accuracy)"
+                    let base = meta["variant"] as? String == "embeddinggemma" ? " (Gemma)" : ""
+                    return "\(name) \(accuracy)\(base)"
                 }
                 .joined(separator: ", ")
-            return .ready(models)
+            return .ready(models, variant: json["variant"] as? String ?? "minilm")
         }
         if let error = json["error"] as? String { return .failed(error) }
         return .loading

@@ -19,7 +19,12 @@ final class HALInputCapture {
     /// Who receives the audio. Swappable while running (`replaceHandler`), so the wake listener
     /// can hand its live stream to the recording without restarting the hardware. Held for the
     /// whole callback, so after a swap returns the old handler never runs again.
-    private let handler = OSAllocatedUnfairLock<Handler?>(uncheckedState: nil)
+    ///
+    /// Boxed, not a bare closure: a closure state is reabstracted on every `inout` access through
+    /// the lock's generic storage, and unoptimized builds wrap it in one more thunk each time.
+    /// With a callback every ~10 ms the chain grew ~80 bytes of I/O-thread stack per buffer until
+    /// the stack overflowed (~71 s, crashes of 30 Sep and 5 Oct 2026).
+    private let handler = OSAllocatedUnfairLock<HandlerBox?>(uncheckedState: nil)
     private let buffer: AVAudioPCMBuffer
     private let maxFrames: AVAudioFrameCount
 
@@ -57,7 +62,7 @@ final class HALInputCapture {
     /// Starts the hardware; `handler` runs on the real-time I/O thread with a buffer that is
     /// reused for the next callback (copy what you keep).
     func start(handler: @escaping Handler) throws {
-        self.handler.withLockUnchecked { $0 = handler }
+        self.handler.withLockUnchecked { $0 = HandlerBox(handler) }
         try unit.allocateRenderResources()
         let render = unit.renderBlock
         let buffer = self.buffer
@@ -76,7 +81,7 @@ final class HALInputCapture {
             let status = render(&flags, timestamp, frameCount, bus, buffer.mutableAudioBufferList, nil)
             guard status == noErr else { return }
             let time = AVAudioTime(audioTimeStamp: timestamp, sampleRate: sampleRate)
-            current.withLockUnchecked { $0?(buffer, time) }
+            current.withLockUnchecked { $0?.call(buffer, time) }
         }
         try unit.startHardware()
     }
@@ -87,7 +92,7 @@ final class HALInputCapture {
     func replaceHandler(_ newHandler: @escaping Handler, beforeSwap: () -> Void = {}) {
         handler.withLockUnchecked {
             beforeSwap()
-            $0 = newHandler
+            $0 = HandlerBox(newHandler)
         }
     }
 
@@ -101,4 +106,9 @@ final class HALInputCapture {
 
 enum HALInputCaptureError: Error {
     case noUsableFormat
+}
+
+private final class HandlerBox {
+    let call: HALInputCapture.Handler
+    init(_ call: @escaping HALInputCapture.Handler) { self.call = call }
 }

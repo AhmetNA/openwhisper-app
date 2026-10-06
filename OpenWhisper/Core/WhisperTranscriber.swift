@@ -123,6 +123,15 @@ final class WhisperTranscriber: @unchecked Sendable {
         removeOtherModels(keeping: name, in: modelBase)
     }
 
+    /// Frees the loaded model (~1.5 GB) when another speech model takes over. `loadModel`
+    /// loads it again when a Whisper variant is picked.
+    func unloadModel() async {
+        guard let whisperKit else { return }
+        self.whisperKit = nil
+        await whisperKit.unloadModels()
+        owLog("[Whisper] Model unloaded")
+    }
+
     /// Transcribe 16kHz mono Float32 audio to text
     func transcribe(audioData: [Float], language: String) async throws -> String {
         guard let whisperKit else {
