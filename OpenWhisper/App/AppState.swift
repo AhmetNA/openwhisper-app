@@ -702,6 +702,9 @@ final class AppState {
         microphoneGranted = await audioEngine?.requestPermission() ?? false
         owLog("[OpenWhisper] Microphone permission: \(microphoneGranted)")
 
+        // Keep Bluetooth buds out of call mode before anything opens the mic.
+        DefaultInputGuard.shared.start()
+
         // Enumerate input devices for the picker + BT detection
         refreshInputDevices()
         owLog("[OpenWhisper] Input devices: \(availableInputDevices.count), default-is-BT: \(systemDefaultInputIsBluetooth)")

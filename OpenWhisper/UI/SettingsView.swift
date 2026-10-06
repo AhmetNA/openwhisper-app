@@ -81,6 +81,7 @@ struct SettingsView: View {
     @AppStorage("wakeWordCandidateThreshold") private var wakeWordCandidateThreshold: Double = 0.12
     @AppStorage("wakeWordConfirmedScore") private var wakeWordConfirmedScore: Double = 0.5
     @AppStorage("targetSpeakerWakeThreshold") private var targetSpeakerWakeThreshold: Double = 0.40
+    @AppStorage(DefaultInputGuard.defaultsKey) private var keepBuiltInMicAsDefault = true
 
     var body: some View {
         HStack(spacing: 0) {
@@ -547,6 +548,19 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 170)
             }
+
+            Toggle("Sistem girişini Mac mikrofonunda tut", isOn: $keepBuiltInMicAsDefault)
+                .font(.caption)
+                .padding(.leading, 22)
+                .onChange(of: keepBuiltInMicAsDefault) { _, on in
+                    if on { DefaultInputGuard.shared.enforce() }
+                    appState.refreshInputDevices()
+                }
+            Text("Bluetooth kulaklık bağlanınca macOS onun mikrofonunu seçer; bu açıkken giriş Mac mikrofonuna döner, kulaklık hep yüksek kalitede çalar.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 22)
 
             if appState.resolvedInputIsBluetooth {
                 HStack(alignment: .top, spacing: 4) {
