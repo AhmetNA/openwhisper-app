@@ -266,6 +266,7 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(ollamaModel, forKey: "ollamaModel")
             llmCleanup = LLMCleanup(model: ollamaModel)
+            JarvisVoice.shared.translationModel = ollamaModel
             if oldValue != ollamaModel {
                 let previous = oldValue
                 Task.detached(priority: .utility) { await LLMCleanup.unload(model: previous) }
@@ -521,6 +522,13 @@ final class AppState {
     @ObservationIgnored private var wakeConfirmationID = 0
     /// The wake speaker check finished before the session it belongs to was created.
     @ObservationIgnored private var pendingWakeSpeakerVerified = false
+    /// Back-to-back reply follow-ups; capped so echo or a TV can't keep Jarvis listening.
+    @ObservationIgnored private var replyFollowUpChain = 0
+    /// After Jarvis asks something back, how long the mic waits for the first word.
+    nonisolated static let replyFollowUpWindow: TimeInterval = 2.5
+    /// Leading part of that window ignored as Jarvis's own voice tail.
+    nonisolated static let replyFollowUpEchoGuard: TimeInterval = 0.4
+    nonisolated static let maxReplyFollowUps = 2
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored private var pendingWakeClipID: UUID?
     @ObservationIgnored private var mediaActivityMonitor: SystemMediaActivityMonitor?
@@ -643,12 +651,14 @@ final class AppState {
         voiceProviderID = SpeechSettingsStore.standard.providerID
         voiceModelID = SpeechSettingsStore.standard.modelID(for: SpeechSettingsStore.standard.providerID)
         voiceID = SpeechSettingsStore.standard.voiceID(for: SpeechSettingsStore.standard.providerID)
-        decisionEngine = defaults.string(forKey: SetFitDecider.defaultsKey).flatMap(SetFitDecider.Engine.init(rawValue:)) ?? .ollama
+        decisionEngine = defaults.string(forKey: SetFitDecider.defaultsKey).flatMap(SetFitDecider.Engine.init(rawValue:)) ?? .defaultEngine
         let savedModel = defaults.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
         // Models dropped from the picker (the ByT5 normalizer, llama3.2:3b) fall back to the default
         // instead of leaving a selection Settings can't show.
         let isSupported = LLMCleanup.supportedModels.contains { $0.tag == savedModel }
-        ollamaModel = isSupported ? savedModel : LLMCleanup.defaultModel
+        let model = isSupported ? savedModel : LLMCleanup.defaultModel
+        ollamaModel = model
+        JarvisVoice.shared.translationModel = model
         flowBarEnabled = defaults.object(forKey: "flowBarEnabled") as? Bool ?? true
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
@@ -1187,9 +1197,15 @@ final class AppState {
             return
         }
         let sessionStart = CACurrentMediaTime()
-        let wakeLikeSession = recordingTrigger == .wakeWord || recordingTrigger == .jarvisKey
+        // A reply follow-up behaves like "Hey Jarvis" once the user speaks (full command,
+        // Smart Turn endpoint); only its no-speech window is short.
+        let wakeLikeSession = [.wakeWord, .jarvisKey, .followUp].contains(recordingTrigger)
         let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession
         let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
+        let isReplyFollowUp = armVoiceAutoStop && recordingTrigger == .followUp
+        var smartTurnConfig = SmartTurnEndpointDetector.Config()
+        // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
+        let ignoredLeadingSeconds: TimeInterval = mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
         var endpointFallbackConfig: VoiceEndpointDetector.Config = resolvedInputIsBluetooth ? .closeTalk : .init()
         // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
         // incomplete-turn safety limit and also keeps a model failure bounded.
@@ -1203,17 +1219,25 @@ final class AppState {
             endpointFallbackConfig.silenceToStop = min(endpointFallbackConfig.silenceToStop, 0.8)
             owLog("[Reminders] Listening for deletion confirmation (5 s response window)")
         }
+        if isReplyFollowUp {
+            // Jarvis has just asked something back: no speech within the window closes the mic
+            // quietly. Both detectors need it — while Smart Turn is ready, it alone decides.
+            endpointFallbackConfig.noSpeechTimeout = Self.replyFollowUpWindow
+            smartTurnConfig.noSpeechTimeout = Self.replyFollowUpWindow
+            owLog(String(format: "[FollowUp] Listening for an answer (%.1f s window)", Self.replyFollowUpWindow))
+        }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
                 startTime: sessionStart,
                 config: endpointFallbackConfig,
-                ignoreUntil: mediaPlaying ? sessionStart + 0.8 : nil
+                ignoreUntil: ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
             )
             : nil
         smartTurnEndpointDetector = useSmartTurnEndpoint
             ? SmartTurnEndpointDetector(
                 startTime: sessionStart,
-                ignoredLeadingSeconds: mediaPlaying ? 0.8 : 0
+                config: smartTurnConfig,
+                ignoredLeadingSeconds: ignoredLeadingSeconds
             )
             : nil
         ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession
@@ -1310,7 +1334,7 @@ final class AppState {
         session.trigger = recordingTrigger
         // A key press means the user is at the Mac: treat the voice like a matched "Jarvis".
         session.wakeSpeakerVerified = session.trigger == .jarvisKey
-            || (session.trigger == .wakeWord && pendingWakeSpeakerVerified)
+            || ([.wakeWord, .followUp].contains(session.trigger) && pendingWakeSpeakerVerified)
         pendingWakeSpeakerVerified = false
         if session.trigger == .wakeWord {
             session.wakeClipID = pendingWakeClipID
@@ -1705,7 +1729,14 @@ final class AppState {
                         owLog("[OpenWhisper] Batch \(segmentNumber) diarized target words=\(diarized.acceptedWordCount) overlap=\(diarized.hadOverlap)")
                     } else {
                         owLog("[OpenWhisper] Batch \(segmentNumber) diarization found no safe target words")
-                        guard !isAmbiguousTargetMatch,
+                        // No word timings means diarization never judged a single word, so an
+                        // ambiguous batch must not lose all its speech: use the target-only audio.
+                        let hadNoTimings = timed.words.isEmpty
+                            && !timed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        if hadNoTimings {
+                            owLog("[OpenWhisper] Batch \(segmentNumber) had text but no word timings; transcribing accepted target audio")
+                        }
+                        guard !isAmbiguousTargetMatch || hadNoTimings,
                               filtered.hasAcceptedTargetSpeech else { return }
                         segmentText = try await transcriber.transcribe(
                             audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
@@ -1800,8 +1831,10 @@ final class AppState {
         // A follow-up question (deletion confirmation) keeps the music paused through the
         // answer; that session's own finish resumes it.
         var holdMediaForFollowUp = false
+        // Same for a chat answer that asks something back (see `listenForReplyAnswer`).
+        var holdMediaForReplyAnswer = false
         defer {
-            if session.isVoiceCommand && recordingState != .recording && !holdMediaForFollowUp {
+            if session.isVoiceCommand && recordingState != .recording && !holdMediaForFollowUp && !holdMediaForReplyAnswer {
                 recordingMedia.end(resuming: resumeMediaAfterCommand)
             }
         }
@@ -2001,6 +2034,25 @@ final class AppState {
                     owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text))")
                 }
 
+                // Return can only be pressed in the frontmost app. If the user moved to another
+                // app (or full-screen Space) after "gönder", hop to the target, send there, and
+                // go straight back to where they were.
+                var hopFrom: NSRunningApplication?
+                if self.autoPasteEnabled, send,
+                   let target = targetApp, !target.isTerminated,
+                   let front = NSWorkspace.shared.frontmostApplication,
+                   front.processIdentifier != target.processIdentifier {
+                    owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
+                    if await AgentAppActivator.bringToFront(target) {
+                        hopFrom = front
+                    }
+                }
+                let returnToApp = hopFrom
+                @MainActor func goBack() {
+                    guard let app = returnToApp else { return }
+                    Task { @MainActor in _ = await AgentAppActivator.bringToFront(app) }
+                }
+
                 if self.autoPasteEnabled {
                     let pasteStartedAt = session.latency.timestamp()
                     session.latency.expectAsyncOutput()
@@ -2039,6 +2091,8 @@ final class AppState {
                                             VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
                                         }
                                         self.showFlowBarMessage(sent ? "gönderildi" : "yazıldı, gönderilmedi", durationMs: 1200)
+                                        // Wait a beat so the app takes the Return before losing focus.
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { goBack() }
                                     }
                                 }
                             case .pastedVerified, .pastedUnverified:
@@ -2123,6 +2177,7 @@ final class AppState {
                                 self.swapPasteContext = nil
                                 self.hotkey?.setSwapAvailable(false)
                                 self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
+                                goBack()
                             }
                         } }
                     }
@@ -2207,9 +2262,12 @@ final class AppState {
                 owLog("[Route] explicit Jarvis chat: '\(chatText)'")
                 self.lastTranscription = text
                 let actionStartedAt = session.latency.timestamp()
-                await self.chatReply(to: chatText)
+                let answer = await self.chatReply(to: chatText)
                 session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
                 session.latency.markOutput("Jarvis cevabı")
+                if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
+                    holdMediaForReplyAnswer = true
+                }
                 return
             }
 
@@ -2303,9 +2361,12 @@ final class AppState {
                         session.latency.finishDecision(route: "Jarvis sohbet")
                         self.lastTranscription = text
                         let actionStartedAt = session.latency.timestamp()
-                        await self.chatReply(to: trimmed)
+                        let answer = await self.chatReply(to: trimmed)
                         session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
                         session.latency.markOutput("Jarvis cevabı")
+                        if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
+                            holdMediaForReplyAnswer = true
+                        }
                         return
                     }
                 }
@@ -2421,25 +2482,57 @@ final class AppState {
     /// A "Jarvis" session that is no command and not meant for Claude Code / Codex: the user is
     /// talking to Jarvis, so the local LLM answers out loud. The voice starts on the first
     /// sentence while the rest is still being written. Without a voice the answer is shown.
-    private func chatReply(to text: String) async {
+    /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
+    @discardableResult
+    private func chatReply(to text: String) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable else {
             owLog("[Chat] Ollama not available")
             showFlowBarMessage("Ollama kapalı, sohbet edemiyorum")
             await speakReply(jarvisReply.failure("yerel model şu an kapalı"))
-            return
+            return (nil, false)
         }
         jarvisActivity = .thinking
         defer { jarvisActivity = .none }
-        let sentences = JarvisChat.shared.reply(to: text, model: ollamaModel)
+        let sentences = JarvisChat.shared.reply(to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage)
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
             heard = await JarvisVoice.shared.speak(sentences: sentences) { [weak self] in self?.jarvisActivity = .speaking }
         } else {
             for await _ in sentences {}
         }
-        if !heard, recordingState != .recording, let answer = JarvisChat.shared.lastReply, !answer.isEmpty {
+        guard recordingState != .recording else { return (nil, heard) }
+        let answer = JarvisChat.shared.lastReply
+        if !heard, let answer, !answer.isEmpty {
             showFlowBarMessage(answer, durationMs: min(max(answer.count * 60, 3000), 10000))
         }
+        return (answer, heard)
+    }
+
+    /// Jarvis's answer asked something back ("anlayamadım, biraz daha açık söyler misin?"):
+    /// open the mic without the wake word. Silence for `replyFollowUpWindow` closes it; speech
+    /// keeps it open like a "Hey Jarvis" session. Returns true when the window opened, so the
+    /// caller keeps paused media paused for the answer.
+    private func listenForReplyAnswer(_ reply: String?, heard: Bool, after session: RecordingTranscriptionSession) -> Bool {
+        guard session.isVoiceCommand, !session.isCancelled, let reply, JarvisChat.awaitsAnswer(reply),
+              recordingState != .recording, hotkey?.isIdle == true else { return false }
+        let chain = session.trigger == .followUp ? replyFollowUpChain + 1 : 1
+        guard chain <= Self.maxReplyFollowUps else {
+            owLog("[FollowUp] \(Self.maxReplyFollowUps) follow-ups in a row; not listening again")
+            return false
+        }
+        replyFollowUpChain = chain
+        // The user who just spoke is answering; carry the session's voice check over.
+        pendingWakeSpeakerVerified = session.wakeSpeakerVerified
+        Task { @MainActor [weak self] in
+            // Safety net if the follow-up recording never starts.
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, self.recordingState != .recording else { return }
+            self.recordingMedia.end(resuming: true)
+        }
+        if !heard { showFlowBarMessage(reply, durationMs: 6000) }
+        owLog("[FollowUp] Reply asks back (\(chain)/\(Self.maxReplyFollowUps)); opening the mic")
+        startVoiceSession(trigger: .followUp)
+        return true
     }
 
     // MARK: - Misheard word correction

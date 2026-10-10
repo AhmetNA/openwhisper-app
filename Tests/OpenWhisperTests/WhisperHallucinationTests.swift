@@ -102,4 +102,22 @@ final class WhisperTrailingOutroTests: XCTestCase {
             XCTAssertEqual(AudioSegmentation.removeTrailingOutros(text), text, text)
         }
     }
+
+    // Recording 3AC258AE (10 Oct 2026): 30 s of speech ended in "Altyazı M.K."; dropping every
+    // word timing made diarization return nothing and the menu showed "Metin çıkarılamadı".
+    func testTimedWordsSurviveSubtitleCreditRemoval() {
+        func w(_ text: String) -> WhisperTimedWord { WhisperTimedWord(word: text, start: 0, end: 0, probability: 1) }
+        let words = [w(" Şu"), w(" anda"), w(" bir"), w(" bug"), w(" yani."),
+                     w(" Altyazı"), w(" M"), w("."), w("K"), w(".")]
+        let cleaned = TranscriptSanitizer.removeForbiddenArtifacts(from: "Şu anda bir bug yani. Altyazı M.K.")
+        let kept = WhisperTranscriber.alignWords(words, to: cleaned)
+        XCTAssertEqual(kept.map(\.word), [" Şu", " anda", " bir", " bug", " yani."])
+    }
+
+    func testTimedWordsAlignAcrossSplitWordsAndMiddleRemoval() {
+        func w(_ text: String) -> WhisperTimedWord { WhisperTimedWord(word: text, start: 0, end: 0, probability: 1) }
+        let words = [w(" Hey"), w(" Cer"), w("vis"), w(" Altyazı"), w(" M.K."), w(" dinle")]
+        let kept = WhisperTranscriber.alignWords(words, to: "Hey Cervis dinle")
+        XCTAssertEqual(kept.map(\.word), [" Hey", " Cer", "vis", " dinle"])
+    }
 }

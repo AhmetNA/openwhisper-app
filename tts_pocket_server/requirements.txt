@@ -1,0 +1,7 @@
+# Pinned: tested together on this Mac on 2026-10-08 (CPU, offline after the first download).
+pocket-tts-turkish==0.1.0
+pocket-tts==3.1.0
+torch==2.14.1
+numpy==2.5.3
+sentencepiece==0.2.2
+huggingface-hub==2.1.1

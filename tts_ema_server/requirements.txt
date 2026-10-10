@@ -1,0 +1,7 @@
+# Pinned: tested together on this Mac on 2026-10-07 (CPU, offline after the first download).
+# Model revision on the Hub at that time: 7a6ba1ad216bb2f1da9863f80ac8770a6a807632.
+ema-lightning==1.0.1
+torch==2.14.1
+numpy==2.5.3
+normalizer-tr==0.4.0
+huggingface-hub==2.1.1

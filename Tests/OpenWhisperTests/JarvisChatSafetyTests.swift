@@ -39,4 +39,21 @@ final class JarvisChatSafetyTests: XCTestCase {
             "Bu sohbetten o işlemi yapamam."
         )
     }
+
+    func testAnswersThatAskBackOpenTheFollowUpWindow() {
+        XCTAssertTrue(JarvisChat.awaitsAnswer(JarvisChat.unrecognizedCommandReply))
+        XCTAssertTrue(JarvisChat.awaitsAnswer("Hangi şarkıyı açayım patron?"))
+        XCTAssertTrue(JarvisChat.awaitsAnswer("Üzgünüm, bunu anlayamadım."))
+        XCTAssertTrue(JarvisChat.awaitsAnswer("I'm sorry, I didn't catch that."))
+        XCTAssertFalse(JarvisChat.awaitsAnswer("Kara delikler ışığı bile kaçırmaz."))
+        XCTAssertFalse(JarvisChat.awaitsAnswer("Tamamdır, efendim."))
+        XCTAssertFalse(JarvisChat.awaitsAnswer("  "))
+    }
+
+    func testNotUnderstoodWordingsAreRecognised() {
+        XCTAssertTrue(JarvisChat.saysNotUnderstood("Sanırım ne demek istediğinizi tam anlayamadım efendim."))
+        XCTAssertTrue(JarvisChat.saysNotUnderstood("Bunu anlamadım."))
+        XCTAssertFalse(JarvisChat.saysNotUnderstood("Daha açık bir ifade kullanabilir misiniz?"))
+        XCTAssertTrue(JarvisChat.awaitsAnswer(JarvisChat.notUnderstoodReply))
+    }
 }

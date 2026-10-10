@@ -1,0 +1,6 @@
+# Pinned: tested together on this Mac on 2026-10-08 (CPU, offline after the first download).
+# Model: jgkawell/jarvis @ 37f8763 (en_GB jarvis medium). Needs `brew install espeak-ng`.
+onnxruntime==1.30.0
+phonemizer-fork==3.3.2
+numpy==2.5.3
+huggingface-hub==2.1.1

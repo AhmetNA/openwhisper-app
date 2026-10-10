@@ -18,6 +18,14 @@ struct SettingsView: View {
         case idle, testing, success
         case failure(String)
     }
+    @State private var sentenceTestState: SentenceTestState = .idle
+    @State private var sentenceTestTask: Task<Void, Never>?
+
+    private enum SentenceTestState: Equatable {
+        case idle, preparing, done
+        case playing(Int)
+        case failure(String)
+    }
     @State private var spotifyConnectState: SpotifyConnectState = .idle
 
     @State private var checkpointsInput: String = DictationSnapshot.shared.checkpointsString
@@ -769,9 +777,10 @@ struct SettingsView: View {
             if voiceProvider.needsAPIKey {
                 voiceAPIKeyRow
             }
+            sentenceTestRow
         }
         .onAppear(perform: refreshVoiceAPIKeyState)
-        .onChange(of: appState.voiceProviderID) { _, _ in refreshVoiceAPIKeyState(); voiceTestState = .idle }
+        .onChange(of: appState.voiceProviderID) { _, _ in refreshVoiceAPIKeyState(); voiceTestState = .idle; stopSentenceTest() }
         .onChange(of: appState.voiceModelID) { _, _ in voiceTestState = .idle }
         .onChange(of: appState.voiceID) { _, _ in voiceTestState = .idle }
     }
@@ -840,6 +849,66 @@ struct SettingsView: View {
         voiceTestState = .idle
         refreshVoiceAPIKeyState()
         if saved, appState.voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+    }
+
+    /// Reads `JarvisVoice.testSentences` with the chosen provider/model/voice, so voices can be
+    /// compared by ear without speaking. Works for local providers too (waits for the server).
+    private var sentenceTestRow: some View {
+        HStack(spacing: 8) {
+            if sentenceTestTask == nil {
+                Button("Test cümlelerini oku", action: startSentenceTest)
+                    .disabled(voiceProvider.needsAPIKey && !voiceAPIKeyStored)
+            } else {
+                Button("Durdur", action: stopSentenceTest)
+            }
+            switch sentenceTestState {
+            case .idle:
+                Text("Seçili sesle \(JarvisVoice.testSentences.count) zor cümle okur (Türkçe harfler, soru, sayı, uzun cümle)\(voiceProvider.needsAPIKey ? ", \(JarvisVoice.testSentences.count) istek" : "").")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .preparing:
+                ProgressView().controlSize(.small)
+                Text("Ses hazırlanıyor…").foregroundStyle(.secondary)
+            case .playing(let index):
+                Label("Cümle \(index)/\(JarvisVoice.testSentences.count)", systemImage: "speaker.wave.2.fill")
+            case .done:
+                Label("Bitti — süreler log'da ([Voice] Test …)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .failure(let message):
+                Label(message, systemImage: "xmark.octagon.fill")
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .controlSize(.small)
+        .font(.caption2)
+    }
+
+    private func startSentenceTest() {
+        sentenceTestState = .preparing
+        sentenceTestTask = Task {
+            let error = await JarvisVoice.shared.speakTestSentences { index in
+                sentenceTestState = .playing(index)
+            }
+            switch error {
+            case nil: sentenceTestState = .done
+            case .cancelled?: sentenceTestState = .idle
+            case .notReady?:
+                sentenceTestState = .failure(voiceProvider.needsAPIKey
+                    ? "API anahtarı yok."
+                    : "Yerel ses sunucusu açılamadı. Kurulumu (yukarıdaki setup.sh) ve log'u kontrol edin.")
+            case let error?: sentenceTestState = .failure(error.userMessage)
+            }
+            sentenceTestTask = nil
+        }
+    }
+
+    private func stopSentenceTest() {
+        guard let task = sentenceTestTask else { return }
+        task.cancel()
+        JarvisVoice.shared.stop()
+        sentenceTestTask = nil
+        sentenceTestState = .idle
     }
 
     private func testVoice() {

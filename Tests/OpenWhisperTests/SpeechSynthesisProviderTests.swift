@@ -59,18 +59,48 @@ final class SpeechSynthesisProviderTests: XCTestCase {
 
     // MARK: Registry and settings
 
-    func testDefaultsToLocalOmniVoice() {
-        XCTAssertEqual(store.providerID, "local")
+    func testDefaultsToPocketTTS() {
+        XCTAssertEqual(store.providerID, "pocket")
+        XCTAssertEqual(store.modelID(for: "pocket"), LocalPocketTTSProvider.voiceModel)
         XCTAssertEqual(store.modelID(for: "local"), LocalOmniVoiceProvider.voiceModel)
         XCTAssertEqual(store.modelID(for: "gemini"), "gemini-3.8-flash-lite-tts")
     }
 
     func testRegistryListsBothProvidersWithGeminiModels() {
-        XCTAssertEqual(SpeechProviders.all.map(\.id), ["local", "gemini"])
+        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "local", "ema", "gemini"])
         XCTAssertEqual(SpeechProviders.descriptor(for: "gemini").models.map(\.id),
                        ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"])
         XCTAssertFalse(SpeechProviders.descriptor(for: "local").needsAPIKey)
         XCTAssertTrue(SpeechProviders.descriptor(for: "gemini").needsAPIKey)
+    }
+
+    @MainActor
+    func testEMALightningIsALocalOptionWithItsOwnCache() {
+        let ema = SpeechProviders.descriptor(for: "ema")
+        XCTAssertEqual(ema.id, "ema")
+        XCTAssertFalse(ema.needsAPIKey)
+        XCTAssertEqual(ema.models.map(\.id), [LocalEMALightningProvider.voiceModel])
+        store.providerID = "ema"
+        XCTAssertEqual(store.providerID, "ema")
+        let provider = store.makeProvider()
+        XCTAssertTrue(provider === LocalEMALightningProvider.shared)
+        XCTAssertNotEqual(provider.cacheIdentity, LocalOmniVoiceProvider.shared.cacheIdentity)
+        XCTAssertEqual(SpeechProviders.defaultID, "pocket")
+    }
+
+    @MainActor
+    func testPocketTTSIsALocalOptionWithItsOwnCache() {
+        let pocket = SpeechProviders.descriptor(for: "pocket")
+        XCTAssertEqual(pocket.id, "pocket")
+        XCTAssertFalse(pocket.needsAPIKey)
+        XCTAssertEqual(pocket.models.map(\.id), [LocalPocketTTSProvider.voiceModel])
+        store.providerID = "pocket"
+        XCTAssertEqual(store.providerID, "pocket")
+        let provider = store.makeProvider()
+        XCTAssertTrue(provider === LocalPocketTTSProvider.shared)
+        XCTAssertNotEqual(provider.cacheIdentity, LocalOmniVoiceProvider.shared.cacheIdentity)
+        XCTAssertNotEqual(provider.cacheIdentity, LocalEMALightningProvider.shared.cacheIdentity)
+        XCTAssertNotEqual(LocalPocketTTSProvider.port, LocalEMALightningProvider.port)
     }
 
     func testProviderAndModelSurviveARestart() {
@@ -84,7 +114,7 @@ final class SpeechSynthesisProviderTests: XCTestCase {
     func testUnknownStoredValuesFallBackToDefaults() {
         defaults.set("elevenlabs", forKey: SpeechSettingsStore.providerKey)
         defaults.set("gemini-1-tts", forKey: SpeechSettingsStore.modelKey(for: "gemini"))
-        XCTAssertEqual(store.providerID, "local")
+        XCTAssertEqual(store.providerID, "pocket")
         XCTAssertEqual(store.modelID(for: "gemini"), "gemini-3.8-flash-lite-tts")
     }
 

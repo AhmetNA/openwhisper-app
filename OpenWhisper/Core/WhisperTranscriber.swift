@@ -276,17 +276,20 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
 
         var text = selectedPass.text
+        var words = selectedPass.words
         let filteredText = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
         if filteredText != text {
             owLog("[Whisper] Removed forbidden subtitle credit artifact from timed result")
-            // Removing words invalidates the decoder's word timestamps.
             text = filteredText
-            return text.isEmpty ? .textOnly("") : .textOnly(text)
         }
-        let cleanedText = Self.removeLoopsAndOutros(from: text)
-        if cleanedText != text {
-            // The word timestamps no longer match the text; keep the text only.
-            return cleanedText.isEmpty ? .textOnly("") : .textOnly(cleanedText)
+        text = Self.removeLoopsAndOutros(from: text)
+        if text != selectedPass.text {
+            // Returning text without timings used to make diarization drop the whole batch
+            // ("Metin çıkarılamadı" after 30 s of speech). Keep the timings of the surviving words.
+            words = Self.alignWords(words, to: text)
+            owLog("[Whisper] Timed result cleaned; kept \(words.count)/\(selectedPass.words.count) word timings")
+            if text.isEmpty { return .textOnly("") }
+            if words.isEmpty { return .textOnly(text) }
         }
 
         let hallucinations: Set<String> = [
@@ -299,7 +302,46 @@ final class WhisperTranscriber: @unchecked Sendable {
             return .textOnly("")
         }
 
-        return TimedTranscriptionResult(text: text, words: selectedPass.words)
+        return TimedTranscriptionResult(text: text, words: words)
+    }
+
+    /// Keeps, in order, the timed words that still appear in `cleanedText` after an artifact,
+    /// outro, or loop was removed from the decoded text. A word Whisper split into pieces
+    /// ("Cer" + "vis") is kept when its pieces together form one remaining token.
+    static func alignWords(_ words: [WhisperTimedWord], to cleanedText: String) -> [WhisperTimedWord] {
+        func normalized(_ text: String) -> String {
+            String(text.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(Character.init))
+        }
+        let tokens = cleanedText.split(whereSeparator: \.isWhitespace).map { normalized(String($0)) }.filter { !$0.isEmpty }
+        let keys = words.map { normalized($0.word) }
+        var kept: [WhisperTimedWord] = []
+        var tokenIndex = 0
+        var wordIndex = 0
+        while wordIndex < words.count, tokenIndex < tokens.count {
+            if keys[wordIndex].isEmpty {
+                wordIndex += 1
+                continue
+            }
+            var joined = ""
+            var end = wordIndex
+            while end < words.count, joined.count < tokens[tokenIndex].count, end - wordIndex < 6 {
+                joined += keys[end]
+                end += 1
+            }
+            if joined == tokens[tokenIndex] {
+                kept.append(contentsOf: words[wordIndex..<end])
+                wordIndex = end
+                tokenIndex += 1
+            } else if let skip = (1...3).first(where: {
+                tokenIndex + $0 < tokens.count && tokens[tokenIndex + $0] == keys[wordIndex]
+            }) {
+                // A cleaned token with no timed word of its own; resync on the next ones.
+                tokenIndex += skip
+            } else {
+                wordIndex += 1
+            }
+        }
+        return kept
     }
 
     /// Collapses decoding loops ("abone ol" ×70), strips a YouTube outro from the end, and

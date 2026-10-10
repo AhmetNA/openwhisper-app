@@ -91,6 +91,33 @@ else
     echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run tts_server/setup.sh"
 fi
 
+# Experimental local voice (Settings › Sesli cevap › EMA Lightning): keep the installed server
+# script in sync. The venv and the model come from tts_ema_server/setup.sh (once).
+EMA_DEST="$HOME/Library/Application Support/OpenWhisper/tts-ema"
+if [ -x "$EMA_DEST/.venv/bin/python" ]; then
+    cp tts_ema_server/server.py "$EMA_DEST/"
+    echo "==> Updated EMA Lightning server in $EMA_DEST"
+fi
+
+# Default local voice (Settings › Sesli cevap › Pocket TTS): keep the installed server
+# script and the Jarvis reference in sync. The venv and the model come from
+# tts_pocket_server/setup.sh (once).
+POCKET_DEST="$HOME/Library/Application Support/OpenWhisper/tts-pocket"
+if [ -x "$POCKET_DEST/.venv/bin/python" ]; then
+    cp tts_pocket_server/server.py tts_server/jarvis_ref.wav "$POCKET_DEST/"
+    echo "==> Updated Pocket TTS server in $POCKET_DEST"
+else
+    echo "NOTE: Default voice (Pocket TTS) not installed; spoken replies stay silent until you run tts_pocket_server/setup.sh"
+fi
+
+# English voice (Settings › Sesli cevap › Piper Jarvis): keep the installed server script in
+# sync. The venv and the model come from tts_piper_server/setup.sh (once).
+PIPER_DEST="$HOME/Library/Application Support/OpenWhisper/tts-piper"
+if [ -x "$PIPER_DEST/.venv/bin/python" ]; then
+    cp tts_piper_server/server.py "$PIPER_DEST/"
+    echo "==> Updated Piper Jarvis server in $PIPER_DEST"
+fi
+
 # Alternative speech model (Settings › Konuşma modeli › Qwen3-ASR): keep the installed server
 # script in sync. The venv and the model come from asr_server/setup.sh (once).
 ASR_DEST="$HOME/Library/Application Support/OpenWhisper/asr"

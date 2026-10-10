@@ -24,9 +24,10 @@ final class JarvisChat {
 
     /// Sentences of the reply as they are written. Ends early (possibly empty) when Ollama is
     /// unreachable or slow; the finished reply is added to the conversation history.
-    func reply(to text: String, model: String) -> AsyncStream<String> {
+    /// `language` is the reply voice's: an English voice gets English answers.
+    func reply(to text: String, model: String, language: ReplyLanguage = .turkish) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date())]]
+        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language)]]
             + history
             + [["role": "user", "content": text]]
 
@@ -37,8 +38,11 @@ final class JarvisChat {
                 var full = ""
                 var buffer = ""
                 var firstSentenceMs: Int?
+                // After "anlayamadım…" the model only restates it ("Daha açık bir ifade
+                // kullanabilir misiniz?"); the rest of the reply is dropped.
+                var saidNotUnderstood = false
                 func emit(_ sentences: [String]) {
-                    for original in sentences.map(Self.speakable) where !original.isEmpty {
+                    for original in sentences.map(Self.speakable) where !original.isEmpty && !saidNotUnderstood {
                         var sentence = Self.preventUnsupportedActionClaim(original, for: text)
                         if sentence != original {
                             owLog("[Chat] Blocked unsupported action claim: '\(original)'")
@@ -46,10 +50,16 @@ final class JarvisChat {
                             // The model's own wording varies ("bu sohbet üzerinden … yeteneğim yok");
                             // one fixed sentence keeps it short and says what actually happened.
                             sentence = Self.unrecognizedCommandReply
+                        } else if Self.saysNotUnderstood(original) {
+                            // One fixed sentence that already asks the user to say it again.
+                            sentence = Self.notUnderstoodReply
                         }
                         if sentence == Self.unrecognizedCommandReply {
                             owLog("[Chat] Command not recognized by any router: '\(text)'")
+                        }
+                        if sentence == Self.unrecognizedCommandReply || sentence == Self.notUnderstoodReply {
                             // Said once is enough; drop the model's follow-up sentences.
+                            saidNotUnderstood = true
                             if full.contains(sentence) { continue }
                         }
                         if firstSentenceMs == nil { firstSentenceMs = Int(Date().timeIntervalSince(started) * 1000) }
@@ -121,7 +131,7 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    nonisolated static func systemPrompt(now: Date) -> String {
+    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "tr_TR")
         formatter.dateFormat = "d MMMM yyyy EEEE, HH:mm"
@@ -131,13 +141,29 @@ final class JarvisChat {
         Kurallar:
         - Çok kısa ol: genelde tek cümle, en fazla iki kısa cümle. Kullanıcı açıkça detay isterse en fazla dört cümle.
         - Madde işareti, başlık, markdown, emoji, kod kullanma. Düz konuşma dili.
-        - Kullanıcı hangi dilde konuştuysa o dilde cevap ver; genelde Türkçe.
-        - Kullanıcıya bazen "patron" ya da "efendim" de; bir cevapta en fazla bir kez, her cevapta değil.
+        \(languageRule(language))
         - Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle.
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
         - Kendi adını ("Jarvis") söyleme.
         Şu an: \(formatter.string(from: now)).
         """
+    }
+
+    /// The unrecognized-command sentence stays Turkish in both: the exact-match guard in
+    /// `reply` needs it, and `JarvisVoice` translates it for an English voice.
+    nonisolated private static func languageRule(_ language: ReplyLanguage) -> String {
+        switch language {
+        case .turkish:
+            return """
+            - Kullanıcı hangi dilde konuştuysa o dilde cevap ver; genelde Türkçe.
+            - Kullanıcıya bazen "patron" ya da "efendim" de; bir cevapta en fazla bir kez, her cevapta değil.
+            """
+        case .english:
+            return """
+            - Her zaman İngilizce cevap ver, kullanıcı Türkçe konuşsa bile. Tek istisna aşağıdaki sabit cümle: onu aynen yazıldığı gibi söyle.
+            - Kullanıcıya bazen "sir" de; bir cevapta en fazla bir kez, her cevapta değil.
+            """
+        }
     }
 
     /// Complete sentences at the start of `buffer`, removed from it. A sentence ends at . ! ?
@@ -175,6 +201,23 @@ final class JarvisChat {
     /// What an action request that no command router recognised gets back: honest (nothing ran)
     /// and actionable (say it again), instead of a "can't do that from this chat" refusal.
     nonisolated static let unrecognizedCommandReply = "Bunu komut olarak anlayamadım patron, biraz daha açık söyler misin?"
+
+    /// The model didn't understand the user; it is replaced by `notUnderstoodReply`.
+    nonisolated static let notUnderstoodReply = "Anlayamadım patron, biraz daha açık söyler misin?"
+
+    nonisolated static func saysNotUnderstood(_ sentence: String) -> Bool {
+        let lowered = sentence.lowercased(with: Locale(identifier: "tr_TR"))
+        return ["anlayamadım", "anlamadım", "didn't catch", "did not catch"].contains(where: lowered.contains)
+    }
+
+    /// The answer asks the user something back ("…biraz daha açık söyler misin?", "anlayamadım"),
+    /// so Jarvis briefly listens for the answer without "Hey Jarvis".
+    nonisolated static func awaitsAnswer(_ reply: String) -> Bool {
+        let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'”’)"))
+        guard !text.isEmpty else { return false }
+        return text.hasSuffix("?") || saysNotUnderstood(text)
+    }
 
     /// "Bu sohbetten o işlemi gerçekleştiremedim", "bu sohbet üzerinden … yeteneğim bulunmuyor".
     nonisolated static func isCapabilityRefusal(_ reply: String) -> Bool {

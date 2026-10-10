@@ -30,6 +30,9 @@ final class SetFitDecider {
             case .setfitGemma: return "SetFit EmbeddingGemma (deneysel)"
             }
         }
+        /// Used until the user picks one. Without the decider installed, every decision still
+        /// falls through to Ollama (`prepare` reports "Kurulu değil").
+        static let defaultEngine: Engine = .setfit
         var usesSetFit: Bool { self != .ollama }
         /// `server.py --variant`.
         var serverVariant: String { self == .setfitGemma ? "embeddinggemma" : "minilm" }
@@ -73,7 +76,7 @@ final class SetFitDecider {
     private nonisolated static let readyFlag = OSAllocatedUnfairLock(initialState: false)
     nonisolated static var isReady: Bool { readyFlag.withLock { $0 } }
     nonisolated static var isEnabled: Bool {
-        UserDefaults.standard.string(forKey: defaultsKey).flatMap(Engine.init(rawValue:))?.usesSetFit ?? false
+        (UserDefaults.standard.string(forKey: defaultsKey).flatMap(Engine.init(rawValue:)) ?? .defaultEngine).usesSetFit
     }
     /// SetFit is selected and its server answered /health.
     nonisolated static var isActive: Bool { isEnabled && isReady }

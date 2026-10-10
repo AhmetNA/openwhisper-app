@@ -47,4 +47,29 @@ enum AgentAppActivator {
         owLog("[Agent] \(agent.displayName) is not installed")
         return nil
     }
+
+    /// Brings a running app (back) to the front and waits until it is frontmost. Opening its
+    /// bundle works from a background menu-bar app and switches to its full-screen Space too.
+    static func bringToFront(_ app: NSRunningApplication, timeout: TimeInterval = 2) async -> Bool {
+        let pid = app.processIdentifier
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
+        if let url = app.bundleURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+        } else {
+            app.activate()
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+                // Let the window restore keyboard focus to its text field.
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        owLog("[Agent] \(app.localizedName ?? "?") did not come to the front in time")
+        return false
+    }
 }

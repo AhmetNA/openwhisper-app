@@ -139,6 +139,8 @@ enum RecordingTrigger: String, Codable, Sendable {
     case wakeWord
     case jarvisKey
     case confirmation
+    /// Jarvis asked something back ("anlayamadım…"): a short window for the answer.
+    case followUp
     case fnHold
     case fnSpace
     case keyboardShortcut
@@ -149,6 +151,7 @@ enum RecordingTrigger: String, Codable, Sendable {
         case .wakeWord: "Sesle (Hey Jarvis)"
         case .jarvisKey: "Jarvis tuşu"
         case .confirmation: "Jarvis onay cevabı"
+        case .followUp: "Jarvis'e cevap (uyandırmadan)"
         case .fnHold: "Fn basılı tutularak"
         case .fnSpace: "Fn + Space"
         case .keyboardShortcut: "⌘⌥⌃D"

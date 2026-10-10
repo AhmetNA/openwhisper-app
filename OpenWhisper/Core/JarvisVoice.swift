@@ -3,8 +3,9 @@ import CryptoKit
 import Foundation
 
 /// Speaks Jarvis's replies. The audio comes from the `SpeechSynthesisProvider` picked in
-/// Settings (local OmniVoice by default, or the Gemini API); this class owns everything else:
-/// playback, stop/interrupt, the timeout safety net, the disk cache and the Turkish spoken form.
+/// Settings (local Pocket TTS by default; Piper Jarvis, OmniVoice, EMA or the Gemini API as
+/// options); this class owns everything else: playback, stop/interrupt, the timeout safety net,
+/// the disk cache, the Turkish spoken form and, for an English voice, the English reply.
 /// Repeated short phrases ("Tamamdır.") are cached on disk per provider/model/voice, and for the
 /// local voice the acks are synthesized into that cache as soon as it is up.
 /// Playback uses `AVAudioPlayer`, never an `AVAudioEngine`, so it can't disturb mic capture.
@@ -21,6 +22,9 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private let cacheDirectory: URL
     private var provider: SpeechSynthesisProvider
     private var player: AVAudioPlayer?
+    /// Replies play 20% quieter than the system volume (80% → heard at 64%). This is the
+    /// player's own gain; the system output volume itself is never changed.
+    static let replyVolume: Float = 0.8
     private var finished: CheckedContinuation<Void, Never>?
     /// Bumped by `stop()` so a reply still being synthesized doesn't start playing afterwards.
     private var generation: UInt64 = 0
@@ -28,6 +32,12 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private var sentenceProducer: Task<Void, Never>?
     /// Cache identities whose acks were already prefetched this run.
     private var prefetched: Set<String> = []
+    /// The local model that translates replies for an English voice (Settings' Ollama model).
+    var translationModel = LLMCleanup.defaultModel
+    /// Turkish → English for an English voice; nil = Ollama with `translationModel`. Tests swap it.
+    var translator: ((String) async -> String?)?
+    /// Reads a reply in Turkish when an English voice can't get it translated (Ollama off).
+    var turkishFallback: () -> SpeechSynthesisProvider = { LocalPocketTTSProvider.shared }
 
     init(settings: SpeechSettingsStore = .standard,
          provider: SpeechSynthesisProvider? = nil,
@@ -39,6 +49,8 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     }
 
     var isSpeaking: Bool { player?.isPlaying ?? false }
+    /// The language replies are spoken in, i.e. what the chat should answer in.
+    var replyLanguage: ReplyLanguage { provider.replyLanguage }
 
     // MARK: - Provider
 
@@ -54,6 +66,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     }
 
     static let testPhrase = "Merhaba, ben Jarvis. Sesim böyle duyulacak."
+    static let englishTestPhrase = "Hello, I am Jarvis. This is how I will sound."
 
     /// Settings' "Anahtarı test et": one fresh request with the chosen model and voice, played
     /// at once and never cached. nil when it was heard; otherwise why not.
@@ -63,8 +76,9 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         let provider = self.provider
         guard provider.isReady else { return .notReady(provider.notReadyReason) }
         let started = Date()
+        let phrase = provider.replyLanguage == .english ? Self.englishTestPhrase : Self.spokenForm(Self.testPhrase)
         let task = Task { () -> Result<Data, SpeechSynthesisError> in
-            do { return .success(try await provider.synthesize(Self.spokenForm(Self.testPhrase))) }
+            do { return .success(try await provider.synthesize(phrase)) }
             catch let error as SpeechSynthesisError { return .failure(error) }
             catch { return .failure(.failed("unexpected error")) }
         }
@@ -82,9 +96,87 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             return error
         case .success(let audio):
             owLog("[Voice] \(provider.displayName) test OK")
-            _ = await play(audio, text: Self.testPhrase, started: started, generation: myGeneration)
+            _ = await play(audio, text: phrase, started: started, generation: myGeneration)
             return nil
         }
+    }
+
+    /// Settings' "Test cümlelerini oku": sentences that stress the weak spots of Turkish TTS
+    /// (ğ/ı/ş, questions, a long sentence, numbers, an English name, short acks), so models can
+    /// be compared by ear without saying anything. Keep in step with `scripts/tts-compare`.
+    static let testSentences = [
+        "Tamamdır, efendim.",
+        "Saat 14:05, patron. Bugün üç toplantınız var.",
+        "Yarın sabah dokuzda Ayşe Hanım'la görüşmeyi hatırlatayım mı?",
+        "Spotify'da Tarkan çalıyorum, sesi biraz açtım.",
+        "Ağaçların gölgesinde ılık bir rüzgâr eserken, şoför çocuğu güvenle okula bıraktı ve ışıklar yanınca geri döndü.",
+        "Üzgünüm, bunu anlayamadım. Bir kez daha söyler misiniz?",
+    ]
+
+    /// `testSentences` for an English voice: digits, a name, a question, a long sentence.
+    static let englishTestSentences = [
+        "Right away, sir.",
+        "It is 2:05 in the afternoon, sir. You have three meetings today.",
+        "Shall I remind you about the meeting with Pepper tomorrow at nine?",
+        "I'm playing Daft Punk on Spotify and turned the volume up a little.",
+        "While the wind blew softly through the trees, the driver took the children safely to school and came back when the lights turned green.",
+        "I'm sorry, I didn't catch that. Could you say it again?",
+    ]
+
+    /// Reads `testSentences` with the chosen provider: waits for a local server to load first,
+    /// never touches the cache (so the timings are honest) and synthesizes the next sentence
+    /// while the current one plays. `progress` gets the 1-based index of the sentence playing.
+    /// nil when all were heard; otherwise why not.
+    func speakTestSentences(progress: @escaping (Int) -> Void = { _ in }) async -> SpeechSynthesisError? {
+        stop()
+        let myGeneration = generation
+        let provider = self.provider
+        if !provider.isReady { await provider.prepare() }
+        // "Durdur" or a new recording while the local server was loading.
+        guard provider === self.provider, myGeneration == generation, !Task.isCancelled else { return .cancelled }
+        guard provider.isReady else { return .notReady(provider.notReadyReason) }
+        let english = provider.replyLanguage == .english
+        let sentences = english ? Self.englishTestSentences : Self.testSentences
+        owLog("[Voice] \(provider.displayName) test: \(sentences.count) sentences")
+
+        func make(_ index: Int) -> Task<Result<Data, SpeechSynthesisError>, Never> {
+            Task {
+                let started = Date()
+                do {
+                    let data = try await provider.synthesize(english ? ReplyTranslator.spokenTimes(sentences[index]) : Self.spokenForm(sentences[index]))
+                    owLog("[Voice] Test \(index + 1): synthesized in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+                    return .success(data)
+                } catch let error as SpeechSynthesisError { return .failure(error) }
+                catch { return .failure(.failed("unexpected error")) }
+            }
+        }
+
+        var next = make(0)
+        for index in sentences.indices {
+            let current = next
+            // Held as `synthesis` so `stop()` (a new recording) cancels the request too.
+            let wrapped = Task { () -> Data? in
+                await withTaskCancellationHandler { try? await current.value.get() } onCancel: { current.cancel() }
+            }
+            synthesis = wrapped
+            let result = await current.value
+            if synthesis == wrapped { synthesis = nil }
+            guard myGeneration == generation else { return .cancelled }
+            switch result {
+            case .failure(let error):
+                owLog("[Voice] \(provider.displayName) test failed at \(index + 1): \(error)")
+                return error
+            case .success(let audio):
+                if index + 1 < sentences.count { next = make(index + 1) }
+                progress(index + 1)
+                guard await play(audio, text: sentences[index], started: Date(), generation: myGeneration) else {
+                    next.cancel()
+                    return .cancelled
+                }
+            }
+        }
+        owLog("[Voice] \(provider.displayName) test OK")
+        return nil
     }
 
     /// Gets the current provider ready (the local server takes ~15 s to load), then fills the
@@ -111,7 +203,11 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         for phrase in phrases where cachedAudio(for: phrase, identity: identity) == nil {
             guard provider === self.provider else { break }
             guard !isSpeaking, synthesis == nil else { continue }
-            if let data = try? await provider.synthesize(Self.spokenForm(phrase)) {
+            // An English voice gets the fixed English ack (never a translation from the model),
+            // filed under the Turkish text that `audio(for:)` looks up.
+            let spoken = provider.replyLanguage == .english ? ReplyTranslator.fixedEnglish(phrase) : Self.spokenForm(phrase)
+            guard let spoken else { continue }
+            if let data = try? await provider.synthesize(spoken) {
                 store(data, for: phrase, identity: identity)
                 made += 1
             }
@@ -175,6 +271,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             for attempt in 1...4 {
                 let candidate = try AVAudioPlayer(data: audio)
                 candidate.delegate = self
+                candidate.volume = Self.replyVolume
                 self.player = candidate
                 candidate.prepareToPlay()
                 if candidate.play() {
@@ -259,23 +356,60 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             Task { await prepare() }
             return nil
         }
-        let spoken = Self.spokenForm(text)
-        let task = Task { () -> Data? in
+        let task = Task { () -> (data: Data, cacheable: Bool)? in
+            var voice = provider
+            var spoken = Self.spokenForm(text)
+            var cacheable = Self.isCacheable(text)
+            if provider.replyLanguage == .english {
+                switch await self.english(for: text) {
+                case .some((let english, let fixed)):
+                    // Digits stay digits: espeak reads them in English. Only fixed acks and
+                    // sentences already in English are cached; a model's translation may vary.
+                    spoken = ReplyTranslator.spokenTimes(english)
+                    cacheable = cacheable && fixed
+                case nil:
+                    guard !Task.isCancelled else { return nil }
+                    // Never cached: it would be filed under the English voice.
+                    voice = self.turkishFallback()
+                    cacheable = false
+                    owLog("[Voice] No English translation, reading it in Turkish with \(voice.displayName)")
+                }
+            }
             do {
-                return try await provider.synthesize(spoken)
+                return (try await voice.synthesize(spoken), cacheable)
             } catch SpeechSynthesisError.cancelled {
                 return nil
             } catch {
                 // Never the text or a key: the error is a status summary.
-                owLog("[Voice] \(provider.displayName) synthesis failed: \(error)")
+                owLog("[Voice] \(voice.displayName) synthesis failed: \(error)")
                 return nil
             }
         }
-        synthesis = task
-        let data = await task.value
-        if synthesis == task { synthesis = nil }
-        if let data, Self.isCacheable(text) { store(data, for: text, identity: identity) }
-        return data
+        let wrapped = Task { () -> Data? in
+            await withTaskCancellationHandler { await task.value?.data } onCancel: { task.cancel() }
+        }
+        synthesis = wrapped
+        let result = await task.value
+        if synthesis == wrapped { synthesis = nil }
+        if let result, result.cacheable { store(result.data, for: text, identity: identity) }
+        return result?.data
+    }
+
+    /// `text` in English and whether that is fixed (an ack from the table, or text that already
+    /// was English); nil when the local model couldn't translate it.
+    private func english(for text: String) async -> (String, fixed: Bool)? {
+        if let fixed = ReplyTranslator.fixedEnglish(text) { return (fixed, true) }
+        if ReplyTranslator.isClearlyEnglish(text) { return (text, true) }
+        let started = Date()
+        let translated: String?
+        if let translator {
+            translated = await translator(text)
+        } else {
+            translated = await ReplyTranslator.translate(text, model: translationModel)
+        }
+        guard let translated else { return nil }
+        owLog("[Voice] Translated in \(Int(Date().timeIntervalSince(started) * 1000)) ms: '\(text)' → '\(translated)'")
+        return (translated, false)
     }
 
     // MARK: - Cache

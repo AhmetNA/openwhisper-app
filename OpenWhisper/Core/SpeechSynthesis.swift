@@ -25,10 +25,18 @@ protocol SpeechSynthesisProvider: AnyObject {
     /// Returns playable WAV data for `text` (already in spoken form). Must honour task
     /// cancellation. Errors must not contain the text or any credential.
     func synthesize(_ text: String) async throws -> Data
+    /// The language this voice speaks. An English voice gets every reply in English:
+    /// `JarvisVoice` translates the Turkish ones and the chat is told to answer in English.
+    var replyLanguage: ReplyLanguage { get }
 }
 
 extension SpeechSynthesisProvider {
     func suspend() {}
+    var replyLanguage: ReplyLanguage { .turkish }
+}
+
+enum ReplyLanguage: Equatable {
+    case turkish, english
 }
 
 enum SpeechSynthesisError: Error, Equatable, CustomStringConvertible {
@@ -114,14 +122,18 @@ struct SpeechProviderDescriptor: Identifiable {
 }
 
 enum SpeechProviders {
-    static let defaultID = LocalOmniVoiceProvider.descriptor.id
+    /// Pocket TTS: small (~1.0 GB RAM), fast, Jarvis cloned in Turkish.
+    static let defaultID = LocalPocketTTSProvider.descriptor.id
 
     static let all: [SpeechProviderDescriptor] = [
+        LocalPocketTTSProvider.descriptor,
+        LocalPiperJarvisProvider.descriptor,
         LocalOmniVoiceProvider.descriptor,
+        LocalEMALightningProvider.descriptor,
         GeminiSpeechProvider.descriptor,
     ]
 
-    /// Unknown ids fall back to the local provider.
+    /// Unknown ids fall back to the default provider.
     static func descriptor(for id: String?) -> SpeechProviderDescriptor {
         all.first { $0.id == id } ?? all.first { $0.id == defaultID }!
     }
