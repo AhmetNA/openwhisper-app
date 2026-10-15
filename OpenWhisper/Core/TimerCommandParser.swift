@@ -89,8 +89,8 @@ enum TimerCommandParser {
     // MARK: - Clock alarm
 
     /// "saat 7'de alarm kur", "sabah 7'ye alarm kur", "yarın sabah 7 buçukta beni uyandır",
-    /// "akşam 8'de beni uyar". Hours 1–11 without a period are the next such hour from now
-    /// (7 at 15:00 → 19:00), except "uyandır", which means the morning.
+    /// "akşam 8'de beni uyar". Same rule as calendar events: 1–7 without "sabah" is the
+    /// afternoon, except "uyandır", which means the morning; 8–11 is the next such hour.
     private static func parseClockAlarm(_ t: String, now: Date, calendar: Calendar) -> Command? {
         let isWake = matches(t, #"\b\#(wakeVerb)\#(tail)"#)
         let isAlarm = matches(t, #"\b\#(timerNoun) \#(startVerb)\#(tail)"#)
@@ -111,7 +111,8 @@ enum TimerCommandParser {
         let evening = matches(t, #"\b(?:akşam|akşamüstü|gece|öğleden sonra|öğlen|öğle)\b"#)
         let morning = matches(t, #"\b(?:sabah|sabahleyin)\b"#)
         let tomorrow = matches(t, #"\byarın\b"#)
-        if evening, hour < 12, !(matches(t, #"\bgece\b"#) && hour <= 4) { hour += 12 }
+        let lateNight = matches(t, #"\bgece\b"#) && hour <= 4
+        if hour < 12, !lateNight, evening || (!morning && !isWake && (1...7).contains(hour)) { hour += 12 }
 
         var comps = calendar.dateComponents([.year, .month, .day], from: now)
         comps.hour = hour

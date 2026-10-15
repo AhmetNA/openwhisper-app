@@ -75,6 +75,12 @@ final class TimerCommandParserTests: XCTestCase {
         XCTAssertEqual(parse("Akşam 8'de beni uyar"), .alarm(at: at(day: 15, 20), label: nil))
         XCTAssertEqual(parse("Saat 16:45'te alarm kur"), .alarm(at: at(day: 15, 16, 45), label: nil))
         XCTAssertEqual(parse("Saat 14'te alarm kur"), .alarm(at: at(day: 16, 14), label: nil))
+        // Like calendar events: 1–7 is the afternoon unless "sabah" (3 at 15:30 → tomorrow 15:00).
+        XCTAssertEqual(parse("Saat 3'te alarm kur"), .alarm(at: at(day: 16, 15), label: nil))
+        XCTAssertEqual(parse("Sabah 3'te alarm kur"), .alarm(at: at(day: 16, 3), label: nil))
+        XCTAssertEqual(parse("Gece 2'de beni uyar"), .alarm(at: at(day: 16, 2), label: nil))
+        // 8–11 is the next such hour: 9 at 15:30 → 21:00 today.
+        XCTAssertEqual(parse("Saat 9'da alarm kur"), .alarm(at: at(day: 15, 21), label: nil))
     }
 
     func testRemainingAndCancel() {

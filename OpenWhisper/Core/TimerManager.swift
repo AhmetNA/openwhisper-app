@@ -41,6 +41,8 @@ final class TimerManager {
 
     /// Called on the main actor when a timer goes off (after the first chimes have started).
     var onFire: ((JarvisTimer) -> Void)?
+    /// Called when the sounding alarm stops: stopped, snoozed, cancelled or gave up.
+    var onRingingEnded: (() -> Void)?
     /// Called when one of `ReminderManager`'s reminders comes due while Jarvis runs.
     var onReminderDue: ((ReminderManager.Reminder) -> Void)?
 
@@ -132,6 +134,7 @@ final class TimerManager {
         ringing = nil
         ringTask?.cancel()
         ringTask = nil
+        onRingingEnded?()
         notificationCenter?.removeDeliveredNotifications(withIdentifiers: [Self.notificationPrefix + current.id.uuidString])
     }
 
@@ -178,6 +181,7 @@ final class TimerManager {
             guard let self, self.ringing?.id == timer.id else { return }
             owLog("[Timer] Nobody stopped \(timer.id); giving up")
             self.ringing = nil
+            self.onRingingEnded?()
         }
     }
 

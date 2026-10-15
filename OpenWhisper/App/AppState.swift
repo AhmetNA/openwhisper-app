@@ -2531,7 +2531,14 @@ final class AppState {
     private func setupTimers() {
         let timers = TimerManager.shared
         timers.onFire = { [weak self] timer in
+            // Music pauses under the chimes, as it does for a voice command.
+            self?.recordingMedia.begin()
             Task { @MainActor in await self?.announceTimer(timer) }
+        }
+        timers.onRingingEnded = { [weak self] in
+            // A recording in progress (the stop/snooze answer) resumes it when it ends.
+            guard let self, self.recordingState != .recording else { return }
+            self.recordingMedia.end(resuming: true)
         }
         timers.onReminderDue = { [weak self] reminder in
             Task { @MainActor in
