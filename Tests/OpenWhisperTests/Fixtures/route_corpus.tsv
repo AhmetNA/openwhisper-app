@@ -207,3 +207,12 @@ voice	system	parlaklığı%70 yap.
 voice	typed	bu kodekse gönder şu anda pil tüketimi ne durumda yeni uygulamayı kur ve sessiz bir ortamda ne olduğunu test edelim gönder
 voice	typed	İncele şu anda yeni gelen setfit ve normal bizim lama modelinde hani gemaya düşüyor ya onları incele ve bana hız farkını söyle ne kadar hız değişti gönder.
 voice	typed	şu ana kadar olan kodların hepsini komikler sonrasında artık bundan sonra sen bu uygulamaya ne eklerdin ne düşünürdün onları bana yaz.
+voice	timer	20 dakikalık alarm kur
+voice	timer	10 dakika sonra beni uyar
+voice	timer	10 dakika sonra bana hatırlat
+voice	timer	Zamanlayıcı ne kadar kaldı?
+voice	timer	Alarmı iptal et
+voice	timer	Yarın sabah 7'de beni uyandır
+voice	reminder	Yarım saat sonra çayı hatırlat
+keys	dictation	10 dakika sonra çıkıyorum
+keys	dictation	Alarm sesi çok yüksek

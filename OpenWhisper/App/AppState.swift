@@ -809,6 +809,7 @@ final class AppState {
         reminderManager = ReminderManager.shared
         let notifGranted = await reminderManager?.requestPermission() ?? false
         owLog("[OpenWhisper] Notification permission: \(notifGranted)")
+        setupTimers()
         owLog("[OpenWhisper] Ready!")
     }
 
@@ -2331,6 +2332,22 @@ final class AppState {
                 return
             }
 
+            // "20 dakikalık alarm kur", "10 dakika sonra beni uyar", "saat 7'de beni uyandır",
+            // "zamanlayıcı ne kadar kaldı"; while one rings, "tamam" / "5 dakika ertele".
+            let timers = TimerManager.shared
+            if session.acceptsCommands,
+               let timerCommand = TimerCommandParser.parse(trimmed, ringing: timers.ringing != nil, active: !timers.timers.isEmpty) {
+                session.latency.finishDecision(route: "zamanlayıcı")
+                owLog("[Route] timer (\(timerCommand))")
+                self.lastTranscription = text
+                let status = timers.perform(timerCommand)
+                owLog("[Result] Timer: \(status)")
+                session.latency.markOutput("zamanlayıcı")
+                self.showFlowBarMessage(status, durationMs: 3500)
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.timer(timerCommand, status: status)) }
+                return
+            }
+
             // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": in a Jarvis
             // session and with the dictation keys (`acceptsCommands`); "… bunu yaz" above types
             // them instead. A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
@@ -2458,16 +2475,17 @@ final class AppState {
                 session.latency.finishDecision(route: "hatırlatıcı")
                 owLog("[OpenWhisper] Reminder detected: \(text)")
                 self.lastTranscription = text
-                if self.ollamaAvailable {
-                    let actionStartedAt = session.latency.timestamp()
-                    let scheduled = await self.reminderManager?.handleReminder(text: text) ?? false
-                    session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı")
-                    session.latency.markOutput(scheduled ? "hatırlatıcı kuruldu" : "hatırlatıcı kurulamadı")
-                    owLog("[Result] Reminder \(scheduled ? "scheduled" : "not scheduled")")
-                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.reminder(scheduled: scheduled)) }
-                } else {
-                    owLog("[OpenWhisper] Cannot set reminder — Ollama not available")
-                    session.latency.markOutput("hatırlatıcı modeli kullanılamıyor")
+                // The deterministic parser handles most phrasings; Ollama is only its fallback.
+                let actionStartedAt = session.latency.timestamp()
+                let reminder = await self.reminderManager?.handleReminder(text: text)
+                session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı")
+                session.latency.markOutput(reminder != nil ? "hatırlatıcı kuruldu" : "hatırlatıcı kurulamadı")
+                owLog("[Result] Reminder \(reminder != nil ? "scheduled" : "not scheduled")")
+                if reminder == nil, !self.ollamaAvailable {
+                    owLog("[OpenWhisper] Reminder not understood and Ollama is not available")
+                }
+                if session.isVoiceCommand {
+                    await self.speakReply(self.jarvisReply.reminder(at: reminder.map { TimerManager.clock($0.fireDate, sayDay: true) }))
                 }
             } else if isSpotifyCommand {
                 session.latency.finishDecision(route: "Spotify")
@@ -2507,6 +2525,35 @@ final class AppState {
     }
 
     // MARK: - Voice replies
+
+    // MARK: - Timers
+
+    private func setupTimers() {
+        let timers = TimerManager.shared
+        timers.onFire = { [weak self] timer in
+            Task { @MainActor in await self?.announceTimer(timer) }
+        }
+        timers.onReminderDue = { [weak self] reminder in
+            Task { @MainActor in
+                guard let self else { return }
+                self.showFlowBarMessage("Hatırlatma: \(reminder.task)", durationMs: 8000)
+                await self.speakReply(self.jarvisReply.reminderDue(reminder.task))
+            }
+        }
+    }
+
+    /// The first chimes are already playing: say what it was for, then listen briefly for
+    /// "tamam" / "5 dakika ertele" without the wake word. The chimes keep coming back until
+    /// someone stops them.
+    private func announceTimer(_ timer: TimerManager.JarvisTimer) async {
+        let message = jarvisReply.timerFired(label: timer.label, seconds: timer.seconds)
+        showFlowBarMessage(message, durationMs: 8000)
+        await speakReply(message)
+        guard TimerManager.shared.ringing?.id == timer.id, recordingState != .recording,
+              hotkey?.isIdle == true, microphoneGranted else { return }
+        owLog("[Timer] Listening for stop / snooze")
+        startVoiceSession(trigger: .followUp)
+    }
 
     /// Speaks Jarvis's reply and waits for it, so music paused for the command resumes only
     /// after he is done. Silent when the setting is off or a new recording already started.

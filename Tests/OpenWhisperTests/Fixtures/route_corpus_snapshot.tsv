@@ -207,3 +207,12 @@ voice	parlaklığı%70 yap.	system:brightness(up: true, level: Optional(70))
 voice	bu kodekse gönder şu anda pil tüketimi ne durumda yeni uygulamayı kur ve sessiz bir ortamda ne olduğunu test edelim gönder	agent-send
 voice	İncele şu anda yeni gelen setfit ve normal bizim lama modelinde hani gemaya düşüyor ya onları incele ve bana hız farkını söyle ne kadar hız değişti gönder.	agent-send
 voice	şu ana kadar olan kodların hepsini komikler sonrasında artık bundan sonra sen bu uygulamaya ne eklerdin ne düşünürdün onları bana yaz.	typed
+voice	20 dakikalık alarm kur	timer:start(seconds: 1200, label: nil)
+voice	10 dakika sonra beni uyar	timer:start(seconds: 600, label: nil)
+voice	10 dakika sonra bana hatırlat	timer:start(seconds: 600, label: nil)
+voice	Zamanlayıcı ne kadar kaldı?	timer:remaining
+voice	Alarmı iptal et	timer:cancel(all: false)
+voice	Yarın sabah 7'de beni uyandır	timer:alarm
+voice	Yarım saat sonra çayı hatırlat	reminder
+keys	10 dakika sonra çıkıyorum	none
+keys	Alarm sesi çok yüksek	none

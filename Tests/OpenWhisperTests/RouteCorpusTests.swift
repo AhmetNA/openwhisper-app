@@ -36,6 +36,12 @@ final class RouteCorpusTests: XCTestCase {
         }
         if voice, JarvisAddressee.explicitChatCommand(text) != nil { return "chat" }
 
+        // No timer is running or ringing in the corpus, so state-dependent forms stay out.
+        if let timer = TimerCommandParser.parse(text) {
+            if case .alarm = timer { return "timer:alarm" }  // the date depends on today
+            return "timer:\(timer)"
+        }
+
         func system(_ candidate: String) -> SystemCommand? {
             SystemCommandParser.parse(candidate, installedApps: installedApps, shortcuts: [])
         }
