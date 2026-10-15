@@ -78,7 +78,7 @@ voice	Piyano müziği açıp Spotify'da	none
 voice	Piyano tarzı bir şey açtık Spotify'da.	none
 voice	Piyanosal bir şeyler Spotify'da.	none
 voice	Selam diyebilir misin?	none
-voice	Selam nasılsın?	none
+voice	Selam nasılsın?	greeting:howAreYou (unless a text field has focus)
 voice	Siz biraz affarebilir misin?	none
 voice	Spotify that liked songs	none
 voice	Spotify'daki şarkıyı döndür.	none

@@ -158,3 +158,31 @@ final class JarvisChatTests: XCTestCase {
         XCTAssertFalse(AgentApp.isAgentFront(nil))
     }
 }
+
+final class JarvisGreetingTests: XCTestCase {
+    func testGreetingNeedsTheWholeUtterance() {
+        XCTAssertEqual(JarvisReply.greeting(in: "Günaydın Jarvis."), .goodMorning)
+        XCTAssertEqual(JarvisReply.greeting(in: "Selam!"), .hello)
+        XCTAssertEqual(JarvisReply.greeting(in: "Nasılsın?"), .howAreYou)
+        XCTAssertNil(JarvisReply.greeting(in: "Günaydın, müziği aç"))
+        XCTAssertNil(JarvisReply.greeting(in: "Selam yaz"))
+    }
+
+    func testGreetingFollowsTheClock() {
+        var reply = JarvisReply()
+        XCTAssertTrue(reply.greet(.hello, hour: 9).hasPrefix("Günaydın"))
+        XCTAssertTrue(reply.greet(.hello, hour: 20).hasPrefix("İyi akşamlar"))
+        XCTAssertTrue(reply.greet(.goodMorning, hour: 15).contains("İyi günler"))
+    }
+
+    func testAckNeverRepeatsBackToBack() {
+        var reply = JarvisReply()
+        reply.addressChance = 0
+        var last = ""
+        for _ in 0..<50 {
+            let ack = reply.ack()
+            XCTAssertNotEqual(ack, last)
+            last = ack
+        }
+    }
+}

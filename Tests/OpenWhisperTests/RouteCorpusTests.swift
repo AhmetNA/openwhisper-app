@@ -35,6 +35,7 @@ final class RouteCorpusTests: XCTestCase {
             return "typed"
         }
         if voice, JarvisAddressee.explicitChatCommand(text) != nil { return "chat" }
+        if voice, let greeting = JarvisReply.greeting(in: text) { return "greeting:\(greeting) (unless a text field has focus)" }
 
         // No timer is running or ringing in the corpus, so state-dependent forms stay out.
         if let timer = TimerCommandParser.parse(text) {

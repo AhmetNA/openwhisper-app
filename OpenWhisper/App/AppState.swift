@@ -2428,6 +2428,19 @@ final class AppState {
                 return
             }
 
+            // "Günaydın", "Selam Jarvis", "Nasılsın?": answered at once by the clock, no LLM.
+            // In a text field it stays dictation ("Selam nasılsın?" typed into WhatsApp).
+            if session.isVoiceCommand,
+               (VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus) != .editable,
+               let greeting = JarvisReply.greeting(in: trimmed) {
+                session.latency.finishDecision(route: "selamlama")
+                owLog("[Route] greeting (\(greeting))")
+                self.lastTranscription = text
+                let reply = self.jarvisReply.greet(greeting, hour: Calendar.current.component(.hour, from: Date()))
+                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 4000) }
+                return
+            }
+
             // A destructive reminder action is always two-step. While a deletion confirmation
             // is pending, only an explicit approval can execute the already-resolved plan; any
             // other ordinary voice response discards it without touching reminders.

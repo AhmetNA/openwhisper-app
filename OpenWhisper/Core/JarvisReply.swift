@@ -7,6 +7,8 @@ import Foundation
 struct JarvisReply {
     private var rng: any RandomNumberGenerator
     private var addressedLastTime = false
+    /// So the same ack ("Tamamdır.") never comes twice in a row.
+    private var lastAckIndex: Int?
     /// Share of replies that address the user.
     var addressChance: Double = 0.3
 
@@ -155,8 +157,70 @@ struct JarvisReply {
     // MARK: - Building blocks
 
     mutating func ack() -> String {
-        let pick = Self.acks[Int.random(in: 0..<Self.acks.count, using: &rng)]
-        return addressing(pick)
+        var index = Int.random(in: 0..<Self.acks.count, using: &rng)
+        if index == lastAckIndex { index = (index + 1 + Int.random(in: 0..<(Self.acks.count - 1), using: &rng)) % Self.acks.count }
+        lastAckIndex = index
+        return addressing(Self.acks[index])
+    }
+
+    // MARK: - Greetings
+
+    enum Greeting: Equatable, Sendable {
+        case hello, goodMorning, goodDay, goodEvening, goodNight, howAreYou
+    }
+
+    /// The whole utterance is a greeting ("Günaydın", "Selam Jarvis", "Nasılsın?"); anything
+    /// longer ("günaydın, müziği aç") is left to the command routes.
+    static func greeting(in text: String) -> Greeting? {
+        let locale = Locale(identifier: "tr_TR")
+        var words = text.lowercased(with: locale)
+            .components(separatedBy: CharacterSet.letters.inverted)
+            .filter { !$0.isEmpty }
+        let fillers: Set<String> = ["jarvis", "hey", "patron", "efendim", "ya", "canım", "dostum"]
+        words.removeAll { fillers.contains($0) }
+        switch words.joined(separator: " ") {
+        case "günaydın", "günaydınlar": return .goodMorning
+        case "merhaba", "selam", "selamlar", "selamün aleyküm", "selamun aleykum", "selamın aleyküm": return .hello
+        case "iyi günler": return .goodDay
+        case "iyi akşamlar": return .goodEvening
+        case "iyi geceler": return .goodNight
+        case "nasılsın", "naber", "ne haber", "nasıl gidiyor", "naber nasılsın", "selam nasılsın", "merhaba nasılsın", "günaydın nasılsın":
+            return .howAreYou
+        default: return nil
+        }
+    }
+
+    /// A greeting answered by the clock: "günaydın" at 22:00 gets a gentle correction.
+    mutating func greet(_ greeting: Greeting, hour: Int) -> String {
+        let fitting: String
+        switch hour {
+        case 5..<12: fitting = "Günaydın"
+        case 12..<18: fitting = "İyi günler"
+        case 18..<23: fitting = "İyi akşamlar"
+        default: fitting = "İyi geceler"
+        }
+        switch greeting {
+        case .howAreYou:
+            let line = choose(["Gayet iyiyim, sizin için buradayım.", "Her zamanki gibi tetikteyim.", "Sistemler sorunsuz çalışıyor, teşekkürler."])
+            return addressing(line)
+        case .goodNight:
+            return hour >= 20 || hour < 5 ? addressing("İyi geceler, iyi dinlenin.") : addressing("Daha gün bitmedi ama iyi dinlenin.")
+        case .goodMorning where !(5..<12).contains(hour):
+            return hour < 5 ? addressing("Günaydın demek için biraz erken, yine de buradayım.")
+                : addressing("Öğleni geçtik ama günaydın. \(fitting) demek daha doğru olur.")
+        case .goodMorning, .hello, .goodDay, .goodEvening:
+            let tail = choose(["Nasıl yardımcı olabilirim?", "Emrinizdeyim.", "Buradayım."])
+            return "\(addressingGreeting(fitting)) \(tail)"
+        }
+    }
+
+    private mutating func addressingGreeting(_ word: String) -> String {
+        addressedLastTime = true
+        return "\(word) \(Self.addresses[Int.random(in: 0..<Self.addresses.count, using: &rng)])."
+    }
+
+    private mutating func choose(_ options: [String]) -> String {
+        options[Int.random(in: 0..<options.count, using: &rng)]
     }
 
     mutating func answer(_ text: String) -> String {
