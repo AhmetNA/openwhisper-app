@@ -24,6 +24,11 @@ enum SystemCommand: Equatable, Sendable {
     case quitApp(String)
     /// "Chrome'u zorla kapat / öldür": kills the app and every process that belongs to it.
     case forceQuitApp(String)
+    /// "Safari'ye geç": brings the app to the front (launching it if needed) and waits until it
+    /// is frontmost, so the next command of a chain ("… ve videoyu başlat") runs there.
+    case switchToApp(String)
+    /// "Claude Code'a geç", "ChatGPT'ye geç": the agent app, through `AgentAppActivator`.
+    case switchToAgent(AgentApp)
     /// Apple Mail (`MailController`).
     case mailCount
     case mailLatest
@@ -109,6 +114,7 @@ enum SystemCommandParser {
         if let query = parseQuery(cleaned) { return query }
         if let action = parseAction(cleaned) { return action }
         if let tab = parseBrowserTab(cleaned) { return .browser(tab) }
+        if let target = parseSwitch(cleaned, installedApps: installedApps) { return target }
 
         let off = matches(cleaned, offVerb)
         let on = matches(cleaned, onVerb)
@@ -472,6 +478,27 @@ enum SystemCommandParser {
         if ["aç", "başlat"].contains(verb) { return forced ? nil : .openApp(app) }
         if forced || ["öldür", "sonlandır", "kill et", "killle", "kille"].contains(verb) { return .forceQuitApp(app) }
         return .quitApp(app)
+    }
+
+    /// "Safari'ye geç", "Spotify'a geç", "Claude Code'a geç", "Xcode uygulamasına geç",
+    /// "ChatGPT'ye geçer misin". Unlike "aç / kapat" Spotify counts, and the name must be an
+    /// exact or one-letter match: "şarkıya geç" is two letters from "Safari" and is a skip.
+    private static func parseSwitch(_ text: String, installedApps: [String]) -> SystemCommand? {
+        if let command = parseSwitchPhrase(text, installedApps: installedApps) { return command }
+        // Whisper glues the case ending and the verb onto the name: "Cloud Codecage"
+        // (Claude Code'a geç), "Safariyege" — split them back; the name must still resolve.
+        let unglued = text.replacingOccurrences(
+            of: #"^(.+?)(?:y|c)?([ae])\s?ge[çc]?$"#, with: "$1'$2 geç", options: .regularExpression)
+        return unglued == text ? nil : parseSwitchPhrase(unglued, installedApps: installedApps)
+    }
+
+    private static func parseSwitchPhrase(_ text: String, installedApps: [String]) -> SystemCommand? {
+        guard let spoken = group(
+            #"^(.+?)\s+(?:uygulamasına\s+|programına\s+)?(?:geç|geçiş yap|git|dön)(?:er misin|er mısın|sene|elim|ebilir misin)?(?: lütfen)?$"#,
+            in: text
+        ) else { return nil }
+        if let agent = AgentCommandParser.agentApp(named: spoken) { return .switchToAgent(agent) }
+        return resolveName(spoken, in: installedApps).map { .switchToApp($0) }
     }
 
     /// Matches a spoken app name ("safari'yi", "chromeu", "vs code'u") to an installed app.

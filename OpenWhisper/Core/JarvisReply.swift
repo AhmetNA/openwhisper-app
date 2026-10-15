@@ -41,6 +41,10 @@ struct JarvisReply {
             if BrowserController.failures.contains(status) { return failure(Self.speakable(status)) }
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
+        case .switchToApp, .switchToAgent:
+            // The switch itself is the answer; an ack would talk over a video or song the
+            // next command of the chain starts.
+            return Self.isFailure(status) ? failure(Self.speakable(status)) : nil
         case .video(let action):
             if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") || status == "Tam ekran yapılamadı" { return failure(Self.speakable(status)) }
             switch action {

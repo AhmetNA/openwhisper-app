@@ -26,6 +26,9 @@ enum SystemController {
         case .openApp(let name): return openApp(name)
         case .quitApp(let name): return quitApp(name)
         case .forceQuitApp(let name): return forceQuitApp(name)
+        case .switchToApp(let name): return await switchToApp(name)
+        case .switchToAgent(let agent):
+            return await AgentAppActivator.activate(agent) != nil ? "\(agent.displayName) önde" : "\(agent.displayName) açılamadı"
         case .mailCount: return await mailCount()
         case .mailCheck:
             await MailController.checkForNewMail()
@@ -168,12 +171,14 @@ enum SystemController {
             let items = (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []
             names += items.filter { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
         }
-        return names
+        // Not in the folders above, but "Finder'a geç" should work.
+        return names + ["Finder"]
     }
 
     private static func appURL(_ name: String) -> URL? {
         let folders = ["/Applications", "/Applications/Utilities", "/System/Applications",
                        "/System/Applications/Utilities", NSHomeDirectory() + "/Applications"]
+        if name == "Finder" { return URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app") }
         return folders.map { URL(fileURLWithPath: $0).appendingPathComponent(name + ".app") }
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }
@@ -187,6 +192,37 @@ enum SystemController {
         }
         owLog("[System] Open \(name)")
         return "\(name) açılıyor"
+    }
+
+    /// Opens the app with activation (which also switches to its full-screen Space and
+    /// launches it if needed) and waits until it is frontmost: a chained "… ve videoyu
+    /// başlat" must run in it, not in the app that was in front before.
+    private static func switchToApp(_ name: String) async -> String {
+        guard let url = appURL(name) else { return "\(name) bulunamadı" }
+        let bundleID = Bundle(url: url)?.bundleIdentifier
+        if let bundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { return "\(name) zaten önde" }
+        let wasRunning = bundleID.map { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty } ?? false
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        let pid: pid_t
+        do {
+            pid = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
+        } catch {
+            owLog("[System] Switch to \(name) failed: \(error)")
+            return "\(name) açılamadı"
+        }
+        let deadline = Date().addingTimeInterval(wasRunning ? 2 : 10)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+                // Let its window come up and take keyboard focus before the next command.
+                try? await Task.sleep(nanoseconds: wasRunning ? 200_000_000 : 1_000_000_000)
+                owLog("[System] Switched to \(name) (launched: \(!wasRunning))")
+                return "\(name) önde"
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        owLog("[System] \(name) did not come to the front in time")
+        return "\(name) öne gelemedi"
     }
 
     private static func quitApp(_ name: String) -> String {

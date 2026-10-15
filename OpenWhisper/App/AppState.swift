@@ -2283,7 +2283,8 @@ final class AppState {
 
             // A named target wins; otherwise a Jarvis send goes to the app that was frontmost
             // when recording began. TextInjector still verifies that the destination is safe.
-            if let agent = AgentCommandParser.parse(trimmed) {
+            // "Claude Code'a geç ve şunu yolla …" is the same as naming the app in the command.
+            if let agent = AgentCommandParser.parseAfterSwitch(trimmed) ?? AgentCommandParser.parse(trimmed) {
                 if session.isVoiceCommand, agent.send, agent.target == nil, session.targetApp == nil {
                     let status = "Önde bir uygulama bulamadım; mesaj gönderilmedi."
                     owLog("[Agent] Send skipped: no foreground application")
@@ -2443,6 +2444,9 @@ final class AppState {
                 let actionStartedAt = session.latency.timestamp()
                 var statuses: [String] = []
                 var replies: [String?] = []
+                // After "Safari'ye geç", later steps belong to the app switched to: Spotify gives
+                // focus back to this app if a cold launch stole it.
+                var stepTargetApp = session.targetApp
                 for step in steps {
                     switch step.command {
                     case .timer(let timerCommand):
@@ -2468,12 +2472,16 @@ final class AppState {
                         let status = await SystemController.perform(command)
                         if case .video(let action) = command, action.changesPlayback,
                            !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
+                        switch command {
+                        case .switchToApp, .switchToAgent: stepTargetApp = NSWorkspace.shared.frontmostApplication
+                        default: break
+                        }
                         owLog("[Result] System command: \(status)")
                         statuses.append(status)
                         if !step.command.endsSession { replies.append(self.jarvisReply.system(command, status: status)) }
                     case .spotify(let request):
                         let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
-                        let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: session.targetApp)
+                        let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
                         if handled, !resumes { resumeMediaAfterCommand = false }
                         statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")

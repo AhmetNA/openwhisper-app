@@ -220,3 +220,51 @@ final class BriefingParserRegressionTests: XCTestCase {
         XCTAssertEqual(parse("Yarın neyimiz var"), .briefing(dayOffset: 1))
     }
 }
+
+final class AppSwitchParserTests: XCTestCase {
+    private let apps = ["Safari", "Spotify", "Claude", "Google Chrome", "Xcode", "Notes", "Music"]
+
+    func testSwitchToInstalledApp() {
+        XCTAssertEqual(SystemCommandParser.parse("Safari'ye geç", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safariye geç.", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, Chrome'a geç", installedApps: apps), .switchToApp("Google Chrome"))
+        XCTAssertEqual(SystemCommandParser.parse("Xcode uygulamasına geç", installedApps: apps), .switchToApp("Xcode"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari'ye geçer misin", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari'ye dön", installedApps: apps), .switchToApp("Safari"))
+        // "Spotify'ı aç" belongs to SpotifyManager; switching to its window does not.
+        XCTAssertEqual(SystemCommandParser.parse("Spotify'a geç", installedApps: apps), .switchToApp("Spotify"))
+    }
+
+    func testSwitchToAgentApp() {
+        XCTAssertEqual(SystemCommandParser.parse("Claude Code'a geç", installedApps: apps), .switchToAgent(.claudeCode))
+        XCTAssertEqual(SystemCommandParser.parse("Cloud koda geç", installedApps: apps), .switchToAgent(.claudeCode))
+        XCTAssertEqual(SystemCommandParser.parse("ChatGPT'ye geç", installedApps: apps), .switchToAgent(.chatGPT))
+        XCTAssertEqual(SystemCommandParser.parse("Codex'e geç", installedApps: apps), .switchToAgent(.codex))
+        // Whisper's glued spellings from the 2026-10-15 voice test.
+        XCTAssertEqual(SystemCommandParser.parse("Cloud Codecage", installedApps: apps), .switchToAgent(.claudeCode))
+        XCTAssertEqual(SystemCommandParser.parse("Safariyege", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertNil(SystemCommandParser.parse("Garage", installedApps: apps))
+        XCTAssertNil(SystemCommandParser.parse("Bir dakika bekle", installedApps: apps))
+    }
+
+    func testOtherGeçCommandsKeepTheirRoutes() {
+        for text in ["Şarkıyı geç", "Şarkıya geç", "Bu kısmı geç", "Eve dön", "Geri dön"] {
+            XCTAssertNil(SystemCommandParser.parse(text, installedApps: apps), text)
+        }
+        XCTAssertEqual(SystemCommandParser.parse("Sonraki sekmeye geç", installedApps: apps), .browser(.nextTab))
+        XCTAssertEqual(SystemCommandParser.parse("Sonraki videoya geç", installedApps: apps), .video(.next))
+        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç", installedApps: apps), .developerMode)
+        XCTAssertNotEqual(SpotifyManager.explicitIntent(in: "sonraki şarkıya geç"), nil)
+    }
+
+    func testSwitchChains() {
+        let plan = MultiCommandStep.plan("Safari'ye geç ve videoyu başlat", ringing: false, active: false,
+                                         installedApps: apps, shortcuts: { [] })
+        XCTAssertEqual(plan?.map(\.command), [.system(.switchToApp("Safari")), .system(.video(.play))])
+        let music = MultiCommandStep.plan("Safari'ye geç ve müziği başlat", ringing: false, active: false,
+                                          installedApps: apps, shortcuts: { [] })
+        XCTAssertEqual(music?.first?.command, .system(.switchToApp("Safari")))
+        XCTAssertEqual(music?.count, 2)
+        if case .spotify = music?.last?.command {} else { XCTFail("müziği başlat → Spotify: \(String(describing: music))") }
+    }
+}

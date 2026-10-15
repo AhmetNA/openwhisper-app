@@ -91,7 +91,7 @@ enum AgentCommandParser {
     private static let newSession = #"(?<new>(?:yeni|new)(?:\s+bir)?)"#
     // "Sağ seçeneğine" was Whisper's "son session'ına"; only counts before a session word.
     private static let lastSession = #"(?<last>(?:en\s+)?(?:son|sağ)|bir\s+önceki|önceki|last|previous)"#
-    private static let openVerb = #"(?:aç|açıp|açın|açtır)\p{L}*"#
+    private static let openVerb = #"(?:aç|açıp|açın|açtır|başlat)\p{L}*"#
     /// `bare` also accepts "new session" / "yeni sohbet" with no ending; only used where the
     /// verb has to follow right after, so nothing of the message can be swallowed.
     private static func sessionQualifier(bare: Bool, spotify: Bool) -> String {
@@ -138,6 +138,51 @@ enum AgentCommandParser {
         let pattern = #"[\s,;:.!?\-"# + quotes + #"]*(?:\b(?:ve\s+)?(?:sonra|sonrasında|ardından)\s+|\bve\s+)?\b(?:gönder|gonder|yolla)\p{L}*(?:\s+(?:bunu|onu|mesajı|hemen))?(?:\s+m[iı]s[iı]n)?[\s.!?,;:"# + quotes + #"]*$"#
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
+
+    // "Claude Code'a" / "ChatGPT'ye" alone: the app a "… geç" switches to.
+    private static let nameOnlyRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: "^\\s*\(names)\(suffix)\\s*$", options: [.caseInsensitive])
+    }()
+
+    // "Claude Code'a geç ve şunu yolla …", "Cloud koda geç, yeni session başlat": the switch,
+    // then everything after it. The tail is free text, so it is never cut at its own "ve".
+    private static let switchThenRegex: NSRegularExpression = {
+        let switchVerb = #"(?:uygulamasına\s+)?(?:geç|geçiş\s+yap|git|dön)(?:er\s+m[ıi]s[ıi]n|elim|sene)?"#
+        let connector = #"(?:(?:ve\s+sonra|ve\s+ardından|ve|sonra|ardından)\s+)?"#
+        let pattern = "^\\s*\(names)\(suffix)\\s+\(switchVerb)(?:\\s+lütfen)?(?:[\\s,.;:!]+)\(connector)(?<tail>\\S.*)$"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+    }()
+
+    /// The coding agent a spoken name means ("claude code'a", "cloud koda", "chatgpt'ye").
+    static func agentApp(named spoken: String) -> AgentApp? {
+        let lowered = spoken.lowercased(with: locale)
+        guard let match = nameOnlyRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else { return nil }
+        return targetApp(for: match)
+    }
+
+    /// "Claude Code'a geç ve şunu yolla: …", "ChatGPT'ye geç, şunu yaz …", "Claude'a geç ve
+    /// yeni session başlat": the agent dictation that follows the switch, or nil. The tail is
+    /// read as if it had named the app itself ("Claude'a şunu yolla …"), or as "… yaz".
+    static func parseAfterSwitch(_ text: String) -> AgentDictation? {
+        let trimmed = WakeWordVerifier.strippingLeadingWakeWord(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased(with: locale)
+        guard lowered.utf16.count == trimmed.utf16.count,
+              let match = switchThenRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)),
+              let target = targetApp(for: match),
+              let tailRange = Range(match.range(withName: "tail"), in: trimmed) else { return nil }
+        let tail = String(trimmed[tailRange])
+        let name: String
+        switch target {
+        case .claudeCode: name = "Claude'a"
+        case .codex: name = "Codex'e"
+        case .chatGPT: name = "ChatGPT'ye"
+        }
+        if let dictation = parse("\(name) \(tail)"), dictation.target == target { return dictation }
+        if let body = JarvisAddressee.trailingTypeCommand(tail) {
+            return AgentDictation(target: target, body: body, send: false)
+        }
+        return nil
+    }
 
     /// Returns nil when the text is neither addressed to an agent nor ends with "gönder".
     static func parse(_ text: String) -> AgentDictation? {

@@ -152,3 +152,33 @@ final class AgentCommandParserTests: XCTestCase {
         XCTAssertNil(AgentCommandParser.parse("Yeni Spotify aç"))
     }
 }
+
+final class AgentSwitchParserTests: XCTestCase {
+    func testSwitchThenSend() {
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Claude Code'a geç ve şunu yolla: testleri çalıştır ve hataları düzelt"),
+                       AgentDictation(target: .claudeCode, body: "testleri çalıştır ve hataları düzelt", send: true))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Cloud koda geç, şunu yaz merhaba"),
+                       AgentDictation(target: .claudeCode, body: "merhaba", send: false))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("ChatGPT'ye geç ve şunu sor: bugün hava nasıl"),
+                       AgentDictation(target: .chatGPT, body: "bugün hava nasıl", send: false))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Hey Jarvis, Claude'a geç ve README'yi güncelle, gönder"),
+                       AgentDictation(target: .claudeCode, body: "README'yi güncelle", send: true))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Claude'a geç ve merhaba yaz"),
+                       AgentDictation(target: .claudeCode, body: "merhaba", send: false))
+    }
+
+    func testSwitchThenNewSession() {
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Claude Code'a geç ve yeni session başlat"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Cloud koda geç ve yeni sesine başlat"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parseAfterSwitch("Claude'a geç, yeni session'a şunu yaz merhaba")?.session, .new)
+    }
+
+    func testNotAnAgentFollowUp() {
+        XCTAssertNil(AgentCommandParser.parseAfterSwitch("Claude Code'a geç"))
+        XCTAssertNil(AgentCommandParser.parseAfterSwitch("Safari'ye geç ve şunu yolla merhaba"))
+        XCTAssertNil(AgentCommandParser.parseAfterSwitch("Claude'a geç ve Wi-Fi'yi kapat"))
+        XCTAssertNil(AgentCommandParser.parseAfterSwitch("Claude'a geçtim ve şunu yolla merhaba"))
+    }
+}

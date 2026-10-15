@@ -55,6 +55,18 @@
    "teardown": ["osascript -e 'tell application \"Spotify\" to pause' >/dev/null 2>&1"],
    "note": "TODO Birden fazla komut: yalnızca Spotify'a gidiyordu"},
 
+  {"name": "gec-safari", "say": "Safari'ye geç",
+   "expect": ["\\[Route\\] system \\(switchToApp\\(\"Safari\"\\)\\)", "\\[System\\] Switched to Safari|\\[Result\\] System command: Safari zaten önde"]},
+  {"name": "gec-safari-video", "say": "Safari'ye geç ve videoyu başlat",
+   "expect": ["\\[Route\\] multi-command \\(2\\).*switchToApp\\(\"Safari\"\\).*video\\(.*play\\)"],
+   "note": "Safari'de video açık değilse video adımı 'video yok' der; yönlendirme yine geçer"},
+  {"name": "gec-spotify", "say": "Spotify'a geç",
+   "expect": ["\\[Route\\] system \\(switchToApp\\(\"Spotify\"\\)\\)"],
+   "forbid": ["\\[Route\\] spotify"]},
+  {"name": "gec-claude", "say": "Claude Code'a geç",
+   "expect": ["\\[Route\\] system \\(switchToAgent\\(.*claudeCode\\)\\)", "\\[Agent\\] Claude is frontmost"],
+   "forbid": ["\\[Route\\] agent"]},
+
   {"name": "takvim-ekle", "say": "Yarın saat üçte Mehmet'le toplantı ekle", "safe": false,
    "expect": ["\\[Route\\] system \\(calendarEvent"],
    "note": "Takvime gerçek etkinlik ekler"},
