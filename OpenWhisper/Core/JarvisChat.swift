@@ -4,13 +4,13 @@ import Foundation
 /// the local Ollama model. Used only for "Jarvis" sessions that are neither a command nor
 /// meant for Claude Code / Codex. The reply streams out sentence by sentence so the voice can
 /// start on the first sentence while the model is still writing the rest. The last few turns
-/// are remembered for ten minutes, so follow-up questions work.
+/// are remembered for half an hour, so follow-up questions work.
 @MainActor
 final class JarvisChat {
     static let shared = JarvisChat()
 
-    private static let memory: TimeInterval = 10 * 60
-    private static let maxHistoryMessages = 8
+    private static let memory: TimeInterval = 30 * 60
+    private static let maxHistoryMessages = 16
     private var history: [[String: String]] = []
     /// The last finished reply, for showing it when it couldn't be spoken.
     private(set) var lastReply: String?
