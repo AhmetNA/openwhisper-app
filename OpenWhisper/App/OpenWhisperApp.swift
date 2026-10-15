@@ -114,4 +114,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     ) {
         completionHandler([.banner, .sound])
     }
+
+    // Timer notification buttons ("Kapat", "5 dk ertele") and a click on the banner.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let action = response.actionIdentifier
+        let id = response.notification.request.identifier
+        Task { @MainActor in
+            TimerManager.shared.handleAction(action, notificationID: id)
+            completionHandler()
+        }
+    }
 }

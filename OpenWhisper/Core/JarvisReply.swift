@@ -76,8 +76,29 @@ struct JarvisReply {
         addressing("Yeni session açtım.")
     }
 
-    mutating func reminder(scheduled: Bool) -> String? {
-        scheduled ? addressing("Not ettim.") : failure("hatırlatıcıyı kuramadım")
+    /// `when` is the reminder's time ("bugün 15:46"), nil when it couldn't be set. Saying the
+    /// time back catches a misheard one right away.
+    mutating func reminder(at when: String?) -> String? {
+        guard let when else { return failure("hatırlatıcıyı kuramadım") }
+        return answer("Not ettim, \(when) hatırlatırım")
+    }
+
+    /// A reminder came due: "Patron, hatırlatma: toplantı."
+    mutating func reminderDue(_ task: String) -> String {
+        "Patron, hatırlatma: \(Self.speakable(task))."
+    }
+
+    /// The status `TimerManager.perform` returned, as a sentence; a stop is a plain ack.
+    mutating func timer(_ command: TimerCommandParser.Command, status: String) -> String {
+        if case .stop = command { return ack() }
+        return answer(Self.speakable(status))
+    }
+
+    /// "Patron, 20 dakika doldu." / "Patron, çay için süre doldu." / "Patron, alarm çalıyor."
+    mutating func timerFired(label: String?, seconds: Int?) -> String {
+        if let label { return "Patron, \(label) için süre doldu." }
+        if let seconds { return "Patron, \(SpokenDuration.spoken(seconds)) doldu." }
+        return "Patron, alarm çalıyor."
     }
 
     mutating func reminderDeletion(_ result: ReminderManager.DeletionResult) -> String {

@@ -368,7 +368,8 @@ final class ReminderManager {
     /// Parse reminder text and schedule a notification. Tries the deterministic Turkish
     /// relative-date parser first (fast, exact, no network dependency); only falls back to
     /// the Ollama LLM for phrasing the regex parser doesn't recognize.
-    func handleReminder(text: String) async -> Bool {
+    /// The scheduled reminder, or nil when it couldn't be understood or saved.
+    func handleReminder(text: String) async -> Reminder? {
         owLog("[Reminders] Processing: \(text)")
 
         let parsed: ParsedReminder
@@ -380,7 +381,7 @@ final class ReminderManager {
         } else {
             owLog("[Reminders] Failed to parse reminder")
             sendConfirmation(title: "Hatırlatıcı Anlaşılamadı", body: "Örnek: \"Bana 10 dakika sonra toplantıyı hatırlat\"")
-            return false
+            return nil
         }
 
         owLog("[Reminders] Parsed — task: \(parsed.task), date: \(parsed.fireDate)")
@@ -425,7 +426,7 @@ final class ReminderManager {
         // A reminder is a success if EITHER the local notification was scheduled or it landed
         // in Apple Reminders — previously this only checked `scheduled`, so a successful Apple
         // Reminders save with a failed/denied notification was silently reported as failure.
-        return scheduled || appleIdentifier != nil
+        return scheduled || appleIdentifier != nil ? reminder : nil
     }
 
     // MARK: - Ollama Parsing

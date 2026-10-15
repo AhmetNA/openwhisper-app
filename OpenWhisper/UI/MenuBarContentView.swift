@@ -101,6 +101,8 @@ struct MenuBarContentView: View {
             .padding(10)
             .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
 
+            TimersSection()
+
             Divider()
 
             if let latest = appState.savedRecordings.first {
@@ -281,6 +283,48 @@ private extension View {
             self.buttonStyle(.glassProminent)
         } else {
             self.buttonStyle(.borderedProminent)
+        }
+    }
+}
+
+/// Running timers and alarms, with the time left; hidden when there are none.
+private struct TimersSection: View {
+    private var manager: TimerManager { TimerManager.shared }
+
+    var body: some View {
+        if manager.ringing != nil || !manager.timers.isEmpty {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let ringing = manager.ringing {
+                        row(icon: "alarm.waves.left.and.right.fill", title: ringing.label ?? "Alarm çalıyor",
+                            detail: "Şimdi", tint: .orange, action: "Kapat") { manager.stopRinging() }
+                    }
+                    ForEach(manager.timers) { timer in
+                        row(icon: timer.seconds == nil ? "alarm" : "timer",
+                            title: timer.label ?? (timer.seconds.map { "\(SpokenDuration.spoken($0)) zamanlayıcı" } ?? "Alarm"),
+                            detail: "\(TimerManager.clock(timer.fireDate, sayDay: false)) · \(TimerManager.spokenLeft(timer.fireDate.timeIntervalSince(context.date))) kaldı",
+                            tint: .accentColor, action: "İptal") { manager.cancel(timer) }
+                    }
+                }
+                .padding(10)
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+            }
+        }
+    }
+
+    private func row(icon: String, title: String, detail: String, tint: Color, action: String, perform: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button(action, action: perform)
+                .controlSize(.small)
         }
     }
 }

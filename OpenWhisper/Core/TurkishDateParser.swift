@@ -139,14 +139,10 @@ enum TurkishDateParser {
         var dayLevelDate: Date?
         var exactDate: Date?
 
-        // --- 1. Exact offsets: "X dakika sonra" / "X saat sonra" (override everything else) ---
-        if let m = firstMatch("\\b\(numberPattern)\\s*dakika\\s+sonra\\b", in: working),
-           let n = numberValue(m.groups[0] ?? "") {
-            exactDate = cal.date(byAdding: .minute, value: n, to: now)
-            working.removeSubrange(m.range)
-        } else if let m = firstMatch("\\b\(numberPattern)\\s*saat\\s+sonra\\b", in: working),
-                  let n = numberValue(m.groups[0] ?? "") {
-            exactDate = cal.date(byAdding: .hour, value: n, to: now)
+        // --- 1. Exact offsets: "10 dakika sonra", "yarım saat sonra", "bir buçuk saat sonra",
+        // "2 saat 15 dakika sonra" (override everything else) ---
+        if let m = SpokenDuration.first(in: working, suffix: "\\s+sonra\\b") {
+            exactDate = now.addingTimeInterval(TimeInterval(m.seconds))
             working.removeSubrange(m.range)
         }
 
