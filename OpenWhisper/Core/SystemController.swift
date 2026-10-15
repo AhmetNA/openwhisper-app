@@ -44,6 +44,7 @@ enum SystemController {
         case .developerMode: return await startDeveloperMode()
         case .calendarEvent(let event): return await CalendarController.add(event)
         case .browser(let action): return await BrowserController.perform(action)
+        case .video(let action): return await VideoController.perform(action)
         }
     }
 

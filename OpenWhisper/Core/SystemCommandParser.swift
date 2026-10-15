@@ -42,6 +42,8 @@ enum SystemCommand: Equatable, Sendable {
     case calendarEvent(CalendarEventParser.Event)
     /// Safari tabs, searches and "bu sayfayı özetle" (`BrowserController`).
     case browser(BrowserAction)
+    /// The video playing in Safari: pause, seek, speed, subtitles (`VideoController`).
+    case video(VideoAction)
 }
 
 enum BrowserAction: Equatable, Sendable {
@@ -85,6 +87,7 @@ enum SystemCommandParser {
         // Dates and addresses need the raw text: cleaning turns "15:30" and "github.com" apart.
         if let event = CalendarEventParser.parse(text, now: now) { return .calendarEvent(event) }
         if let browse = parseBrowserRequest(text) { return .browser(browse) }
+        if let video = parseVideoRequest(text) { return .video(video) }
         var cleaned = text.lowercased(with: locale)
             .replacingOccurrences(of: #"[.,!?;:"“”]"#, with: " ", options: .regularExpression)
         // A leading call to the assistant or a filler is not part of the command.
@@ -291,6 +294,118 @@ enum SystemCommandParser {
             return .open("https://" + (host.contains(".") ? host : host + ".com"))
         }
         return nil
+    }
+
+    // MARK: - Video
+
+    /// "videoyu", "videoya", "YouTube'u", "filmi", "diziyi". A video command needs one of
+    /// these, so a bare "durdur" / "devam et" stays with Spotify.
+    private static let videoNoun = #"(?:video|vidyo|film|dizi|youtube|you tube|yutub|yutup)\S*"#
+    private static let numberWord = #"(?:\d+(?:[.,]\d+)?|yarım|(?:(?:on|yirmi|otuz|kırk|elli|altmış|yetmiş|seksen|doksan)(?: (?:bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz))?|bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz)(?: buçuk)?)"#
+    private static let timeUnit = #"(?:saat|dakika|dk|saniye|sn)"#
+
+    /// "Videoyu durdur", "videoya devam et", "videoyu başa sar", "10 saniye ileri sar",
+    /// "videoyu 5. dakikaya al", "video hızını 1.5 yap", "altyazıyı aç", "sonraki video".
+    /// From the raw text: cleaning would turn "1.5" and "5." apart.
+    static func parseVideoRequest(_ text: String) -> VideoAction? {
+        let raw = text.lowercased(with: locale)
+            .replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: #"[!?;"“”]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[.,]\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(\D)[.,](?=\s)"#, with: "$1 ", options: .regularExpression)
+            .replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)[\s,]+)?(?:lütfen\s+)?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+(?:lütfen|hemen)$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty, raw.split(separator: " ").count <= 9 else { return nil }
+        let noun = videoNoun
+        let lead = #"^(?:\#(noun) )?(?:bu |şu )?"#
+
+        // Subtitles and fullscreen name themselves; no noun needed.
+        if let verb = group(#"\#(lead)altyaz\S* (aç|kapat|kapa)$"#, in: raw) { return .subtitles(on: verb == "aç") }
+        if matches(raw, #"\#(lead)tam ekran(?:a al|a geç| yap|a geçir|dan çık)$"#) { return .fullscreen }
+        if matches(raw, #"^(?:bir )?(?:sonraki|diğer) video(?:ya)?(?: (?:geç|git|aç|oynat))?$|^(?:bu |şu )?\#(noun) (?:geç|atla)$"#) { return .next }
+
+        let hasNoun = matches(raw, #"(?:^|\s)\#(noun)"#)
+        if matches(raw, #"^(?:bu |şu )?\#(noun) (?:bitmesine |sonuna )?(?:ne kadar (?:kaldı|var)|kaç dakika\S* (?:kaldı|var)|süresi ne(?: kadar)?)$"#) { return .remaining }
+
+        if hasNoun {
+            if matches(raw, #"\#(lead)(?:ses\S* (?:kapat|kapa)|sessize al|sustur)$"#) { return .mute(true) }
+            if matches(raw, #"\#(lead)(?:ses\S* (?:geri )?aç|sessizden çıkar)$"#) { return .mute(false) }
+        }
+
+        // Speed: "video hızını 1.5 yap", "videoyu 2x yap", "videoyu iki kat hızlandır",
+        // "normal hıza al", "videoyu hızlandır / yavaşlat".
+        if matches(raw, #"\#(lead)(?:hız\S* normale? (?:al|döndür|getir|yap|çek)|normal hız\S* (?:al|dön|döndür|getir|geç|yap))$"#) { return .speed(1) }
+        if let value = group(#"\#(lead)(?:hız\S* )?(\#(numberWord)) ?(?:x|kat|katı)?(?:\S*)? (?:yap|al|ayarla|hızlandır|hızda oynat)$"#, in: raw),
+           hasNoun || matches(raw, #"hız"#), let rate = number(value), (0.25...3).contains(rate) {
+            return .speed(rate)
+        }
+        if hasNoun, matches(raw, #"\#(lead)(?:biraz )?hızlandır$"#) { return .speedStep(faster: true) }
+        if hasNoun, matches(raw, #"\#(lead)(?:biraz )?yavaşlat$"#) { return .speedStep(faster: false) }
+
+        // Seeking: relative ("30 saniye ileri sar", "videoyu biraz geri al"),
+        // absolute ("videonun 5. dakikasına git", "2 dakika 30 saniyeye al").
+        let seekVerb = #"(?:sar|al|git|atla|götür|getir|dön|gel)"#
+        if let amount = group(#"\#(lead)((?:\#(numberWord) \#(timeUnit) ?)+|biraz |)(?:kadar )?(?:ileri|geri)(?:ye|ya)? \#(seekVerb)$"#, in: raw)
+            ?? (matches(raw, #"\#(lead)(?:biraz )?(?:ileri|geri)(?:ye|ya)? \#(seekVerb)$"#) && hasNoun ? "" : nil) {
+            // Bare "ileri git" / "geri git" never gets here: it is Safari's history.
+            let seconds = durationSeconds(amount) ?? 10
+            return .seekBy(matches(raw, #"geri"#) ? -seconds : seconds)
+        }
+        if let target = group(#"\#(lead)(?:\#(noun) )?((?:\d+\.? \#(timeUnit)\S* ?)+)(?:ine|ına|una|üne|sine|sına|a|e|ya|ye)? \#(seekVerb)$"#, in: raw),
+           target.contains("."), let seconds = durationSeconds(target.replacingOccurrences(of: ".", with: "")) {
+            // An ordinal ("5. dakika") is a position; "5 dakika" without "ileri" is too vague.
+            return .seekTo(seconds)
+        }
+        if let target = group(#"\#(lead)(?:\#(noun) )?((?:\d+ \#(timeUnit)\S* ?)+)\S* \#(seekVerb)$"#, in: raw),
+           matches(target, #"(?:ya|ye|ine|ına|sine|sına)\s*$"#), let seconds = durationSeconds(target) {
+            // "2 dakika 30 saniyeye al": the dative marks a position.
+            return .seekTo(seconds)
+        }
+
+        if matches(raw, #"\#(lead)(?:en )?başa sar$"#)
+            || (hasNoun && matches(raw, #"\#(lead)(?:en )?(?:başa (?:sar|al|dön|döndür)|başından (?:başlat|oynat|al)|baştan (?:başlat|oynat|al|izle)|sıfıra (?:al|sar|çek)|sıfırla)$"#)) {
+            return .restart
+        }
+        guard hasNoun else { return nil }
+        if matches(raw, #"\#(lead)(?:bi |bir )?(?:durdur|duraklat|beklet|dondur|pause|stop)$|^(?:durdur|duraklat) \#(noun)$"#) { return .pause }
+        if matches(raw, #"\#(lead)(?:devam et|devam ettir|başlat|oynat|play|sürdür|kaldığı yerden (?:devam et|devam ettir|başlat|oynat))$|^(?:başlat|oynat|devam ettir) \#(noun)$"#) { return .play }
+        return nil
+    }
+
+    /// "1 dakika 30 saniye" → 90, "yarım dakika" → 30, "bir buçuk dakika" → 90.
+    static func durationSeconds(_ text: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: #"(\#(numberWord)) (\#(timeUnit))"#) else { return nil }
+        var total = 0.0
+        var found = false
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let valueRange = Range(match.range(at: 1), in: text), let unitRange = Range(match.range(at: 2), in: text),
+                  let value = number(String(text[valueRange])) else { continue }
+            let unit = text[unitRange]
+            total += value * (unit == "saat" ? 3600 : unit.hasPrefix("d") ? 60 : 1)
+            found = true
+        }
+        return found ? Int(total.rounded()) : nil
+    }
+
+    /// "1.5", "1,5", "iki", "bir buçuk", "otuz beş", "yarım".
+    static func number(_ text: String) -> Double? {
+        let text = text.trimmingCharacters(in: .whitespaces)
+        if let value = Double(text.replacingOccurrences(of: ",", with: ".")) { return value }
+        if text == "yarım" { return 0.5 }
+        let tens = ["on": 10, "yirmi": 20, "otuz": 30, "kırk": 40, "elli": 50, "altmış": 60, "yetmiş": 70, "seksen": 80, "doksan": 90]
+        let units = ["bir": 1, "iki": 2, "üç": 3, "dört": 4, "beş": 5, "altı": 6, "yedi": 7, "sekiz": 8, "dokuz": 9]
+        var value = 0.0
+        var found = false
+        for word in text.split(separator: " ").map(String.init) {
+            if let ten = tens[word] { value += Double(ten); found = true }
+            else if let unit = units[word] { value += Double(unit); found = true }
+            else if word == "buçuk", found { value += 0.5 }
+            else if let digits = Double(word) { value += digits; found = true }
+            else { return nil }
+        }
+        return found ? value : nil
     }
 
     /// "lofi'yi" → "lofi"; spaces stay (URL-encoding happens in `BrowserController`).

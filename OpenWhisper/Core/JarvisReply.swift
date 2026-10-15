@@ -41,6 +41,15 @@ struct JarvisReply {
             if BrowserController.failures.contains(status) { return failure(Self.speakable(status)) }
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
+        case .video(let action):
+            if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") { return failure(Self.speakable(status)) }
+            switch action {
+            case .remaining: return answer(Self.speakable(status))
+            // Pausing or silencing it: a short ack. Anything that keeps it playing stays silent,
+            // so Jarvis doesn't talk over the video (as with starting a song).
+            case .pause, .mute(true): return ack()
+            default: return nil
+            }
         default:
             if Self.isFailure(status) { return failure(Self.speakable(status)) }
             // "Safari zaten kapalı": worth saying instead of a plain ack.
@@ -60,6 +69,11 @@ struct JarvisReply {
     /// "Claude Code'a şunu yaz … gönder": the text went in, and was sent if asked.
     mutating func agent(sent: Bool) -> String {
         addressing(sent ? "Gönderdim." : "Yazdım.")
+    }
+
+    /// "Claude Code'da yeni session aç" with nothing to write.
+    mutating func newAgentSession() -> String {
+        addressing("Yeni session açtım.")
     }
 
     mutating func reminder(scheduled: Bool) -> String? {

@@ -2247,27 +2247,65 @@ final class AppState {
                     )
                 )
                 if routeToAgent {
-                    owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send))")
-                    guard !agent.body.isEmpty else {
+                    owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send), session: \(agent.session.rawValue))")
+                    // "Claude Code'da yeni session aç" alone just opens the session.
+                    guard !agent.body.isEmpty || agent.session == .new else {
                         owLog("[Agent] Nothing to write after the command words, skipping")
+                        return
+                    }
+                    @MainActor func fail(_ status: String, spoken: String) async {
+                        if !agent.body.isEmpty { self.textInjector?.copyToClipboard(agent.body) }
+                        self.showFlowBarMessage(agent.body.isEmpty ? status : "\(status), panoya kopyalandı", durationMs: 4500)
+                        if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(spoken)) }
+                    }
+                    if agent.session != .current, agent.target != .claudeCode {
+                        await fail("Session seçimi yalnızca Claude Code'da var", spoken: "session seçimini yalnızca Claude Code'da yapabiliyorum")
                         return
                     }
                     var targetApp = session.targetApp
                     var pasteContext = session.pasteContext
                     if let target = agent.target,
-                       !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false) {
+                       !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false)
+                        || agent.session != .current {
                         guard let app = await AgentAppActivator.activate(target) else {
-                            self.textInjector?.copyToClipboard(agent.body)
-                            self.showFlowBarMessage("\(target.displayName) açılamadı, panoya kopyalandı")
-                            if session.isVoiceCommand {
-                                await self.speakReply(self.jarvisReply.failure("\(target.displayName) açılamadı"))
-                            }
+                            await fail("\(target.displayName) açılamadı", spoken: "\(target.displayName) açılamadı")
                             return
                         }
                         targetApp = app
                         pasteContext = PasteContext.capture(targetApp: app)
                     }
+                    // Never fall back to whatever session happens to be open: a message meant
+                    // for a new or earlier conversation would land in the wrong one.
+                    if agent.session != .current, let app = targetApp {
+                        let switched: Bool
+                        switch agent.session {
+                        case .new:
+                            switched = await ClaudeSessionNavigator.openNewSession(app)
+                        case .last:
+                            guard let name = ClaudeSessionNavigator.lastSessionTitle else {
+                                await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
+                                return
+                            }
+                            switched = await ClaudeSessionNavigator.selectSession(app, titled: name)
+                        case .current:
+                            switched = true
+                        }
+                        guard switched else {
+                            let what = agent.session == .new ? "Yeni session açılamadı" : "Son session bulunamadı"
+                            await fail(what, spoken: what.lowercased(with: Locale(identifier: "tr_TR")))
+                            return
+                        }
+                        pasteContext = PasteContext.capture(targetApp: app)
+                        if agent.body.isEmpty {
+                            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.newAgentSession()) }
+                            return
+                        }
+                    }
                     await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                    if agent.send, let app = targetApp,
+                       app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false {
+                        ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
+                    }
                     if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
                     return
                 }
@@ -2360,6 +2398,10 @@ final class AppState {
                 let status = await SystemController.perform(command)
                 // Liked Songs now play; don't resume what the session paused over them.
                 if command == .developerMode { resumeMediaAfterCommand = false }
+                // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
+                // lets the video the recording paused continue, and so does a failed command.
+                if case .video(let action) = command, action.changesPlayback,
+                   !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
                 session.latency.record(.action, since: actionStartedAt, detail: "sistem komutu")
                 session.latency.markOutput("sistem komutu tamamlandı")
                 owLog("[Result] System command: \(status)")

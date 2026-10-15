@@ -86,4 +86,58 @@ final class AgentCommandParserTests: XCTestCase {
         XCTAssertEqual(AgentCommandParser.parse("Claude Code'a yaz gönder"),
                        AgentDictation(target: .claudeCode, body: "", send: true))
     }
+
+    func testNewSessionAfterAgentName() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'da yeni session'a şunu gönder: testleri çalıştır"),
+                       AgentDictation(target: .claudeCode, body: "testleri çalıştır", send: true, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'a yeni bir konuşmada şunu yaz README'yi güncelle gönder"),
+                       AgentDictation(target: .claudeCode, body: "README'yi güncelle", send: true, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da yeni Spotify'a bunu gönder selam naber"),
+                       AgentDictation(target: .claudeCode, body: "selam naber", send: true, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'da yeni session aç ve şunu yaz merhaba")?.session, .new)
+        XCTAssertEqual(AgentCommandParser.parse("Claude'a yeni konuşmaya merhaba de gönder"),
+                       AgentDictation(target: .claudeCode, body: "merhaba de", send: true, session: .new))
+    }
+
+    func testNewSessionWithoutAgentNameMeansClaude() {
+        XCTAssertEqual(AgentCommandParser.parse("Yeni session'a şunu gönder: build'i kontrol et"),
+                       AgentDictation(target: .claudeCode, body: "build'i kontrol et", send: true, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("New Session bunu gönder selam"),
+                       AgentDictation(target: .claudeCode, body: "selam", send: true, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Yeni konuşmaya bunu gönder selam")?.session, .new)
+        XCTAssertNotEqual(AgentCommandParser.parse("Yeni ChatGPT'ye yaz selam")?.session, .new)
+    }
+
+    func testLastSession() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'da son session'a gönder testleri tekrar çalıştır"),
+                       AgentDictation(target: .claudeCode, body: "testleri tekrar çalıştır", send: true, session: .last))
+        XCTAssertEqual(AgentCommandParser.parse("Son sesine gönder selam naber"),
+                       AgentDictation(target: .claudeCode, body: "selam naber", send: true, session: .last))
+        XCTAssertEqual(AgentCommandParser.parse("Claude'a bir önceki session'da şunu yaz devam et gönder")?.session, .last)
+    }
+
+    func testYeniWithoutSessionWordStaysInBody() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'a yeni bir özellik ekle gönder"),
+                       AgentDictation(target: .claudeCode, body: "yeni bir özellik ekle", send: true))
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'a yaz yeni session'a geçelim gönder"),
+                       AgentDictation(target: .claudeCode, body: "yeni session'a geçelim", send: true))
+        XCTAssertNil(AgentCommandParser.parse("Yeni session açtım bugün"))
+    }
+
+    func testSessionWordWithOtherEndingsStaysInBody() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'a yeni session butonunu kontrol et gönder"),
+                       AgentDictation(target: .claudeCode, body: "yeni session butonunu kontrol et", send: true))
+        XCTAssertEqual(AgentCommandParser.parse("Claude'a son konuşmayı özetle gönder"),
+                       AgentDictation(target: .claudeCode, body: "son konuşmayı özetle", send: true))
+        XCTAssertEqual(AgentCommandParser.parse("Claude'a yeni sohbeti kaydet gönder"),
+                       AgentDictation(target: .claudeCode, body: "yeni sohbeti kaydet", send: true))
+    }
+
+    func testOpenNewSessionAlone() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude Code'da yeni session aç"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Yeni bir konuşma açar mısın?")?.session, .new)
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da yeni Spotify aç")?.session, .new)
+        XCTAssertNil(AgentCommandParser.parse("Yeni Spotify aç"))
+    }
 }

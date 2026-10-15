@@ -48,6 +48,16 @@ enum AgentApp: String, CaseIterable, Sendable {
     ]
 }
 
+/// Which session of the agent app the text goes to ("yeni session'a", "son session'a").
+enum AgentSession: String, Equatable, Sendable {
+    /// Whatever session is open now.
+    case current
+    /// A freshly opened session.
+    case new
+    /// The session Jarvis last sent to, even if another one is open now.
+    case last
+}
+
 /// A dictation addressed to a coding agent: where it goes, what to type, and whether to
 /// press Return afterwards.
 struct AgentDictation: Equatable, Sendable {
@@ -55,6 +65,7 @@ struct AgentDictation: Equatable, Sendable {
     let target: AgentApp?
     let body: String
     let send: Bool
+    var session: AgentSession = .current
 }
 
 /// Pure parsing, no app or keyboard access. Works on the raw Whisper transcript, so it
@@ -70,18 +81,50 @@ enum AgentCommandParser {
     private static let chatGPTName = #"(?:chat\s*gpt|chatgpt|chat\s*y?pti|chatypti|chatypt|çet\s*citi\s*piti|çetypti|çetypt)"#
     private static let suffix = #"(?:['’`]?\s*(?:y?a|y?e|n?[dt][ae]|n[ae]))?"#
     private static let filler = #"(?:\s+(?:şunu|şöyle|bunu|şu|sunu|soyle))?"#
+    // "yeni session'a", "new session", "yeni konuşmaya", "son session'ına" (Whisper: "son
+    // sesine"). The session word itself is required, so "Claude'a yeni bir özellik ekle"
+    // keeps its "yeni", and it only takes a dative / locative ending: "son konuşmayı özetle"
+    // or "yeni session butonunu" stay part of the message.
+    private static let sessionStem = #"(?:session|sesyon|seşın|seşin|seşn|sesin|sesşın|seans|oturum|konuşma|sohbet|chat(?!\s*(?:g?pt|y?pti?))|thread)"#
+    private static let sessionCase = #"(?:['’`]\s*)?(?:s?[ıiuü]?n?[dt][ae]|s?[ıiuü]?n[ae]|y?[ae])"#
+    private static let newSession = #"(?<new>(?:yeni|new)(?:\s+bir)?)"#
+    private static let lastSession = #"(?<last>(?:en\s+)?son|bir\s+önceki|önceki|last|previous)"#
+    private static let openVerb = #"(?:aç|açıp|açın|açtır)\p{L}*"#
+    /// `bare` also accepts "new session" / "yeni sohbet" with no ending; only used where the
+    /// verb has to follow right after, so nothing of the message can be swallowed.
+    private static func sessionQualifier(bare: Bool, spotify: Bool) -> String {
+        // After a Claude name, "yeni Spotify'a" is Whisper's take on "yeni session'a".
+        let stem = spotify ? "(?:\(sessionStem)|spotify)" : sessionStem
+        let word = "\(stem)\(sessionCase)\(bare ? "?" : "")(?!\\p{L})"
+        return "(?:\(newSession)|\(lastSession))\\s+\(word)(?:\\s+\(openVerb)(?:\\s+ve)?)?"
+    }
     // The final capture: a "gönder" / "yolla" verb here means send without a trailing verb.
-    private static let verb = #"\s+(?:yaz|yazsın|yazın|söyle|soyle|sor|((?:gönder|gonder|yolla)\p{L}*))"#
+    private static let verb = #"\s+(?:yaz|yazsın|yazın|söyle|soyle|sor|(?<send>(?:gönder|gonder|yolla)\p{L}*))"#
+    private static let names = "(?:(?<claude>\(claudeName))|(?<codex>\(codexName))|(?<chatgpt>\(chatGPTName)))"
 
     private static let targetRegex: NSRegularExpression = {
-        let pattern = "^\\s*(?:(\(claudeName))|(\(codexName))|(\(chatGPTName)))\(suffix)\(filler)\(verb)\\b[\\s:,.;-]*"
+        let pattern = "^\\s*\(names)\(suffix)(?:\\s+\(sessionQualifier(bare: true, spotify: true)))?\(filler)\(verb)\\b[\\s:,.;-]*"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    // "Yeni session'a şunu gönder …" / "New session bunu yaz …" without naming an app:
+    // sessions are a Claude Code thing, so Claude is assumed. The qualifier is mandatory here.
+    private static let sessionOnlyRegex: NSRegularExpression = {
+        let pattern = "^\\s*\(sessionQualifier(bare: true, spotify: false))\(filler)\(verb)\\b[\\s:,.;-]*"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    // "Claude Code'da yeni session aç" / "yeni bir konuşma aç": open it, write nothing.
+    private static let openNewSessionRegex: NSRegularExpression = {
+        let word = "(?:\(sessionStem)|(?<spotify>spotify))\(sessionCase)?(?:y[ıi])?"
+        let pattern = "^\\s*(?:\(names)\(suffix)\\s+)?\(newSession)\\s+\(word)\\s+\(openVerb)(?:\\s+m[ıi]s[ıi]n)?[\\s.!?,]*$"
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
     // Also accept the natural form "Codex'e merhaba ... gönder". This fallback requires an
     // explicit trailing send verb below, so "Claude'a geçtim" can never become a message.
     private static let directTargetRegex: NSRegularExpression = {
-        let pattern = "^\\s*(?:(\(claudeName))|(\(codexName))|(\(chatGPTName)))\(suffix)\\s+"
+        let pattern = "^\\s*\(names)\(suffix)(?:\\s+\(sessionQualifier(bare: false, spotify: true)))?\\s+"
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
@@ -99,14 +142,28 @@ enum AgentCommandParser {
         var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var target: AgentApp?
         var sendVerb = false
+        var session = AgentSession.current
 
         // Match on a Turkish-lowercased copy: "I" → "ı" etc. keep the same UTF-16 length
         // for the letters these patterns use, but compute the cut on the original string.
         let lowered = body.lowercased(with: locale)
+        if let match = openNewSessionRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)),
+           // "Yeni Spotify aç" is only a misheard session after a Claude name.
+           match.range(withName: "spotify").location == NSNotFound || targetApp(for: match) != nil {
+            return AgentDictation(target: targetApp(for: match) ?? .claudeCode, body: "", send: false, session: .new)
+        }
         if lowered.utf16.count == body.utf16.count,
            let match = targetRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) {
             target = targetApp(for: match)
-            sendVerb = match.range(at: 4).location != NSNotFound
+            sendVerb = match.range(withName: "send").location != NSNotFound
+            session = sessionKind(for: match)
+            let cut = String.Index(utf16Offset: match.range.upperBound, in: body)
+            body = String(body[cut...])
+        } else if lowered.utf16.count == body.utf16.count,
+                  let match = sessionOnlyRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) {
+            target = .claudeCode
+            sendVerb = match.range(withName: "send").location != NSNotFound
+            session = sessionKind(for: match)
             let cut = String.Index(utf16Offset: match.range.upperBound, in: body)
             body = String(body[cut...])
         } else if lowered.utf16.count == body.utf16.count,
@@ -120,6 +177,7 @@ enum AgentCommandParser {
             }
             target = targetApp(for: match)
             sendVerb = true
+            session = sessionKind(for: match)
             let bodyEnd = String.Index(utf16Offset: sendMatch.range.location, in: candidate)
             body = String(candidate[..<bodyEnd])
         }
@@ -135,13 +193,19 @@ enum AgentCommandParser {
 
         body = body.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:-\"'“”‘’«»`")))
         guard target != nil || send else { return nil }
-        return AgentDictation(target: target, body: body, send: send)
+        return AgentDictation(target: target, body: body, send: send, session: session)
     }
 
     private static func targetApp(for match: NSTextCheckingResult) -> AgentApp? {
-        if match.range(at: 1).location != NSNotFound { return .claudeCode }
-        if match.range(at: 2).location != NSNotFound { return .codex }
-        if match.range(at: 3).location != NSNotFound { return .chatGPT }
+        if match.range(withName: "claude").location != NSNotFound { return .claudeCode }
+        if match.range(withName: "codex").location != NSNotFound { return .codex }
+        if match.range(withName: "chatgpt").location != NSNotFound { return .chatGPT }
         return nil
+    }
+
+    private static func sessionKind(for match: NSTextCheckingResult) -> AgentSession {
+        if match.range(withName: "new").location != NSNotFound { return .new }
+        if match.range(withName: "last").location != NSNotFound { return .last }
+        return .current
     }
 }
