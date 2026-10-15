@@ -2438,8 +2438,22 @@ final class AppState {
                 session.latency.finishDecision(route: "selamlama")
                 owLog("[Route] greeting (\(greeting))")
                 self.lastTranscription = text
-                let reply = self.jarvisReply.greet(greeting, hour: Calendar.current.component(.hour, from: Date()))
-                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 4000) }
+                let now = Date()
+                let hour = Calendar.current.component(.hour, from: now)
+                var reply = self.jarvisReply.greet(greeting, hour: hour)
+                // The first "günaydın" / "selam" of the morning brings the day's summary.
+                let today = Calendar.current.startOfDay(for: now).timeIntervalSince1970
+                if [.goodMorning, .hello, .howAreYou].contains(greeting), (5..<12).contains(hour),
+                   UserDefaults.standard.double(forKey: "jarvisLastMorningBriefing") != today,
+                   let summary = await JarvisContext.withTimeout(.seconds(3), { await DailyBriefing.build(dayOffset: 0, now: now) }) {
+                    UserDefaults.standard.set(today, forKey: "jarvisLastMorningBriefing")
+                    reply = reply.replacingOccurrences(of: " Nasıl yardımcı olabilirim?", with: "")
+                        .replacingOccurrences(of: " Emrinizdeyim.", with: "")
+                        .replacingOccurrences(of: " Buradayım.", with: "")
+                        + " " + summary.morningLine(now: now)
+                    owLog("[Briefing] Morning: \(summary.headline)")
+                }
+                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 6000) }
                 return
             }
 

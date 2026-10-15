@@ -31,3 +31,13 @@ final class JarvisContextTests: XCTestCase {
         XCTAssertEqual(fast, 7)
     }
 }
+
+final class MorningBriefingLineTests: XCTestCase {
+    func testMorningLine() {
+        let now = Calendar.current.date(bySettingHour: 8, minute: 5, second: 0, of: Date())!
+        let summary = DailyBriefing.Summary(title: "Bugün", events: ["10:00 Toplantı", "14:00 Spor"], reminders: ["Süt al"], unreadMailCount: 3, mail: [])
+        XCTAssertEqual(summary.morningLine(now: now), "Saat 08:05. Bugün 2 etkinlik var, ilki 10:00 Toplantı. 1 hatırlatıcı ve 3 okunmamış mail bekliyor.")
+        let empty = DailyBriefing.Summary(title: "Bugün", events: [], reminders: [], unreadMailCount: 0, mail: [])
+        XCTAssertEqual(empty.morningLine(now: now), "Saat 08:05. Takvim bugün boş.")
+    }
+}

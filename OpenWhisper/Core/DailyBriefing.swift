@@ -29,6 +29,27 @@ enum DailyBriefing {
             return "\(title): " + parts.joined(separator: " · ") + first
         }
 
+        /// Spoken after the first "günaydın" of the day: the clock, the day's first event and
+        /// what is waiting, in two or three short sentences.
+        func morningLine(now: Date) -> String {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            var sentences = ["Saat \(formatter.string(from: now))."]
+            if !missingAccess.contains("Takvim") {
+                if let first = events.first {
+                    sentences.append(events.count == 1 ? "Bugün bir etkinlik var: \(first)."
+                                     : "Bugün \(events.count) etkinlik var, ilki \(first).")
+                } else {
+                    sentences.append("Takvim bugün boş.")
+                }
+            }
+            var waiting: [String] = []
+            if !reminders.isEmpty { waiting.append("\(reminders.count) hatırlatıcı") }
+            if let unreadMailCount, unreadMailCount > 0 { waiting.append("\(unreadMailCount) okunmamış mail") }
+            if !waiting.isEmpty { sentences.append(waiting.joined(separator: " ve ") + " bekliyor.") }
+            return sentences.joined(separator: " ")
+        }
+
         /// Notification body, one section per source.
         var body: String {
             var lines: [String] = []
