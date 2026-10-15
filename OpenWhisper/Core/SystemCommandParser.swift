@@ -324,7 +324,11 @@ enum SystemCommandParser {
         // Subtitles and fullscreen name themselves; no noun needed.
         if let verb = group(#"\#(lead)altyaz\S* (aç|kapat|kapa)$"#, in: raw) { return .subtitles(on: verb == "aç") }
         // "tam ekran yap", "tam ekranı yap", "tam ekran yapar mısın", "tam ekrana alır mısın".
-        if matches(raw, #"\#(lead)tam ekran(?:ı? yap(?:ar mısın|sana|ıver)?|a (?:al|geç|geçir)(?:ır mısın|sana)?|dan çık(?:ar mısın)?)$"#) { return .fullscreen }
+        // Whisper often bends "yap" ("Tam ekranjap", "Tam ekran, ja") and the noun ("Safar yi
+        // tam ekran yap"), so up to two leading words and those spellings count too; the
+        // sentence still has to end there, so "tam ekranı yapıyorum" stays dictation.
+        let fullscreenVerb = #"(?:yap(?:ar mısın|sana|ıver)?|jap|ja|yab|yapp|hap)"#
+        if matches(raw, #"^(?:\S+ ){0,2}tam ekran(?:ı?[ ,]*\#(fullscreenVerb)|a (?:al|geç|geçir)(?:ır mısın|sana)?|dan çık(?:ar mısın)?)$"#) { return .fullscreen }
         if matches(raw, #"^(?:bir )?(?:sonraki|diğer) video(?:ya)?(?: (?:geç|git|aç|oynat))?$|^(?:bu |şu )?\#(noun) (?:geç|atla)$"#) { return .next }
 
         let hasNoun = matches(raw, #"(?:^|\s)\#(noun)"#)

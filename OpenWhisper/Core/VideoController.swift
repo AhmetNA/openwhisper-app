@@ -186,6 +186,35 @@ enum VideoController {
             """
     }
 
+    /// `before` and `after` are AppleScript keywords; as variable names they broke the whole
+    /// script ("Expected expression but found to"), so the state lives in fsBefore/fsAfter.
+    /// `VideoScriptCompileTests` compiles this with osacompile.
+    static let fullscreenScript: String = {
+        let state = "(document.fullscreenElement||document.webkitFullscreenElement)?'on':'off'"
+        let focus = "(function(){var a=document.activeElement;if(a&&a.blur){a.blur();}var p=document.getElementById('movie_player');if(p){p.focus();}return 'ok';})()"
+        return """
+            tell application id "com.apple.Safari"
+                set t to current tab of front window
+                set u to URL of t
+                if u does not contain "youtube.com/watch" then return "nobutton"
+                set fsBefore to "unknown"
+                try
+                    set fsBefore to (do JavaScript "\(state)" in t) as text
+                    do JavaScript "\(focus)" in t
+                end try
+            end tell
+            delay 0.15
+            tell application "System Events" to keystroke "f"
+            if fsBefore is "unknown" then return "sent"
+            delay 0.8
+            tell application id "com.apple.Safari"
+                set fsAfter to (do JavaScript "\(state)" in current tab of front window) as text
+            end tell
+            if fsAfter is fsBefore then return "unchanged"
+            return fsAfter
+            """
+    }()
+
     /// YouTube's own "f" shortcut; only into Safari while it is in front, never another app.
     /// The player gets keyboard focus first: with the caret in the search box (or on a button
     /// Jarvis clicked earlier) the "f" went nowhere and Jarvis still said "Tam ekran". Whether
@@ -194,29 +223,7 @@ enum VideoController {
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == safariBundleID else {
             return BrowserController.notFront
         }
-        let state = "(document.fullscreenElement||document.webkitFullscreenElement)?'on':'off'"
-        let focus = "(function(){var a=document.activeElement;if(a&&a.blur){a.blur();}var p=document.getElementById('movie_player');if(p){p.focus();}return 'ok';})()"
-        let source = """
-            tell application id "com.apple.Safari"
-                set t to current tab of front window
-                set u to URL of t
-                if u does not contain "youtube.com/watch" then return "nobutton"
-                set before to "unknown"
-                try
-                    set before to (do JavaScript "\(state)" in t) as text
-                    do JavaScript "\(focus)" in t
-                end try
-            end tell
-            delay 0.15
-            tell application "System Events" to keystroke "f"
-            if before is "unknown" then return "sent"
-            delay 0.8
-            tell application id "com.apple.Safari"
-                set after to (do JavaScript "\(state)" in current tab of front window) as text
-            end tell
-            if after is before then return "unchanged"
-            return after
-            """
+        let source = fullscreenScript
         let result = OSAScriptRunner.run(["-e", source])
         owLog("[Video] fullscreen → \(result ?? "script failed")")
         switch result {

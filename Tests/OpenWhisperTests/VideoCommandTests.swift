@@ -56,6 +56,11 @@ final class VideoCommandTests: XCTestCase {
         XCTAssertEqual(video("Tam ekran yapar mısın"), .fullscreen)
         XCTAssertEqual(video("Tam ekrana alır mısın"), .fullscreen)
         XCTAssertNil(video("Videoyu tam ekranı yapıyorum"))
+        // Whisper output from the 2026-10-15 Safari test.
+        XCTAssertEqual(video("Tam ekranjap."), .fullscreen)
+        XCTAssertEqual(video("Tam ekran, ja."), .fullscreen)
+        XCTAssertEqual(video("Safar yi tam ekran yap."), .fullscreen)
+        XCTAssertNil(video("Bu oyunu tam ekran oynuyorum"))
         XCTAssertEqual(video("Videonun bitmesine ne kadar var?"), .remaining)
         XCTAssertEqual(video("Videonun kaç dakikası kaldı"), .remaining)
         XCTAssertEqual(video("Videonun süresi ne kadar"), .remaining)
