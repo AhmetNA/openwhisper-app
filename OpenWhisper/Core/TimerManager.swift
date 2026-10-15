@@ -95,7 +95,9 @@ final class TimerManager {
                 stopRinging()
                 return "Alarmı kapattım"
             }
-            guard !timers.isEmpty || ringing != nil else { return "Kurulu bir alarm yok" }
+            guard !timers.isEmpty || ringing != nil else {
+                return "Jarvis'te kurulu alarm yok. Saat uygulamasındaki alarmları oradan kapatabilirsin"
+            }
             let removed = all ? timers : Array(timers.prefix(1))
             remove(removed)
             if all { stopRinging() }

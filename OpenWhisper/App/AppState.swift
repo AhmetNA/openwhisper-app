@@ -2340,7 +2340,15 @@ final class AppState {
                 session.latency.finishDecision(route: "zamanlayıcı")
                 owLog("[Route] timer (\(timerCommand))")
                 self.lastTranscription = text
-                let status = timers.perform(timerCommand)
+                let status: String
+                // A wall-clock alarm goes to the Clock app, which rings it even without Jarvis;
+                // Jarvis keeps it only when that can't be done (no shortcut, more than a day away).
+                if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
+                   await ClockAlarm.set(date, label: label) {
+                    status = "Saat uygulamasına alarm kurdum: \(TimerManager.clock(date, sayDay: true))"
+                } else {
+                    status = timers.perform(timerCommand)
+                }
                 owLog("[Result] Timer: \(status)")
                 session.latency.markOutput("zamanlayıcı")
                 self.showFlowBarMessage(status, durationMs: 3500)

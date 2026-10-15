@@ -154,3 +154,16 @@ final class TimerReplyTests: XCTestCase {
         XCTAssertEqual(TimerManager.clock(tomorrow, now: now, calendar: calendar), "yarın 07:00")
     }
 }
+
+final class ClockAlarmTests: XCTestCase {
+    func testInputAndRange() {
+        let calendar = Calendar.current
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 15, minute: 30))!
+        let tomorrow7 = calendar.date(from: DateComponents(year: 2026, month: 10, day: 16, hour: 7))!
+        XCTAssertEqual(ClockAlarm.input(for: tomorrow7, label: nil), "2026-10-16 07:00|Jarvis")
+        XCTAssertEqual(ClockAlarm.input(for: tomorrow7, label: "çay|demle"), "2026-10-16 07:00|çay demle")
+        XCTAssertTrue(ClockAlarm.canSet(tomorrow7, now: now))
+        XCTAssertFalse(ClockAlarm.canSet(now.addingTimeInterval(-60), now: now))
+        XCTAssertFalse(ClockAlarm.canSet(now.addingTimeInterval(2 * 24 * 3600), now: now))
+    }
+}
