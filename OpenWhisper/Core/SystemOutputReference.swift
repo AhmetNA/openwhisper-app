@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
+import os
 
 /// What the Mac is playing, as 16 kHz mono with host-clock timestamps: the echo reference for
 /// `EchoCanceller`. Audio-only ScreenCaptureKit stream (like `SystemAudioCapture`), so it needs
@@ -11,12 +12,18 @@ final class SystemOutputReference: NSObject, SCStreamOutput, SCStreamDelegate, @
     typealias Handler = @Sendable ([Float], Double) -> Void
 
     private let queue = DispatchQueue(label: "com.openwhisper.aec-reference", qos: .userInitiated)
-    private let handler: Handler
+    /// Swappable so a recording can take over the wake listener's running stream.
+    private let handler: OSAllocatedUnfairLock<Handler>
     private var stream: SCStream?
     private var loggedTiming = false
 
     init(handler: @escaping Handler) {
-        self.handler = handler
+        self.handler = OSAllocatedUnfairLock(initialState: handler)
+    }
+
+    /// Sends later buffers to `handler` instead; the stream keeps running.
+    func setHandler(_ handler: @escaping Handler) {
+        self.handler.withLock { $0 = handler }
     }
 
     /// Never prompts: without the permission the caller just runs without a reference.
@@ -69,6 +76,7 @@ final class SystemOutputReference: NSObject, SCStreamOutput, SCStreamDelegate, @
             let now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
             owLog(String(format: "[AEC] First reference buffer: pts − host now = %.1f ms", (pts - now) * 1000))
         }
+        let handler = handler.withLock { $0 }
         try? sampleBuffer.withAudioBufferList { buffers, _ in
             guard let first = buffers.first, let data = first.mData else { return }
             let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size

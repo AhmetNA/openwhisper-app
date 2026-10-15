@@ -5,6 +5,7 @@ import ApplicationServices
 import ServiceManagement
 import UserNotifications
 import QuartzCore
+import os
 
 /// Owns the audio/transcript state for one dictation. A new recording gets a new session so a
 /// later Fn press cannot reset or append to a dictation that is still being transcribed.
@@ -24,6 +25,15 @@ final class RecordingTranscriptionSession {
     var isVoiceCommand = false
     /// How the recording was started; upgraded to `.fnSpace` when Space locks a Fn hold.
     var trigger: RecordingTrigger = .fnHold
+    /// The Mac was playing media during the recording: audio the profile rejects is then most
+    /// likely the speakers, and is never transcribed or offered back (see the salvage path).
+    var mediaWasPlaying = false
+    /// Whether this recording ran echo cancellation; then `playbackHeard` (set by the canceller
+    /// when the speakers actually carried sound) decides instead of `mediaWasPlaying`, which stays
+    /// true while Safari merely has a paused video open.
+    var echoCancelled = false
+    var playbackHeard = OSAllocatedUnfairLock(initialState: false)
+    var speakersPlayed: Bool { echoCancelled ? playbackHeard.withLock { $0 } : mediaWasPlaying }
     /// Commands (system, Spotify, reminders, "… bunu yaz") run for voice sessions and for the
     /// dictation keys (Fn, Fn+Space, the recording shortcut) alike. Chat, the first-sentence
     /// split and spoken replies stay voice-only: at the keyboard a non-command is typed.
@@ -1275,6 +1285,7 @@ final class AppState {
         let recordingInputDeviceUID = resolvedInputDeviceUID
         let processingMode = audioProcessingMode
         let echoCancellation = recordingEchoCancellationWanted
+        let playbackHeard = OSAllocatedUnfairLock(initialState: false)
         let audioEngineRef = audioEngine
         let smartEndpoint = smartTurnEndpointDetector
         let endpointSampleCallback: (([Float]) -> Void)? = smartEndpoint.map { endpoint in
@@ -1288,9 +1299,13 @@ final class AppState {
         let captureHandoff: WakeCaptureHandoff? = wakeLikeSession && processingMode != .appleVoiceProcessing
             ? wakeWordListener?.handOffCapture(
                 toDeviceID: recordingInputDeviceUID.flatMap(AudioEngine.audioDeviceID(forUID:)) ?? AudioEngine.defaultInputDeviceID(),
-                wakePreroll: recordingTrigger == .wakeWord)
+                wakePreroll: recordingTrigger == .wakeWord,
+                echo: echoCancellation)
             : nil
-        if audioEngineRef == nil { captureHandoff?.capture.stop() }
+        if audioEngineRef == nil {
+            captureHandoff?.capture.stop()
+            captureHandoff?.echo?.release()
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
@@ -1298,6 +1313,7 @@ final class AppState {
                 audioProcessingMode: processingMode,
                 sampleCallback: endpointSampleCallback,
                 echoCancellation: echoCancellation,
+                playbackHeard: playbackHeard,
                 handoff: captureHandoff,
                 levelCallback: { rawLevel in
                     let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
@@ -1347,6 +1363,9 @@ final class AppState {
         )
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
+        session.mediaWasPlaying = mediaPlaying
+        session.echoCancelled = echoCancellation
+        session.playbackHeard = playbackHeard
         // A key press means the user is at the Mac: treat the voice like a matched "Jarvis".
         session.wakeSpeakerVerified = session.trigger == .jarvisKey
             || ([.wakeWord, .followUp].contains(session.trigger) && pendingWakeSpeakerVerified)
@@ -1700,6 +1719,12 @@ final class AppState {
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
                 noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
+                return
+            }
+            // What the Mac plays is never transcribed, shown or offered as "Bu benim sesimdi".
+            guard !session.speakersPlayed else {
+                owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; Whisper skipped (speaker audio is never salvaged)")
+                noteSpeakers { $0.notes.append("rejected while media played, Whisper skipped") }
                 return
             }
             owLog("[OpenWhisper] Batch \(segmentNumber) below target-speaker threshold; transcribing for clipboard salvage only")

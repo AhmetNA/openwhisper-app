@@ -253,6 +253,7 @@ final class AudioEngine: @unchecked Sendable {
         audioProcessingMode: AudioProcessingMode,
         sampleCallback: (([Float]) -> Void)? = nil,
         echoCancellation: Bool = false,
+        playbackHeard: OSAllocatedUnfairLock<Bool>? = nil,
         handoff: WakeCaptureHandoff? = nil,
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
@@ -316,6 +317,11 @@ final class AudioEngine: @unchecked Sendable {
             handoff.capture.stop()
             owLog("[AudioEngine] Wake listener stream not usable for this recording; stopped it")
         }
+        // The listener's echo reference and filter only fit a recording that continues its mic.
+        let echoHandoff = echoCancellation ? adoptedHandoff?.echo : nil
+        if echoHandoff == nil { handoff?.echo?.release() }
+        // No-op once the recording's canceller has attached; stops the stream on early returns.
+        defer { echoHandoff?.release() }
 
         // Only rebuild the AudioEngine graph if device/mode changed or engine is unconfigured
         if capture == nil, !isEnginePrepared || configuredDeviceUID != deviceUID || configuredAudioProcessingMode != audioProcessingMode {
@@ -329,7 +335,11 @@ final class AudioEngine: @unchecked Sendable {
         lock.lock()
         let loadedDeepFilter = deepFilterProcessor
         lock.unlock()
-        let useDeepFilter = audioProcessingMode == .deepFilterNet && loadedDeepFilter != nil
+        let deepFilterWanted = audioProcessingMode == .deepFilterNet && loadedDeepFilter != nil
+        // Echo-cancelled recordings run DeepFilterNet after the canceller, on its queue
+        // (`PostEchoDenoiser`): cancelling the denoiser's output left most of the speakers' sound in.
+        let postEchoDenoiser = echoCancellation && deepFilterWanted ? loadedDeepFilter.flatMap(PostEchoDenoiser.init) : nil
+        let useDeepFilter = deepFilterWanted && postEchoDenoiser == nil
         let didFallBackFromDeepFilter = audioProcessingMode == .deepFilterNet && loadedDeepFilter == nil
         if didFallBackFromDeepFilter {
             owLog("[AudioEngine] DeepFilterNet selected but not loaded (prewarm failed or still loading); recording without it")
@@ -403,7 +413,7 @@ final class AudioEngine: @unchecked Sendable {
         // Sized to this recording's actual worst-case denoised-frame count so the real-time
         // callback never needs to grow this array; harmless no-op if already large enough.
         deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
-        let echo = echoCancellation ? RecordingEchoCanceller() : nil
+        let echo = echoCancellation ? RecordingEchoCanceller(handoff: echoHandoff, denoiser: postEchoDenoiser, playbackHeard: playbackHeard) : nil
         recordingEcho = echo
         lock.unlock()
         if let echo {

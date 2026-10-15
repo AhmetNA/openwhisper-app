@@ -226,8 +226,8 @@ final class WakeWordListener {
             aecReferenceAudible = audible
             let held = aecAligner.drain()
             aecAligner = EchoReferenceAligner()
-            echoCanceller = EchoCanceller()
-            echoCanceller.log = { owLog($0) }
+            // The room's echo path hasn't changed: keep the converged filter, drop its part block.
+            _ = echoCanceller.flushPending()
             if audible {
                 loggedMicTiming = false
                 owLog("[AEC] Audible reference — processing resumed")
@@ -240,6 +240,28 @@ final class WakeWordListener {
         }
         guard audible else { return }
         aecAligner.appendReference(samples, startIndex: Int((pts * Double(EchoCanceller.sampleRate)).rounded()))
+    }
+
+    /// Queue: gives up the canceller, its reference history and the mic it holds to a recording
+    /// (nil unless it was cancelling an audible reference) and returns this listener to the plain
+    /// mic. The recording drops its own copy of the held span (see `EchoCancelledStream.adopt`).
+    private func takeEchoState(prerollStart: Int?) -> EchoStateHandoff.State? {
+        acceptedReference = 0
+        let held = aecAligner.heldMic.map { $0.lowerBound - echoCanceller.pendingCount }
+        let covered = prerollStart.map { start in held.map { start <= $0 } ?? false } ?? false
+        let state = aecActive && aecReferenceAudible == true && covered
+            ? EchoStateHandoff.State(aligner: aecAligner, canceller: echoCanceller)
+            : nil
+        if aecActive, aecReferenceAudible == true, !covered {
+            owLog("[AEC] Echo filter not handed over: the recording doesn't replay the audio it holds")
+        }
+        aecActive = false
+        aecReferenceAudible = nil
+        aecAligner = EchoReferenceAligner()
+        echoCanceller = EchoCanceller()
+        aecDump?.close()
+        aecDump = nil
+        return state
     }
 
     /// Queue: back to the plain mic; whatever the aligner still held is scored as is.
@@ -281,12 +303,31 @@ final class WakeWordListener {
     /// (~0.45 s, then a near-silent first buffer, measured 28 Sep 2026). With `wakePreroll`, the
     /// audio since the last direct wake is passed on too, so "Hey Jarvis, <command>" in one
     /// breath keeps the command's start. The listener stops as if `stop()` was called.
-    func handOffCapture(toDeviceID deviceID: AudioDeviceID?, wakePreroll: Bool) -> WakeCaptureHandoff? {
+    /// With `echo`, the running echo reference and the converged canceller go along too
+    /// (`EchoStateHandoff`), so the recording's cancellation doesn't start from zero.
+    func handOffCapture(toDeviceID deviceID: AudioDeviceID?, wakePreroll: Bool, echo: Bool = false) -> WakeCaptureHandoff? {
         guard isRunning, let capture, let deviceID, capture.deviceID == deviceID else { return nil }
         let ring = nativeRing
         let since = wakePreroll ? wakeAudioHostTime.withLock { $0 } : nil
+        var echoHandoff: EchoStateHandoff?
+        if echo, let reference = echoReference {
+            // Detached before `stop()`, which would otherwise stop the stream.
+            echoReference = nil
+            let handoff = EchoStateHandoff(reference: reference)
+            echoHandoff = handoff
+            // The held mic the filter carries must be audio the recording replays (the preroll);
+            // otherwise it would put sound from before the session into it.
+            let prerollStart = since.flatMap { since in
+                mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: 3)
+                    ? Int((AVAudioTime.seconds(forHostTime: since) * Double(EchoCanceller.sampleRate)).rounded())
+                    : nil
+            }
+            queue.async { [weak self] in
+                handoff.deliver(self?.takeEchoState(prerollStart: prerollStart))
+            }
+        }
         // A wake older than the ring (or none) has nothing left worth prepending.
-        let handoff = WakeCaptureHandoff(capture: capture) {
+        let handoff = WakeCaptureHandoff(capture: capture, echo: echoHandoff) {
             guard let since, mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: 3) else { return [] }
             return ring.buffers(since: since)
         }
@@ -637,9 +678,12 @@ final class WakeWordListener {
 final class WakeCaptureHandoff {
     let capture: HALInputCapture
     let preroll: () -> [(AVAudioPCMBuffer, AVAudioTime)]
+    /// The running echo reference and converged filter; whoever doesn't use it must `release()` it.
+    let echo: EchoStateHandoff?
 
-    init(capture: HALInputCapture, preroll: @escaping () -> [(AVAudioPCMBuffer, AVAudioTime)]) {
+    init(capture: HALInputCapture, echo: EchoStateHandoff? = nil, preroll: @escaping () -> [(AVAudioPCMBuffer, AVAudioTime)]) {
         self.capture = capture
+        self.echo = echo
         self.preroll = preroll
     }
 }

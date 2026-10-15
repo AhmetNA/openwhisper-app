@@ -33,6 +33,7 @@ final class VoiceTestInjector: @unchecked Sendable {
         var activeUntilHost: UInt64 = 0
         var bypassSpeakerChecks = true
         var focus: TextFocusStatus?
+        var audible = false
         var noiseSeed: UInt32 = 0x1234_5678
     }
 
@@ -63,7 +64,14 @@ final class VoiceTestInjector: @unchecked Sendable {
         return state.withLock { now < $0.activeUntilHost ? $0.focus : nil }
     }
 
-    /// `openwhisper://voicetest/play?file=<name in directory>&speaker=user|real`
+    /// Replies and the wake chime play at zero volume (same timing, nothing heard) unless the
+    /// scenario tests what comes out of the speakers (`audible=1`).
+    var mutesOutput: Bool {
+        let now = mach_absolute_time()
+        return state.withLock { now < $0.activeUntilHost && !$0.audible }
+    }
+
+    /// `openwhisper://voicetest/play?file=<name in directory>&speaker=user|real&audible=1`
     /// `&focus=editable|notEditable|unknown&id=<marker>`
     /// and `openwhisper://voicetest/end`.
     func handle(_ url: URL) {
@@ -80,7 +88,8 @@ final class VoiceTestInjector: @unchecked Sendable {
                 return
             }
             play(Self.directory.appendingPathComponent(name), bypassSpeaker: query("speaker") != "real",
-                 focus: query("focus").flatMap(TextFocusStatus.init(rawValue:)), id: query("id"))
+                 focus: query("focus").flatMap(TextFocusStatus.init(rawValue:)),
+                 audible: query("audible") == "1", id: query("id"))
         case "end":
             state.withLock { $0.activeUntilHost = 0; $0.samples = [] }
             owLog("[VoiceTest] Ended \(query("id") ?? "")")
@@ -89,7 +98,7 @@ final class VoiceTestInjector: @unchecked Sendable {
         }
     }
 
-    private func play(_ file: URL, bypassSpeaker: Bool, focus: TextFocusStatus?, id: String?) {
+    private func play(_ file: URL, bypassSpeaker: Bool, focus: TextFocusStatus?, audible: Bool, id: String?) {
         let samples: [Float]
         let sampleRate: Double
         do {
@@ -117,8 +126,10 @@ final class VoiceTestInjector: @unchecked Sendable {
             $0.activeUntilHost = until
             $0.bypassSpeakerChecks = bypassSpeaker
             $0.focus = focus
+            $0.audible = audible
         }
-        owLog(String(format: "[VoiceTest] Playing %@ (%.2f s)%@%@%@", file.lastPathComponent, duration,
+        owLog(String(format: "[VoiceTest] Playing %@ (%.2f s)%@%@%@%@", file.lastPathComponent, duration,
+                     audible ? ", replies audible" : ", replies muted",
                      bypassSpeaker ? ", speaker checks bypassed" : ", speaker checks on",
                      focus.map { ", focus \($0.rawValue)" } ?? "",
                      id.map { " id \($0)" } ?? ""))

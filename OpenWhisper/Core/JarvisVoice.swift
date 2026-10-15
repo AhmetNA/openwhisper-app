@@ -284,7 +284,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             for attempt in 1...4 {
                 let candidate = try AVAudioPlayer(data: audio)
                 candidate.delegate = self
-                candidate.volume = Self.replyVolume
+                candidate.volume = VoiceTestInjector.shared.mutesOutput ? 0 : Self.replyVolume
                 self.player = candidate
                 candidate.prepareToPlay()
                 if candidate.play() {

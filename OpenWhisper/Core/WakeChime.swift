@@ -11,7 +11,7 @@ enum WakeChime {
     }()
 
     static func play() {
-        guard let sound else { return }
+        guard let sound, !VoiceTestInjector.shared.mutesOutput else { return }
         sound.stop()
         sound.play()
     }

@@ -457,6 +457,9 @@ final class EchoCanceller {
         return out
     }
 
+    /// Mic samples taken in but not yet out (short of a whole block).
+    var pendingCount: Int { micPending.count }
+
     /// The mic samples still short of a whole block, unprocessed; a recording's last few ms.
     func flushPending() -> [Float] {
         defer { micPending.removeAll(); refPending.removeAll() }
@@ -570,7 +573,7 @@ struct EchoReferenceAligner {
     private(set) var referenceEnd: Int?
     private var micPending: [Float] = []
     private var micPendingStart = 0
-    private var micNext: Int?
+    private(set) var micNext: Int?
     private(set) var resyncs = 0
     /// Released mic samples, and how many of them had arrived reference (the rest got
     /// silence): a low share means the clocks disagree or the reference stalls.
@@ -632,6 +635,12 @@ struct EchoReferenceAligner {
         micPendingStart += releaseCount
         defer { unpaired.removeAll() }
         return (unpaired + mic, [Float](repeating: 0, count: unpaired.count) + reference)
+    }
+
+    /// Host indices of the mic held waiting for the reference: a recording that takes over this
+    /// aligner drops the same span from its own copy of the stream (see `EchoCancelledStream.adopt`).
+    var heldMic: Range<Int>? {
+        micNext.map { micPendingStart..<$0 }
     }
 
     /// Everything still held, as plain mic (used when cancellation switches off).

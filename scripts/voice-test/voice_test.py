@@ -19,7 +19,8 @@ match), forbid (regexes), timeout (s), safe (false = changes something hard to u
 without --all), speaker ("user" = treat the voice as the enrolled user's, "real" = keep the
 speaker checks on), voice (per-scenario TTS voice), focus (what the keyboard
 focus counts as: "editable" = a text field, the default, "notEditable" = nothing to type into,
-"unknown"; decides dictation vs. answer), setup / teardown (shell commands), skip_if (shell command; exit 0 = skip), note, wake (false = no "Hey Jarvis" prefix).
+"unknown"; decides dictation vs. answer), audible (true = Jarvis's reply and the wake
+chime come out of the speakers; otherwise they run at zero volume), setup / teardown (shell commands), skip_if (shell command; exit 0 = skip), note, wake (false = no "Hey Jarvis" prefix).
 """
 
 import argparse
@@ -140,7 +141,10 @@ def run_scenario(sc: dict, args) -> tuple[bool, str, str]:
     # Whether Jarvis answers or types depends on the keyboard focus (`[Addressee]`); the app
     # takes it from the scenario instead of whatever the developer has in front.
     focus = sc.get("focus", "editable")
-    open_url(f"openwhisper://voicetest/play?file={clip.name}&speaker={speaker}&focus={focus}&id={marker}")
+    # Replies are synthesized and "played" at zero volume unless the scenario is about them.
+    audible = "1" if sc.get("audible") else "0"
+    open_url(f"openwhisper://voicetest/play?file={clip.name}&speaker={speaker}&focus={focus}"
+             f"&audible={audible}&id={marker}")
     expects = [re.compile(p) for p in sc.get("expect", [])]
     forbids = [re.compile(p) for p in sc.get("forbid", [])]
     deadline = time.time() + sc.get("timeout", 25)
@@ -155,7 +159,9 @@ def run_scenario(sc: dict, args) -> tuple[bool, str, str]:
             verdict, why = False, f"forbidden: {bad}"
             break
         missing = [e.pattern for e in expects if not e.search(log)]
-        if SESSION_DONE.search(log) and done_at is None:
+        # Only the session our clip woke counts: a Fn dictation finishing meanwhile must not.
+        woke = log.find("Voice session requested (wake word)")
+        if woke >= 0 and SESSION_DONE.search(log, woke) and done_at is None:
             done_at = time.time()
         if not missing and done_at is not None:
             # Let late lines (a reply, a follow-up window) land so `forbid` can still catch them.

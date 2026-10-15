@@ -105,6 +105,90 @@ final class RecordingEchoCancellerTests: XCTestCase {
         let erle = 10 * log10(energy(mic[tail]) / max(energy(out[tail]), 1e-12))
         XCTAssertGreaterThan(erle, 10, "echo suppression after convergence: \(erle) dB")
     }
+
+    /// A recording that continues the wake listener's stream adopts its converged filter,
+    /// reference history and held mic: every sample comes out once, in order, and the echo is
+    /// cancelled from the first block instead of after several seconds.
+    func testWarmHandoffCancelsFromTheStartAndPairsThePreroll() {
+        warmHandoff(engine: .linear, minimumERLE: 20)
+    }
+
+    /// The user's engine; same seam, measured with AEC3's linear output.
+    func testWarmHandoffWithAEC3() {
+        warmHandoff(engine: .aec3, minimumERLE: 10)
+    }
+
+    private func warmHandoff(engine: EchoCancellationEngineKind, minimumERLE: Float) {
+        let delay = 480
+        let total = 16_000 * 12
+        let reference = noise(total + 8_000, seed: 8, amplitude: 0.3)
+        var mic = [Float](repeating: 0, count: total)
+        for i in delay..<total { mic[i] = 0.5 * reference[i - delay] }
+        // ScreenCaptureKit's buffers carry timestamps ~75 ms behind the mic's, so the aligner
+        // holds the newest mic (plus its 100 ms lookahead) until the reference catches up.
+        let lag = 1_200
+        let handoffAt = 16_000 * 8
+        let prerollStart = handoffAt - 3_200 // the wake preroll replays 200 ms
+
+        // The wake listener: its own aligner and canceller over the first 8 s.
+        var aligner = EchoReferenceAligner()
+        let listener = EchoCanceller(engine: engine)
+        var offset = 0
+        while offset < handoffAt {
+            let referenceStart = max(0, offset - lag), referenceEnd = offset + chunk - lag
+            if referenceEnd > referenceStart {
+                aligner.appendReference(Array(reference[referenceStart..<referenceEnd]), startIndex: t0 + referenceStart)
+            }
+            if let pair = aligner.appendMic(Array(mic[offset..<offset + chunk]), startIndex: t0 + offset) {
+                _ = listener.process(mic: pair.mic, reference: pair.reference)
+            }
+            offset += chunk
+        }
+
+        let stream = EchoCancelledStream(engine: engine)
+        stream.adopt(.init(aligner: aligner, canceller: listener))
+        var out: [Float] = []
+        var sent = handoffAt - lag
+        var at = prerollStart
+        while at < total {
+            let target = min(reference.count, max(sent, at + 3_200 + chunk - lag))
+            if target > sent {
+                stream.appendReference(Array(reference[sent..<target]), startIndex: t0 + sent)
+                sent = target
+            }
+            out += stream.process(mic: Array(mic[at..<at + chunk]), hostIndex: t0 + at)
+            at += chunk
+        }
+        out += stream.finish()
+        XCTAssertEqual(stream.inputSamples, stream.outputSamples)
+        XCTAssertEqual(out.count, total - prerollStart)
+        XCTAssertEqual(stream.idleSamples, 0, "preroll released without its reference")
+        // The raw overlap (listener-cancelled, its output gone) is at most the aligner's hold.
+        let overlap = (handoffAt - lag - EchoCanceller.lookahead) - prerollStart
+        XCTAssertLessThan(overlap, 1_000)
+        let firstSecond = (overlap + 256)..<16_000
+        let micFirst = mic[(prerollStart + firstSecond.lowerBound)..<(prerollStart + firstSecond.upperBound)]
+        let warmERLE = 10 * log10(energy(micFirst) / max(energy(out[firstSecond]), 1e-12))
+        XCTAssertGreaterThan(warmERLE, minimumERLE, "\(engine) warm start, first second: \(warmERLE) dB")
+    }
+    /// Reference buffers that arrive between the handoff and the recording's attach are kept
+    /// and delivered first; an unclaimed handoff stops forwarding.
+    func testEchoStateHandoffBuffersUntilAttachedAndWaitsForState() {
+        let handoff = EchoStateHandoff(reference: SystemOutputReference { _, _ in })
+        XCTAssertNil(handoff.waitForState(timeout: 0.01), "nothing delivered yet")
+        handoff.appendReference([1], pts: 1)
+        handoff.appendReference([2], pts: 2)
+        handoff.deliver(.init(aligner: EchoReferenceAligner(), canceller: EchoCanceller(engine: .linear)))
+        XCTAssertNotNil(handoff.waitForState(timeout: 0))
+        XCTAssertNil(handoff.waitForState(timeout: 0), "state is handed out once")
+        var received: [Float] = []
+        handoff.attach { samples, _ in received += samples }
+        handoff.appendReference([3], pts: 3)
+        XCTAssertEqual(received, [1, 2, 3])
+        handoff.release() // attached: no-op
+        handoff.appendReference([4], pts: 4)
+        XCTAssertEqual(received, [1, 2, 3, 4])
+    }
 }
 
 private struct SeededGenerator: RandomNumberGenerator {

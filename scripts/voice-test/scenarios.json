@@ -1,6 +1,9 @@
 [
   {"name": "saat", "smoke": true, "say": "Saat kaç?",
    "expect": ["\\[Route\\] system \\(time\\)", "\\[Voice\\] Reply: 'Saat"]},
+  {"name": "ses-cikisi", "say": "Saat kaç?", "audible": true,
+   "expect": ["\\[Voice\\] Speaking 'Saat"],
+   "note": "Cevap hoparlörden duyulur; yalnızca ses çıkışını denerken"},
   {"name": "sarj", "say": "Şarj kaç?",
    "expect": ["\\[Route\\] system \\(battery\\)"]},
   {"name": "sarjimiz-kac", "say": "Şarjımız kaç?",
