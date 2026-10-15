@@ -2370,9 +2370,68 @@ final class AppState {
                 return
             }
 
+            // Several commands at once: "sesi kıs ve Bluetooth'u kapat", "Wi-Fi'yi aç, sonra
+            // 10 dakikalık alarm kur". Only when every part is a command on its own; otherwise
+            // the transcript goes on to the single-command routes below.
+            let timers = TimerManager.shared
+            if session.acceptsCommands,
+               let steps = MultiCommandStep.plan(
+                   trimmed, ringing: timers.ringing != nil, active: !timers.timers.isEmpty,
+                   installedApps: SystemController.installedApps(), shortcuts: SystemController.shortcutNames
+               ) {
+                session.latency.finishDecision(route: "çoklu komut")
+                owLog("[Route] multi-command (\(steps.count)): \(steps.map { "'\($0.text)' → \($0.command)" }.joined(separator: ", "))")
+                self.lastTranscription = text
+                let actionStartedAt = session.latency.timestamp()
+                var statuses: [String] = []
+                var replies: [String?] = []
+                for step in steps {
+                    switch step.command {
+                    case .timer(let timerCommand):
+                        let status: String
+                        if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
+                           await ClockAlarm.set(date, label: label) {
+                            status = "Saat uygulamasına alarm kurdum: \(TimerManager.clock(date, sayDay: true))"
+                        } else {
+                            status = timers.perform(timerCommand)
+                        }
+                        owLog("[Result] Timer: \(status)")
+                        statuses.append(status)
+                        replies.append(self.jarvisReply.timer(timerCommand, status: status))
+                    case .system(let command):
+                        if step.command.endsSession {
+                            // Say everything before the Mac stops listening.
+                            if session.isVoiceCommand {
+                                await self.speakReply(self.jarvisReply.combined(replies + ["Görüşürüz."]))
+                            }
+                            replies = []
+                        }
+                        if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
+                        let status = await SystemController.perform(command)
+                        if case .video(let action) = command, action.changesPlayback,
+                           !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
+                        owLog("[Result] System command: \(status)")
+                        statuses.append(status)
+                        if !step.command.endsSession { replies.append(self.jarvisReply.system(command, status: status)) }
+                    case .spotify(let request):
+                        let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
+                        let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: session.targetApp)
+                        owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
+                        if handled, !resumes { resumeMediaAfterCommand = false }
+                        statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")
+                        replies.append(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
+                    }
+                }
+                session.latency.record(.action, since: actionStartedAt, detail: "çoklu komut")
+                session.latency.markOutput("çoklu komut tamamlandı")
+                let summary = statuses.joined(separator: " · ")
+                self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : 3500)
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.combined(replies)) }
+                return
+            }
+
             // "20 dakikalık alarm kur", "10 dakika sonra beni uyar", "saat 7'de beni uyandır",
             // "zamanlayıcı ne kadar kaldı"; while one rings, "tamam" / "5 dakika ertele".
-            let timers = TimerManager.shared
             if session.acceptsCommands,
                let timerCommand = TimerCommandParser.parse(trimmed, ringing: timers.ringing != nil, active: !timers.timers.isEmpty) {
                 session.latency.finishDecision(route: "zamanlayıcı")

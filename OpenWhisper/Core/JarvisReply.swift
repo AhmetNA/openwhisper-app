@@ -132,6 +132,22 @@ struct JarvisReply {
         }
     }
 
+    /// Several commands at once: answers and failures are all said, in order, but the acks
+    /// fold into a single one ("Tamam. Tamam." would sound broken). nil when nothing is said.
+    mutating func combined(_ replies: [String?]) -> String? {
+        let said = replies.compactMap { $0 }
+        let worded = said.filter { !Self.isAck($0) }
+        if worded.isEmpty { return said.isEmpty ? nil : ack() }
+        return worded.joined(separator: " ")
+    }
+
+    /// An ack from `ack()`, with or without the address.
+    static func isAck(_ reply: String) -> Bool {
+        var body = reply
+        for who in addresses { body = body.replacingOccurrences(of: ", \(who).", with: ".") }
+        return acks.contains(body)
+    }
+
     // MARK: - Building blocks
 
     mutating func ack() -> String {
