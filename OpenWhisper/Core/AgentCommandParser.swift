@@ -85,10 +85,12 @@ enum AgentCommandParser {
     // sesine"). The session word itself is required, so "Claude'a yeni bir özellik ekle"
     // keeps its "yeni", and it only takes a dative / locative ending: "son konuşmayı özetle"
     // or "yeni session butonunu" stay part of the message.
-    private static let sessionStem = #"(?:session|sesyon|seşın|seşin|seşn|sesin|sesşın|seans|oturum|konuşma|sohbet|chat(?!\s*(?:g?pt|y?pti?))|thread)"#
+    // Whisper's spellings of "session" from real voice tests: "sesion", "seçeneğine" (2026-10-15).
+    private static let sessionStem = #"(?:session|sesion|sesyon|seşın|seşin|seşn|sesin|sesşın|seçene[kğ]|seans|oturum|konuşma|sohbet|chat(?!\s*(?:g?pt|y?pti?))|thread)"#
     private static let sessionCase = #"(?:['’`]\s*)?(?:s?[ıiuü]?n?[dt][ae]|s?[ıiuü]?n[ae]|y?[ae])"#
     private static let newSession = #"(?<new>(?:yeni|new)(?:\s+bir)?)"#
-    private static let lastSession = #"(?<last>(?:en\s+)?son|bir\s+önceki|önceki|last|previous)"#
+    // "Sağ seçeneğine" was Whisper's "son session'ına"; only counts before a session word.
+    private static let lastSession = #"(?<last>(?:en\s+)?(?:son|sağ)|bir\s+önceki|önceki|last|previous)"#
     private static let openVerb = #"(?:aç|açıp|açın|açtır)\p{L}*"#
     /// `bare` also accepts "new session" / "yeni sohbet" with no ending; only used where the
     /// verb has to follow right after, so nothing of the message can be swallowed.

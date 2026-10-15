@@ -2605,6 +2605,13 @@ final class AppState {
     private func announceTimer(_ timer: TimerManager.JarvisTimer) async {
         let message = jarvisReply.timerFired(label: timer.label, seconds: timer.seconds)
         showFlowBarMessage(message, durationMs: 8000)
+        // It may go off while the user is giving another command: say it once that is done,
+        // instead of skipping the announcement (and the stop/snooze listening) entirely.
+        let deadline = Date().addingTimeInterval(30)
+        while recordingState == .recording || isTranscribing || jarvisActivity != .none, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        guard TimerManager.shared.ringing?.id == timer.id else { return }
         await speakReply(message)
         guard TimerManager.shared.ringing?.id == timer.id, recordingState != .recording,
               hotkey?.isIdle == true, microphoneGranted else { return }

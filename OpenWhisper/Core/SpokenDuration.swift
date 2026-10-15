@@ -90,6 +90,13 @@ enum SpokenDuration {
         return best
     }
 
+    /// Whisper hears "yarım saat" as "20 saat" ("20 saat sonra çay için haber ver", voice
+    /// test 2026-10-15). Twenty hours is almost never what a timer or reminder means, so only
+    /// that exact length, right before "sonra" / "-lik", is read as half an hour.
+    static func repairMishearing(_ lowered: String) -> String {
+        lowered.replacingOccurrences(of: #"\b(?:20|yirmi)\s*saat(?=\s+sonra\b|l[ıi]k\b)"#, with: "yarım saat", options: .regularExpression)
+    }
+
     /// "20 dakika", "1 saat 30 dakika", "yarım saat", "45 saniye" — for spoken replies.
     static func spoken(_ seconds: Int) -> String {
         if seconds < 60 { return "\(seconds) saniye" }

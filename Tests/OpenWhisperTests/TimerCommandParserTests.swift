@@ -59,6 +59,13 @@ final class TimerCommandParserTests: XCTestCase {
         XCTAssertEqual(parse("5 dakika sonra alarm kur"), .start(seconds: 300, label: nil))
     }
 
+    /// Whisper output from the 2026-10-15 voice test.
+    func testWhisperMishearings() {
+        XCTAssertEqual(parse("20 saat sonra çay için haber ver."), .start(seconds: 1800, label: "çay"))
+        XCTAssertEqual(parse("Bir dakikalık alarm kuruş."), .start(seconds: 60, label: nil))
+        XCTAssertEqual(parse("20 dakika sonra beni uyar"), .start(seconds: 1200, label: nil))
+    }
+
     func testRemindersWithATaskAreNotTimers() {
         XCTAssertNil(parse("15 dakika sonra toplantıyı hatırlat"))
         XCTAssertNil(parse("Beş dakika sonra ocağı kontrol etmemi hatırlat"))
@@ -127,6 +134,7 @@ final class ReminderDurationTests: XCTestCase {
         XCTAssertEqual(minutes("2 saat 15 dakika sonra ilacımı hatırlat"), 135)
         XCTAssertEqual(minutes("15 dakika sonra toplantıyı hatırlat"), 15)
         XCTAssertEqual(minutes("Yirmi dakika sonra çamaşırı hatırlat"), 20)
+        XCTAssertEqual(minutes("20 saat sonra çayı hatırlat"), 30)
         XCTAssertEqual(TurkishDateParser.parse("Yarım saat sonra çayı hatırlat", now: now)?.task, "Çayı")
     }
 }

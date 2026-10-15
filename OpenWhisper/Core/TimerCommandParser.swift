@@ -26,7 +26,7 @@ enum TimerCommandParser {
     private static let maxWords = 14
 
     private static let timerNoun = #"(?:alarm|zamanlayıcı|zamanlayici|sayaç|sayac|geri sayım|timer)\p{L}*"#
-    private static let startVerb = #"(?:kur|kurar mısın|kurabilir misin|kursana|başlat|başlatır mısın|ayarla|ayarlar mısın|koy|koyar mısın|aç|açar mısın)"#
+    private static let startVerb = #"(?:kur|kuruş|kurun|kursun|kurar mısın|kurabilir misin|kursana|başlat|başlatır mısın|ayarla|ayarlar mısın|koy|koyar mısın|aç|açar mısın)"#
     /// "beni uyar", "bana haber ver", "beni dürt", "alarm çal".
     private static let alertVerb = #"(?:(?:beni |bana )?(?:uyar|uyarır mısın|uyarabilir misin|uyarsana|haber ver|haber verir misin|seslen|dürt|ses ver)|alarm çal\p{L}*)"#
     private static let remindVerb = #"(?:bana |beni )?(?:hatırlat|hatırlatır mısın|hatırlatabilir misin|hatırlatsana)"#
@@ -153,7 +153,7 @@ enum TimerCommandParser {
             .replacingOccurrences(of: #"[,!?;"“”]"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\.\s*$"#, with: "", options: .regularExpression)
         t = t.replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)\s+)?"#, with: "", options: .regularExpression)
-        return collapse(t)
+        return collapse(SpokenDuration.repairMishearing(t))
     }
 
     private static func collapse(_ s: String) -> String {

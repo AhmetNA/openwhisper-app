@@ -88,7 +88,7 @@ enum VideoController {
             guard parts.count == 2 else { return notFound }
             guard parts[1].isFinite, parts[1] > 0 else { return "Bu canlı yayın, süresi yok" }
             let left = max(0, Int(parts[1] - parts[0]))
-            return "Videonun bitmesine \(Self.duration(left)) var (toplam \(Self.duration(Int(parts[1]))))"
+            return "Videonun bitmesine \(Self.duration(left)) var, toplam \(Self.duration(Int(parts[1])))"
         }
     }
 
@@ -187,22 +187,42 @@ enum VideoController {
     }
 
     /// YouTube's own "f" shortcut; only into Safari while it is in front, never another app.
+    /// The player gets keyboard focus first: with the caret in the search box (or on a button
+    /// Jarvis clicked earlier) the "f" went nowhere and Jarvis still said "Tam ekran". Whether
+    /// the page actually changed is checked afterwards, when JavaScript is allowed.
     private static func fullscreen() -> String {
         guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == safariBundleID else {
             return BrowserController.notFront
         }
+        let state = "(document.fullscreenElement||document.webkitFullscreenElement)?'on':'off'"
+        let focus = "(function(){var a=document.activeElement;if(a&&a.blur){a.blur();}var p=document.getElementById('movie_player');if(p){p.focus();}return 'ok';})()"
         let source = """
             tell application id "com.apple.Safari"
-                set u to URL of current tab of front window
+                set t to current tab of front window
+                set u to URL of t
+                if u does not contain "youtube.com/watch" then return "nobutton"
+                set before to "unknown"
+                try
+                    set before to (do JavaScript "\(state)" in t) as text
+                    do JavaScript "\(focus)" in t
+                end try
             end tell
-            if u does not contain "youtube.com/watch" then return "nobutton"
+            delay 0.15
             tell application "System Events" to keystroke "f"
-            return "ok"
+            if before is "unknown" then return "sent"
+            delay 0.8
+            tell application id "com.apple.Safari"
+                set after to (do JavaScript "\(state)" in current tab of front window) as text
+            end tell
+            if after is before then return "unchanged"
+            return after
             """
         let result = OSAScriptRunner.run(["-e", source])
         owLog("[Video] fullscreen → \(result ?? "script failed")")
         switch result {
-        case "ok": return "Tam ekran"
+        case "on", "sent": return "Tam ekran"
+        case "off": return "Tam ekrandan çıkıldı"
+        case "unchanged": return "Tam ekran yapılamadı"
         case "nobutton": return "Tam ekran yalnızca YouTube'da"
         default: return unreachable
         }

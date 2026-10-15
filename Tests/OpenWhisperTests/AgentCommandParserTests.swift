@@ -108,6 +108,17 @@ final class AgentCommandParserTests: XCTestCase {
         XCTAssertNotEqual(AgentCommandParser.parse("Yeni ChatGPT'ye yaz selam")?.session, .new)
     }
 
+    /// Real Whisper output from the 2026-10-15 voice test.
+    func testMisheardSessionWords() {
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da yeni sesion aç."),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Yeni seçeneğine şunu yaz merhaba"),
+                       AgentDictation(target: .claudeCode, body: "merhaba", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Sağ seçeneğine şunu gönder. Selam."),
+                       AgentDictation(target: .claudeCode, body: "Selam.", send: true, session: .last))
+        XCTAssertNil(AgentCommandParser.parse("Sağ taraftaki seçeneğe tıkla"))
+    }
+
     func testLastSession() {
         XCTAssertEqual(AgentCommandParser.parse("Claude Code'da son session'a gönder testleri tekrar çalıştır"),
                        AgentDictation(target: .claudeCode, body: "testleri tekrar çalıştır", send: true, session: .last))

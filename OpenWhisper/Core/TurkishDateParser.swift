@@ -133,7 +133,7 @@ enum TurkishDateParser {
     /// fall back to the LLM in that case. `now`/`calendar` are injectable for testing.
     static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> ParsedResult? {
         let cal = calendar
-        let lower = trLower(text)
+        let lower = SpokenDuration.repairMishearing(trLower(text))
         var working = lower
 
         var dayLevelDate: Date?

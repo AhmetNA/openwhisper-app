@@ -42,7 +42,7 @@ struct JarvisReply {
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
         case .video(let action):
-            if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") { return failure(Self.speakable(status)) }
+            if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") || status == "Tam ekran yapılamadı" { return failure(Self.speakable(status)) }
             switch action {
             case .remaining: return answer(Self.speakable(status))
             // Pausing or silencing it: a short ack. Anything that keeps it playing stays silent,
