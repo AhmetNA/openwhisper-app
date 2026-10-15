@@ -2662,6 +2662,34 @@ final class AppState {
                         session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
                         return
                     }
+                    // Sounds like a command no rule caught: let the model rephrase it, and run
+                    // it only if a rule then recognises the rephrased sentence.
+                    if route == .chat, self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
+                       let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel) {
+                        if let command = CommandRewriter.safeSystemCommand(rewritten, installedApps: SystemController.installedApps()) {
+                            session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
+                            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → system (\(command))")
+                            self.lastTranscription = text
+                            let status = await SystemController.perform(command)
+                            if case .video(let action) = command, action.changesPlayback,
+                               !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
+                            owLog("[Result] System command: \(status)")
+                            self.showFlowBarMessage(status, durationMs: status.count > 40 ? 6000 : 2500)
+                            await self.speakReply(self.jarvisReply.system(command, status: status))
+                            return
+                        }
+                        if SpotifyManager.explicitIntent(in: rewritten) != nil {
+                            session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
+                            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → spotify")
+                            self.lastTranscription = text
+                            let handled = await SpotifyManager.shared.handleCommand(text: rewritten, targetApp: session.targetApp)
+                            owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(rewritten)'")
+                            if handled, !SpotifyManager.resumesPausedMedia(afterCommand: rewritten) { resumeMediaAfterCommand = false }
+                            await self.speakReply(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
+                            return
+                        }
+                        owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule; chatting")
+                    }
                     if route == .chat {
                         session.latency.finishDecision(route: "Jarvis sohbet")
                         self.lastTranscription = text
