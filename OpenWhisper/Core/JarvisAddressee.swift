@@ -55,6 +55,15 @@ enum JarvisAddressee {
         }
     }
 
+    /// On the lock screen (loginwindow in front) nobody can be dictating, so anything reaches the
+    /// chat; a transcript with non-words there is noise heard through the locked Mac ("Siz se
+    /// sonhalen" got a long spoken reply, 10 Oct 2026). Such text is dropped.
+    static let lockScreenBundleID = "com.apple.loginwindow"
+
+    static func skipsChat(frontBundleID: String?, misheardWordCount: Int) -> Bool {
+        frontBundleID == lockScreenBundleID && misheardWordCount > 0
+    }
+
     // MARK: - Explicit destination overrides
 
     // "buraya/imlece/alana yaz ..." is intentionally narrower than a bare leading "yaz".

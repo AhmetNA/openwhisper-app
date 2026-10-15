@@ -4,112 +4,110 @@ import CoreMedia
 import AudioToolbox
 import CoreGraphics
 
-/// Splits the system output into recordings using audible activity and a quiet tail.
-/// The caller decides whether a recording contains speech; this detector only finds sound.
-final class SystemAudioActivityDetector {
+/// Keeps everything heard between Başlat and Bitir as one recording. Silence never ends
+/// the recording: voice messages often have pauses, and splitting them made every part
+/// overwrite the previous one on the clipboard. Long pauses are only shortened (to ~1 s)
+/// so Whisper keeps the sentence break but does not invent text over minutes of silence.
+final class SystemAudioSessionRecorder {
     static let sampleRate = 16_000
-    private let onsetRMS: Float = 0.008
-    private let quietTailSamples = 2 * sampleRate
-    private let prerollSamples = sampleRate / 2
-    private let minimumClipSamples = sampleRate * 3 / 5
+    /// -42 dBFS: counts as something actually heard.
+    private let audibleRMS: Float = 0.008
+    /// -50 dBFS: only frames this quiet belong to a pause that may be shortened, so soft
+    /// speech between the two thresholds is always kept.
+    private let pauseRMS: Float = 0.003
+    private let keptPauseSamples = sampleRate
     private let minimumAudibleSamples = sampleRate * 3 / 10
-    // Keep a long voice message together; transcription itself still runs in 3-minute
-    // batches after the user finishes or silence ends the recording.
-    private let maximumClipSamples = sampleRate * 30 * 60
+    /// 90 minutes of kept audio (~350 MB of Float samples) — the session is then finished.
+    static let maximumSamples = sampleRate * 90 * 60
 
-    private var preroll: [Float] = []
-    private var clip: [Float] = []
-    private var quietSamples = 0
+    private var samples: [Float] = []
+    private var pause: [Float] = []
     private var audibleSamples = 0
-    private var lastAudibleUptime: TimeInterval = 0
-    private(set) var isRecording = false
-    var onRecordingChange: ((Bool) -> Void)?
-    var onClip: (([Float]) -> Void)?
+    private(set) var reachedLimit = false
+    var onLimitReached: (() -> Void)?
 
-    func ingest(_ samples: [Float]) {
-        guard !samples.isEmpty else { return }
+    var keptSampleCount: Int { samples.count + min(pause.count, keptPauseSamples) }
+
+    func ingest(_ input: [Float]) {
+        guard !input.isEmpty, !reachedLimit else { return }
         let frameLength = Self.sampleRate / 50 // 20 ms
         var offset = 0
-        while offset < samples.count {
-            let end = min(offset + frameLength, samples.count)
-            let frame = samples[offset..<end]
-            let power = frame.reduce(Float.zero) { $0 + $1 * $1 } / Float(frame.count)
-            let audible = sqrt(power) >= onsetRMS
-
-            if !isRecording {
-                if audible {
-                    isRecording = true
-                    clip = preroll + frame
-                    preroll.removeAll(keepingCapacity: true)
-                    quietSamples = 0
-                    audibleSamples = frame.count
-                    lastAudibleUptime = ProcessInfo.processInfo.systemUptime
-                    onRecordingChange?(true)
-                } else {
-                    preroll.append(contentsOf: frame)
-                    if preroll.count > prerollSamples {
-                        preroll.removeFirst(preroll.count - prerollSamples)
-                    }
+        while offset < input.count {
+            let end = min(offset + frameLength, input.count)
+            let frame = input[offset..<end]
+            let rms = sqrt(frame.reduce(Float.zero) { $0 + $1 * $1 } / Float(frame.count))
+            if rms < pauseRMS {
+                pause.append(contentsOf: frame)
+                // Bound memory during a long pause: keep its first and last half second.
+                if pause.count > keptPauseSamples * 2 {
+                    let half = keptPauseSamples / 2
+                    pause.removeSubrange(half..<(pause.count - half))
                 }
             } else {
-                clip.append(contentsOf: frame)
-                quietSamples = audible ? 0 : quietSamples + frame.count
-                if audible {
-                    audibleSamples += frame.count
-                    lastAudibleUptime = ProcessInfo.processInfo.systemUptime
-                }
-                if quietSamples >= quietTailSamples || clip.count >= maximumClipSamples {
-                    finish()
-                }
+                flushPause()
+                samples.append(contentsOf: frame)
+                if rms >= audibleRMS { audibleSamples += frame.count }
             }
             offset = end
+            if samples.count >= Self.maximumSamples {
+                reachedLimit = true
+                onLimitReached?()
+                return
+            }
         }
     }
 
-    /// Some audio streams stop delivering buffers as soon as playback ends.
-    func checkForSilence(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        if isRecording && now - lastAudibleUptime >= 2 {
-            finish()
-        }
-    }
-
-    func finish() {
-        guard isRecording else { return }
-        let completed = clip
-        let audibleCount = audibleSamples
-        clip = []
-        quietSamples = 0
+    /// Returns the whole session, or nil when nothing audible was heard (Whisper would only
+    /// hallucinate on it). The recorder is empty afterwards.
+    func finish() -> [Float]? {
+        flushPause()
+        let completed = samples
+        let audible = audibleSamples
+        samples = []
         audibleSamples = 0
-        isRecording = false
-        onRecordingChange?(false)
-        if completed.count >= minimumClipSamples && audibleCount >= minimumAudibleSamples {
-            onClip?(completed)
-        }
+        reachedLimit = false
+        return audible >= minimumAudibleSamples ? completed : nil
     }
+
+    private func flushPause() {
+        guard !pause.isEmpty else { return }
+        if pause.count <= keptPauseSamples {
+            samples.append(contentsOf: pause)
+        } else {
+            let half = keptPauseSamples / 2
+            samples.append(contentsOf: pause.prefix(half))
+            samples.append(contentsOf: pause.suffix(half))
+        }
+        pause.removeAll(keepingCapacity: true)
+    }
+}
+
+struct SystemAudioRecording: Sendable {
+    let samples: [Float]
+    let startedAt: Date
+    /// Wall-clock length of the session; `samples` is shorter when pauses were shortened.
+    let elapsed: TimeInterval
 }
 
 /// ScreenCaptureKit delivers the mixed Mac output directly, without opening a microphone.
 /// Only an audio output is installed; video frames are never received or retained.
 final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.openwhisper.system-audio", qos: .userInitiated)
-    private let detector = SystemAudioActivityDetector()
-    private var silenceTimer: DispatchSourceTimer?
+    private let recorder = SystemAudioSessionRecorder()
     private var stream: SCStream?
     private var didLogUnexpectedFormat = false
+    private var startedAt = Date()
+    private var startedUptime = ProcessInfo.processInfo.systemUptime
+    /// End time of the last delivered buffer; ScreenCaptureKit may skip buffers while the
+    /// output is silent, and the gap is filled so words on either side do not run together.
+    private var lastBufferEnd: CMTime?
 
-    var onClip: (@Sendable ([Float]) -> Void)?
-    var onRecordingChange: (@Sendable (Bool) -> Void)?
+    var onLimitReached: (@Sendable () -> Void)?
     var onError: (@Sendable (String) -> Void)?
 
     override init() {
         super.init()
-        detector.onClip = { [weak self] samples in self?.onClip?(samples) }
-        detector.onRecordingChange = { [weak self] active in self?.onRecordingChange?(active) }
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
-        timer.setEventHandler { [weak self] in self?.detector.checkForSilence() }
-        silenceTimer = timer
-        timer.resume()
+        recorder.onLimitReached = { [weak self] in self?.onLimitReached?() }
     }
 
     func start() async throws {
@@ -121,7 +119,7 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
         configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = SystemAudioActivityDetector.sampleRate
+        configuration.sampleRate = SystemAudioSessionRecorder.sampleRate
         configuration.channelCount = 1
         configuration.width = 16
         configuration.height = 16
@@ -131,21 +129,38 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         try newStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
         try await newStream.startCapture()
         stream = newStream
+        queue.sync {
+            startedAt = Date()
+            startedUptime = ProcessInfo.processInfo.systemUptime
+        }
         owLog("[SystemAudio] Capture started")
     }
 
-    func stop() async {
-        queue.sync {
-            detector.finish()
-            silenceTimer?.cancel()
-            silenceTimer = nil
-        }
+    /// Ends the session and returns everything recorded since `start()`.
+    /// - Parameter tail: keeps listening this long first, so the last word that is still
+    ///   playing when Bitir is pressed is not cut off.
+    func stop(tail: TimeInterval = 0.7) async -> SystemAudioRecording? {
         if let stream {
+            if tail > 0 { try? await Task.sleep(nanoseconds: UInt64(tail * 1_000_000_000)) }
             self.stream = nil
             do { try await stream.stopCapture() }
             catch { owLog("[SystemAudio] Stop failed: \(error)") }
         }
-        owLog("[SystemAudio] Capture stopped")
+        // Finish on the sample queue so buffers already handed to it are included.
+        let recording: SystemAudioRecording? = await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let elapsed = ProcessInfo.processInfo.systemUptime - startedUptime
+                let samples = recorder.finish()
+                lastBufferEnd = nil
+                continuation.resume(returning: samples.map {
+                    SystemAudioRecording(samples: $0, startedAt: startedAt, elapsed: elapsed)
+                })
+            }
+        }
+        owLog(String(format: "[SystemAudio] Capture stopped: %.1f s kept of %.1f s",
+                     Double(recording?.samples.count ?? 0) / Double(SystemAudioSessionRecorder.sampleRate),
+                     recording?.elapsed ?? 0))
+        return recording
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -161,19 +176,30 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
               (format.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
               format.mBitsPerChannel == 32,
               format.mChannelsPerFrame == 1,
-              Int(format.mSampleRate) == SystemAudioActivityDetector.sampleRate else {
+              Int(format.mSampleRate) == SystemAudioSessionRecorder.sampleRate else {
             if !didLogUnexpectedFormat {
                 didLogUnexpectedFormat = true
                 onError?("Bilgisayar sesi beklenen 16 kHz mono biçiminde gelmedi.")
             }
             return
         }
+        let start = sampleBuffer.presentationTimeStamp
+        if let lastBufferEnd, start.isValid, lastBufferEnd.isValid {
+            let gap = CMTimeGetSeconds(CMTimeSubtract(start, lastBufferEnd))
+            if gap > 0.05 {
+                // The recorder shortens long pauses itself; 2 s is enough to mark one.
+                recorder.ingest(Array(repeating: 0, count: Int(min(gap, 2) * Double(SystemAudioSessionRecorder.sampleRate))))
+            }
+        }
+        if start.isValid {
+            lastBufferEnd = CMTimeAdd(start, sampleBuffer.duration)
+        }
         do {
             try sampleBuffer.withAudioBufferList { buffers, _ in
                 guard let first = buffers.first, let data = first.mData else { return }
                 let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size
                 let samples = Array(UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self), count: count))
-                detector.ingest(samples)
+                recorder.ingest(samples)
             }
         } catch {
             onError?("Bilgisayar sesi okunamadı: \(error.localizedDescription)")

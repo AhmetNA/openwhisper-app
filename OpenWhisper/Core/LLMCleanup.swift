@@ -370,6 +370,23 @@ final class LLMCleanup: Sendable {
         normalizedWords(from: a) == normalizedWords(from: b)
     }
 
+    /// Whether replacing `original` with `cleaned` would change nothing a reader sees: only
+    /// spacing, quote/apostrophe style or a closing period differ. The swap deletes and retypes
+    /// the whole dictation seconds later, which is not worth it for that.
+    static func isNoOpCleanup(original: String, cleaned: String) -> Bool {
+        func normalized(_ text: String) -> String {
+            var result = text
+                .replacingOccurrences(of: "[’‘`´]", with: "'", options: .regularExpression)
+                .replacingOccurrences(of: "[“”„]", with: "\"", options: .regularExpression)
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .replacingOccurrences(of: " ([,.!?;:])", with: "$1", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.hasSuffix(".") && !result.hasSuffix("...") { result.removeLast() }
+            return result
+        }
+        return normalized(original) == normalized(cleaned)
+    }
+
     /// `isFaithfulCleanup` without glossary or learned corrections, for tests.
     static func isFaithfulCleanup(
         original: String,

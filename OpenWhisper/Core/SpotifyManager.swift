@@ -116,6 +116,12 @@ final class SpotifyManager: @unchecked Sendable {
     ]
     static let questionParticles: Set<String> = ["mısın", "misin", "musun", "müsün", "misiniz", "mısınız"]
 
+    /// Canonical token for "devam et" / "sürdür": resume what was paused. Never a search,
+    /// and only a command next to a music or Spotify word ("toplantıya devam edelim" is prose).
+    private static let resumeVerb = "resume"
+    private static let resumeAuxiliaries: Set<String> = ["et", "ettir", "etsene", "ettirsene", "edelim", "edin"]
+    private static let resumeAliases: Set<String> = ["sürdür", "surdur", "sürdürsene", "surdursene"]
+
     /// Rewrites colloquial verb forms to the canonical verbs below, so "Barış Manço
     /// çalsana" and "Tarkan'ı çalar mısın" are gated exactly like "... çal".
     private static func canonicalizeVerbs(_ words: [String]) -> [String] {
@@ -129,7 +135,14 @@ final class SpotifyManager: @unchecked Sendable {
                 index += 2
                 continue
             }
-            result.append(playVerbAliases[word] ?? word)
+            // "müziğe devam et", "şarkıya devam ettir": one resume verb, so the gate's
+            // command-position check sees "devam et" as the closing verb.
+            if word == "devam", let next, resumeAuxiliaries.contains(next) {
+                result.append(resumeVerb)
+                index += 2
+                continue
+            }
+            result.append(resumeAliases.contains(word) ? resumeVerb : playVerbAliases[word] ?? word)
             index += 1
         }
         return result
@@ -268,6 +281,8 @@ final class SpotifyManager: @unchecked Sendable {
             return .pause
         }
 
+        if hasCommandPositionVerb([resumeVerb], in: words) { return .play }
+
         let playVerbs: Set<String> = ["çal", "cal", "aç", "ac", "oynat", "başlat", "baslat", "dinlet", "play", "resume"]
         if !playVerbs.isDisjoint(with: wordSet),
            (hasSpotifyContext
@@ -349,6 +364,10 @@ final class SpotifyManager: @unchecked Sendable {
                 || (natural && !Set(cues).isDisjoint(with: naturalPauseCues))
         case .play:
             guard !wordSet.isDisjoint(with: playVerbs) else { return false }
+            // "Müziğe devam et": resuming has no title to search for.
+            if wordSet.contains(resumeVerb) {
+                return addressesSpotify(text) || !musicContextWords.isDisjoint(with: wordSet)
+            }
             // Nothing left to search for; otherwise this is a search, not a resume.
             if shared.extractSearchQuery(normalized).isEmpty { return true }
             // A voice command naming Spotify with a play verb, where Ollama found no title:
@@ -574,6 +593,8 @@ final class SpotifyManager: @unchecked Sendable {
     private static let smallAmountWords: Set<String> = ["biraz", "azicik", "azcik", "hafif", "hafifce", "tik"]
     private static let largeAmountWords: Set<String> = ["cok", "asiri", "baya", "bayagi", "epey", "iyice", "fazla"]
     private static let maxVolumePhrases: [String] = ["sonuna kadar", "son ses", "en yuksek", "maksimum", "full"]
+    /// Max volume only next to a volume noun; matched as word starts ("seviyeye").
+    private static let maxVolumeNounPhrases: [String] = ["sona getir", "sona cek", "sona kadar", "son seviye", "en son seviye"]
 
     private static let naturalPauseCues: Set<String> = [
         "sustur", "sustursana", "durdursana", "kapatsana", "kapatir", "durdurur", "duraklatir"
@@ -613,7 +634,14 @@ final class SpotifyManager: @unchecked Sendable {
         // Only lowering verbs veto: "en yüksek" itself contains the "too loud" cue.
         let lowering = !Set(cues).isDisjoint(with: quieterWords)
             || cues.contains { word in ["azalt", "dusur", "indir"].contains { word.hasPrefix($0) } }
-        guard maxVolumePhrases.contains(where: cues.joined(separator: " ").contains), !lowering else { return nil }
+        guard !lowering else { return nil }
+        // Word-bounded, so "son" can't match inside another word.
+        let joined = " " + cues.joined(separator: " ") + " "
+        func says(_ phrase: String) -> Bool { joined.contains(" " + phrase) }
+        if maxVolumePhrases.contains(where: says) { return 100 }
+        // "sesi sona getir", "sesi son seviyeye çıkar" (10 Oct 2026, both pasted as dictation):
+        // only next to a volume noun, so "listeyi sona getir" stays dictation.
+        guard !volumeNouns.isDisjoint(with: cues), maxVolumeNounPhrases.contains(where: says) else { return nil }
         return 100
     }
 
@@ -672,6 +700,13 @@ final class SpotifyManager: @unchecked Sendable {
             .replacingOccurrences(of: "\\b([Dd])ur([.!?]*)\\s*$", with: "$1urdur$2", options: .regularExpression)
         repaired = digitizeSpelledPercent(repaired)
         return repaired
+    }
+
+    /// A voice session's transcript as commands read it: a leading "Hey Jarvis" dropped (a
+    /// reply follow-up keeps it: "Hey Javis, sesi son seviyeye çıkar", 10 Oct 2026) and
+    /// mangled command verbs repaired.
+    static func commandModeText(_ text: String) -> String {
+        repairCommandVerbMishearing(WakeWordVerifier.strippingLeadingWakeWord(text))
     }
 
     /// "sesi yüzde elli yap" → "sesi yüzde 50 yap": volume targets are read as digits.
@@ -735,7 +770,7 @@ final class SpotifyManager: @unchecked Sendable {
     /// `commandMode` marks a voice-started session: see `commandIntent`.
     static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false, commandMode: Bool = false) async -> Bool {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
-        let text = commandMode ? repairCommandVerbMishearing(heard) : heard
+        let text = commandMode ? commandModeText(heard) : heard
         let rules = explicitIntent(in: text)
         // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down.
         let modelAvailable = ollamaAvailable || SetFitDecider.isActive

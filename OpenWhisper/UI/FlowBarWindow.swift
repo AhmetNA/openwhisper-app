@@ -25,6 +25,13 @@ final class FlowBarController {
     /// A second, coalesced measurement keeps wider content centered.
     private var recenterScheduled = false
     private var spaceObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
+    /// Bumped on every show/hide so a stale fade-out (or its completion) can never act on a
+    /// bar that has since been shown again.
+    private var visibilityGeneration = 0
+    /// While shown, periodically re-asserts visibility: another app's window, a Space or
+    /// display change, or a leftover fade can otherwise leave the bar ordered out or at alpha 0.
+    private var watchdog: Timer?
 
     init(appState: AppState) {
         self.appState = appState
@@ -38,6 +45,14 @@ final class FlowBarController {
             MainActor.assumeIsolated {
                 guard let self, self.isShown else { return }
                 self.panel?.orderFrontRegardless()
+                self.recenterAfterContentLayout()
+            }
+        }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isShown else { return }
                 self.recenterAfterContentLayout()
             }
         }
@@ -57,8 +72,10 @@ final class FlowBarController {
         if !isShown {
             isShown = true
             owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
-            panel?.alphaValue = 1
         }
+        visibilityGeneration &+= 1
+        forceOpaque()
+        startWatchdog()
         // The menu-bar app is normally inactive while the user dictates into another app.
         // orderFrontRegardless keeps the nonactivating overlay visible without stealing
         // keyboard focus from that target app, including while it owns a fullscreen Space.
@@ -77,6 +94,9 @@ final class FlowBarController {
     func hide() {
         guard isShown else { return }
         isShown = false
+        stopWatchdog()
+        visibilityGeneration &+= 1
+        let generation = visibilityGeneration
         let panelRef = panel
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
@@ -84,17 +104,59 @@ final class FlowBarController {
             panelRef?.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
-                if !self.isShown {
-                    panelRef?.orderOut(nil)
-                }
+                guard let self, !self.isShown, self.visibilityGeneration == generation else { return }
+                panelRef?.orderOut(nil)
             }
         })
     }
 
+    /// Cancels any in-flight fade-out and pins the bar fully opaque. Assigning `alphaValue`
+    /// directly does not stop a running `animator()` fade: a hide() followed by a show()
+    /// within its 0.2 s would end at alpha 0 — ordered in front, but invisible. A zero-length
+    /// animation to 1 replaces the running one.
+    private func forceOpaque() {
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().alphaValue = 1
+        }
+        panel.alphaValue = 1
+    }
+
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.ensureVisible() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+    }
+
+    private func ensureVisible() {
+        guard isShown, let panel else { return }
+        guard !panel.isVisible || panel.alphaValue < 0.99
+                || targetScreen().map({ !$0.frame.intersects(panel.frame) }) == true else { return }
+        owLog("[FlowBar] watchdog re-showing bar (visible=\(panel.isVisible), alpha=\(panel.alphaValue), frame=\(panel.frame))")
+        forceOpaque()
+        panel.orderFrontRegardless()
+        centerPanelOnScreen()
+    }
+
+    /// The screen the user is working on: the one under the mouse pointer, falling back to
+    /// the key-window screen. `NSScreen.main` alone put the bar on another display.
+    private func targetScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+    }
+
     /// Center panel horizontally on the main screen based on its exact content width
     private func centerPanelOnScreen() {
-        guard let panel = panel, let screen = NSScreen.main else { return }
+        guard let panel = panel, let screen = targetScreen() else { return }
         if let hostingView = panel.contentView {
             hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize

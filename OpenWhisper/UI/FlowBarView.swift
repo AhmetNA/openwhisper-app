@@ -77,25 +77,25 @@ struct FlowBarView: View {
     private var systemAudioContent: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(appState.systemAudioIsRecording ? Color.red : Color.green)
+                .fill(appState.systemAudioIsRecording ? Color.red : Color.orange)
                 .frame(width: 8, height: 8)
 
-            Text(appState.systemAudioIsRecording ? "Bilgisayar sesi kaydediliyor" : "Bilgisayar sesi bekleniyor")
+            Text(appState.systemAudioIsRecording ? "Bilgisayar sesi kaydediliyor" : "Bilgisayar sesi açılıyor")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white)
 
             Button {
                 appState.stopSystemAudioListening()
             } label: {
-                Text(appState.systemAudioIsRecording ? "Bitir ve kopyala" : "Kapat")
+                Text("Bitir ve kopyala")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 5)
-                    .background(Capsule().fill(appState.systemAudioIsRecording ? Color.red : Color.white.opacity(0.2)))
+                    .background(Capsule().fill(Color.red))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(appState.systemAudioIsRecording ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini dinlemeyi kapat")
+            .accessibilityLabel("Kaydı bitir ve metni panoya kopyala")
         }
         .frame(height: 26)
     }

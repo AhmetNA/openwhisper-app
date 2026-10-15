@@ -119,12 +119,13 @@ enum SystemCommandParser {
 
     /// "Dev modu aç", "developer modunu başlat", "geliştirici moduna geç". It opens several apps
     /// and starts music, so the whole utterance must be the command: anything longer
-    /// ("developer modu açınca ne oluyor") stays dictation.
+    /// ("developer modu açınca ne oluyor") stays dictation. Whisper often glues and bends the
+    /// words ("Devmodo Aç", "Def modu aç", "dev mod'u aç"), so the spellings are loose.
     static func isDeveloperMode(_ cleaned: String) -> Bool {
-        let noun = #"(?:dev|developer|developır|devoloper|divelopır|divelopir|developper|geliştirici)"#
-        let mode = #"(?:mod|modu|modunu|moduna|mode|mode'?u|mode'?a)"#
-        let verb = #"(?:aç|açar mısın|açalım|başlat|etkinleştir|aktif et|aktifleştir|geç|geçelim)"#
-        return matches(cleaned, #"^\#(noun) ?\#(mode) \#(verb)(?: lütfen)?$"#)
+        let noun = #"(?:dev|def|deb|dew|developer|developır|devoloper|divelopır|divelopir|developper|geliştirici)"#
+        let mode = #"(?:mod(?:['’]?(?:u|o|ı|i|e|a|unu|onu|una|ona))?|mode['’]?(?:u|a)?)"#
+        let verb = #"(?:aç|ac|açar mısın|açalım|açın|başlat|etkinleştir|aktif et|aktifleştir|geç|geçelim)"#
+        return matches(cleaned, #"^\#(noun)[ -]?\#(mode) \#(verb)(?: lütfen)?$"#)
     }
 
     /// "Bugün ne var", "bugün neyimiz var", "programımız ne", "yarın planım ne", "günün özeti".

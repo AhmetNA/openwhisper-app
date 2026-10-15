@@ -24,12 +24,16 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     struct Config: Sendable {
         var vadThreshold: Float = 0.3
         var pauseBeforeAnalysis: TimeInterval = 0.2
-        /// Confidence-aware debounce after the actual speech end. A strong acoustic endpoint
-        /// should feel prompt; a borderline one gets more time for a thinking pause to resume.
-        var veryHighConfidenceSilence: TimeInterval = 1.2
-        var highConfidenceSilence: TimeInterval = 1.6
-        var lowConfidenceSilence: TimeInterval = 2
-        var incompleteSilenceTimeout: TimeInterval = 3
+        /// Confidence-aware debounce after the actual speech end. A borderline endpoint gets
+        /// more time for a thinking pause to resume. Smart Turn rates even a short command
+        /// ("devmodu aç") ~0.97 complete, so 1.2 s cut users off mid-thought; 2 s leaves room.
+        var veryHighConfidenceSilence: TimeInterval = 2
+        var highConfidenceSilence: TimeInterval = 2.5
+        var lowConfidenceSilence: TimeInterval = 3
+        var incompleteSilenceTimeout: TimeInterval = 4
+        /// No endpoint stop before this much audio since the session began: a wake word
+        /// followed by a short pause must not end the session before the command is spoken.
+        var minimumListenDuration: TimeInterval = 4
         var noSpeechTimeout: TimeInterval = 6
         var maxDuration: TimeInterval = 120
         var loadGrace: TimeInterval = 3
@@ -47,9 +51,11 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     static func endpointDecision(
         probability: Float,
         silenceDuration: TimeInterval,
+        sessionElapsed: TimeInterval = .infinity,
         config: Config
     ) -> Decision? {
-        guard silenceDuration >= requiredSilence(for: probability, config: config) else { return nil }
+        guard silenceDuration >= requiredSilence(for: probability, config: config),
+              sessionElapsed >= config.minimumListenDuration else { return nil }
         return probability > 0.5
             ? .stop(probability: probability)
             : .stopAfterIncompleteTimeout
@@ -103,6 +109,7 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                 var samplesToIgnore = max(0, Int(ignoredLeadingSeconds * Double(Self.sampleRate)))
                 var pendingEndpoint: (speechEndSample: Int, probability: Float)?
                 var processedSamples = 0
+                let ignoredSamples = samplesToIgnore
 
                 itemLoop: for await item in stream {
                     switch item {
@@ -157,6 +164,8 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                             if let endpointDecision = Self.endpointDecision(
                                 probability: pendingEndpoint.probability,
                                 silenceDuration: silence,
+                                sessionElapsed: Double(processedSamples + ignoredSamples)
+                                    / Double(Self.sampleRate),
                                 config: config
                             ) {
                                 status.withLock { $0.terminalDecision = endpointDecision }

@@ -68,10 +68,12 @@ final class EchoCancellerTests: XCTestCase {
         mic: [Float],
         reference: [Float],
         chunk: Int = 480,
-        engine: EchoCancellationEngineKind = .linear
+        engine: EchoCancellationEngineKind = .linear,
+        residualGate: Bool = false
     ) -> [Float] {
         let ahead = Array(reference.dropFirst(EchoCanceller.lookahead)) + [Float](repeating: 0, count: EchoCanceller.lookahead)
         let canceller = EchoCanceller(engine: engine)
+        if residualGate { canceller.residualGate = ResidualEchoGate() }
         canceller.log = { print($0) }
         var out: [Float] = []
         var i = 0
@@ -277,6 +279,55 @@ final class EchoCancellerTests: XCTestCase {
         let wake = try wakePositive()
         let out = cancel(mic: wake, reference: [Float](repeating: 0, count: wake.count))
         for i in 0..<out.count { XCTAssertEqual(out[i], wake[i], accuracy: 1e-6) }
+    }
+
+    /// Echo the filter mostly removed is muted; the user's voice the filter can't touch passes.
+    func testResidualGateMutesEchoAndPassesVoice() {
+        var gate = ResidualEchoGate()
+        let block = [Float](repeating: 0.1, count: 160)
+        let energy: Float = 160 * 0.01
+        // Echo only: the filter took out ~11 dB.
+        var echoOut: [Float] = []
+        for _ in 0..<20 {
+            echoOut = gate.apply(block, micEnergy: energy * 12.6, outputEnergy: energy, referenceActive: true)
+        }
+        XCTAssertLessThan(echoOut.map(abs).max()!, 0.1 * 0.05)
+        // The user talks over it: the filter removes little; the gate reopens at once.
+        let voiceOut = gate.apply(block, micEnergy: energy * 1.5, outputEnergy: energy, referenceActive: true)
+        let next = gate.apply(block, micEnergy: energy * 1.5, outputEnergy: energy, referenceActive: true)
+        XCTAssertGreaterThan(voiceOut.last!, 0.05)
+        XCTAssertEqual(next.first!, 0.1, accuracy: 1e-6)
+        // No reference: never touched.
+        var fresh = ResidualEchoGate()
+        XCTAssertEqual(fresh.apply(block, micEnergy: energy * 20, outputEnergy: energy, referenceActive: false), block)
+    }
+
+    /// Recording path: speaker audio as loud as the voice (15 Oct 2026 log: both ≈ −23 dBFS).
+    /// With the gate the echo-only stretch drops far below what the linear filter leaves, and
+    /// the word spoken over it still scores.
+    func testResidualGateSilencesEchoButKeepsVoice() throws {
+        let wake = try wakePositive()
+        let lead = 8 * rate
+        let ref = try music(seconds: (lead + wake.count) / rate + 2)
+        var echo = roomEcho(ref, delay: 900, gain: 1)
+        let voiceRMS = (energy(wake[...]) / Float(wake.count)).squareRoot()
+        let echoRMS = (energy(echo[lead...]) / Float(echo.count - lead)).squareRoot()
+        echo = echo.map { $0 * voiceRMS / echoRMS }
+        var mic = echo
+        for (i, v) in wake.enumerated() { mic[lead + i] += v }
+
+        let linear = cancel(mic: mic, reference: ref, engine: .aec3)
+        let gated = cancel(mic: mic, reference: ref, engine: .aec3, residualGate: true)
+        let echoOnly = (4 * rate)..<(lead - rate / 2)
+        let micDB = 10 * log10(energy(mic[echoOnly]))
+        let linearDB = 10 * log10(energy(linear[echoOnly]))
+        let gatedDB = 10 * log10(energy(gated[echoOnly]))
+        let slice = Array(gated[(lead - 2 * rate)..<min(gated.count, lead + wake.count)])
+        let wakeScore = try scores(slice.map { $0 * 32767 }).max() ?? 0
+        print(String(format: "Echo-only stretch: linear removes %.1f dB, with gate %.1f dB; wake over it %.2f",
+                     micDB - linearDB, micDB - gatedDB, wakeScore))
+        XCTAssertGreaterThan(micDB - gatedDB, micDB - linearDB + 10)
+        XCTAssertGreaterThan(wakeScore, 0.5)
     }
 
     // MARK: Wake word helpers

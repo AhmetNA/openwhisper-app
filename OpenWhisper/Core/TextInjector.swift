@@ -260,6 +260,26 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         return true
     }
 
+    /// `pressReturn`, but when `pid` is in the background (another app or full-screen Space,
+    /// after a background paste) it is brought forward for the Return and the app that was
+    /// in front gets the focus back. Return is still only posted once `pid` is frontmost.
+    @MainActor
+    func pressReturnBringingToFront(pid: pid_t) async -> Bool {
+        let front = NSWorkspace.shared.frontmostApplication
+        guard let front, front.processIdentifier != pid else { return pressReturn(inPID: pid) }
+        guard let target = NSRunningApplication(processIdentifier: pid), !target.isTerminated,
+              await AgentAppActivator.bringToFront(target) else {
+            owLog("[TextInjector] Return skipped: could not bring the target forward")
+            return false
+        }
+        owLog("[TextInjector] Brought \(target.localizedName ?? "?") forward to press Return; back to \(front.localizedName ?? "?") after")
+        let sent = pressReturn(inPID: pid)
+        // Let the app take the Return before it loses focus.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        if !front.isTerminated { _ = await AgentAppActivator.bringToFront(front) }
+        return sent
+    }
+
     private struct PasteDestination {
         let element: AXUIElement
         let pid: pid_t

@@ -19,6 +19,7 @@ final class EchoCancelledStream {
     init(engine: EchoCancellationEngineKind = EchoCancellationSettings.engine, log: @escaping (String) -> Void = { _ in }) {
         canceller = EchoCanceller(engine: engine)
         canceller.log = log
+        if EchoCancellationSettings.recordingSuppressesResidual { canceller.residualGate = ResidualEchoGate() }
     }
 
     var resyncs: Int { aligner.resyncs }
@@ -71,10 +72,11 @@ final class EchoCancelledStream {
         let paired = aligner.takePairedPercent() ?? .nan
         let sorted = erle.sorted()
         let median = sorted.isEmpty ? Float.nan : sorted[sorted.count / 2]
+        let gate = canceller.residualGate.map { String(format: ", residual gate muted %d/%d echo blocks", $0.mutedBlocks, $0.activeBlocks) } ?? ""
         return String(format: "engine %@, paired with reference %.0f%%, ERLE median %.1f dB over %d blocks, resyncs %d, untimed %d, no reference %.1f s, in %d / out %d samples",
                       canceller.activeEngine.rawValue, paired, median, erle.count, resyncs,
                       untimedSamples, Double(idleSamples) / Double(EchoCanceller.sampleRate),
-                      inputSamples, outputSamples)
+                      inputSamples, outputSamples) + gate
     }
 }
 

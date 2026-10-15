@@ -59,6 +59,13 @@ final class WakeWordListener {
     private var engine: AVAudioEngine?
     private var capture: HALInputCapture?
     private var detector: WakeWordDetector?
+    /// Scores what the Mac itself played (`recentReference`) when a wake fires on the
+    /// echo-cancelled path: if the speakers alone say "Jarvis", the wake is theirs, not the
+    /// user's. Loaded lazily on the first such check. Queue-confined.
+    private var referenceDetector: WakeWordDetector?
+    /// The paired echo reference (what the speakers play) for the last `preRollSamples`, kept in
+    /// step with `recentAudio` while the echo-cancelled path runs. Queue-confined.
+    private var recentReference: [Float] = []
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
     private var lastWake = Date.distantPast
@@ -459,11 +466,16 @@ final class WakeWordListener {
         }
         guard aecActive, aecReferenceAudible == true, let hostIndex else {
             scoredEndHostIndex = hostIndex.map { $0 + raw.count }
+            if !recentReference.isEmpty { recentReference.removeAll(keepingCapacity: true) }
             score(raw)
             return
         }
         scoredEndHostIndex = nil
         guard let pair = aecAligner.appendMic(raw, startIndex: hostIndex) else { return }
+        recentReference.append(contentsOf: pair.reference)
+        if recentReference.count > Self.preRollSamples {
+            recentReference.removeFirst(recentReference.count - Self.preRollSamples)
+        }
         let cleaned = echoCanceller.process(mic: pair.mic, reference: pair.reference)
         // The paired inputs; offline tuning re-runs the canceller on them.
         aecDump?.write([pair.mic, pair.reference])
@@ -480,6 +492,33 @@ final class WakeWordListener {
                          delay, aecAligner.resyncs))
         }
         if !cleaned.isEmpty { score(cleaned) }
+    }
+
+    /// Queue: on the echo-cancelled path, scores the last 2 s of what the Mac played with a
+    /// second detector. Returns that score when the speakers alone reach the wake threshold
+    /// (a video or song saying "Jarvis", whose echo the canceller left in the mic), else nil.
+    /// The user calling over music doesn't trip it: their voice isn't in the reference.
+    private func speakersSaidWakeWord() -> Float? {
+        guard scoredEndHostIndex == nil, recentReference.count >= 16_000 else { return nil }
+        if referenceDetector == nil, let dir = WakeWordDetector.bundledModelDirectory() {
+            referenceDetector = try? WakeWordDetector(modelDirectory: dir)
+        }
+        guard let referenceDetector else { return nil }
+        let t0 = Date()
+        // The reference is the digital output, already at full level: no mic gain.
+        let samples = recentReference.map { min(max($0 * 32767, -32768), 32767) }
+        guard (try? referenceDetector.reset()) != nil,
+              let peak = (try? referenceDetector.process(samples))?.max() else { return nil }
+        owLog(String(format: "[WakeWord] Speaker-output check: what the Mac played scores %.2f (%.0f ms)",
+                     peak, Date().timeIntervalSince(t0) * 1000))
+        return peak >= Self.speakerOutputThreshold ? peak : nil
+    }
+
+    /// The speakers' own score at which a wake counts as theirs.
+    /// Override: `defaults write com.openwhisper.app wakeWordSpeakerOutputThreshold 0.4`
+    static var speakerOutputThreshold: Float {
+        let stored = UserDefaults.standard.float(forKey: "wakeWordSpeakerOutputThreshold")
+        return stored > 0 ? stored : threshold
     }
 
     private func score(_ raw: [Float]) {
@@ -514,6 +553,12 @@ final class WakeWordListener {
             let now = Date()
             if s >= threshold, now.timeIntervalSince(lastWake) > cooldown {
                 lastWake = now
+                if let speakerScore = speakersSaidWakeWord() {
+                    owLog(String(format: "[WakeWord] Ignored detection %.2f: the speakers said it (what the Mac played scores %.2f)",
+                                 s, speakerScore))
+                    pendingCandidate = nil
+                    continue
+                }
                 owLog(String(format: "[WakeWord] Detected (score %.2f, level %.0f dB, floor %.0f dB)",
                              s, detector.lastLevelDB, detector.gate?.floor ?? .nan))
                 if pendingCandidate != nil { owLog("[WakeWord] Candidate superseded by direct detection") }
@@ -551,6 +596,11 @@ final class WakeWordListener {
         if let pending = pendingCandidate, pending.remaining <= 0 {
             pendingCandidate = nil
             lastCandidate = Date()
+            if let speakerScore = speakersSaidWakeWord() {
+                owLog(String(format: "[WakeWord] Ignored candidate %.2f: the speakers said it (what the Mac played scores %.2f)",
+                             pending.peak, speakerScore))
+                return
+            }
             let audio = Self.normalizedForWhisper(pending.audio)
             DispatchQueue.main.async { [weak self] in self?.onCandidate?(audio, pending.peak) }
         }

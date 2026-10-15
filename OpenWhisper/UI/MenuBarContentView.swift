@@ -86,17 +86,16 @@ struct MenuBarContentView: View {
                     HStack(spacing: 5) {
                         Image(systemName: appState.systemAudioEnabled ? "stop.fill" : "play.fill")
                             .font(.system(size: 10, weight: .bold))
-                        Text(appState.systemAudioIsRecording ? "Bitir" : (appState.systemAudioEnabled ? "Kapat" : "Başlat"))
+                        Text(appState.systemAudioEnabled ? "Bitir" : "Başlat")
                             .font(.system(size: 12, weight: .semibold))
                     }
-                    .foregroundStyle(appState.systemAudioEnabled && !appState.systemAudioIsRecording ? Color.primary : .white)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 10)
                     .frame(height: 28)
                     .liquidGlass(in: Capsule(), tint: systemAudioButtonColor, clear: true, interactive: true)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(appState.systemAudioIsRecording ? "Kaydı bitir ve metni panoya kopyala" :
-                    (appState.systemAudioEnabled ? "Bilgisayar sesini dinlemeyi kapat" : "Bilgisayar sesini dinlemeyi başlat"))
+                .accessibilityLabel(appState.systemAudioEnabled ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini kaydetmeye başla")
                 .disabled(!appState.modelLoaded && !appState.systemAudioEnabled)
             }
             .padding(10)
@@ -208,9 +207,7 @@ struct MenuBarContentView: View {
     }
 
     private var systemAudioButtonColor: Color {
-        if appState.systemAudioIsRecording { return .red }
-        if appState.systemAudioEnabled { return .clear }
-        return .accentColor
+        appState.systemAudioEnabled ? .red : .accentColor
     }
 
     private var statusText: String {
@@ -221,7 +218,7 @@ struct MenuBarContentView: View {
         case .idle:
             if appState.systemAudioIsRecording { return "Bilgisayar sesi kaydediliyor" }
             if appState.systemAudioIsTranscribing { return "Bilgisayar sesi işleniyor" }
-            if appState.systemAudioEnabled { return "Bilgisayar sesi dinleniyor" }
+            if appState.systemAudioEnabled { return "Bilgisayar sesi açılıyor" }
             return appState.modelLoaded ? "Hazır" : "Model hazır değil"
         }
     }

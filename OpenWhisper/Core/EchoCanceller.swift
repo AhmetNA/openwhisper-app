@@ -26,6 +26,13 @@ enum EchoCancellationSettings {
     static var recordingIsEnabled: Bool {
         UserDefaults.standard.bool(forKey: "recordingEchoCancellation")
     }
+    /// Mutes what the linear filter leaves of the speakers in recordings (`ResidualEchoGate`).
+    /// Off: on 15 Oct 2026 the filter removed 7–9 dB from the user's own speech over a video,
+    /// as much as from the video alone, so the gate cut the user's words (Whisper got "...").
+    /// `defaults write com.openwhisper.app recordingResidualEchoGate -bool YES` to experiment.
+    static var recordingSuppressesResidual: Bool {
+        UserDefaults.standard.bool(forKey: "recordingResidualEchoGate")
+    }
     /// `linear` keeps the existing vDSP filter. `aec3` opts into WebRTC AEC3's linear output;
     /// its residual suppressor is deliberately not used because it damages wake-word scores.
     /// `defaults write com.openwhisper.app wakeWordEchoEngine aec3`
@@ -251,6 +258,56 @@ final class AEC3LinearEchoFilter: EchoCancellationEngine {
     }
 }
 
+// MARK: - Residual echo
+
+/// The linear filter removes ~10–12 dB of a laptop speaker's echo (measured 15 Oct 2026); a
+/// video's speech is still clearly audible after it, so the flow bar moved with it and Whisper
+/// transcribed it. This gate mutes blocks the speakers dominate, judged by how much the filter
+/// took out: echo alone loses most of its energy, while the user's voice (absent from the
+/// reference) passes the filter intact. Talking over the audio keeps the removed share low and
+/// the gate open. Closes on a ~50 ms average, over a few blocks so word ends survive; opens at once.
+struct ResidualEchoGate {
+    /// Removed energy at or below this leaves the block untouched.
+    var openBelowDB: Float = 3
+    /// Removed energy at or above this mutes the block down to `floorGain`.
+    var closedAboveDB: Float = 6
+    var floorGain: Float = 0.03
+    private var micPower: Float = 0
+    private var outputPower: Float = 0
+    private var gain: Float = 1
+    private(set) var mutedBlocks = 0
+    private(set) var activeBlocks = 0
+
+    init() {}
+
+    mutating func apply(_ block: [Float], micEnergy: Float, outputEnergy: Float, referenceActive: Bool) -> [Float] {
+        let a: Float = 0.6
+        micPower = a * micPower + (1 - a) * micEnergy
+        outputPower = a * outputPower + (1 - a) * outputEnergy
+        var target: Float = 1
+        if referenceActive, micPower > 1e-9 {
+            activeBlocks += 1
+            // The smoothed share closes the gate; any block where the filter removed little
+            // (the user starting to talk) opens it at once.
+            let smoothedDB = 10 * log10(micPower / max(outputPower, 1e-12))
+            let blockDB = 10 * log10(max(micEnergy, 1e-12) / max(outputEnergy, 1e-12))
+            let removedDB = min(smoothedDB, blockDB)
+            let t = min(max((removedDB - openBelowDB) / (closedAboveDB - openBelowDB), 0), 1)
+            target = pow(floorGain, t)
+        }
+        let next = target >= gain ? target : gain + (target - gain) * 0.5
+        if next <= floorGain * 2 { mutedBlocks += 1 }
+        defer { gain = next }
+        if gain == 1, next == 1 { return block }
+        // Ramp across the block so gain steps don't click.
+        let n = block.count
+        let step = (next - gain) / Float(n)
+        var out = block
+        for i in 0..<n { out[i] *= gain + step * Float(i + 1) }
+        return out
+    }
+}
+
 // MARK: - Bulk delay
 
 /// GCC-PHAT between mic and reference: how many samples the echo trails the reference.
@@ -348,6 +405,9 @@ final class EchoCanceller {
     /// Per-block ERLE while the reference plays, for the periodic log.
     private(set) var erleSamples: [Float] = []
     var log: (String) -> Void = { _ in }
+    /// Recordings only (`EchoCancelledStream`): mutes what the linear filter leaves of the
+    /// speakers, see `ResidualEchoGate`. The wake listener keeps it off (it lowers wake scores).
+    var residualGate: ResidualEchoGate?
 
     init(engine requestedEngine: EchoCancellationEngineKind = EchoCancellationSettings.engine) {
         if requestedEngine == .aec3, let aec3 = AEC3LinearEchoFilter() {
@@ -452,7 +512,12 @@ final class EchoCanceller {
         } else {
             divergentBlocks = 0
         }
-        return errorPower > 2 * micPower ? mic : output
+        let result = errorPower > 2 * micPower ? mic : output
+        guard residualGate != nil else { return result }
+        var resultEnergy: Float = 0
+        vDSP_svesq(result, 1, &resultEnergy, vDSP_Length(blockSize))
+        return residualGate!.apply(result, micEnergy: micEnergy, outputEnergy: resultEnergy,
+                                   referenceActive: referenceActive)
     }
 
     private func collectForEstimate(mic: [Float], reference: [Float]) {

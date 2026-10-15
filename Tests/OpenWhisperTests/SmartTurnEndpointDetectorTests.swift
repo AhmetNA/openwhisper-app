@@ -7,12 +7,12 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
 
         XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 1.19,
+            silenceDuration: 1.99,
             config: config
         ))
         XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 1.2,
+            silenceDuration: 2.0,
             config: config
         ), .stop(probability: 0.985))
     }
@@ -22,11 +22,11 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
 
         XCTAssertEqual(
             SmartTurnEndpointDetector.requiredSilence(for: 0.8, config: config),
-            1.6
+            2.5
         )
         XCTAssertEqual(
             SmartTurnEndpointDetector.requiredSilence(for: 0.6, config: config),
-            2.0
+            3.0
         )
     }
 
@@ -35,14 +35,31 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
 
         XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.2,
-            silenceDuration: 2.99,
+            silenceDuration: 3.99,
             config: config
         ))
         XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.2,
-            silenceDuration: 3.0,
+            silenceDuration: 4.0,
             config: config
         ), .stopAfterIncompleteTimeout)
+    }
+
+    func testNoEndpointStopBeforeMinimumListenDuration() {
+        let config = SmartTurnEndpointDetector.Config()
+
+        XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
+            probability: 0.99,
+            silenceDuration: 2.5,
+            sessionElapsed: 3.9,
+            config: config
+        ))
+        XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
+            probability: 0.99,
+            silenceDuration: 2.5,
+            sessionElapsed: 4.0,
+            config: config
+        ), .stop(probability: 0.99))
     }
 
     func testBundledModelLoadsAndReturnsProbability() throws {

@@ -1,0 +1,209 @@
+# mode	text	rule route — written by RouteCorpusTests (UPDATE_ROUTE_SNAPSHOT=1)
+keys	Selamın haber gönder	agent-send
+keys	şu anda bazen bu flow bar gözükmüyor yani sebebini anlamadım bir türlü flow bar niye gözükmüyor yani bazen gözükmüyor sebebini bulamadım yani sen araştır flowları her türlü her ekranda göstermeliyiz her zaman tamam mı yani şey olarak dinlerken dinlerken flow bar gözükmeli abone olayım her yerde tamam bunu ayarla gönder	agent-send
+voice	Cloud kodu şunu gönder eğer ki uygun fiyatlı ve bizim için projemize uyabilecek bir yerel lokal bir model WhatsApp text to speech onu kullanalım ve bunu nasıl yapsak bilmiyorum ama açıkçası şey yapabiliriz. Direkt orada kullansın yani Text to Speech 'i ve modunu da yine Jarvis tarzı bir mod koyarız. Öyle konuşur biz de ama Türkçe ve İngilizce kelimeleri iyi telaffuz edebilmeli. Gönder.	agent:claudeCode
+voice	Kodekse merhaba bu yeni bir test mesajı yollayabilir misin gönder	agent:codex
+voice	Kodekse yollar mısın? Şu anda yapmamız gereken bu hani Download klasöründeki Jarvis HTML 'inde yapılması önem arz eden başka bir şey var mı? Gönder.	agent:codex
+voice	Son gelişmeleri bu yıl talı bana kurup neler test etmem gerektiğini söyle gönder.	agent-send
+voice	Son komutları incele ve neden hala verilen emri yerine getirmediğini incele yapay zekanın. Şu anda mesela bazı emirler verdim emirleri algıladı ama onları yapmadı bunu araştır gönder.	agent-send
+voice	Tamamdır bu bahsettiğimiz Laya modeli ile ilerleyelim. Tamamen lokalde çalışsın ve bizim projemize olabilecek en uygun şekilde bağlayalım. Karar mekanizmaları falan galiba orada yapılırsa daha iyi yapılıyor. Bizim entegrasyonu yapalım. Yapınca bana söyle ve kur uygulamayı sonrasında test yapmam için neler yapabileceğimi söyle gönder.	agent-send
+voice	sanırım şu an bile decider artık çalışıyor son logları incele ve bana doğru mu yanlış mı çalışıyor onları söyle gönder	agent-send
+voice	uygulamayı kur ve ben test edeyim ve benim test etmem için bana nasıl test edeceğimi söyle gönder	agent-send
+voice	web rtc ih3 ayarını neden kapattık şu anda açabilir misin onu gönder	agent-send
+voice	İnternette sistem 1 LLM modellerini araştırır mısın benim için. Bu hani lokalde çalışması gerekiyor. Aynı JEV gibi modeller var. Jiv onları araştır ve bana raporsun. Biz bu projede nasıl kullanabiliriz. En uygun şekilde kullanabileceğimiz lokal çalışan modeller var mı. Bak gönder.	agent-send
+voice	Şu anda mesela beni cümlelerimde dinliyor. Yazıya dökmüyor. Mesela son birkaç tazında bak bunlar yaptı. Bunları çöze. Gönder.	agent-send
+voice	bana cevap ver nasılsın	chat
+keys	1, 2, 3, 4, 5, 6	none
+keys	Aynı anda birden fazla model şu anda bunun üzerinde çalışıyor olabilir ona göre kod değişikliklerini vesaire yap. En sonunda yaptıktan sonra da build.sh çalıştır.	none
+keys	Bu hani Ironman'deki Jarvis var ya aynı onun gibi bir iletişim kuracak speech modeli lazım bana. Onun için de yapabilirim.	none
+keys	Bu yıl baloz olsun.	none
+keys	Dikic	none
+keys	Fenerbahçe basılı çıtırarak	none
+keys	Fn Space'ı basılı tutarak	none
+keys	Hale getirmeliyiz. Yani sesi komutla uyandırınca cevabı ise konuşuyorum. Bir anda konuşurken bir anda kesilebiliyor. Bunu çözerim.	none
+keys	Hecars, toplantı yarın saat 3'te başlıyor.	none
+keys	Hú yild að ózaman.	none
+keys	Konuşabilir misin?	none
+keys	Mesela şu anda arada ben konuşuyorum. da ben konuşuyorum. Şu anda da ben konuşuyorum. Dur farklı şeyler söyle. Benim bilmediğim bir kelime söyle. Trabzon'dan	none
+keys	Onları yaptım zaten. Yani beklememiz gerekiyormuş galiba. Onu bekleyeceğiz. Ayrıca sen bu yüzden memorini güncelle artık. Cloudflare'de çalışıyoruz tamamen.	none
+keys	Sputfayda şarkı şah	none
+keys	Sys control	none
+keys	Tamam bu bahsettiğin logolardan, prompt örneklerinden etiketli veri seti çıkarma işlemini yapalım. Sonrasında da bu yeni dediğimiz set fit 'i kuralım ve onu eğitmeye çalışalım. Eğittikçe test et. Eğitmek çok maliyetli değilse gelen yeni verilerle vesaire de sürekli eğitelim onu sürekli güçlendirelim modeli.	none
+keys	Yarın neyimiz var?	system:briefing(dayOffset: 1)
+keys	bak ben şu anda sesli uyandırdığımda carvisi bazen şey olması gerekiyor yani bilgisayarın bilgisayarın hoparlöründen çıkan sesi engellemesi gerekiyor bu flow bar'da da gözükmemesi gerekiyor ayrıca kendisi de almaması gerekiyor o sesi whisper 'a falan ama şu anda hem whisper 'a alıyor gibi gözüküyor hem de o flow bar'da görüyorum ben bilgisayarda konuşulan sesin oraya gittiğini bunu düzeltelim.	none
+keys	basınca şubelerden birine yani şubelerin bilgileri orada yaş grubu adresi ama böyle adresi kısa bir şekilde olsun yani tam adres detaylı verme yaş grubu adresi yani mahalle bilgisi olsun yaş grubu adresi ve kurucunun yani oradaki müdürün ismi ona tıklayınca veya işte Bilgi al butonu olsun basınca otomatik WhatsApp atsın.	none
+keys	hakkımızda bulunan yer var ya orada kurucularımız diye bir tane link var onu kaldıracağız onun yerine o paneli kurucuların 4 kurucunun kartı olacak her birinin ve kısa bir açıklama ayrıca da bir tane profil fotoğrafı gibi bir şey olacak orada tek tek tıkladığımızda popop olarak o kullanıcının o kurucunun bilgileri tam haliyle çıkacak	none
+keys	test transcript	none
+keys	şu anda ben kitap reposu kuruyorum tamam mı ben kitap reposunu kurduktan sonra buradaki işlemlerin hepsini sana vereyim mi kitap reposunu şu anda sana verebilir miyim ya da bu okur çalıştırmak ücretsiz mi bunları bana açıklasan	none
+voice	1.6 saniye yaklaşık 8 saniye düşün toplantıyı hatırlatıcıyı sil.	reminder-deletion
+voice	1.6 saniye yaklaşık 8 saniye hatırlatıcısı var onu siler misin?	reminder-deletion
+voice	10 saniye konuşacağım sonrasında 5 saniye süreceğim tekrar konuşacağım.	none
+voice	10 saniye konuşacağım. Sonra 5 saniye susacağım. Sonra tekrar konuşacağım.	none
+voice	Abi akşam geliyor musun?	none
+voice	Acaba senin sesin mi bana benziyor?	none
+voice	Aklı baya bir kız.	none
+voice	Altyazı M. K. Kapandın mı oğlum ne oldu sana iyi misin.	none
+voice	Arlaklığı%70 yapabilir misin?	system:brightness(up: true, level: Optional(70))
+voice	Aynı anda 3 tane çalışıyor şu anda.	none
+voice	Bana kara delikleri anlat.	none
+voice	Bazen çok hızlı kayboluyoruz. O kadar hızlı kaybolmaman lazım.	none
+voice	Blüttel kapat.	system:bluetooth(on: false)
+voice	Burada başka hatalar bulduğumuzda onları söyle. Ve bu komutların daha iyi anlaşılıp çalıştırılabilmesini yapabileceğimiz bir taktik vesaire var mı? İnternette araştır. Gönlün.	none
+voice	Bye Fiat.	none
+voice	Ceci use the six-cent.	none
+voice	Cloud kodu kapat.	none
+voice	Daha ilan gelip şeyler açısına.	none
+voice	Developer moda aç.	system:developerMode
+voice	Devmodo Aç	system:developerMode
+voice	Ekranı baya bir yukarı kaydırır.	system:scroll(up: true, large: true)
+voice	Eller serbest notta	none
+voice	Evet şu anda mesela cümle ortasında bir düşüncem	none
+voice	Eğlenceli bir şeyler açacağız biraz.	none
+voice	Eğlenceli bir şeyler açıyor. Yapıyor musunuz? Ama sen bir şeyler dediğin için şu anda yapmayacağım.	none
+voice	Günlük özet ve kısa yol.	none
+voice	Harikasın.	none
+voice	Hey Carviz	none
+voice	Hey Jarmes	none
+voice	Hey Jarvis	none
+voice	Karadelik kısaca anlat.	none
+voice	Kilitli	none
+voice	Kontyakı başlayın.	none
+voice	Kısırsız	none
+voice	Müziğe devam et.	spotify:play
+voice	Ne haber nasıl?	none
+voice	Ne yap, bilmiyorum yani.	none
+voice	Neyilde hapize İran hocadan gelen mehilleri buyur.	none
+voice	Parlaklığı baya bir kız.	none
+voice	Piyano müziği açıp Spotify'da	none
+voice	Piyano tarzı bir şey açtık Spotify'da.	none
+voice	Piyanosal bir şeyler Spotify'da.	none
+voice	Selam diyebilir misin?	none
+voice	Selam nasılsın?	none
+voice	Siz biraz affarebilir misin?	none
+voice	Spotify that liked songs	none
+voice	Spotify'daki şarkıyı döndür.	none
+voice	Spotify'daki şart liderdür.	none
+voice	Teşekkürler.	none
+voice	Yerin ne var işte?	none
+voice	Yerun nevar ya arashty Baksanava.	none
+voice	harika anlıyorsun beni şu anda tebrikler	none
+voice	parlaklığı yüzde yüz yap.	system:brightness(up: true, level: Optional(100))
+voice	test transcript	none
+voice	İndimlere babamlara bilet bakacağız hatırlatıcısınız.	none
+voice	Şarjımız kaç?	none
+voice	Şarkıyı durdur. Neden. Var öyle, sulamam gerekiyor. Ama konuştuğun şu anda meselesi.	spotify:pause (first sentence)
+voice	Şarşkaç	none
+voice	Şu an	none
+voice	Şu anda düşünme molasına girdim. Düşünmem olan bitti. Sonrasında tümcimden bitti.	none
+voice	Şu anda mesela bazen beni duyamıyor. Neden? Sebebini anlamadım.	none
+voice	Şu anda çalıyor.	none
+voice	Şu anda çalığı	none
+voice	Şu anda çok hızlı mikrofon kapanabiliyor otomatik olarak. Bunu biraz daha.	none
+voice	şarkıyı başladı	none
+voice	şu anda mesela cümle ortasında düşünüyorum ama galiba statik bir engelleme kodumuz var bizim bir saniyede kapanmaktadır	none
+voice	жан мәселі бен duyuyormusun nasy duyuyorsan anlat	none
+voice	سفریات	none
+voice	Jarvis yarın 1.6 saniye yaklaşık 8 saniye düşün saat 9'da toplantıyı hatırlat.	reminder
+voice	Sabah 9 'a hatırlatıcı oluştur. Jarvis hazır model taraması.	reminder
+voice	Yarın saat 10'da bisküviyi hatırlat.	reminder
+voice	İki gün sonra hatırlatıcı var. Annemlere, babamlara bilet bakacağız. - Yüz.	reminder
+voice	1. 6 saniye yaklaşık 8 saniye düşün toplantıyı hatırlatıcısını sil.	reminder-deletion
+voice	Annemlere babamlara bilet bakacağız hatırlatıcısını siler misin?	reminder-deletion
+voice	Annemlere babamlara bilet bakacağız. Hatırlatıcısını siler misin?	reminder-deletion
+voice	Bugün saat 9'da olan hatırlatıcıyı sil.	reminder-deletion
+voice	Bugün saat 9'daki Jarvis 1. 6 saniye yaklaşık 8 saniye düşün toplantıyı hatırlatıcısını sil.	reminder-deletion
+voice	Bugün saat 9'daki hatırlatıcıyı sil.	reminder-deletion
+voice	Hatırlatıcı istersene bu Carbis 1.6 saniye yaklaşık 8 saniye düşün toplantıyı hatırlatıcısını sil	reminder-deletion
+voice	Ona iliyorum.	none
+voice	Onaylıyorum.	none
+voice	Silebilirsin.	none
+voice	Var annemlere babamlara bilet bakacağız hatırlatıcısını sil.	reminder-deletion
+voice	Var annemlere babamlara bilet bakacağız hatırlatıcısını siler misin?	reminder-deletion
+voice	Var annemlere babamlara bilet bakacağız. Hatırlatıcısını silebilir misin?	reminder-deletion
+voice	Var annemlere babamlara hatırlatıcısını siler misin?	reminder-deletion
+voice	Yarınki var annemlere babamlara bilet bakacağız hatırlatıcısını sil.	reminder-deletion
+voice	bir çarvis 1.6 saniye yaklaşık 8 saniye diye bir hatırlatıcı var onu sil	reminder-deletion
+voice	%30'a indir sesi	none
+voice	Beğendiğim şarkıları aç.	spotify:search(beğendiğim)
+voice	Bir şeyler çalsana Spotify'dan.	spotify:search(bir şeyler)
+voice	Eğlenceli bir şeyler çal Spotify'da.	spotify:search(eğlenceli)
+voice	Müzeyi durdur.	none
+voice	Sesi %100 yap.	none
+voice	Sesi %50 yapabilir misin?	none
+voice	Sesi %80 yap.	none
+voice	Sesi biraz daha kız.	none
+voice	Sesi biraz kız.	none
+voice	Sesi%30 'a kısar mısın?	none
+voice	Sesi%30 seviyesine çıkar.	none
+voice	Sesi%30 yapabilir misin?	none
+voice	Sesi%80 'e çıkar.	none
+voice	Sonraki şarkı	none
+voice	Spotify kapat.	spotify:pause
+voice	Spotify'da Tarkan zilli düdük çalabilir misin?	spotify:search(tarkan zilli düdük)
+voice	Spotify'da aşkımız eski bir roman aç.	spotify:search(aşkımız eski bir roman)
+voice	Spotify'da beğendiğim şarkıları aç.	spotify:search(beğendiğim)
+voice	Spotify'da beğenilen şarkıları aç.	none
+voice	Spotify'da bir sonraki şarkıya aç.	spotify:next
+voice	Spotify'da bir şeyler çalsana.	spotify:search(bir şeyler)
+voice	Spotify'da bir şeyler çeğe sun.	none
+voice	Spotify'da daha eğlenceli şeyler açsana.	spotify:search(daha eğlenceli)
+voice	Spotify'da eğlenceli bir şeyler çal.	spotify:search(eğlenceli)
+voice	Spotify'da müzik çal, piyanolu.	spotify:search(piyanolu)
+voice	Spotify'da şarkı aç	spotify:play
+voice	Spotify'da şarkı aç.	spotify:play
+voice	Spotify'da şarkıyı durdur.	spotify:pause
+voice	Spotify'daki şarkıyı durdurur musun?	none
+voice	Spotify'daki şarkıyı son ses alabilir misin?	none
+voice	Tarkan Dudu Aç	none
+voice	Tarkan Şımarık Aç	none
+voice	bu şartının sesini biraz daha arttır	none
+voice	İyi durdur.	none
+voice	İyilenceli bir şeyler açar mısın?	none
+voice	Şarkı aç bir şeyler.	spotify:search(bir şeyler)
+voice	Şarkı etsana Spotify'dan.	none
+voice	Şarkıya başlat.	spotify:play
+voice	Şarkıyı başlat	spotify:play
+voice	Şarkıyı başlat.	spotify:play
+voice	Şarkıyı durdur.	spotify:pause
+voice	Şarkıyı durdurur musun?	none
+voice	Şu anda ne çalıyor?	none
+voice	Bluetooth'u aç.	system:bluetooth(on: true)
+voice	Bluetooth'u kapat.	system:bluetooth(on: false)
+voice	Bugün ne var?	system:briefing(dayOffset: 0)
+voice	Cervis yarın saat 8'de bana toplantıyı hatırlat.	reminder
+voice	Dev Modu Aç	system:developerMode
+voice	Developer modu aç.	system:developerMode
+voice	Ekran görüntüsü al.	system:screenshot
+voice	Ekranı baya bir yukarı kaydı.	system:scroll(up: true, large: true)
+voice	Ekranı baya bir yukarı kaydır.	system:scroll(up: true, large: true)
+voice	Ekranı bayağı bir yukarı kaydır.	system:scroll(up: true, large: true)
+voice	Ekranı kilitle.	system:lockScreen
+voice	Ekranı kilitli.	system:lockScreen
+voice	Ekranı yukarı kaydır.	system:scroll(up: true, large: false)
+voice	Hafize İrem Türkmen'den son maili aç.	system:mailOpen
+voice	Mail aç	system:mailOpen
+voice	Okunmamış mailleri oku.	system:mailReadUnread
+voice	Parlaklığı arttır	system:brightness(up: true, level: nil)
+voice	Parlaklığı baya bir azaltı.	system:brightness(up: false, level: nil)
+voice	Parlaklığı%30 yap.	system:brightness(up: true, level: Optional(30))
+voice	Saat kaç?	system:time
+voice	Safari Aç	system:openApp("Safari")
+voice	Safari kapat	system:quitApp("Safari")
+voice	Son gelen mailleri kontrol edelim.	system:mailCheck
+voice	Son gelen meyli aç.	system:mailOpen
+voice	Son mail kimden?	system:mailLatest
+voice	Toplantı yarın saat 3'te başlıyor.	none
+voice	Wifi aç	system:wifi(on: true)
+voice	Wifi kapats	system:wifi(on: false)
+voice	Yarın etkinlik ne var?	system:briefing(dayOffset: 1)
+voice	Yarın neyimiz var?	system:briefing(dayOffset: 1)
+voice	Yarın programda ne var. Bakar mısın.	system:briefing(dayOffset: 1)
+voice	Yarın programda neler var. Baksana.	system:briefing(dayOffset: 1)
+voice	Yarın programımızda ne var?	system:briefing(dayOffset: 1)
+voice	Yarınki toplantı hatırlatıcısını sil.	reminder-deletion
+voice	kaç mail var	system:mailCount
+voice	parlaklığı %100 yap	system:brightness(up: true, level: Optional(100))
+voice	parlaklığı%70 yap.	system:brightness(up: true, level: Optional(70))
+voice	bu kodekse gönder şu anda pil tüketimi ne durumda yeni uygulamayı kur ve sessiz bir ortamda ne olduğunu test edelim gönder	agent-send
+voice	İncele şu anda yeni gelen setfit ve normal bizim lama modelinde hani gemaya düşüyor ya onları incele ve bana hız farkını söyle ne kadar hız değişti gönder.	agent-send
+voice	şu ana kadar olan kodların hepsini komikler sonrasında artık bundan sonra sen bu uygulamaya ne eklerdin ne düşünürdün onları bana yaz.	typed

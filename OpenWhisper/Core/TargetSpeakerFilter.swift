@@ -1571,4 +1571,19 @@ enum TargetSpeakerOutputGate {
     static func shouldSkipPostProcessing(featureEnabled: Bool, acceptedSampleCount: Int) -> Bool {
         featureEnabled && acceptedSampleCount == 0
     }
+
+    /// Whether an ambiguous batch whose diarization found no speaker at all is still pasted:
+    /// only for a dictation key held or pressed on purpose, never for a voice session, where
+    /// the speech may be someone else's.
+    /// Whether rejected speech is kept for a "Bu benim sesimdi" tap. A follow-up window opens
+    /// without a wake word, so when it heard only other voices (33 s of music, 10 Oct 2026)
+    /// nobody answered: nothing is kept. One uncertain voice may still be the user.
+    static func retainsRejectedCandidate(trigger: RecordingTrigger, hadSingleSpeakerUncertain: Bool) -> Bool {
+        trigger != .followUp || hadSingleSpeakerUncertain
+    }
+
+    static func keepsUnidentifiedSpeech(trigger: RecordingTrigger, error: Error) -> Bool {
+        guard case TargetSpeakerDiarizationError.targetSpeakerNotIdentified = error else { return false }
+        return [.fnHold, .fnSpace, .keyboardShortcut].contains(trigger)
+    }
 }

@@ -1012,7 +1012,8 @@ final class AppState {
 
     // MARK: - Recording Flow
 
-    /// Listens to the mixed Mac output. The mic/Fn recording path remains separate.
+    /// Records the mixed Mac output from Başlat until Bitir as one recording; the whole
+    /// session is transcribed once and copied to the clipboard. The mic/Fn path is separate.
     func startSystemAudioListening() {
         guard !systemAudioEnabled else { return }
         recordingPreviewTask?.cancel()
@@ -1026,67 +1027,78 @@ final class AppState {
         systemAudioCapture = capture
         systemAudioEnabled = true
         systemAudioStatus = "Bilgisayar sesi açılıyor…"
-        capture.onClip = { [weak self] samples in
-            Task { @MainActor [weak self] in self?.enqueueSystemAudioClip(samples) }
-        }
-        capture.onRecordingChange = { [weak self] active in
+        capture.onLimitReached = { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self, self.systemAudioEnabled else { return }
-                self.systemAudioIsRecording = active
-                self.systemAudioStatus = active ? "Bilgisayar sesi kaydediliyor" : "Yeni ses bekleniyor"
+                guard let self, self.systemAudioGeneration == generation else { return }
+                owLog("[SystemAudio] 90-minute limit reached; finishing the recording")
+                self.stopSystemAudioListening(tail: 0)
             }
         }
         capture.onError = { [weak self] message in
             Task { @MainActor [weak self] in
                 guard let self, self.systemAudioGeneration == generation else { return }
+                // What was captured before the error is still transcribed.
                 self.lastError = message
-                self.stopSystemAudioListening()
-                self.systemAudioStatus = message
+                self.stopSystemAudioListening(tail: 0)
             }
         }
         Task { @MainActor [weak self] in
             do {
                 try await capture.start()
                 guard let self, self.systemAudioGeneration == generation, self.systemAudioEnabled else {
-                    await capture.stop()
+                    _ = await capture.stop(tail: 0)
                     return
                 }
-                self.systemAudioStatus = "Yeni ses bekleniyor"
+                self.systemAudioIsRecording = true
+                self.systemAudioStatus = "Kaydediliyor · Bitir'e basınca yazıya dökülür"
             } catch {
                 guard let self, self.systemAudioGeneration == generation else { return }
                 let message = "Bilgisayar sesi açılamadı: \(error.localizedDescription)"
                 self.lastError = message
-                self.stopSystemAudioListening()
+                self.stopSystemAudioListening(tail: 0)
                 self.systemAudioStatus = message
             }
         }
     }
 
-    func stopSystemAudioListening() {
+    func stopSystemAudioListening(tail: TimeInterval = 0.7) {
         guard systemAudioEnabled || systemAudioCapture != nil else { return }
         systemAudioGeneration &+= 1
+        let generation = systemAudioGeneration
+        let wasRecording = systemAudioIsRecording
         systemAudioEnabled = false
         systemAudioIsRecording = false
-        systemAudioStatus = "Kapalı"
+        systemAudioStatus = wasRecording ? "Kayıt bitiriliyor…" : "Kapalı"
         let capture = systemAudioCapture
         systemAudioCapture = nil
-        Task { await capture?.stop() }
+        guard let capture else { return }
+        Task { @MainActor [weak self] in
+            let recording = await capture.stop(tail: wasRecording ? tail : 0)
+            guard let self else { return }
+            if let recording {
+                self.enqueueSystemAudioRecording(recording)
+            } else if wasRecording, self.systemAudioGeneration == generation {
+                owLog("[Result] System audio: nothing audible was recorded")
+                self.systemAudioStatus = "Kayıtta ses duyulmadı"
+            }
+        }
     }
 
-    private func enqueueSystemAudioClip(_ samples: [Float]) {
-        guard samples.count >= 6_400 else { return }
+    private func enqueueSystemAudioRecording(_ recording: SystemAudioRecording) {
+        guard recording.samples.count >= 6_400 else { return }
         let previous = systemAudioTranscriptionTail
         systemAudioTranscriptionTail = Task { @MainActor [weak self] in
             if let previous { await previous.value }
             guard let self else { return }
-            await self.transcribeSystemAudioClip(samples)
+            await self.transcribeSystemAudioClip(recording)
         }
     }
 
-    private func transcribeSystemAudioClip(_ samples: [Float]) async {
+    private func transcribeSystemAudioClip(_ recording: SystemAudioRecording) async {
+        let samples = recording.samples
         systemAudioIsTranscribing = true
         defer { systemAudioIsTranscribing = false }
-        systemAudioStatus = "Bilgisayar sesi yazıya dökülüyor…"
+        if !systemAudioEnabled { systemAudioStatus = "Bilgisayar sesi yazıya dökülüyor…" }
         nextTranscriptionID &+= 1
         let session = RecordingTranscriptionSession(
             id: nextTranscriptionID,
@@ -1100,7 +1112,7 @@ final class AppState {
             let segment = CompletedAudioSegment(samples: Array(part.samples), overlapSampleCount: part.overlapSampleCount)
             session.queuedSampleCount += segment.samples.count - segment.overlapSampleCount
             do {
-                try await recordingHistoryStore.append(segment, sessionID: session.id, startedAt: session.startedAt)
+                try await recordingHistoryStore.append(segment, sessionID: session.id, startedAt: recording.startedAt)
             } catch {
                 saveFailed = true
                 owLog("[SystemAudio] History save failed: \(error)")
@@ -1123,9 +1135,10 @@ final class AppState {
         if let traceID {
             VoiceEventLog.shared.begin(traceID, header: [
                 "Recording \(traceID.uuidString)",
-                "Started: \(session.startedAt.formatted(date: .numeric, time: .standard))",
+                "Started: \(recording.startedAt.formatted(date: .numeric, time: .standard))",
                 "Source: system audio",
-                String(format: "Duration: %.1f s", Double(samples.count) / 16_000),
+                String(format: "Duration: %.1f s recorded, %.1f s kept (long pauses shortened)",
+                       recording.elapsed, Double(samples.count) / 16_000),
                 "Whisper segments: \(session.allSegmentTexts)",
             ] + (savedRecordings.first { $0.id == traceID }?.stats?.logLines ?? [])
               + ["Speakers: not split (system audio)"])
@@ -1140,7 +1153,7 @@ final class AppState {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty, !output.hasPrefix("[BLANK"), !output.hasPrefix("(BLANK") else {
             owLog("[Result] System audio: no text")
-            systemAudioStatus = systemAudioEnabled ? "Yeni ses bekleniyor" : "Metin çıkarılamadı"
+            if !systemAudioEnabled { systemAudioStatus = "Metin çıkarılamadı" }
             return
         }
         output = CorrectionEngine.applyCorrections(to: output, pairs: CorrectionStore.shared.activePairs).0
@@ -1154,9 +1167,7 @@ final class AppState {
         guard !output.isEmpty else { return }
         lastTranscription = output
         textInjector?.copyToClipboard(output)
-        systemAudioStatus = systemAudioEnabled
-            ? "Metin panoya kopyalandı · yeni ses bekleniyor"
-            : "Metin panoya kopyalandı"
+        if !systemAudioEnabled { systemAudioStatus = "Metin panoya kopyalandı" }
         owLog("[SystemAudio] Transcript copied to clipboard")
         owLog("[Result] System audio copied to clipboard: '\(output)'")
     }
@@ -1753,27 +1764,38 @@ final class AppState {
                         if !heard.isEmpty { $0.uncertainText = heard }
                         $0.notes.append("diarization failed, words not split: \(error)")
                     }
-                    // A partial result still has a safe identity-masked path. An ambiguous result
-                    // has no accepted target samples, so never transcribe its original mixed audio
-                    // and never offer it for confirmation.
-                    guard !isAmbiguousTargetMatch,
-                          filtered.hasAcceptedTargetSpeech else { return }
                     let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if session.trigger == .confirmation, !heard.isEmpty {
-                        // A one-word answer is too short for diarization; masking its gaps turns
-                        // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
-                        session.heardVariants.append(heard)
-                    }
-                    let maskedText = try await transcriber.transcribe(
-                        audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
-                        language: language,
-                        overlapSampleCount: segment.overlapSampleCount
-                    )
-                    if session.trigger == .confirmation, !heard.isEmpty {
-                        session.heardVariants.append(maskedText)
+                    // A held Fn key is a deliberate dictation: when no speaker could be told apart
+                    // at all, the gate made no decision, so the text is pasted like a gate failure
+                    // instead of being lost (31.9 s Fn hold, 10 Oct 2026, 0 words pasted).
+                    if isAmbiguousTargetMatch, !heard.isEmpty,
+                       TargetSpeakerOutputGate.keepsUnidentifiedSpeech(trigger: session.trigger, error: error) {
+                        owLog("[OpenWhisper] Batch \(segmentNumber) no speaker identified in a deliberate dictation; keeping the whole text")
+                        noteSpeakers { $0.notes.append("no speaker identified — deliberate dictation, whole text kept") }
+                        session.hadFailClosedPassthrough = true
                         segmentText = heard
                     } else {
-                        segmentText = maskedText
+                        // A partial result still has a safe identity-masked path. An ambiguous result
+                        // has no accepted target samples, so never transcribe its original mixed audio
+                        // and never offer it for confirmation.
+                        guard !isAmbiguousTargetMatch,
+                              filtered.hasAcceptedTargetSpeech else { return }
+                        if session.trigger == .confirmation, !heard.isEmpty {
+                            // A one-word answer is too short for diarization; masking its gaps turns
+                            // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
+                            session.heardVariants.append(heard)
+                        }
+                        let maskedText = try await transcriber.transcribe(
+                            audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
+                            language: language,
+                            overlapSampleCount: segment.overlapSampleCount
+                        )
+                        if session.trigger == .confirmation, !heard.isEmpty {
+                            session.heardVariants.append(maskedText)
+                            segmentText = heard
+                        } else {
+                            segmentText = maskedText
+                        }
                     }
                 }
             } else {
@@ -1915,7 +1937,12 @@ final class AppState {
                     return ""
                 }()
 
-                if !rawCandidateText.isEmpty {
+                if !rawCandidateText.isEmpty, !TargetSpeakerOutputGate.retainsRejectedCandidate(
+                    trigger: session.trigger, hadSingleSpeakerUncertain: session.hadSingleSpeakerUncertain
+                ) {
+                    owLog("[FollowUp] Only other voices heard; nothing kept for confirmation")
+                    dismissFlowBarMessage()
+                } else if !rawCandidateText.isEmpty {
                     let candidateSamples = !session.ambiguousTargetSamples.isEmpty
                         ? session.ambiguousTargetSamples
                         : session.belowThresholdRejectedSamples
@@ -2081,11 +2108,14 @@ final class AppState {
                                 // Electron composers and CLI bracketed paste need a moment to
                                 // take the paste before Return, or only part of it is sent.
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                                    MainActor.assumeIsolated {
+                                    Task { @MainActor in
                                         guard let self else { return }
-                                        let sent = pasteContext.targetPID.map {
-                                            (self.textInjector as? TextInjector)?.pressReturn(inPID: $0) ?? false
-                                        } ?? false
+                                        // A background paste (the hop above failed or the user moved
+                                        // on) still gets sent: hop there for the Return and back.
+                                        var sent = false
+                                        if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
+                                            sent = await injector.pressReturnBringingToFront(pid: pid)
+                                        }
                                         owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
                                         if let traceID {
                                             VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
@@ -2123,6 +2153,10 @@ final class AppState {
                                         let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                         guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+                                        if LLMCleanup.isNoOpCleanup(original: initialText, cleaned: trimmedCleaned) {
+                                            owLog("[OpenWhisper] LLM cleanup only changed spacing/punctuation style; not swapping")
+                                            return
+                                        }
                                         // A corrected word can reveal a voice command ("Sesifullah"
                                         // → "Sesi fulle"): take the dictation back out and run it.
                                         if !misheard.isEmpty,
@@ -2357,6 +2391,12 @@ final class AppState {
                         minScore: minScore
                     )
                     owLog("[Addressee] focus \(focusStatus.rawValue), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
+                    if route == .chat,
+                       JarvisAddressee.skipsChat(frontBundleID: front, misheardWordCount: self.misheardWords(in: trimmed).count) {
+                        owLog("[Addressee] Lock screen and the text has non-words; not answering: '\(trimmed)'")
+                        session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
+                        return
+                    }
                     if route == .chat {
                         session.latency.finishDecision(route: "Jarvis sohbet")
                         self.lastTranscription = text

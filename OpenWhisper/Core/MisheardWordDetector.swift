@@ -31,7 +31,8 @@ enum MisheardWordDetector {
                   word != word.uppercased(),          // acronyms: API, MLP
                   !ignoring.contains(lower),
                   seen.insert(lower).inserted,
-                  !isKnown(word) else { continue }
+                  !isKnown(word),
+                  !isSuffixedKnownRoot(word) else { continue }
             result.append(Word(text: word))
         }
         return result
@@ -47,6 +48,26 @@ enum MisheardWordDetector {
         text.split { !$0.isLetter && $0 != "'" && $0 != "’" }
             .map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "'’")) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Turkish endings Whisper puts straight onto English words ("logları", "loglar").
+    private static let suffixesOnEnglishRoots = [
+        "ları", "leri", "lar", "ler", "dan", "den", "tan", "ten", "nın", "nin", "da", "de", "ta", "te",
+        "yı", "yi", "ı", "i", "u", "ü",
+    ]
+
+    /// A known word with a Turkish suffix: the part before an apostrophe ("fullscreen'de"),
+    /// or an English root with one of `suffixesOnEnglishRoots` ("logları").
+    static func isSuffixedKnownRoot(_ word: String) -> Bool {
+        if let apostrophe = word.firstIndex(where: { $0 == "'" || $0 == "’" }) {
+            let root = String(word[..<apostrophe])
+            return root.count >= minLength && isKnown(root)
+        }
+        let lower = word.lowercased(with: Locale(identifier: "tr_TR"))
+        return suffixesOnEnglishRoots.contains { suffix in
+            guard lower.hasSuffix(suffix), lower.count - suffix.count >= minLength else { return false }
+            return isKnown(String(lower.dropLast(suffix.count)), language: "en")
+        }
     }
 
     private static func isKnown(_ word: String, language: String) -> Bool {

@@ -60,6 +60,9 @@ enum PhoneticGlossaryCorrector {
         // Turkish word stems verbatim (e.g. "Bun" the JS runtime vs. "bun" in "bunu"/"buna";
         // "Git" vs. the verb "git").
         if let exact = terms.first(where: { $0.lowercased() == normalizedRoot }) {
+            // An all-lowercase term spelled exactly as heard ("model" in "modeli") is an
+            // ordinary word: the only change would be an apostrophe ("model'i").
+            if !hadPhoneticSubstitution, exact == exact.lowercased() { return .none }
             return (hadPhoneticSubstitution || root.count >= minRootLengthForBareMatch) ? .found(exact) : .none
         }
         return .none
@@ -93,7 +96,10 @@ enum PhoneticGlossaryCorrector {
     /// punctuation untouched. Returns the corrected text plus the (original, corrected) pairs
     /// that fired, for logging.
     static func correct(_ text: String) -> (result: String, applied: [(String, String)]) {
-        let terms = GlossaryStore.singleWordTerms()
+        correct(text, terms: GlossaryStore.singleWordTerms())
+    }
+
+    static func correct(_ text: String, terms: [String]) -> (result: String, applied: [(String, String)]) {
         guard !terms.isEmpty else { return (text, []) }
 
         var tokens = CorrectionEngine.tokenize(text)

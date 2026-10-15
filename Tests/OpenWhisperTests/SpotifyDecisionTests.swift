@@ -97,3 +97,29 @@ final class SpotifyDecisionTests: XCTestCase {
         XCTAssertFalse(SpotifyManager.isPromotionCandidate("Bugün toplantıda deploy işini konuştuk"))
     }
 }
+
+/// TEST-HATALARI 2026-09-27 #2: "Müziğe devam et" was pasted as dictation.
+final class SpotifyResumeDecisionTests: XCTestCase {
+    private typealias Parse = SpotifyRequestParser.OllamaParse
+
+    private func decide(_ text: String, _ parse: Parse?, commandMode: Bool = false) -> SpotifyManager.ExplicitSpotifyIntent? {
+        SpotifyManager.decide(rules: SpotifyManager.explicitIntent(in: text), parse: parse, text: text, commandMode: commandMode)
+    }
+
+    func testResumeWithMusicWordPlays() {
+        for text in ["Müziğe devam et", "Şarkıya devam et lütfen", "Spotify'da kaldığı yerden devam et",
+                     "Müziği sürdür", "müziğe devam ettir"] {
+            XCTAssertEqual(SpotifyManager.explicitIntent(in: text), .play, text)
+            XCTAssertEqual(decide(text, Parse(intent: .play)), .play, text)
+            XCTAssertEqual(decide(text, Parse(intent: .play), commandMode: true), .play, text)
+        }
+    }
+
+    func testResumeWithoutMusicWordStaysDictation() {
+        for text in ["Toplantıya devam edelim", "Devam et", "Müziğe devam ettik dün akşam"] {
+            XCTAssertNil(SpotifyManager.explicitIntent(in: text), text)
+            XCTAssertNil(decide(text, Parse(intent: .play)), text)
+        }
+        XCTAssertNil(decide("Toplantıya devam edelim", Parse(intent: .play), commandMode: true))
+    }
+}

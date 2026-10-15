@@ -31,6 +31,11 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Geliştirici modunu başlat"), .developerMode)
         XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç"), .developerMode)
         XCTAssertEqual(SystemCommandParser.parse("Jarvis dev modunu açar mısın?"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Devmodo Aç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Devmodu aç."), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Def modu aç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Dev mod'u aç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Dev mod aç"), .developerMode)
         XCTAssertNil(SystemCommandParser.parse("Developer modu açınca ne oluyor"))
         XCTAssertNil(SystemCommandParser.parse("Yarın dev modu açmayı düşünüyorum"))
         XCTAssertNil(SystemCommandParser.parse("Developer modu aç ve sonra bana bir mail yaz"))
@@ -193,5 +198,25 @@ final class SystemCommandParserTests: XCTestCase {
         let summary = DailyBriefing.Summary(title: "Yarın", events: [], reminders: [], unreadMailCount: nil, mail: [], missingAccess: ["Takvim"])
         XCTAssertEqual(summary.headline, "Yarın: takvim izni yok")
         XCTAssertTrue(summary.body.contains("İzin yok: Takvim"))
+    }
+}
+
+/// TEST-HATALARI 2026-09-27 #1: "toplantı" matched the "plan" root and read tomorrow's briefing.
+final class BriefingParserRegressionTests: XCTestCase {
+    private func parse(_ text: String) -> SystemCommand? {
+        SystemCommandParser.parse(text, installedApps: [], shortcuts: [])
+    }
+
+    func testStatementsAboutTheDayAreNotBriefings() {
+        for text in ["Toplantı yarın saat üçte başlıyor", "Toplantı yarın saat 3'te başlıyor",
+                     "Yarın programcıyla görüşeceğim", "Bugün planlama yaptık", "Yarın takvimli bir iş var"] {
+            XCTAssertNil(parse(text), text)
+        }
+    }
+
+    func testDayQuestionsAreBriefings() {
+        XCTAssertEqual(parse("Yarın planım ne"), .briefing(dayOffset: 1))
+        XCTAssertEqual(parse("Bugün programımız ne"), .briefing(dayOffset: 0))
+        XCTAssertEqual(parse("Yarın neyimiz var"), .briefing(dayOffset: 1))
     }
 }

@@ -122,7 +122,9 @@ enum SoundAlikeCorrector {
         // that a near miss can't be an everyday Turkish word.
         guard let spoken = entry.spoken, !entry.canonical.contains(" "), candidate.count >= 5 else { return false }
         let target = fold(spoken).replacingOccurrences(of: " ", with: "")
-        let allowed = Int(Double(target.count) * 0.4)
+        // A short spoken form is only one letter away from everyday words at 40%: "bulut(ta)"
+        // → Bluetooth'ta and "varsa" → WhatsApp (Oct 2026). Below 7 letters, one edit at most.
+        let allowed = target.count < 7 ? 1 : Int(Double(target.count) * 0.4)
         return WakeWordVerifier.editDistance(candidate, target) <= allowed
     }
 
