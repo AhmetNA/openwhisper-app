@@ -26,9 +26,10 @@ final class JarvisChat {
     /// unreachable or slow; the finished reply is added to the conversation history.
     /// `language` is the reply voice's: an English voice gets English answers.
     /// `context` is what Jarvis can see right now (`JarvisContext.promptLines`).
-    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = []) -> AsyncStream<String> {
+    /// `userFacts` is what the user asked Jarvis to remember (`UserMemory`).
+    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context)]]
+        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts)]]
             + history
             + [["role": "user", "content": text]]
 
@@ -132,7 +133,7 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = []) -> String {
+    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = []) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "tr_TR")
         formatter.dateFormat = "d MMMM yyyy EEEE, HH:mm"
@@ -146,7 +147,7 @@ final class JarvisChat {
         \(accessRule(context))
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
         - Kendi adını ("Jarvis") söyleme.
-        Şu an: \(formatter.string(from: now)).\(contextBlock(context))
+        Şu an: \(formatter.string(from: now)).\(contextBlock(context))\(factsBlock(userFacts))
         """
     }
 
@@ -156,6 +157,12 @@ final class JarvisChat {
         context.isEmpty
             ? "- Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle."
             : "- İnternete, hava durumuna, haberlere ve e-postaya erişimin yok; güncel bilgi uydurma. Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
+    }
+
+    /// The user said these themself; the model may use them but must not recite them unasked.
+    nonisolated private static func factsBlock(_ facts: [String]) -> String {
+        facts.isEmpty ? "" : "\nKullanıcının sana söyleyip hatırlamanı istediği bilgiler (gerektiğinde kullan, sorulmadan sayma; adını biliyorsan arada adıyla hitap edebilirsin):\n"
+            + facts.map { "- \($0)" }.joined(separator: "\n")
     }
 
     nonisolated private static func contextBlock(_ context: [String]) -> String {

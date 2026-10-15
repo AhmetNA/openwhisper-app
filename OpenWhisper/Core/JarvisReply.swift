@@ -163,6 +163,29 @@ struct JarvisReply {
         return addressing(Self.acks[index])
     }
 
+    // MARK: - Memory
+
+    /// "Bunu hatırla …" / "hakkımda ne biliyorsun?" / "… unut". `facts` is what is stored
+    /// after the command ran; `removed` how many facts a forget took away.
+    mutating func memory(_ command: UserMemoryCommand, facts: [String], removed: Int = 0) -> String {
+        switch command {
+        case .remember(let fact) where fact.hasPrefix(UserMemory.namePrefix):
+            return "Memnun oldum, \(fact.dropFirst(UserMemory.namePrefix.count))."
+        case .remember:
+            return addressing(choose(["Aklımda tutuyorum.", "Not ettim, unutmam.", "Hafızama ekledim."]))
+        case .recall:
+            guard !facts.isEmpty else { return addressing("Henüz bana kendinizle ilgili bir şey söylemediniz.") }
+            let recent = facts.suffix(6).map { $0.hasSuffix(".") ? $0 : $0 + "." }
+            return "Bildiklerim şunlar: " + recent.joined(separator: " ")
+        case .forget:
+            return removed > 0 ? addressing("Unuttum.") : addressing("Bununla ilgili bir şey hatırlamıyorum.")
+        case .forgetLast:
+            return removed > 0 ? addressing("Son söylediğinizi unuttum.") : addressing("Hafızamda bir şey yok zaten.")
+        case .forgetAll:
+            return addressing("Hafızamı temizledim.")
+        }
+    }
+
     // MARK: - Greetings
 
     enum Greeting: Equatable, Sendable {

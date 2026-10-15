@@ -2441,6 +2441,25 @@ final class AppState {
                 return
             }
 
+            // "Bunu hatırla: …", "benim adım …", "hakkımda ne biliyorsun?", "… unut".
+            if session.isVoiceCommand, let memoryCommand = UserMemoryCommand.parse(trimmed) {
+                session.latency.finishDecision(route: "kişisel hafıza")
+                owLog("[Route] memory (\(memoryCommand))")
+                self.lastTranscription = text
+                let memory = UserMemory.shared
+                var removed = 0
+                switch memoryCommand {
+                case .remember(let fact): memory.remember(fact)
+                case .recall: break
+                case .forget(let topic): removed = memory.forget(topic)
+                case .forgetLast: removed = memory.forgetLast() == nil ? 0 : 1
+                case .forgetAll: removed = memory.facts.count; memory.forgetAll()
+                }
+                let reply = self.jarvisReply.memory(memoryCommand, facts: memory.facts.map(\.text), removed: removed)
+                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 5000) }
+                return
+            }
+
             // A destructive reminder action is always two-step. While a deletion confirmation
             // is pending, only an explicit approval can execute the already-resolved plan; any
             // other ordinary voice response discards it without touching reminders.
@@ -2810,7 +2829,8 @@ final class AppState {
         let context = await JarvisContext.gather()
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
-            to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines
+            to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
+            userFacts: UserMemory.shared.promptLines
         )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
