@@ -69,6 +69,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
 
     /// Copy text to the system clipboard.
     func copyToClipboard(_ text: String) {
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would copy: \(text)")
+            return
+        }
         _ = writeToClipboard(text)
     }
 
@@ -110,6 +114,12 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         let cleaned = cleanedText(text)
         guard !cleaned.isEmpty else {
             complete(.clipboardOnly(.emptyText), onOutcome: onOutcome)
+            return
+        }
+        // Automatic voice tests run while the developer works in another app: never type into it.
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would type: \(cleaned)")
+            complete(.pastedUnverified, onOutcome: onOutcome)
             return
         }
 
@@ -157,6 +167,11 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     ) {
         let cleaned = cleanedText(newText)
         guard !cleaned.isEmpty else {
+            onReplaced?()
+            return
+        }
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would replace: \(oldText) → \(cleaned)")
             onReplaced?()
             return
         }
@@ -221,6 +236,11 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         context: PasteContext?,
         completion: @escaping (Bool) -> Void
     ) {
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would delete \(text.count) chars")
+            completion(true)
+            return
+        }
         let capturedContext = context ?? PasteContext.capture(targetApp: targetApp)
         resolveDestination(capturedContext) { [weak self] resolution in
             guard let self, case .ready(let destination) = resolution, !destination.isBackground else {
@@ -240,6 +260,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     /// switched to could send or confirm something else. Returns whether it was posted.
     @discardableResult
     func pressReturn(inPID pid: pid_t) -> Bool {
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would press Return")
+            return true
+        }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
             owLog("[TextInjector] Return skipped: target is no longer frontmost")
             return false

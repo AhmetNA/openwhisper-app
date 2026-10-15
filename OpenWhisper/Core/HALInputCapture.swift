@@ -69,6 +69,7 @@ final class HALInputCapture {
         let maxFrames = self.maxFrames
         let sampleRate = format.sampleRate
         let current = self.handler
+        let injector = VoiceTestInjector.shared
         unit.inputHandler = { _, timestamp, frameCount, bus in
             guard frameCount <= maxFrames else { return }
             buffer.frameLength = frameCount
@@ -80,6 +81,9 @@ final class HALInputCapture {
             var flags = AudioUnitRenderActionFlags()
             let status = render(&flags, timestamp, frameCount, bus, buffer.mutableAudioBufferList, nil)
             guard status == noErr else { return }
+            if timestamp.pointee.mFlags.contains(.hostTimeValid) {
+                injector.fill(buffer, hostTime: timestamp.pointee.mHostTime, deviceRate: sampleRate)
+            }
             let time = AVAudioTime(audioTimeStamp: timestamp, sampleRate: sampleRate)
             current.withLockUnchecked { $0?.call(buffer, time) }
         }

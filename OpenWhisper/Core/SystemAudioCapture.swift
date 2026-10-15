@@ -26,8 +26,6 @@ final class SystemAudioSessionRecorder {
     private(set) var reachedLimit = false
     var onLimitReached: (() -> Void)?
 
-    var keptSampleCount: Int { samples.count + min(pause.count, keptPauseSamples) }
-
     func ingest(_ input: [Float]) {
         guard !input.isEmpty, !reachedLimit else { return }
         let frameLength = Self.sampleRate / 50 // 20 ms

@@ -310,10 +310,12 @@ final class AppState {
     /// Dictation goes through the target-speaker filter.
     var targetSpeakerFiltersTranscription: Bool {
         targetSpeakerEnabled && targetSpeakerScope.coversTranscription
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks
     }
     /// "Jarvis" wakes only for the enrolled voice.
     private var targetSpeakerGuardsWakeWord: Bool {
         targetSpeakerEnabled && targetSpeakerScope.coversWakeWord && targetSpeakerProfile != nil
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks
     }
     var launchAtLogin: Bool {
         didSet {
@@ -1254,6 +1256,7 @@ final class AppState {
             : nil
         ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession
             && targetSpeakerEnabled && targetSpeakerProfile != nil
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate()
             : nil
         ownVoiceCheckInFlight = false
@@ -1601,11 +1604,17 @@ final class AppState {
         default:
             canUseDiarizationDecision = false
         }
+        // A short-bypass batch had no run long enough to score, so diarization cannot name the
+        // speaker either (60 of 61 failed, 14–15 Oct 2026) and its fallback decoded the masked
+        // audio a second time. Go straight to that masked decode: same text, ~0.7 s sooner.
+        // Confirmations keep the timed decode, whose full text they use as a heard variant.
+        let skipsUnscorableDiarization = filtered.shortBypass && session.trigger != .confirmation
         let shouldUseDiarization = session.targetSpeakerEnabled
             && !filtered.wasFailClosed
             && targetSpeakerDiarizationReady
             && filtered.hadVoiceActivity
             && canUseDiarizationDecision
+            && !skipsUnscorableDiarization
         if session.targetSpeakerEnabled && filtered.decision == .partial {
             session.hadPartialTargetSpeech = true
         }
@@ -1702,6 +1711,19 @@ final class AppState {
             let segmentText: String
             if shouldUseDiarization {
                 var timedTranscription: TimedTranscriptionResult?
+                // The speaker half of diarization needs only the audio: run it during the decode.
+                // On a 23 s dictation the two took 1.5 s and 1.4 s one after the other.
+                let diarization = targetSpeakerDiarization
+                let speakerAnalysis = session.targetSpeakerProfile.map { profile in
+                    Task {
+                        try await diarization.analyzeSpeakers(
+                            audioData: segment.samples,
+                            profile: profile,
+                            audioProcessingMode: audioProcessingMode
+                        )
+                    }
+                }
+                defer { speakerAnalysis?.cancel() }
                 do {
                     let timed = try await transcriber.transcribeTimed(
                         audioData: segment.samples,
@@ -1721,7 +1743,8 @@ final class AppState {
                         transcription: timed,
                         profile: profile,
                         audioProcessingMode: audioProcessingMode,
-                        segmentAcceptedRanges: filtered.acceptedSampleRanges
+                        segmentAcceptedRanges: filtered.acceptedSampleRanges,
+                        analysis: try await speakerAnalysis?.value
                     )
                     let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     noteSpeakers {
@@ -2003,12 +2026,14 @@ final class AppState {
             /// `send`, presses Return once the paste landed, for coding agents: the text is
             /// then gone from the field, so the swap, snapshot and LLM cleanup steps are skipped.
             @MainActor
+            /// True once the text is in the target, and, with `send`, Return went to it.
+            @discardableResult
             func pasteAsDictation(
                 _ rawText: String,
                 targetApp: NSRunningApplication?,
                 pasteContext: PasteContext,
                 send: Bool
-            ) async {
+            ) async -> Bool {
                 session.latency.finishDecision(route: send ? "agent yazma" : "dikte")
                 let preprocessingStartedAt = session.latency.timestamp()
                 var initialText = rawText
@@ -2054,7 +2079,7 @@ final class AppState {
                 session.latency.record(.preprocessing, since: preprocessingStartedAt)
                 guard !initialText.isEmpty else {
                     owLog("[OpenWhisper] Forbidden-only transcript blocked before output")
-                    return
+                    return false
                 }
                 self.lastTranscription = initialText
                 let misheard = self.misheardWords(in: initialText)
@@ -2086,7 +2111,16 @@ final class AppState {
                     session.latency.expectAsyncOutput()
                     guard let textInjector = self.textInjector else {
                         session.latency.markOutput("metin enjektörü kullanılamıyor")
-                        return
+                        return false
+                    }
+                    // Resumed once the paste (and, with `send`, the Return) is done, so a
+                    // spoken "Gönderdim" never runs ahead of the real send.
+                    return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    var finished = false
+                    @MainActor func finish(_ delivered: Bool) {
+                        guard !finished else { return }
+                        finished = true
+                        continuation.resume(returning: delivered)
                     }
                     // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
                     textInjector.pasteTextResult(
@@ -2117,11 +2151,21 @@ final class AppState {
                                         if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
                                             sent = await injector.pressReturnBringingToFront(pid: pid)
                                         }
+                                        // A posted Return proves nothing if Claude was not ready:
+                                        // a sent message leaves the composer.
+                                        if sent, let app = targetApp, !app.isTerminated,
+                                           app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
+                                           NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                                           await ClaudeSessionNavigator.composerStillHolds(app, text: initialText) {
+                                            owLog("[Result] Return pressed but the text is still in Claude's composer")
+                                            sent = false
+                                        }
                                         owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
                                         if let traceID {
                                             VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
                                         }
                                         self.showFlowBarMessage(sent ? "gönderildi" : "yazıldı, gönderilmedi", durationMs: 1200)
+                                        finish(sent)
                                         // Wait a beat so the app takes the Return before losing focus.
                                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { goBack() }
                                     }
@@ -2140,6 +2184,7 @@ final class AppState {
                                 )
 
                                 self.dismissFlowBarMessage()
+                                finish(true)
 
                                 // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
                                 // Once Ollama finishes, replace the initially pasted text in-place.
@@ -2213,6 +2258,7 @@ final class AppState {
                                 self.hotkey?.setSwapAvailable(false)
                                 self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
                                 goBack()
+                                finish(false)
                             }
                         } }
                     }
@@ -2221,11 +2267,17 @@ final class AppState {
                     Task { @MainActor in
                         try? await Task.sleep(for: .seconds(2))
                         session.latency.markOutput("yapıştırma sonucu zaman aşımı")
+                        // The send path hops apps and waits, but never this long.
+                        try? await Task.sleep(for: .seconds(6))
+                        if !finished { owLog("[Result] Paste result never came back; reporting not delivered") }
+                        finish(false)
+                    }
                     }
                 } else {
                     self.textInjector?.copyToClipboard(initialText)
                     owLog("[Result] Auto-paste off, copied to clipboard: '\(initialText)'")
                     session.latency.markOutput("panoya kopyalandı")
+                    return false
                 }
             }
 
@@ -2302,7 +2354,13 @@ final class AppState {
                             return
                         }
                     }
-                    await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                    let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                    guard delivered else {
+                        owLog("[Agent] Not delivered to \(targetApp?.localizedName ?? "?"); not reporting success")
+                        await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
+                                   spoken: agent.send ? "mesajı gönderemedim" : "mesajı yazamadım")
+                        return
+                    }
                     if agent.send, let app = targetApp,
                        app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false {
                         ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
@@ -2501,7 +2559,7 @@ final class AppState {
             @MainActor func dictateOrChat() async {
                 let front = session.targetApp?.bundleIdentifier
                 if session.isVoiceCommand {
-                    let focusStatus = session.pasteContext.focusStatus
+                    let focusStatus = VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus
                     let needsScore = focusStatus == .unknown
                     let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
@@ -3684,6 +3742,10 @@ final class AppState {
     /// Handles openwhisper://start | stop | toggle, used by Siri Vocal Shortcuts / Shortcuts.
     func handleExternalURL(_ url: URL) {
         guard url.scheme?.lowercased() == "openwhisper" else { return }
+        if url.host?.lowercased() == "voicetest" {
+            VoiceTestInjector.shared.handle(url)
+            return
+        }
         let action = (url.host ?? url.path).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let hotkey else {
             owLog("[OpenWhisper] URL trigger '\(action)' ignored — setup not finished yet")
@@ -3714,6 +3776,7 @@ final class AppState {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }
+        JarvisVoice.shared.warmUp()
     }
 
     /// Jarvis key: idle → start a session like "Hey Jarvis"; during a hands-free recording

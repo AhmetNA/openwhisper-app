@@ -2,19 +2,34 @@ import XCTest
 @testable import OpenWhisper
 
 final class SmartTurnEndpointDetectorTests: XCTestCase {
-    func testVeryHighCompletionScoreUsesShortDebounce() {
+    func testCertainCompletionScoreUsesShortestDebounce() {
         let config = SmartTurnEndpointDetector.Config()
 
         XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 1.99,
+            silenceDuration: 1.49,
             config: config
         ))
         XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 2.0,
+            silenceDuration: 1.5,
             config: config
         ), .stop(probability: 0.985))
+    }
+
+    func testVeryHighCompletionScoreUsesShortDebounce() {
+        let config = SmartTurnEndpointDetector.Config()
+
+        XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
+            probability: 0.95,
+            silenceDuration: 1.99,
+            config: config
+        ))
+        XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
+            probability: 0.95,
+            silenceDuration: 2.0,
+            config: config
+        ), .stop(probability: 0.95))
     }
 
     func testBorderlineCompletionScoreGetsMoreThinkingTime() {

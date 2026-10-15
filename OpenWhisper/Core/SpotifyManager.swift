@@ -807,14 +807,23 @@ final class SpotifyManager: @unchecked Sendable {
 
     /// SetFit's intent as an `OllamaParse`, so `decide` applies the same evidence rules to it as
     /// to Ollama's. Nil (→ ask Ollama) when SetFit is off, unsure, or says "search" while
-    /// Ollama is up: SetFit only classifies, and a search still needs Ollama's title/artist split.
+    /// Ollama is up and the rules can't split it: SetFit only classifies, and a bare
+    /// "Coldplay Yellow" still needs Ollama's title/artist split.
     /// Without Ollama a search goes ahead with the rule-based split.
     private static func setFitParse(_ text: String, ollamaAvailable: Bool) async -> SpotifyRequestParser.OllamaParse? {
         guard let decision = await SetFitDecider.decide(.spotifyIntent, text: text), decision.confident,
               let intent = SpotifyRequestParser.OllamaIntent(rawValue: decision.label)
         else { return nil }
-        if intent == .search && ollamaAvailable { return nil }
+        if intent == .search && ollamaAvailable && !rulesSplitSearch(text) { return nil }
         return SpotifyRequestParser.OllamaParse(intent: intent)
+    }
+
+    /// Whether the rules already split this search from grammar alone (genitive artist,
+    /// ablative artist, album or playlist noun, a mood with "bir şeyler"). Ollama only
+    /// re-confirms those and costs ~2 s ("Eğlenceli bir şeyler çal", 15 Oct 2026); a kind-less
+    /// SetFit parse makes `searchRequest` use the same rules.
+    static func rulesSplitSearch(_ text: String) -> Bool {
+        SpotifyRequestParser.requestFromRules(normalize(text)).kind != .freeText
     }
 
     /// The model the user picked in Settings (AppState.ollamaModel, UserDefaults key

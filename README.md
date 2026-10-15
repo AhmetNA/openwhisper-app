@@ -15,7 +15,7 @@
 
 Jarvis is a menu-bar dictation app for Apple Silicon Macs. It uses [WhisperKit](https://github.com/argmaxinc/WhisperKit) and Core ML for local transcription, then optionally uses [Ollama](https://ollama.com/) on `localhost` to remove filler words and improve punctuation.
 
-Your microphone audio and transcript stay on your Mac during normal dictation. Spotify integration is optional and is the only feature that communicates with an external service.
+Your microphone audio and transcript stay on your Mac during normal dictation. Spotify integration and the Gemini voice are optional and are the only features that communicate with external services.
 
 ## Highlights
 
@@ -31,6 +31,8 @@ Your microphone audio and transcript stay on your Mac during normal dictation. S
 - **Correction learning:** teach Jarvis recurring corrections from its settings window.
 - **Voice reminders:** say commands such as “bana 10 dakika sonra toplantıyı hatırlat”.
 - **Optional Spotify controls:** search, play, pause, skip, and use Liked Songs from voice commands.
+- **"Hey Jarvis" voice assistant:** a wake word opens a voice session for commands (system, Spotify,
+  timers and alarms, calendar, Safari, video, Claude Code) and spoken replies from a local voice.
 - **Input-device selection:** automatic mode prefers a connected headset microphone and falls back to the built-in Mac microphone; manual selection is also available.
 - **No cloud account required:** build and run the app locally with SwiftPM.
 
@@ -55,7 +57,8 @@ Accessibility API → text pasted into the active app
 | Mac | Apple Silicon: M1, M2, M3, or M4 |
 | macOS | 14.0 or newer |
 | Build tools | Xcode Command Line Tools; the full Xcode app is not required |
-| Optional cleanup | Ollama plus `gemma4:e2b-it-qat` or `qwen3.5:4b` |
+| Optional cleanup | Ollama plus `gemma4:e4b-it-qat` (default), `gemma4:e2b-it-qat` (faster) or `qwen3.5:4b` |
+| Optional voice add-ons | `uv` and Python 3.12 for the local voices, SetFit decider and Qwen3-ASR (see below) |
 | Optional Spotify | A Spotify Developer application and Spotify Premium for playback endpoints |
 
 Intel Macs are not supported by the current build.
@@ -74,8 +77,8 @@ Ollama is not required for raw transcription, but it enables cleanup and the fle
 
 ```bash
 brew install ollama
-ollama pull gemma4:e2b-it-qat
-# Optional slower alternative: ollama pull qwen3.5:4b
+ollama pull gemma4:e4b-it-qat
+# Faster: ollama pull gemma4:e2b-it-qat · More careful: ollama pull qwen3.5:4b
 ```
 
 Ollama should be available at `http://localhost:11434` while Jarvis is running.
@@ -169,6 +172,50 @@ python bridge.py --transcribe /path/to/16k-mono.wav
 launch and adds it to the model picker; no Swift model-specific code is required. The bridge is
 responsible for model format, quantization, downloads, and its own local runtime.
 
+## Jarvis voice assistant (optional)
+
+Say **"Hey Jarvis"** (or press the Jarvis key set in **Settings › Jarvis**) and speak a command.
+The wake word runs locally with openWakeWord; weak detections are double-checked with Whisper.
+Commands that are not recognised are answered as a short chat through Ollama.
+
+Examples (Turkish is the primary language):
+
+- System: "Wi-Fi'yi kapat", "Sesi biraz kıs", "Chrome'u zorla kapat", "Dev modu aç"
+- Several at once: "Bluetooth'u kapat ve Wi-Fi'yi aç"
+- Timers and alarms: "20 dakikalık alarm kur", "Saat 7'ye alarm kur" (Clock app via a Shortcut,
+  see `scripts/clock-alarm/`), "Yarım saat sonra çayı hatırlat"
+- Calendar: "Yarın saat 3'te Mehmet'le toplantı ekle"
+- Safari and video: "YouTube'da lofi ara", "Bu sayfayı özetle", "10 saniye ileri sar"
+- Claude Code: "Claude Code'da yeni session'a şunu gönder: …"
+
+### Command routing: SetFit decider
+
+By default (**Settings › LLM Cleanup › Karar motoru**) small SetFit classifiers decide in a few
+milliseconds whether a sentence is a command, with Ollama as the fallback. The trained models and
+their server live in the parent project's `decision_model/` folder (not in this repository); run
+`decision_model/install.sh` once. Without them, choose the Ollama engine.
+
+### Spoken replies
+
+Pick a voice in **Settings › Sesli cevap**. Each local voice installs once into
+`~/Library/Application Support/OpenWhisper/` with its own venv; `build.sh` keeps the server
+scripts up to date afterwards.
+
+| Voice | Language | Install |
+| --- | --- | --- |
+| Pocket TTS (default) | Turkish | `bash tts_pocket_server/setup.sh` (~440 MB) |
+| Piper Jarvis | English | `bash tts_piper_server/setup.sh` (~63 MB) |
+| OmniVoice (MLX) | Turkish | `bash tts_server/setup.sh` (~2 GB) |
+| EMA Lightning | Turkish (experimental) | `bash tts_ema_server/setup.sh` |
+| Gemini | Cloud | API key in Settings; sends the reply text to Google |
+
+`tts_antalia_server/` is compare-only (`scripts/tts-compare/`); the app does not use it.
+
+### Alternative speech model
+
+**Settings › Konuşma modeli › Qwen3-ASR** uses Qwen3-ASR 1.7B on MLX instead of Whisper.
+Install once with `bash asr_server/setup.sh` (~2.5 GB).
+
 ## Optional Spotify setup
 
 Spotify is deliberately opt-in. If you enable it:
@@ -220,6 +267,7 @@ swift build
 - Raw audio transcription is performed locally by WhisperKit/Core ML.
 - Cleanup and reminder fallback parsing use only a local Ollama server.
 - Spotify commands can send search/account requests to Spotify when that integration is enabled.
+- The Gemini voice, when selected, sends reply text to Google. All other voices run locally.
 - The first Whisper model run downloads the selected model from WhisperKit's model source.
 - The app currently targets Apple Silicon and macOS 14+.
 - There is no signed/notarized release artifact yet; source builds use your local signing identity or ad-hoc signing.

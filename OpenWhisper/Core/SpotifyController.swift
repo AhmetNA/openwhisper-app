@@ -531,6 +531,15 @@ final class SpotifyController: @unchecked Sendable {
     /// Retrying once against an explicit device (preferring this Mac) avoids that 404
     /// without touching AppleScript, so it also works in the App Store build.
     private func withDeviceFallback(_ body: (String?) async throws -> Void) async throws {
+        // Idle is the usual case (all 4 play commands on 15 Oct 2026 got the 404), and the
+        // failed call costs ~0.4 s; the device list costs ~0.08 s, so check it first.
+        if let devices = try? await SpotifyWebAPI.shared.fetchAvailableDevices(),
+           !devices.contains(where: { $0.isActive }),
+           let device = devices.first(where: { $0.type == "Computer" }) ?? devices.first {
+            owLog("[SpotifyController] No active device; playing on \(device.name) (\(device.type))")
+            try await body(device.id)
+            return
+        }
         do {
             try await body(nil)
         } catch SpotifyWebAPI.SpotifyAPIError.noActiveDevice {

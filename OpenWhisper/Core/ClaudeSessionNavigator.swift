@@ -57,6 +57,38 @@ enum ClaudeSessionNavigator {
         return false
     }
 
+    /// Waits until the composer exists and focuses it. Right after a cold launch Claude is
+    /// frontmost long before its web content loads, and a paste then goes nowhere.
+    static func waitForComposer(_ app: NSRunningApplication, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if app.isTerminated { return false }
+            if app.isFinishedLaunching, let prompt = promptField(app) {
+                focus(prompt)
+                // Let the freshly loaded composer take the focus before anything is pasted.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        } while Date() < deadline
+        owLog("[Agent] Claude: the composer did not appear within \(Int(timeout))s")
+        return false
+    }
+
+    /// After Return: whether the composer still holds `text`, i.e. the message never left.
+    /// False when the composer cannot be read, so a missing AX tree never fakes a failure.
+    static func composerStillHolds(_ app: NSRunningApplication, text: String) async -> Bool {
+        let needle = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        guard !needle.isEmpty else { return false }
+        let deadline = Date().addingTimeInterval(1.5)
+        repeat {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard let prompt = promptField(app), let current = value(prompt) else { return false }
+            if !current.contains(needle) { return false }
+        } while Date() < deadline
+        return true
+    }
+
     /// Switches to the sidebar session titled `name` (expanding collapsed day groups if
     /// needed) and focuses its composer. False when no such session is listed.
     static func selectSession(_ app: NSRunningApplication, titled name: String) async -> Bool {

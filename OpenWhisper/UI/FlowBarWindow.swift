@@ -45,6 +45,7 @@ final class FlowBarController {
             MainActor.assumeIsolated {
                 guard let self, self.isShown else { return }
                 self.panel?.orderFrontRegardless()
+                self.rebuildIfOffActiveSpace()
                 self.recenterAfterContentLayout()
             }
         }
@@ -81,6 +82,7 @@ final class FlowBarController {
         // keyboard focus from that target app, including while it owns a fullscreen Space.
         // Every time, not only on the first show: a fullscreen app may have covered it since.
         panel?.orderFrontRegardless()
+        rebuildIfOffActiveSpace()
         recenterAfterContentLayout()
 
         let tShowEnd = CACurrentMediaTime()
@@ -138,13 +140,32 @@ final class FlowBarController {
     }
 
     private func ensureVisible() {
-        guard isShown, let panel else { return }
+        guard isShown else { return }
+        rebuildIfOffActiveSpace()
+        guard let panel else { return }
         guard !panel.isVisible || panel.alphaValue < 0.99
                 || targetScreen().map({ !$0.frame.intersects(panel.frame) }) == true else { return }
         owLog("[FlowBar] watchdog re-showing bar (visible=\(panel.isVisible), alpha=\(panel.alphaValue), frame=\(panel.frame))")
         forceOpaque()
         panel.orderFrontRegardless()
         centerPanelOnScreen()
+    }
+
+    /// The window server can drop the panel's all-Spaces membership and leave it tied to one
+    /// fullscreen Space (seen under Stage Manager: CGSCopySpacesForWindows gave only the old
+    /// fullscreen Space while the user was back on the desktop). AppKit still reports it
+    /// visible and opaque, so the bar is silently invisible, and `orderFrontRegardless` on
+    /// every show didn't move it back. A freshly created panel joins every Space again.
+    private func rebuildIfOffActiveSpace() {
+        guard isShown, let old = panel, old.isVisible, !old.isOnActiveSpace else { return }
+        owLog("[FlowBar] panel not on the active Space (frame=\(old.frame)) — rebuilding it")
+        old.orderOut(nil)
+        old.contentView = nil
+        panel = nil
+        createPanel()
+        forceOpaque()
+        panel?.orderFrontRegardless()
+        recenterAfterContentLayout()
     }
 
     /// The screen the user is working on: the one under the mouse pointer, falling back to

@@ -30,6 +30,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private var generation: UInt64 = 0
     private var synthesis: Task<Data?, Never>?
     private var sentenceProducer: Task<Void, Never>?
+    private var lastWarmUp = Date.distantPast
     /// Cache identities whose acks were already prefetched this run.
     private var prefetched: Set<String> = []
     /// The local model that translates replies for an English voice (Settings' Ollama model).
@@ -177,6 +178,18 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         }
         owLog("[Voice] \(provider.displayName) test OK")
         return nil
+    }
+
+    /// A throwaway synthesis when a voice session starts, so a reply that isn't cached doesn't
+    /// pay for the voice's pages coming back. After hours idle next to a loaded Ollama model,
+    /// Pocket took 1.7–2.2 s for a sentence it makes warm in 0.2–0.5 s (15 Oct 2026). Free
+    /// local voices only (the same rule as the ack prefetch), at most every two minutes.
+    func warmUp() {
+        let provider = self.provider
+        guard provider.prefetchesAcks, provider.isReady,
+              Date().timeIntervalSince(lastWarmUp) > 120 else { return }
+        lastWarmUp = Date()
+        Task { _ = try? await provider.synthesize("Hazırım.") }
     }
 
     /// Gets the current provider ready (the local server takes ~15 s to load), then fills the

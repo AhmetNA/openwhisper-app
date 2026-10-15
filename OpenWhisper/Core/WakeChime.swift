@@ -1,12 +1,12 @@
 import AppKit
 
-/// The short "HUD ping" played when "Hey Jarvis" starts a session: a bright chord ping
-/// (G6 + D7 + G7) with a softer C7 echo 70 ms later, about 0.22 s in all. Synthesized once
-/// in memory, so there is no audio file to bundle.
+/// The tiny tick played when "Hey Jarvis" starts a session: one soft E6 sine blip, about
+/// 60 ms, kept quiet so it only confirms the wake word. Synthesized once in memory, so there
+/// is no audio file to bundle.
 enum WakeChime {
     private static let sound: NSSound? = {
         let sound = NSSound(data: wavData())
-        sound?.volume = 0.4
+        sound?.volume = 0.12
         return sound
     }()
 
@@ -24,17 +24,10 @@ enum WakeChime {
     }
 
     private static func samples() -> [Double] {
-        let count = Int(sampleRate * 0.22)
+        let count = Int(sampleRate * 0.06)
         return (0..<count).map { i in
             let t = Double(i) / sampleRate
-            var s = 0.0
-            for (freq, gain) in [(1568.0, 1.0), (2349.0, 0.45), (3136.0, 0.2)] {
-                s += gain * sin(2 * .pi * freq * t)
-            }
-            s *= envelope(t, length: 0.12)
-            let echo = t - 0.07
-            if echo > 0 { s += 0.35 * envelope(echo, length: 0.12) * sin(2 * .pi * 2093 * echo) }
-            return s
+            return envelope(t, length: 0.05) * sin(2 * .pi * 1319 * t)
         }
     }
 

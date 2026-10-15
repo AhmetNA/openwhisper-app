@@ -200,4 +200,13 @@ final class SpotifyRequestParserTests: XCTestCase {
         // The pre-intent schema must not decode as a command.
         XCTAssertNil(SpotifyRequestParser.decodeOllamaResponse(#"{"is_music_command":true,"type":"none","title":"","artist":""}"#))
     }
+
+    func testRulesSplitSearchSkipsOllamaOnlyForGrammaticalSplits() {
+        XCTAssertTrue(SpotifyManager.rulesSplitSearch("Eğlenceli bir şeyler çal Spotify'da."))
+        XCTAssertTrue(SpotifyManager.rulesSplitSearch("Tarkan'ın Şımarık şarkısını çal"))
+        XCTAssertTrue(SpotifyManager.rulesSplitSearch("Sezen Aksu'dan bir şarkı aç"))
+        XCTAssertTrue(SpotifyManager.rulesSplitSearch("Tarkan'ın Karma albümünü aç"))
+        XCTAssertFalse(SpotifyManager.rulesSplitSearch("Spotify'da Coldplay Yellow çal"))
+        XCTAssertFalse(SpotifyManager.rulesSplitSearch("Şarkat"))
+    }
 }

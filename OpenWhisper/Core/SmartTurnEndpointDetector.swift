@@ -27,6 +27,9 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         /// Confidence-aware debounce after the actual speech end. A borderline endpoint gets
         /// more time for a thinking pause to resume. Smart Turn rates even a short command
         /// ("devmodu aç") ~0.97 complete, so 1.2 s cut users off mid-thought; 2 s leaves room.
+        /// At ≥0.97 (most finished commands score ~0.98–0.99) 1.5 s is enough: every voice
+        /// command waited a median 1.8 s after its last word (15 Oct 2026).
+        var certainSilence: TimeInterval = 1.5
         var veryHighConfidenceSilence: TimeInterval = 2
         var highConfidenceSilence: TimeInterval = 2.5
         var lowConfidenceSilence: TimeInterval = 3
@@ -42,6 +45,7 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     static func requiredSilence(for probability: Float, config: Config) -> TimeInterval {
         guard probability > 0.5 else { return config.incompleteSilenceTimeout }
         switch probability {
+        case 0.97...: return config.certainSilence
         case 0.9...: return config.veryHighConfidenceSilence
         case 0.75...: return config.highConfidenceSilence
         default: return config.lowConfidenceSilence

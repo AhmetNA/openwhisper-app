@@ -116,6 +116,14 @@ struct TargetSpeakerActivityInterval: Sendable, Equatable {
     let isOverlap: Bool
 }
 
+/// The audio-only half of diarization: Sortformer activity and which slot is the target
+/// speaker. It needs no transcript, so it runs while Whisper decodes the same samples.
+struct TargetSpeakerAnalysis: Sendable, Equatable {
+    let frames: [TargetSpeakerActivityFrame]
+    let intervals: [TargetSpeakerActivityInterval]
+    let targetSlot: Int
+}
+
 /// Result of filtering Whisper's timed words through Sortformer activity and target-speaker
 /// identity. `words` contains accepted words only, in original Whisper order.
 struct TargetSpeakerDiarizationResult: Sendable, Equatable {
@@ -167,12 +175,21 @@ protocol TargetSpeakerDiarizationService: Sendable {
     ///   that the segment-level `TargetSpeakerFilter` already accepted as the target speaker. A
     ///   word fully resolved by that gate is not independently re-vetoed here -- see Kusur A,
     ///   SES-PLANI.md section 10. Pass `[]` when no segment-level decision is available.
+    func analyzeSpeakers(
+        audioData: [Float],
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode
+    ) async throws -> TargetSpeakerAnalysis
+
+    /// - Parameter analysis: `analyzeSpeakers` for these same samples, when it was started
+    ///   ahead of the transcript; nil runs it here.
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
         audioProcessingMode: AudioProcessingMode,
-        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
+        analysis: TargetSpeakerAnalysis?
     ) async throws -> TargetSpeakerDiarizationResult
 }
 
@@ -190,7 +207,8 @@ extension TargetSpeakerDiarizationService {
             transcription: transcription,
             profile: profile,
             audioProcessingMode: audioProcessingMode,
-            segmentAcceptedRanges: segmentAcceptedRanges
+            segmentAcceptedRanges: segmentAcceptedRanges,
+            analysis: nil
         )
     }
 }
@@ -221,19 +239,33 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
         try await runtime.prepare(progressHandler: progressHandler)
     }
 
+    func analyzeSpeakers(
+        audioData: [Float],
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode
+    ) async throws -> TargetSpeakerAnalysis {
+        try await runtime.analyzeSpeakers(
+            audioData: audioData,
+            profile: profile,
+            audioProcessingMode: audioProcessingMode
+        )
+    }
+
     func diarizeAndFilter(
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
         audioProcessingMode: AudioProcessingMode,
-        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
+        analysis: TargetSpeakerAnalysis?
     ) async throws -> TargetSpeakerDiarizationResult {
         try await runtime.diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
             profile: profile,
             audioProcessingMode: audioProcessingMode,
-            segmentAcceptedRanges: segmentAcceptedRanges
+            segmentAcceptedRanges: segmentAcceptedRanges,
+            analysis: analysis
         )
     }
 }
@@ -382,14 +414,12 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         ))
     }
 
-    func diarizeAndFilter(
+    func analyzeSpeakers(
         audioData: [Float],
-        transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode,
-        segmentAcceptedRanges: [TargetSpeakerAcceptedRange]
-    ) async throws -> TargetSpeakerDiarizationResult {
-        owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count), segmentAcceptedRanges=\(segmentAcceptedRanges.count)")
+        audioProcessingMode: AudioProcessingMode
+    ) async throws -> TargetSpeakerAnalysis {
+        let started = Date()
         guard !audioData.isEmpty, audioData.allSatisfy({ $0.isFinite }) else {
             owLog("[TargetSpeakerDiarization] Error: invalidAudio (empty or non-finite samples)")
             throw TargetSpeakerDiarizationError.invalidAudio
@@ -416,17 +446,53 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
                 profile: profile,
                 embeddingDiarizer: embeddingDiarizer
             )
+            owLog("[TargetSpeakerDiarization] speaker analysis: targetSlot=\(targetSlot) in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+            return TargetSpeakerAnalysis(frames: frames, intervals: intervals, targetSlot: targetSlot)
+        } catch let error as TargetSpeakerDiarizationError {
+            owLog("[TargetSpeakerDiarization] Error: \(error.localizedDescription)")
+            throw error
+        } catch {
+            owLog("[TargetSpeakerDiarization] Processing failed error: \(error)")
+            throw TargetSpeakerDiarizationError.processingFailed(String(describing: error))
+        }
+    }
+
+    func diarizeAndFilter(
+        audioData: [Float],
+        transcription: TimedTranscriptionResult,
+        profile: TargetSpeakerProfile,
+        audioProcessingMode: AudioProcessingMode,
+        segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
+        analysis: TargetSpeakerAnalysis?
+    ) async throws -> TargetSpeakerDiarizationResult {
+        owLog("[TargetSpeakerDiarization] diarizeAndFilter called: samples=\(audioData.count), words=\(transcription.words.count), profileEmbeddings=\(profile.embeddings.count), segmentAcceptedRanges=\(segmentAcceptedRanges.count), analysisReady=\(analysis != nil)")
+        let speakers: TargetSpeakerAnalysis
+        if let analysis {
+            speakers = analysis
+        } else {
+            speakers = try await analyzeSpeakers(
+                audioData: audioData,
+                profile: profile,
+                audioProcessingMode: audioProcessingMode
+            )
+        }
+        guard let embeddingDiarizer else {
+            owLog("[TargetSpeakerDiarization] Error: notPrepared (Sortformer or DiarizerManager nil)")
+            throw TargetSpeakerDiarizationError.notPrepared
+        }
+
+        do {
             let result = try filterWords(
                 transcription.words,
                 audioData: audioData,
-                frames: frames,
-                targetSlot: targetSlot,
+                frames: speakers.frames,
+                targetSlot: speakers.targetSlot,
                 profile: profile,
                 embeddingDiarizer: embeddingDiarizer,
-                intervals: intervals,
+                intervals: speakers.intervals,
                 segmentAcceptedRanges: segmentAcceptedRanges
             )
-            owLog("[TargetSpeakerDiarization] diarizeAndFilter succeeded: targetSlot=\(targetSlot), acceptedWords=\(result.acceptedWordCount)/\(transcription.words.count), rejectedWords=\(result.rejectedWordCount), uncertainWords=\(result.uncertainWordCount), hadOverlap=\(result.hadOverlap), text=\"\(result.text)\"")
+            owLog("[TargetSpeakerDiarization] diarizeAndFilter succeeded: targetSlot=\(speakers.targetSlot), acceptedWords=\(result.acceptedWordCount)/\(transcription.words.count), rejectedWords=\(result.rejectedWordCount), uncertainWords=\(result.uncertainWordCount), hadOverlap=\(result.hadOverlap), text=\"\(result.text)\"")
             return result
         } catch let error as TargetSpeakerDiarizationError {
             owLog("[TargetSpeakerDiarization] Error: \(error.localizedDescription)")
