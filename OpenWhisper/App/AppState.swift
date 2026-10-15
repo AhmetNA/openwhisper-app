@@ -3647,12 +3647,26 @@ final class AppState {
         guard let hotkey, hotkey.isIdle else { return }
         armVoiceAutoStopForNextRecording = true
         hotkey.externalStartHandsFree(trigger: trigger)
+        // A short, quiet "tink" so the user hears that "Hey Jarvis" was caught and it's listening.
+        if trigger == .wakeWord { Self.playWakeChime() }
         // Load the model while the user is still speaking; after an idle night Ollama has
         // unloaded it and the cold load alone outlasts a command's wait.
         if ollamaAvailable {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }
+    }
+
+    private static let wakeChime: NSSound? = {
+        let sound = NSSound(named: "Tink")
+        sound?.volume = 0.35
+        return sound
+    }()
+
+    private static func playWakeChime() {
+        guard let chime = wakeChime else { return }
+        chime.stop()
+        chime.play()
     }
 
     /// Jarvis key: idle → start a session like "Hey Jarvis"; during a hands-free recording
