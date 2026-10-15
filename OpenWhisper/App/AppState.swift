@@ -2794,7 +2794,11 @@ final class AppState {
         }
         jarvisActivity = .thinking
         defer { jarvisActivity = .none }
-        let sentences = JarvisChat.shared.reply(to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage)
+        let context = await JarvisContext.gather()
+        owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
+        let sentences = JarvisChat.shared.reply(
+            to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines
+        )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
             heard = await JarvisVoice.shared.speak(sentences: sentences) { [weak self] in self?.jarvisActivity = .speaking }

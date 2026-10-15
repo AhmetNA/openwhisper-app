@@ -25,9 +25,10 @@ final class JarvisChat {
     /// Sentences of the reply as they are written. Ends early (possibly empty) when Ollama is
     /// unreachable or slow; the finished reply is added to the conversation history.
     /// `language` is the reply voice's: an English voice gets English answers.
-    func reply(to text: String, model: String, language: ReplyLanguage = .turkish) -> AsyncStream<String> {
+    /// `context` is what Jarvis can see right now (`JarvisContext.promptLines`).
+    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language)]]
+        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context)]]
             + history
             + [["role": "user", "content": text]]
 
@@ -131,7 +132,7 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish) -> String {
+    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = []) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "tr_TR")
         formatter.dateFormat = "d MMMM yyyy EEEE, HH:mm"
@@ -142,11 +143,23 @@ final class JarvisChat {
         - Çok kısa ol: genelde tek cümle, en fazla iki kısa cümle. Kullanıcı açıkça detay isterse en fazla dört cümle.
         - Madde işareti, başlık, markdown, emoji, kod kullanma. Düz konuşma dili.
         \(languageRule(language))
-        - Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle.
+        \(accessRule(context))
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
         - Kendi adını ("Jarvis") söyleme.
-        Şu an: \(formatter.string(from: now)).
+        Şu an: \(formatter.string(from: now)).\(contextBlock(context))
         """
+    }
+
+    /// With live context the calendar, timers and the playing song are known; the rest
+    /// (internet, weather, news, mail) never is.
+    nonisolated private static func accessRule(_ context: [String]) -> String {
+        context.isEmpty
+            ? "- Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle."
+            : "- İnternete, hava durumuna, haberlere ve e-postaya erişimin yok; güncel bilgi uydurma. Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
+    }
+
+    nonisolated private static func contextBlock(_ context: [String]) -> String {
+        context.isEmpty ? "" : "\nDurum:\n" + context.map { "- \($0)" }.joined(separator: "\n")
     }
 
     /// The unrecognized-command sentence stays Turkish in both: the exact-match guard in
