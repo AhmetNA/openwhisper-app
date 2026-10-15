@@ -186,3 +186,13 @@ final class JarvisGreetingTests: XCTestCase {
         }
     }
 }
+
+final class JarvisMetaTests: XCTestCase {
+    func testRepeatAndHelp() {
+        XCTAssertEqual(JarvisReply.meta(in: "Pardon, ne dedin?"), .repeatLast)
+        XCTAssertEqual(JarvisReply.meta(in: "Bir daha söyle"), .repeatLast)
+        XCTAssertEqual(JarvisReply.meta(in: "Neler yapabilirsin?"), .help)
+        XCTAssertNil(JarvisReply.meta(in: "Pardon"))
+        XCTAssertNil(JarvisReply.meta(in: "Ona ne dedin bilmiyorum ama"))
+    }
+}

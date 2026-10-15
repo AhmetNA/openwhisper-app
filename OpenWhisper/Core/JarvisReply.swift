@@ -163,6 +163,32 @@ struct JarvisReply {
         return addressing(Self.acks[index])
     }
 
+    // MARK: - About Jarvis himself
+
+    enum Meta: Equatable, Sendable { case repeatLast, help }
+
+    static func meta(in text: String) -> Meta? {
+        let locale = Locale(identifier: "tr_TR")
+        var words = text.lowercased(with: locale)
+            .components(separatedBy: CharacterSet.letters.inverted)
+            .filter { !$0.isEmpty }
+        words.removeAll { ["jarvis", "hey", "patron", "pardon", "efendim", "lütfen", "bir", "daha"].contains($0) }
+        switch words.joined(separator: " ") {
+        case "ne dedin", "ne dediniz", "tekrar söyle", "tekrar eder misin", "tekrarla", "tekrar et",
+             "söyle", "anlamadım tekrar söyle", "duymadım", "duyamadım", "duymadım tekrar söyle", "son söylediğini tekrarla":
+            return words.isEmpty ? nil : .repeatLast
+        case "ne yapabilirsin", "neler yapabilirsin", "sen ne yapabilirsin", "sen neler yapabilirsin",
+             "neler yapabiliyorsun", "hangi komutları biliyorsun", "yardım", "yardım et", "nasıl kullanılıyorsun":
+            return .help
+        default: return nil
+        }
+    }
+
+    static let helpText = "Müzik çalarım, sesi, Wi-Fi'yi, Bluetooth'u ve ekranı ayarlarım, uygulama açıp geçiş yaparım. "
+        + "Zamanlayıcı, alarm, hatırlatıcı ve takvim etkinliği kurarım, günün özetini veririm. "
+        + "Safari'de arama yapar, sayfayı özetler, videoyu yönetirim, Claude Code'a mesaj yazarım. "
+        + "Bana bir şeyi hatırlamamı söyleyebilir ya da sadece sohbet edebilirsiniz."
+
     // MARK: - Memory
 
     /// "Bunu hatırla …" / "hakkımda ne biliyorsun?" / "… unut". `facts` is what is stored

@@ -258,6 +258,8 @@ final class AppState {
         }
     }
     @ObservationIgnored private var jarvisReply = JarvisReply()
+    /// The last thing Jarvis said, for "ne dedin?".
+    @ObservationIgnored private var lastSpokenReply: String?
     enum JarvisActivity: Sendable, Equatable {
         case none, thinking, speaking
     }
@@ -2441,6 +2443,20 @@ final class AppState {
                 return
             }
 
+            // "Ne dedin?" repeats the last reply; "Ne yapabilirsin?" lists what Jarvis does.
+            if session.isVoiceCommand, let meta = JarvisReply.meta(in: trimmed) {
+                session.latency.finishDecision(route: "Jarvis hakkında")
+                owLog("[Route] meta (\(meta))")
+                self.lastTranscription = text
+                let reply: String
+                switch meta {
+                case .repeatLast: reply = self.lastSpokenReply ?? "Henüz bir şey söylemedim."
+                case .help: reply = JarvisReply.helpText
+                }
+                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 8000) }
+                return
+            }
+
             // "Bunu hatırla: …", "benim adım …", "hakkımda ne biliyorsun?", "… unut".
             if session.isVoiceCommand, let memoryCommand = UserMemoryCommand.parse(trimmed) {
                 session.latency.finishDecision(route: "kişisel hafıza")
@@ -2807,6 +2823,7 @@ final class AppState {
     private func speakReply(_ reply: String?) async -> Bool {
         guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
         owLog("[Voice] Reply: '\(reply)'")
+        lastSpokenReply = reply
         let heard = await JarvisVoice.shared.speak(reply) { [weak self] in self?.jarvisActivity = .speaking }
         jarvisActivity = .none
         return heard
@@ -2840,6 +2857,7 @@ final class AppState {
         }
         guard recordingState != .recording else { return (nil, heard) }
         let answer = JarvisChat.shared.lastReply
+        if let answer, !answer.isEmpty { lastSpokenReply = answer }
         if !heard, let answer, !answer.isEmpty {
             showFlowBarMessage(answer, durationMs: min(max(answer.count * 60, 3000), 10000))
         }

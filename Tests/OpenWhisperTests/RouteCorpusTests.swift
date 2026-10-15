@@ -35,6 +35,7 @@ final class RouteCorpusTests: XCTestCase {
             return "typed"
         }
         if voice, JarvisAddressee.explicitChatCommand(text) != nil { return "chat" }
+        if voice, let meta = JarvisReply.meta(in: text) { return "meta:\(meta)" }
         if voice, let memory = UserMemoryCommand.parse(text) { return "memory:\(memory)" }
         if voice, let greeting = JarvisReply.greeting(in: text) { return "greeting:\(greeting) (unless a text field has focus)" }
 
