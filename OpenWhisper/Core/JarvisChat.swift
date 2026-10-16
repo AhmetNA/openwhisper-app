@@ -27,9 +27,11 @@ final class JarvisChat {
     /// `language` is the reply voice's: an English voice gets English answers.
     /// `context` is what Jarvis can see right now (`JarvisContext.promptLines`).
     /// `userFacts` is what the user asked Jarvis to remember (`UserMemory`).
-    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = []) -> AsyncStream<String> {
+    /// `recalled` is the journal of the past time the user asks about (`JarvisJournal`); empty
+    /// for every other question, so the prompt stays short.
+    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts)]]
+        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled)]]
             + history
             + [["role": "user", "content": text]]
 
@@ -133,7 +135,7 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = []) -> String {
+    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "tr_TR")
         formatter.dateFormat = "d MMMM yyyy EEEE, HH:mm"
@@ -147,7 +149,7 @@ final class JarvisChat {
         \(accessRule(context))
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
         - Kendi adını ("Jarvis") söyleme.
-        Şu an: \(formatter.string(from: now)).\(contextBlock(context))\(factsBlock(userFacts))
+        Şu an: \(formatter.string(from: now)).\(contextBlock(context))\(factsBlock(userFacts))\(recallBlock(recalled))
         """
     }
 
@@ -161,8 +163,14 @@ final class JarvisChat {
 
     /// The user said these themself; the model may use them but must not recite them unasked.
     nonisolated private static func factsBlock(_ facts: [String]) -> String {
-        facts.isEmpty ? "" : "\nKullanıcının sana söyleyip hatırlamanı istediği bilgiler (gerektiğinde kullan, sorulmadan sayma; adını biliyorsan arada adıyla hitap edebilirsin):\n"
+        facts.isEmpty ? "" : "\nKullanıcının sana söyleyip hatırlamanı istediği bilgiler, söylediği tarihle (gerektiğinde kullan, sorulmadan sayma; adını biliyorsan arada adıyla hitap edebilirsin):\n"
             + facts.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    /// Only for "geçen hafta ne demiştim?"-style questions.
+    nonisolated private static func recallBlock(_ lines: [String]) -> String {
+        lines.isEmpty ? "" : "\nSorulan zamandaki konuşma kayıtların (tarihli). Soruyu yalnızca bunlara bakarak kısaca cevapla, özetle; kayıtta olmayanı uydurma:\n"
+            + lines.map { "- \($0)" }.joined(separator: "\n")
     }
 
     nonisolated private static func contextBlock(_ context: [String]) -> String {

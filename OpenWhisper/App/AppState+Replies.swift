@@ -66,7 +66,8 @@ extension AppState {
     /// sentence while the rest is still being written. Without a voice the answer is shown.
     /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
     @discardableResult
-    func chatReply(to text: String) async -> (text: String?, heard: Bool) {
+    /// `recalled` is set for "geçen hafta ne demiştim?"; such a question is not journaled itself.
+    func chatReply(to text: String, recalled: [String] = []) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable else {
             owLog("[Chat] Ollama not available")
             showFlowBarMessage("Ollama kapalı, sohbet edemiyorum")
@@ -79,7 +80,7 @@ extension AppState {
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
             to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
-            userFacts: UserMemory.shared.promptLines
+            userFacts: UserMemory.shared.promptLines, recalled: recalled
         )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
@@ -89,7 +90,10 @@ extension AppState {
         }
         guard recordingState != .recording else { return (nil, heard) }
         let answer = JarvisChat.shared.lastReply
-        if let answer, !answer.isEmpty { lastSpokenReply = answer }
+        if let answer, !answer.isEmpty {
+            lastSpokenReply = answer
+            if recalled.isEmpty { JarvisJournal.shared.append(user: text, reply: answer) }
+        }
         if !heard, let answer, !answer.isEmpty {
             showFlowBarMessage(answer, durationMs: min(max(answer.count * 60, 3000), 10000))
         }

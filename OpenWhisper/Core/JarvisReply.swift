@@ -212,6 +212,12 @@ struct JarvisReply {
         }
     }
 
+    /// "Geçen hafta ne demiştim?" with nothing in the journal for that time.
+    mutating func nothingRecalled(_ label: String) -> String {
+        let when = label.prefix(1).uppercased(with: Locale(identifier: "tr_TR")) + label.dropFirst()
+        return addressing("\(when) konuştuğumuz bir şey kaydımda yok.")
+    }
+
     // MARK: - Greetings
 
     enum Greeting: Equatable, Sendable {

@@ -37,6 +37,7 @@ final class RouteCorpusTests: XCTestCase {
         if voice, JarvisAddressee.explicitChatCommand(text) != nil { return "chat" }
         if voice, let meta = JarvisReply.meta(in: text) { return "meta:\(meta)" }
         if voice, let memory = UserMemoryCommand.parse(text) { return "memory:\(memory)" }
+        if voice, let query = TimeQuery.parse(text) { return "memory-time:\(query.label)" }
         if voice, let greeting = JarvisReply.greeting(in: text) { return "greeting:\(greeting) (unless a text field has focus)" }
 
         // No timer is running or ringing in the corpus, so state-dependent forms stay out.

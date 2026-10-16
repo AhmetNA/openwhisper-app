@@ -605,7 +605,30 @@ extension AppState {
                 case .forgetAll: removed = memory.facts.count; memory.forgetAll()
                 }
                 let reply = self.jarvisReply.memory(memoryCommand, facts: memory.facts.map(\.text), removed: removed)
+                JarvisJournal.shared.append(user: trimmed, reply: reply)
                 if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 5000) }
+                return
+            }
+
+            // "Geçen hafta ne demiştim?", "dün ne konuşmuştuk?": only now is the journal read,
+            // and only that time's lines go to the model.
+            if session.isVoiceCommand, let query = TimeQuery.parse(trimmed) {
+                session.latency.finishDecision(route: "geçmiş sohbet")
+                self.lastTranscription = text
+                let recalled = JarvisJournal.shared.recall(query, facts: UserMemory.shared.facts)
+                owLog("[Route] memory-time (\(query.label), \(recalled.count) line(s))")
+                guard !recalled.isEmpty else {
+                    let reply = self.jarvisReply.nothingRecalled(query.label)
+                    if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 5000) }
+                    return
+                }
+                let actionStartedAt = session.latency.timestamp()
+                let answer = await self.chatReply(to: trimmed, recalled: recalled)
+                session.latency.record(.action, since: actionStartedAt, detail: "geçmiş sohbet")
+                session.latency.markOutput("Jarvis cevabı")
+                if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
+                    holdMediaForReplyAnswer = true
+                }
                 return
             }
 

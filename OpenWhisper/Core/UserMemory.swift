@@ -30,8 +30,16 @@ final class UserMemory {
             .appendingPathComponent("OpenWhisper/jarvis_memory.json")
     }
 
-    /// Lines for the chat's system prompt, newest last; the name first when known.
-    var promptLines: [String] { facts.suffix(25).map(\.text) }
+    /// Lines for the chat's system prompt, newest last, each with the day it was said
+    /// ("12 Ekim: kahveyi şekersiz içiyorum"); the name needs no date.
+    var promptLines: [String] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.dateFormat = "d MMMM yyyy"
+        return facts.suffix(25).map { fact in
+            fact.text.hasPrefix(Self.namePrefix) ? fact.text : "\(formatter.string(from: fact.saved)): \(fact.text)"
+        }
+    }
 
     func remember(_ text: String, now: Date = Date()) {
         let fact = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
