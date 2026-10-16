@@ -123,7 +123,28 @@ extension AppState {
         }
         if !heard { showFlowBarMessage(reply, durationMs: 6000) }
         owLog("[FollowUp] Reply asks back (\(chain)/\(Self.maxReplyFollowUps)); opening the mic")
+        pendingCommandFollowUp = nil
         startVoiceSession(trigger: .followUp)
         return true
+    }
+
+    /// A command just ran: listen `commandFollowUpWindow` more without the wake word, so the
+    /// user can fix it ("müzik başlat" → "sonrakine geç"). Only a command is taken from that
+    /// recording; `domain` tells a bare "sonrakine geç" what to skip. Media is left playing:
+    /// the user is judging what the command started.
+    func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession) {
+        guard session.isVoiceCommand, !session.isCancelled, recordingState != .recording,
+              hotkey?.isIdle == true, microphoneGranted else { return }
+        let chain = session.followsCommand ? commandFollowUpChain + 1 : 1
+        guard chain <= Self.maxCommandFollowUps else {
+            owLog("[FollowUp] \(Self.maxCommandFollowUps) command follow-ups in a row; not listening again")
+            return
+        }
+        commandFollowUpChain = chain
+        // The user who just gave the command is the one fixing it.
+        pendingWakeSpeakerVerified = session.wakeSpeakerVerified
+        pendingCommandFollowUp = .some(domain)
+        owLog("[FollowUp] Command done (\(domain?.rawValue ?? "no domain"), \(chain)/\(Self.maxCommandFollowUps)); opening the mic")
+        startVoiceSession(trigger: .followUp)
     }
 }

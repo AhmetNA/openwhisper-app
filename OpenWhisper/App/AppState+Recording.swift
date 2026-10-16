@@ -34,6 +34,8 @@ extension AppState {
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
         armVoiceAutoStopForNextRecording = false
         let recordingTrigger = hotkey?.trigger ?? .fnHold
+        let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
+        pendingCommandFollowUp = nil
 
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
@@ -75,11 +77,14 @@ extension AppState {
             owLog("[Reminders] Listening for deletion confirmation (5 s response window)")
         }
         if isReplyFollowUp {
-            // Jarvis has just asked something back: no speech within the window closes the mic
-            // quietly. Both detectors need it — while Smart Turn is ready, it alone decides.
-            endpointFallbackConfig.noSpeechTimeout = Self.replyFollowUpWindow
-            smartTurnConfig.noSpeechTimeout = Self.replyFollowUpWindow
-            owLog(String(format: "[FollowUp] Listening for an answer (%.1f s window)", Self.replyFollowUpWindow))
+            // Jarvis has just asked something back (or run a command the user may want to
+            // fix): no speech within the window closes the mic quietly. Both detectors need
+            // it — while Smart Turn is ready, it alone decides.
+            let window = commandFollowUp != nil ? Self.commandFollowUpWindow : Self.replyFollowUpWindow
+            endpointFallbackConfig.noSpeechTimeout = window
+            smartTurnConfig.noSpeechTimeout = window
+            owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
+                         commandFollowUp != nil ? "a fix to the command" : "an answer", window))
         }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
@@ -107,7 +112,8 @@ extension AppState {
         // The Settings switch decides for every trigger, voice sessions included. Buds are the
         // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
         // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
-        if audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying) {
+        // Not after a command: the user is judging the song or video it just started.
+        if commandFollowUp == nil, audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying) {
             recordingMedia.begin(immediately: recordingInputIsBluetooth)
         }
 
@@ -214,6 +220,10 @@ extension AppState {
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
+        if let commandFollowUp {
+            session.followsCommand = true
+            session.commandFollowUpDomain = commandFollowUp
+        }
         session.echoCancelled = echoCancellation
         session.playbackHeard = playbackHeard
         // A key press means the user is at the Mac: treat the voice like a matched "Jarvis".

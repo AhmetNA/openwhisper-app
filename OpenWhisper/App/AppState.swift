@@ -403,6 +403,14 @@ final class AppState {
     /// Leading part of that window ignored as Jarvis's own voice tail.
     nonisolated static let replyFollowUpEchoGuard: TimeInterval = 0.4
     nonisolated static let maxReplyFollowUps = 2
+    /// The next `.followUp` recording comes after a command (`listenAfterCommand`): the
+    /// command's domain, nil inside when "sonraki" means nothing there. Consumed at the start.
+    @ObservationIgnored var pendingCommandFollowUp: CommandFollowUp.Domain??
+    /// Back-to-back command follow-ups ("sonrakine geç", again and again).
+    @ObservationIgnored var commandFollowUpChain = 0
+    /// After a command, how long the mic waits for a fix ("sonrakine geç").
+    nonisolated static let commandFollowUpWindow: TimeInterval = 2
+    nonisolated static let maxCommandFollowUps = 3
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

@@ -37,6 +37,10 @@ final class RecordingTranscriptionSession {
     /// Commands (system, Spotify, reminders, "… bunu yaz") run for voice sessions and for the
     /// dictation keys (Fn, Fn+Space, the recording shortcut) alike. Chat, the first-sentence
     /// split and spoken replies stay voice-only: at the keyboard a non-command is typed.
+    /// A `.followUp` opened after a command: only a command is taken from it, and a bare
+    /// "sonrakine geç" is read against this domain (`CommandFollowUp`).
+    var followsCommand = false
+    var commandFollowUpDomain: CommandFollowUp.Domain?
     var acceptsCommands: Bool {
         isVoiceCommand || [.fnHold, .fnSpace, .keyboardShortcut].contains(trigger)
     }

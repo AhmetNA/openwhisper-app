@@ -11,6 +11,12 @@ extension AppState {
     func finishTranscription(_ session: RecordingTranscriptionSession) async {
         guard !session.hasFinished else { return }
         session.hasFinished = true
+        // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
+        // first so it runs last, once the media and recording state below are settled.
+        var commandFollowUp: CommandFollowUp.Domain?? = nil
+        defer {
+            if let commandFollowUp { listenAfterCommand(domain: commandFollowUp, after: session) }
+        }
         // Media paused when a voice session started plays again only after its command
         // (or dictation) is done, on every exit path below. A recording started meanwhile
         // owns the pause now and releases it when it stops.
@@ -445,6 +451,7 @@ extension AppState {
                 // After "Safari'ye geç", later steps belong to the app switched to: Spotify gives
                 // focus back to this app if a cold launch stole it.
                 var stepTargetApp = session.targetApp
+                var ran: [VoiceCommand] = []
                 for step in steps {
                     switch step.command {
                     case .timer(let timerCommand):
@@ -458,6 +465,7 @@ extension AppState {
                             status = timers.perform(timerCommand)
                         }
                         owLog("[Result] Timer: \(status)")
+                        ran.append(step.command)
                         statuses.append(status)
                         replies.append(self.jarvisReply.timer(timerCommand, status: status))
                     case .system(let command):
@@ -482,6 +490,7 @@ extension AppState {
                         default: break
                         }
                         owLog("[Result] System command: \(status)")
+                        ran.append(step.command)
                         statuses.append(status)
                         if !step.command.endsSession { replies.append(self.jarvisReply.system(command, status: status)) }
                     case .spotify(let request):
@@ -489,6 +498,7 @@ extension AppState {
                         let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
                         if handled, !resumes { resumeMediaAfterCommand = false }
+                        if handled { ran.append(step.command) }
                         statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")
                         replies.append(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
                     case .agent:
@@ -506,6 +516,10 @@ extension AppState {
                     self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : lone ? 2500 : 3500)
                 }
                 if session.isVoiceCommand { await self.speakReply(self.jarvisReply.combined(replies)) }
+                // The Mac stops listening after sleep / lock; developer mode is a whole setup.
+                if !ran.isEmpty, !ran.contains(where: { $0.endsSession || $0 == .system(.developerMode) }) {
+                    commandFollowUp = .some(ran.reversed().lazy.compactMap(CommandFollowUp.domain(of:)).first)
+                }
             }
 
             /// Answers with the chat model and, when the answer asks something back, listens.
@@ -623,6 +637,31 @@ extension AppState {
                 }
                 facts.pendingDeletion = false
                 route = VoiceRouter.route(text, facts: facts)
+            }
+
+            // The mic stayed open after a command: only a command is taken from it, never
+            // dictation or chat (a TV, the song's lyrics, someone else in the room). A bare
+            // "sonrakine geç" is about what the command just did.
+            if session.followsCommand {
+                var isCommand: Bool {
+                    switch route { case .command, .commands: true; default: false }
+                }
+                if !isCommand, let domain = session.commandFollowUpDomain,
+                   let fix = CommandFollowUp.resolve(trimmed, after: domain) {
+                    owLog("[FollowUp] '\(trimmed)' after a \(domain.rawValue) command → \(fix)")
+                    route = .command(fix)
+                } else if case .spotifyOrConversation = route,
+                          let spotify = CommandRegistry.match(trimmed, in: [.spotify], context: commandContext()) {
+                    route = .command(spotify)
+                }
+                switch route {
+                case .command, .commands, .meta, .voiceTest: break
+                default:
+                    owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
+                    session.latency.finishDecision(route: "komut sonrası, komut değil")
+                    dismissFlowBarMessage()
+                    return
+                }
             }
 
             switch route {
@@ -888,6 +927,7 @@ extension AppState {
                     return
                 }
                 resumeMediaAfterCommand = resumesMedia
+                commandFollowUp = .some(.music)
                 self.lastTranscription = text
                 // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
                 if session.isVoiceCommand {
