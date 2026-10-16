@@ -36,6 +36,9 @@ enum SystemController {
         case .mailLatest: return await mailLatest()
         case .mailOpen: return await mailOpen()
         case .mailReadUnread: return await mailReadUnread()
+        case .mailReadLatest: return await mailReadLatest()
+        case .mailFrom(let name): return await mailFrom(name)
+        case .mailReplyDraft(let text): return await mailReplyDraft(text)
         case .runShortcut(let name): return runShortcut(name)
         case .briefing(let dayOffset):
             let summary = await DailyBriefing.build(dayOffset: dayOffset)
@@ -154,6 +157,36 @@ enum SystemController {
             _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
         return "Okunmamış mail yok, Mail açıldı"
+    }
+
+    /// The flow bar shows up to this much of the mail text; Jarvis says less (`JarvisReply`).
+    private static let mailBodyLimit = 400
+
+    private static func mailReadLatest() async -> String {
+        guard let mail = await MailController.newestMessageWithBody() else { return "Mail'e erişilemedi" }
+        var text = mail.body
+        if text.count > mailBodyLimit { text = String(text.prefix(mailBodyLimit)) + "…" }
+        let subject = mail.subject.isEmpty ? "konusuz" : "konu: \(mail.subject)"
+        return text.isEmpty ? "Gönderen \(mail.sender), \(subject). Metin boş."
+            : "Gönderen \(mail.sender), \(subject). \(text)"
+    }
+
+    /// `name` is as heard ("Ahmet"); the answer uses the sender's own name from Mail.
+    private static func mailFrom(_ name: String) async -> String {
+        guard let found = await MailController.messages(from: name) else { return "Mail'e erişilemedi" }
+        guard let newest = found.first else { return "Son maillerde gönderen \(name) olan mail yok" }
+        let unread = found.filter(\.unread).count
+        let count = found.count == 1 ? "1 mail" : "\(found.count) mail"
+        let unreadPart = unread == 0 ? "" : unread == found.count ? ", hepsi okunmamış" : ", \(unread) tanesi okunmamış"
+        return "\(newest.message.sender): \(count)\(unreadPart). Sonuncusu: \(newest.message.subject)"
+    }
+
+    /// Never sends: the draft opens in Mail and the user presses Send there.
+    private static func mailReplyDraft(_ text: String) async -> String {
+        guard let original = await MailController.openReplyDraft(text) else { return "Cevap taslağı açılamadı" }
+        let to = "\(original.sender) adlı kişiye"
+        return text.isEmpty ? "\(to) boş cevap açtım, göndermeden önce yazabilirsin"
+            : "\(to) cevap taslağı hazır. Göndermek için Mail'de Gönder'e bas"
     }
 
     private static func mailReadUnread() async -> String {

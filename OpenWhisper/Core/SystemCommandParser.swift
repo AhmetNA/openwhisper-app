@@ -36,6 +36,13 @@ enum SystemCommand: Equatable, Sendable {
     case mailCheck
     case mailReadUnread
     case mailMarkAllRead
+    /// "Son maili oku": sender, subject and the start of the text of the newest mail.
+    case mailReadLatest
+    /// "Ahmet'ten mail var mı?": recent inbox mail whose sender matches the name.
+    case mailFrom(String)
+    /// "Son maile cevap yaz: yarın uygunum": a reply to the newest mail, opened in Mail but
+    /// never sent; the user sends it there. An empty text opens an empty reply.
+    case mailReplyDraft(String)
     /// "Bugün ne var?": calendar, reminders and mail for today (0) or tomorrow (1).
     case briefing(dayOffset: Int)
     /// A Shortcuts.app shortcut by its exact name.
@@ -90,6 +97,8 @@ enum SystemCommandParser {
     /// `shortcuts`: names from `shortcuts list`, for "X kısayolunu çalıştır".
     static func parse(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], now: Date = Date()) -> SystemCommand? {
         // Dates and addresses need the raw text: cleaning turns "15:30" and "github.com" apart.
+        // The reply text keeps its case and punctuation, so it goes first.
+        if let reply = parseMailReply(text) { return reply }
         if let event = CalendarEventParser.parse(text, now: now) { return .calendarEvent(event) }
         if let browse = parseBrowserRequest(text) { return .browser(browse) }
         if let video = parseVideoRequest(text) { return .video(video) }
@@ -177,10 +186,50 @@ enum SystemCommandParser {
         guard matches(text, mail) else { return nil }
         if matches(text, #"okundu (?:yap|işaretle)"#) { return .mailMarkAllRead }
         if matches(text, #"(?:kontrol et|yenile|kontrol)"#) { return .mailCheck }
+        if let sender = parseMailSender(text) { return .mailFrom(sender) }
+        if matches(text, #"^son (?:gelen )?\#(mail)\S* (?:oku|okur musun|okuyabilir misin|içeriğini oku|ne diyor)"#) { return .mailReadLatest }
         if matches(text, #"okunmamış.*\#(mail)\w* oku|\#(mail)\w* oku"#), !matches(text, #"^son"#) { return .mailReadUnread }
         if matches(text, #"\baç"#) { return .mailOpen }
         if matches(text, #"son (?:gelen )?\#(mail)|kimden|konusu"#) { return .mailLatest }
         if matches(text, #"kaç|var mı|geldi mi|yeni \#(mail)|okunmamış"#) { return .mailCount }
+        return nil
+    }
+
+    /// "Ahmet'ten mail var mı", "Ayşe Yılmaz'dan gelen e-posta var mı", "Mehmetten mail geldi mi"
+    /// → the name as heard, without the ablative ending ("Ahmet", "Ayşe Yılmaz").
+    static func parseMailSender(_ text: String) -> String? {
+        let pattern = #"^(.+?)['’]?(?:den|dan|ten|tan) (?:gelen |yeni |bir |hiç )*\#(mail)\S* (?:var mı|geldi mi|gelmiş mi|var)$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        let name = text[range].trimmingCharacters(in: .whitespaces)
+        // "Bugünden / kimden / yeniden mail var mı" name no one.
+        let notNames: Set<String> = ["bugün", "dün", "sabah", "akşam", "kim", "yeni", "son", "o", "bu", "şu", "biri", "birisi"]
+        guard !name.isEmpty, name.split(separator: " ").count <= 3, !notNames.contains(name) else { return nil }
+        return name.split(separator: " ").map { word in
+            word.prefix(1).uppercased(with: locale) + word.dropFirst()
+        }.joined(separator: " ")
+    }
+
+    /// "Son maile cevap yaz: yarın uygunum.", "maile yanıt olarak şunu yaz …", "Yarın gelirim
+    /// diye son maile cevap ver". Works on the raw transcript so the reply keeps its case and
+    /// punctuation. Only the reply text is kept; nothing is ever sent.
+    static func parseMailReply(_ text: String) -> SystemCommand? {
+        let call = #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)[\s,.!]+)?(?:lütfen\s+)?"#
+        let target = #"(?:son (?:gelen )?)?\#(mail)\S*"#
+        let reply = #"(?:cevap|yanıt)(?: olarak)?(?: taslağı)?"#
+        let verb = #"(?:yaz|ver|hazırla|oluştur)"#
+        let patterns = [
+            #"\#(call)\#(target) (?:bir |kısa (?:bir )?)?\#(reply) (?:şunu |şöyle )?\#(verb)(?:[\s:,.!]+(.+?))?[\s.!]*$"#,
+            #"\#(call)(.+?),? (?:diye|şeklinde) \#(target) (?:bir |kısa (?:bir )?)?\#(reply) \#(verb)[\s.!]*$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { continue }
+            guard let range = Range(match.range(at: 1), in: text) else { return .mailReplyDraft("") }
+            let body = text[range].trimmingCharacters(in: .whitespaces)
+            return .mailReplyDraft(body.prefix(1).uppercased(with: locale) + body.dropFirst())
+        }
         return nil
     }
 

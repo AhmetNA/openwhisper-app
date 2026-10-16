@@ -64,12 +64,12 @@ enum CommandRewriter {
     }
 
     /// The rewrite as a system command, unless it is one that shouldn't come from a guess
-    /// (quitting apps, sleeping, locking, marking mail read, calendar entries, shortcuts).
+    /// (quitting apps, sleeping, locking, marking mail read, mail replies, calendar entries, shortcuts).
     static func safeSystemCommand(_ rewritten: String, installedApps: [String]) -> SystemCommand? {
         guard let command = SystemCommandParser.parse(rewritten, installedApps: installedApps, shortcuts: []) else { return nil }
         switch command {
         case .quitApp, .forceQuitApp, .sleep, .displaySleep, .lockScreen, .screenSaver, .mailMarkAllRead,
-             .developerMode, .runShortcut, .calendarEvent, .headset:
+             .developerMode, .runShortcut, .calendarEvent, .headset, .mailReplyDraft:
             return nil
         default:
             return command

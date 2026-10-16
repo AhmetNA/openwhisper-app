@@ -32,7 +32,8 @@ struct JarvisReply {
         switch command {
         case .mute(true), .sleep, .displaySleep, .lockScreen, .screenSaver:
             return nil
-        case .time, .battery, .mailCount, .mailCheck, .mailLatest, .mailReadUnread, .mailOpen, .briefing:
+        case .time, .battery, .mailCount, .mailCheck, .mailLatest, .mailReadUnread, .mailOpen, .briefing,
+             .mailReadLatest, .mailFrom, .mailReplyDraft:
             return answer(Self.speakable(Self.shortened(status, for: command)))
         case .calendarEvent:
             // Say the date and time back, so a wrong hour is caught right away.
@@ -185,7 +186,7 @@ struct JarvisReply {
     }
 
     static let helpText = "Müzik çalarım, sesi, Wi-Fi'yi, Bluetooth'u ve ekranı ayarlarım, uygulama açıp geçiş yaparım. "
-        + "Zamanlayıcı, alarm, hatırlatıcı ve takvim etkinliği kurarım, günün özetini veririm. "
+        + "Zamanlayıcı, alarm, hatırlatıcı ve takvim etkinliği kurarım, günün özetini veririm, mailleri okur, cevap taslağı hazırlarım. "
         + "Safari'de arama yapar, sayfayı özetler, videoyu yönetirim, Claude Code'a mesaj yazarım. "
         + "Bana bir şeyi hatırlamamı söyleyebilir ya da sadece sohbet edebilirsiniz."
 
@@ -312,6 +313,14 @@ struct JarvisReply {
             let items = status.components(separatedBy: " · ")
             guard items.count > 1 else { return status }
             return "\(items.count) okunmamış mail, ilki \(items[0])"
+        case .mailReadLatest:
+            // The flow bar has more; about two sentences of the mail are enough to hear.
+            guard status.count > 260 else { return status }
+            let cut = status.prefix(260)
+            if let end = cut.lastIndex(where: { ".!?".contains($0) }), cut.distance(from: cut.startIndex, to: end) > 80 {
+                return String(cut[...end]) + " Devamı ekranda."
+            }
+            return String(cut) + "… Devamı ekranda."
         case .briefing:
             return status.count > 140 ? (status.components(separatedBy: " — ").first ?? status) : status
         case .browser(.summarize):

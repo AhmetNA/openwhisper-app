@@ -141,6 +141,42 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Mail'i kapat", installedApps: apps + ["Mail"]), .quitApp("Mail"))
     }
 
+    func testMailReadLatestAndSender() {
+        XCTAssertEqual(SystemCommandParser.parse("Son maili oku", installedApps: apps), .mailReadLatest)
+        XCTAssertEqual(SystemCommandParser.parse("Jarvis, son gelen maili okur musun?", installedApps: apps), .mailReadLatest)
+        XCTAssertEqual(SystemCommandParser.parse("Son mail ne diyor?", installedApps: apps), .mailReadLatest)
+        XCTAssertEqual(SystemCommandParser.parse("Ahmet'ten mail var mı?", installedApps: apps), .mailFrom("Ahmet"))
+        XCTAssertEqual(SystemCommandParser.parse("Ayşe Yılmaz'dan gelen e-posta var mı", installedApps: apps), .mailFrom("Ayşe Yılmaz"))
+        XCTAssertEqual(SystemCommandParser.parse("İremden mail geldi mi", installedApps: apps), .mailFrom("İrem"))
+        XCTAssertEqual(SystemCommandParser.parse("Kimden mail var?", installedApps: apps), .mailLatest)
+        XCTAssertEqual(SystemCommandParser.parse("Yeni mail var mı", installedApps: apps), .mailCount)
+    }
+
+    func testMailReplyDraft() {
+        XCTAssertEqual(SystemCommandParser.parse("Son maile cevap yaz: Yarın saat 3 uygun, teşekkürler.", installedApps: apps),
+                       .mailReplyDraft("Yarın saat 3 uygun, teşekkürler"))
+        XCTAssertEqual(SystemCommandParser.parse("Jarvis maile kısa bir yanıt yaz tamam bakıyorum", installedApps: apps),
+                       .mailReplyDraft("Tamam bakıyorum"))
+        XCTAssertEqual(SystemCommandParser.parse("Toplantıya geliyorum diye son maile cevap ver.", installedApps: apps),
+                       .mailReplyDraft("Toplantıya geliyorum"))
+        XCTAssertEqual(SystemCommandParser.parse("Son maile cevap yaz", installedApps: apps), .mailReplyDraft(""))
+        // Dictation that only talks about replying is no command.
+        XCTAssertNil(SystemCommandParser.parse("Ona maile cevap yazacağımı söyledim", installedApps: apps))
+        // A guessed rewrite must never become a draft.
+        XCTAssertNil(CommandRewriter.safeSystemCommand("Son maile cevap yaz tamam", installedApps: apps))
+    }
+
+    func testMailSenderMatchAndBody() {
+        XCTAssertTrue(MailController.senderMatches("Ahmet Yılmaz <ahmet@example.com>", name: "Ahmet"))
+        XCTAssertTrue(MailController.senderMatches("Ayşe Işık <a@example.com>", name: "ayse isik"))
+        XCTAssertTrue(MailController.senderMatches("\"YILMAZ, Ahmet\" <ay@example.com>", name: "Ahmet Yılmaz"))
+        XCTAssertFalse(MailController.senderMatches("Mehmet Ahmetoğlu <m@example.com>", name: "Ali"))
+        XCTAssertFalse(MailController.senderMatches("Ali Veli <ali@example.com>", name: "Ahmet"))
+        XCTAssertEqual(MailController.readableBody("Merhaba,\n\nYarın uygun musun?\n\nOn Mon, Ada wrote:\n> eski"),
+                       "Merhaba, Yarın uygun musun?")
+        XCTAssertEqual(MailController.readableBody("Selam\n--\nİmza"), "Selam")
+    }
+
     func testMailSenderName() {
         XCTAssertEqual(MailController.displayName("Ada Lovelace <ada@example.com>"), "Ada Lovelace")
         XCTAssertEqual(MailController.displayName("<ada@example.com>"), "ada@example.com")
