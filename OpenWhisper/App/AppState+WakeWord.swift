@@ -108,7 +108,21 @@ extension AppState {
                     owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms, session already over — %@", score, ms, why))
                     return
                 }
-                owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms — discarding session: %@", score, ms, why))
+                // Never close the moment it opened: the session stays up at least
+                // `minimumRejectedWakeOpen` (16 Oct 2026: rejected and gone in 477 ms).
+                if let session = self.activeTranscriptionSession {
+                    let wait = Self.minimumRejectedWakeOpen - Date().timeIntervalSince(session.startedAt)
+                    if wait > 0 {
+                        try? await Task.sleep(for: .seconds(wait))
+                        guard id == self.wakeConfirmationID, self.recordingState == .recording,
+                              self.activeTranscriptionSession === session else {
+                            owLog(String(format: "[WakeWord] Weak detection %.2f rejected, session over while held open — %@", score, why))
+                            return
+                        }
+                    }
+                }
+                owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms — discarding session: %@",
+                             score, Int(Date().timeIntervalSince(started) * 1000), why))
                 self.hotkey?.externalCancelHandsFree()
                 self.discardActiveRecording(reason: "wake word not confirmed")
             }

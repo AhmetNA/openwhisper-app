@@ -411,6 +411,10 @@ final class AppState {
     /// After a command, how long the mic waits for a fix ("sonrakine geç").
     nonisolated static let commandFollowUpWindow: TimeInterval = 2
     nonisolated static let maxCommandFollowUps = 3
+    /// A weak wake rejected by Whisper still keeps its session open this long before closing.
+    nonisolated static let minimumRejectedWakeOpen: TimeInterval = 1
+    /// Longest a command follow-up recording may run once something was heard.
+    nonisolated static let commandFollowUpMaxDuration: TimeInterval = 6
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

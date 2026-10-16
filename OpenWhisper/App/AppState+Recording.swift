@@ -83,6 +83,11 @@ extension AppState {
             let window = commandFollowUp != nil ? Self.commandFollowUpWindow : Self.replyFollowUpWindow
             endpointFallbackConfig.noSpeechTimeout = window
             smartTurnConfig.noSpeechTimeout = window
+            if commandFollowUp != nil {
+                // A fix is a few words; vocals of the song just started must not keep it open.
+                endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
+                smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
+            }
             owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
                          commandFollowUp != nil ? "a fix to the command" : "an answer", window))
         }

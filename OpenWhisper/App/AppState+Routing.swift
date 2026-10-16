@@ -35,7 +35,9 @@ extension AppState {
         do {
             savedRecordings = try await recordingHistoryStore.finish(
                 sessionID: session.id,
-                keep: !session.isCancelled && !session.historySaveFailed && session.queuedSampleCount >= 6_400,
+                // A command's follow-up window heard the song or video it started: never kept.
+                keep: !session.isCancelled && !session.historySaveFailed && session.queuedSampleCount >= 6_400
+                    && !(session.followsCommand && (session.mediaWasPlaying || session.speakersPlayed)),
                 previewText: AudioSegmentation.joinTranscripts(session.segmentTexts),
                 whisperSegments: session.allSegmentTexts.count,
                 trigger: session.trigger
@@ -108,7 +110,12 @@ extension AppState {
                     return ""
                 }()
 
-                if !rawCandidateText.isEmpty, !TargetSpeakerOutputGate.retainsRejectedCandidate(
+                // After a command the mic was open for a fix only: whatever else it heard (the
+                // song just started, a TV) never reaches the clipboard or an offer.
+                if session.followsCommand {
+                    owLog("[FollowUp] Not the user's voice after the command; ignored")
+                    dismissFlowBarMessage()
+                } else if !rawCandidateText.isEmpty, !TargetSpeakerOutputGate.retainsRejectedCandidate(
                     trigger: session.trigger, hadSingleSpeakerUncertain: session.hadSingleSpeakerUncertain
                 ) {
                     owLog("[FollowUp] Only other voices heard; nothing kept for confirmation")
@@ -165,7 +172,7 @@ extension AppState {
             }
             guard !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
                 owLog("[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)")
-                showFlowBarMessage("Anlaşılamadı, tekrar söyler misin?")
+                if session.followsCommand { dismissFlowBarMessage() } else { showFlowBarMessage("Anlaşılamadı, tekrar söyler misin?") }
                 return
             }
 
@@ -560,6 +567,13 @@ extension AppState {
             // editable means dictation, known non-editable means chat. The LLM is only a fallback
             // when Accessibility could not determine the focus. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
+                // After a command only a command is taken (see the follow-up check below).
+                if session.followsCommand {
+                    owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
+                    session.latency.finishDecision(route: "komut sonrası, komut değil")
+                    dismissFlowBarMessage()
+                    return
+                }
                 let front = session.targetApp?.bundleIdentifier
                 if session.isVoiceCommand {
                     let focusStatus = VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus
@@ -650,12 +664,11 @@ extension AppState {
                    let fix = CommandFollowUp.resolve(trimmed, after: domain) {
                     owLog("[FollowUp] '\(trimmed)' after a \(domain.rawValue) command → \(fix)")
                     route = .command(fix)
-                } else if case .spotifyOrConversation = route,
-                          let spotify = CommandRegistry.match(trimmed, in: [.spotify], context: commandContext()) {
-                    route = .command(spotify)
                 }
                 switch route {
-                case .command, .commands, .meta, .voiceTest: break
+                // Spotify asks the models ("biraz rock bir şey aç"); its dictation and chat
+                // fallback is dropped in `dictateOrChat`.
+                case .command, .commands, .meta, .voiceTest, .spotifyOrConversation: break
                 default:
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
