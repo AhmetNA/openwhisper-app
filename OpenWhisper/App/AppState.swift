@@ -1290,9 +1290,11 @@ final class AppState {
         lastOwnVoiceCheck = sessionStart
         if ownVoiceStopGate != nil { owLog("[OwnVoiceStop] Armed for wake-word session") }
 
-        // The Settings switch decides for every trigger, voice sessions included.
-        if audioDuckingEnabled {
-            recordingMedia.begin()
+        // The Settings switch decides for every trigger, voice sessions included. Buds are the
+        // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
+        // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
+        if audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying) {
+            recordingMedia.begin(immediately: recordingInputIsBluetooth)
         }
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
@@ -2073,6 +2075,11 @@ final class AppState {
             }
             guard !AudioSegmentation.isRepetitionHallucination(trimmed) else {
                 owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
+                return
+            }
+            guard !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
+                owLog("[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)")
+                showFlowBarMessage("Anlaşılamadı, tekrar söyler misin?")
                 return
             }
 

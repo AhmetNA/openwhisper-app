@@ -39,7 +39,9 @@ final class RecordingMediaController {
         self.pauseDelay = pauseDelay
     }
 
-    func begin() {
+    /// `immediately` skips the delay that lets a short Fn tap leave the music alone: for
+    /// Bluetooth buds, whose mic hears the music played into the ear.
+    func begin(immediately: Bool = false) {
         queue.async { [self] in
             guard !active else { return }
             active = true
@@ -51,7 +53,7 @@ final class RecordingMediaController {
                 owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)")
             }
             pendingPause = pause
-            if pauseDelay > 0 {
+            if pauseDelay > 0 && !immediately {
                 queue.asyncAfter(deadline: .now() + pauseDelay, execute: pause)
             } else {
                 pause.perform()
