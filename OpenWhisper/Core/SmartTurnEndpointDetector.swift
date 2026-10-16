@@ -2,6 +2,7 @@ import CoreML
 import FluidAudio
 import Foundation
 import os
+import QuartzCore
 
 /// Silero VAD + Smart Turn v3.2 endpointing for hands-free (wake-word) recordings.
 ///
@@ -76,6 +77,15 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         var speechDetected = false
         var terminalDecision: Decision?
         var lastProbability: Float?
+        var lastEndpoint: Endpoint?
+    }
+
+    /// The newest pause Silero found and Smart Turn's verdict on it. Kept when speech starts
+    /// again: `OwnVoiceStopGate` decides over playback whether that speech was the user's.
+    struct Endpoint: Equatable {
+        let probability: Float
+        /// `CACurrentMediaTime` when the pause was reported.
+        let time: TimeInterval
     }
 
     /// Main thread only (set at init and by `restartClock`, read by `decision`).
@@ -153,7 +163,11 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                             status.withLock { $0.speechDetected = true }
                         } else if let event = result.event, event.kind == .speechEnd {
                             let probability = try turnModel.probability(for: recent)
-                            status.withLock { $0.lastProbability = probability }
+                            let endpoint = Endpoint(probability: probability, time: CACurrentMediaTime())
+                            status.withLock {
+                                $0.lastProbability = probability
+                                $0.lastEndpoint = endpoint
+                            }
                             pendingEndpoint = (event.sampleIndex, probability)
                             let requiredSilence = Self.requiredSilence(for: probability, config: config)
                             owLog(String(
@@ -224,6 +238,14 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
             return .useLevelFallback(reason: "models were not ready within the grace period")
         }
         return .continueRecording
+    }
+
+    var lastEndpoint: Endpoint? {
+        status.withLock { $0.lastEndpoint }
+    }
+
+    func requiredSilence(after endpoint: Endpoint) -> TimeInterval {
+        Self.requiredSilence(for: endpoint.probability, config: config)
     }
 
     var summary: String {

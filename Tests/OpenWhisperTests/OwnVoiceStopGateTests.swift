@@ -16,7 +16,7 @@ final class OwnVoiceStopGateTests: XCTestCase {
         var t = start
         for score in scores {
             level(&gate, loud: true, from: t - 0.5, to: t)
-            if gate.record(score: score, at: t) { return t }
+            if gate.record(score: score, at: t) != .keep { return t }
             t += 0.5
         }
         return nil
@@ -38,7 +38,7 @@ final class OwnVoiceStopGateTests: XCTestCase {
         var t = 3.0
         for score: Float in [0.138, 0.179, 0.151, 0.142, 0.219, 0.1, 0.1, 0.1] {
             level(&gate, loud: false, from: t - 0.5, to: t)
-            XCTAssertFalse(gate.record(score: score, at: t))
+            XCTAssertEqual(gate.record(score: score, at: t), .keep)
             t += 0.5
         }
     }
@@ -71,5 +71,57 @@ final class OwnVoiceStopGateTests: XCTestCase {
         var gate = OwnVoiceStopGate()
         level(&gate, loud: true, from: 0, to: 1.5)
         XCTAssertNil(speak(&gate, scores: Array(repeating: 0.15, count: 20), start: 1.5))
+    }
+
+    // MARK: - Over media (16 Oct 2026: the video's residual scored 0.29 and kept 20 s sessions open)
+
+    func testOverMediaTheResidualEndsTheSessionWithoutTheUser() {
+        var gate = OwnVoiceStopGate(startTime: 0, watchesPlayback: true)
+        level(&gate, loud: true, from: 0, to: 1.5)
+        XCTAssertNil(speak(&gate, scores: [0.5, 0.45], start: 1.5))
+        // The user stopped at 2.0; the video's ambiguous 0.29 never reaches 4 clear misses.
+        XCTAssertEqual(speak(&gate, scores: Array(repeating: 0.29, count: 20), start: 2.5), 7.0)
+        XCTAssertTrue(gate.userHeard)
+    }
+
+    func testOverMediaTheUsersFluctuatingSpeechNeverStops() {
+        var gate = OwnVoiceStopGate(startTime: 0, watchesPlayback: true)
+        level(&gate, loud: true, from: 0, to: 1.5)
+        let scores: [Float] = [0.270, 0.276, 0.511, 0.443, 0.287, 0.298, 0.210, 0.222, 0.359, 0.31, 0.19, 0.18,
+                               0.544, 0.438, 0.380, 0.444, 0.317, 0.408, 0.400, 0.303, 0.374, 0.494]
+        XCTAssertNil(speak(&gate, scores: scores, start: 1.5))
+    }
+
+    func testWithoutMediaTheAmbiguousResidualStillNeverStops() {
+        var gate = OwnVoiceStopGate()
+        level(&gate, loud: true, from: 0, to: 1.5)
+        XCTAssertNil(speak(&gate, scores: [0.5] + Array(repeating: 0.29, count: 20), start: 1.5))
+    }
+
+    func testOverMediaAVideoTriggeredSessionEndsWithoutEverHearingTheUser() {
+        var gate = OwnVoiceStopGate(startTime: 0, watchesPlayback: true)
+        level(&gate, loud: true, from: 0, to: 1.5)
+        XCTAssertEqual(speak(&gate, scores: Array(repeating: 0.25, count: 20), start: 1.5), 5.0)
+        XCTAssertFalse(gate.userHeard)
+    }
+
+    func testTurnEndsOverMediaUnlessTheUserComesBack() {
+        var gate = OwnVoiceStopGate(startTime: 0, watchesPlayback: true)
+        level(&gate, loud: true, from: 0, to: 1.5)
+        XCTAssertNil(speak(&gate, scores: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5], start: 1.5))
+        // Smart Turn: pause at 4.2 (the last user window ended at 4.0), 1.5 s required.
+        XCTAssertFalse(gate.endsTurnOverPlayback(endpointAt: 4.2, requiredSilence: 1.5, now: 6.0))
+        XCTAssertTrue(gate.endsTurnOverPlayback(endpointAt: 4.2, requiredSilence: 1.5, now: 6.8))
+        // The user speaks again after the pause: their voice holds it open.
+        XCTAssertNil(speak(&gate, scores: [0.45], start: 5.5))
+        XCTAssertFalse(gate.endsTurnOverPlayback(endpointAt: 4.2, requiredSilence: 1.5, now: 8.0))
+    }
+
+    func testTurnRuleIsOffWithoutMediaAndRightAfterTheWake() {
+        let quiet = OwnVoiceStopGate(startTime: 0)
+        XCTAssertFalse(quiet.endsTurnOverPlayback(endpointAt: 1, requiredSilence: 1.5, now: 9))
+        let media = OwnVoiceStopGate(startTime: 0, watchesPlayback: true)
+        XCTAssertFalse(media.endsTurnOverPlayback(endpointAt: 0.5, requiredSilence: 1.5, now: 3.5))
+        XCTAssertTrue(media.endsTurnOverPlayback(endpointAt: 0.5, requiredSilence: 1.5, now: 4.0))
     }
 }

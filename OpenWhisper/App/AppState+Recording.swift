@@ -118,14 +118,21 @@ extension AppState {
                 ignoredLeadingSeconds: ignoredLeadingSeconds
             )
             : nil
+        // Over a video or song only the user's voice keeps the session open, filter on or off:
+        // the speakers' residual after echo cancellation keeps Silero hearing "speech" forever.
+        // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
+        // Jarvis's reply (the window waits for it to end).
+        let watchesPlayback = mediaPlaying && !recordingInputIsBluetooth && !overReply
         ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession
-            && targetSpeakerEnabled && targetSpeakerProfile != nil
+            && (targetSpeakerEnabled || watchesPlayback) && targetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
-            ? OwnVoiceStopGate()
+            ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
             : nil
         ownVoiceCheckInFlight = false
         lastOwnVoiceCheck = sessionStart
-        if ownVoiceStopGate != nil { owLog("[OwnVoiceStop] Armed for wake-word session") }
+        if ownVoiceStopGate != nil {
+            owLog("[OwnVoiceStop] Armed for wake-word session" + (watchesPlayback ? " (media playing: only your voice keeps it open)" : ""))
+        }
 
         // The Settings switch decides for every trigger, voice sessions included. Buds are the
         // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
@@ -856,7 +863,14 @@ extension AppState {
         let decision: VoiceEndpointDetector.Decision
         switch smartDecision {
         case .continueRecording:
-            return
+            guard let gate = ownVoiceStopGate, let smart = smartTurnEndpointDetector,
+                  let endpoint = smart.lastEndpoint,
+                  gate.endsTurnOverPlayback(endpointAt: endpoint.time,
+                                            requiredSilence: smart.requiredSilence(after: endpoint),
+                                            now: time) else { return }
+            owLog(String(format: "[OwnVoiceStop] Turn complete %.3f %.1f s ago and your voice hasn't come back — the rest is the media, stopping",
+                         endpoint.probability, time - endpoint.time))
+            decision = .stop
         case .stop(let probability):
             owLog(String(format: "[SmartTurn] complete %.3f — stopping", probability))
             decision = .stop
@@ -891,7 +905,8 @@ extension AppState {
     }
 
     /// Scores the last 1.5 s against the enrolled voice (one check at a time, every 0.5 s) and
-    /// stops the session once someone other than the user has been talking for about 2 s.
+    /// stops the session once someone other than the user has been talking for about 2 s, or,
+    /// over media, once no window has been the user's for `noUserVoiceLimit`.
     /// Pauses are Smart Turn's call, not this gate's.
     func checkOwnVoiceEndpoint() {
         guard recordingState == .recording, ownVoiceStopGate != nil, !ownVoiceCheckInFlight,
@@ -920,13 +935,23 @@ extension AppState {
                 self.ownVoiceStopGate = nil
                 return
             }
-            let shouldStop = gate.record(score: score, at: now)
+            let verdict = gate.record(score: score, at: now)
             self.ownVoiceStopGate = gate
             WakeClipLog.shared.update(self.activeTranscriptionSession?.wakeClipID) { $0.ownVoiceScores.append(score) }
+            let outcome = switch verdict {
+            case .keep: ""
+            case .otherVoice: " — someone else is talking, stopping"
+            case .noUserVoice: String(format: " — no window was your voice for %.0f s over the media, stopping", gate.noUserVoiceLimit)
+            }
             owLog(String(format: "[OwnVoiceStop] score %.3f speech %.1fs (user ≥%.2f, other <%.2f)%@",
-                         score, gate.speechDuration(endingAt: now), gate.userThreshold, gate.otherThreshold,
-                         shouldStop ? " — someone else is talking, stopping" : ""))
-            guard shouldStop else { return }
+                         score, gate.speechDuration(endingAt: now), gate.userThreshold, gate.otherThreshold, outcome))
+            guard verdict != .keep else { return }
+            // A weak wake Whisper didn't confirm, with no word of the user's: the video called.
+            if verdict == .noUserVoice, !gate.userHeard, self.activeTranscriptionSession?.wakeUnconfirmed == true {
+                self.hotkey?.externalCancelHandsFree()
+                self.discardActiveRecording(reason: "unconfirmed wake over media, never your voice")
+                return
+            }
             self.voiceEndpointDetector = nil
             self.smartTurnEndpointDetector = nil
             self.ownVoiceStopGate = nil
