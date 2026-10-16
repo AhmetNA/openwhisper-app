@@ -120,6 +120,20 @@ extension AppState {
                             return
                         }
                     }
+                    // The wake clip alone often transcribes empty ('' while the user really
+                    // called): check it again together with what was said since it opened.
+                    let since = self.audioEngine?.recentSamples(count: Int.max) ?? []
+                    if !since.isEmpty {
+                        let again = await WakeWordVerifier.heardWakeWord(audio: audio + since, transcriber: transcriber)
+                        guard id == self.wakeConfirmationID, self.recordingState == .recording,
+                              self.activeTranscriptionSession === session else { return }
+                        if case .accepted(let why) = again {
+                            owLog(String(format: "[WakeWord] Weak detection %.2f confirmed on the second check with %.1f s more — %@",
+                                         score, Double(since.count) / 16_000, why))
+                            WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(again) }
+                            return
+                        }
+                    }
                 }
                 owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms — discarding session: %@",
                              score, Int(Date().timeIntervalSince(started) * 1000), why))
