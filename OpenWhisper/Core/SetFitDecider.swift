@@ -68,8 +68,6 @@ final class SetFitDecider {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("OpenWhisper/decider")
     }
-    private static var python: URL { supportDirectory.appendingPathComponent(".venv/bin/python") }
-    private static var serverScript: URL { supportDirectory.appendingPathComponent("server.py") }
     private nonisolated static let baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
     /// Read from any thread by the static callers (SpotifyManager, WakeWordVerifier…).
@@ -82,9 +80,15 @@ final class SetFitDecider {
     nonisolated static var isActive: Bool { isEnabled && isReady }
 
     private(set) var status = "Kapalı"
-    private var serverProcess: Process?
+    // A menu-bar app's child otherwise runs at background QoS: efficiency cores and
+    // coalesced timers made ~1 in 3 decisions take 300–400 ms instead of ~10 ms.
+    private let server = LocalModelServer(.init(port: port, directory: supportDirectory,
+                                                extraArguments: ["--variant", Engine.setfit.serverVariant],
+                                                qualityOfService: .userInitiated))
     private var preparing = false
-    private var variant = Engine.setfit.serverVariant
+    private var variant = Engine.setfit.serverVariant {
+        didSet { server.setExtraArguments(["--variant", variant]) }
+    }
 
     // MARK: - Server
 
@@ -99,89 +103,57 @@ final class SetFitDecider {
         preparing = true
         defer { preparing = false }
 
-        if await health() == nil {
-            guard FileManager.default.isExecutableFile(atPath: Self.python.path),
-                  FileManager.default.fileExists(atPath: Self.serverScript.path)
-            else {
+        if await server.health() == nil {
+            guard server.isInstalled else {
                 status = "Kurulu değil — terminalde: decision_model/install.sh"
                 owLog("[Decider] SetFit not installed — run decision_model/install.sh. Using Ollama")
                 return
             }
-            guard startServer() else { return }
+            do {
+                let pid = try server.start()
+                owLog("[Decider] Started SetFit server (pid \(pid))")
+            } catch {
+                status = "Başlatılamadı: \(error.localizedDescription)"
+                owLog("[Decider] Could not start SetFit server: \(error)")
+                return
+            }
         }
         status = "Yükleniyor…"
-        let deadline = Date().addingTimeInterval(90)
-        while Date() < deadline {
-            switch await health() {
-            case .ready(_, let served) where served != variant:
+        let outcome = await server.waitUntilReady(timeout: 90, poll: .milliseconds(500)) { json in
+            let served = json["variant"] as? String ?? "minilm"
+            guard served == variant else {
                 // A server left from another run serves the other base model.
                 status = "Model değiştiriliyor…"
                 owLog("[Decider] SetFit server has \(served), reloading as \(variant)")
                 await reload()
-            case .ready(let models, _):
-                Self.readyFlag.withLock { $0 = true }
-                status = "Hazır — \(models)"
-                owLog("[Decider] SetFit ready: \(models)")
-                return
-            case .failed(let error):
-                status = "Yüklenemedi: \(error)"
-                owLog("[Decider] SetFit failed to load: \(error). Log: \(Self.supportDirectory.path)/server.log")
-                return
-            case .loading, nil:
-                if let serverProcess, !serverProcess.isRunning {
-                    status = "Sunucu kapandı (\(serverProcess.terminationStatus))"
-                    owLog("[Decider] SetFit server exited (\(serverProcess.terminationStatus)). Log: \(Self.supportDirectory.path)/server.log")
-                    self.serverProcess = nil
-                    return
-                }
-                try? await _Concurrency.Task.sleep(for: .milliseconds(500))
+                return false
             }
+            return true
         }
-        status = "90 sn içinde hazır olmadı"
-        owLog("[Decider] SetFit server did not become ready within 90 s")
+        switch outcome {
+        case .ready(let json):
+            let models = Self.describeModels(json)
+            Self.readyFlag.withLock { $0 = true }
+            status = "Hazır — \(models)"
+            owLog("[Decider] SetFit ready: \(models)")
+        case .failed(let error):
+            status = "Yüklenemedi: \(error)"
+            owLog("[Decider] SetFit failed to load: \(error). Log: \(server.logPath)")
+        case .exited(let code):
+            status = "Sunucu kapandı (\(code))"
+            owLog("[Decider] SetFit server exited (\(code)). Log: \(server.logPath)")
+        case .timedOut:
+            status = "90 sn içinde hazır olmadı"
+            owLog("[Decider] SetFit server did not become ready within 90 s")
+        }
     }
 
     /// Switching back to Ollama frees the server's memory (~0.5 GB).
     func stop() {
         Self.readyFlag.withLock { $0 = false }
-        serverProcess?.terminate()
-        serverProcess = nil
+        server.stop()
         status = "Kapalı"
     }
-
-    private func startServer() -> Bool {
-        let logURL = Self.supportDirectory.appendingPathComponent("server.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let process = Process()
-        process.executableURL = Self.python
-        process.arguments = [Self.serverScript.path, "--port", "\(Self.port)",
-                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)",
-                             "--variant", variant]
-        process.currentDirectoryURL = Self.supportDirectory
-        // A menu-bar app's child otherwise runs at background QoS: efficiency cores and
-        // coalesced timers made ~1 in 3 decisions take 300–400 ms instead of ~10 ms.
-        process.qualityOfService = .userInitiated
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        environment["HF_HUB_OFFLINE"] = "1"
-        process.environment = environment
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            process.standardOutput = log
-            process.standardError = log
-        }
-        do {
-            try process.run()
-        } catch {
-            status = "Başlatılamadı: \(error.localizedDescription)"
-            owLog("[Decider] Could not start SetFit server: \(error)")
-            return false
-        }
-        serverProcess = process
-        owLog("[Decider] Started SetFit server (pid \(process.processIdentifier))")
-        return true
-    }
-
-    private enum Health { case loading, ready(String, variant: String), failed(String) }
 
     private func reload() async {
         var request = URLRequest(url: Self.baseURL.appendingPathComponent("reload"), timeoutInterval: 90)
@@ -190,25 +162,16 @@ final class SetFitDecider {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    private func health() async -> Health? {
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("health"), timeoutInterval: 1)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        if json["ready"] as? Bool == true {
-            let models = (json["models"] as? [String: [String: Any]] ?? [:])
-                .sorted { $0.key < $1.key }
-                .map { name, meta in
-                    let accuracy = (meta["accuracy"] as? Double).map { String(format: "%%%.0f", $0 * 100) } ?? "?"
-                    let base = meta["variant"] as? String == "embeddinggemma" ? " (Gemma)" : ""
-                    return "\(name) \(accuracy)\(base)"
-                }
-                .joined(separator: ", ")
-            return .ready(models, variant: json["variant"] as? String ?? "minilm")
-        }
-        if let error = json["error"] as? String { return .failed(error) }
-        return .loading
+    /// "addressee %94, reminder_confirm %89, …" from the `/health` answer.
+    private static func describeModels(_ json: [String: Any]) -> String {
+        (json["models"] as? [String: [String: Any]] ?? [:])
+            .sorted { $0.key < $1.key }
+            .map { name, meta in
+                let accuracy = (meta["accuracy"] as? Double).map { String(format: "%%%.0f", $0 * 100) } ?? "?"
+                let base = meta["variant"] as? String == "embeddinggemma" ? " (Gemma)" : ""
+                return "\(name) \(accuracy)\(base)"
+            }
+            .joined(separator: ", ")
     }
 
     // MARK: - Decisions

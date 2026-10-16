@@ -8,17 +8,10 @@ actor QwenASRServer {
     static let shared = QwenASRServer()
 
     nonisolated static let port = 8769
-    nonisolated static var serverDirectory: URL {
-        JarvisVoice.supportDirectory.appendingPathComponent("asr")
-    }
-    nonisolated private static var python: URL { serverDirectory.appendingPathComponent(".venv/bin/python") }
-    nonisolated private static var serverScript: URL { serverDirectory.appendingPathComponent("server.py") }
-    nonisolated private static let baseURL = URL(string: "http://127.0.0.1:\(port)")!
+    nonisolated private static let server = LocalModelServer(.init(
+        port: port, directory: JarvisVoice.supportDirectory.appendingPathComponent("asr")))
 
-    nonisolated static var isInstalled: Bool {
-        FileManager.default.isExecutableFile(atPath: python.path)
-            && FileManager.default.fileExists(atPath: serverScript.path)
-    }
+    nonisolated static var isInstalled: Bool { server.isInstalled }
 
     enum ServerError: LocalizedError {
         case notInstalled
@@ -34,48 +27,44 @@ actor QwenASRServer {
         }
     }
 
-    private var process: Process?
     private var ready = false
 
     /// Starts the server if needed and waits until the model is loaded (~5–10 s from the cache).
     func prepare(progress: @escaping @Sendable (Double) -> Void) async throws {
-        if ready, await health() == .ready { return }
+        let server = Self.server
+        if ready, case .ready? = await server.health() { return }
         ready = false
         progress(0.1)
-        if await health() == nil {
+        if await server.health() == nil {
             guard Self.isInstalled else { throw ServerError.notInstalled }
-            try startServer()
-        }
-        progress(0.3)
-        let deadline = Date().addingTimeInterval(180)
-        while Date() < deadline {
-            switch await health() {
-            case .ready:
-                ready = true
-                progress(1.0)
-                owLog("[QwenASR] Server ready")
-                return
-            case .failed(let error):
-                throw ServerError.failed("model yüklenemedi: \(error). Log: \(Self.serverDirectory.path)/server.log")
-            case .loading, nil:
-                if let process, !process.isRunning {
-                    self.process = nil
-                    throw ServerError.failed("sunucu kapandı (\(process.terminationStatus)). Log: \(Self.serverDirectory.path)/server.log")
-                }
-                try await Task.sleep(for: .milliseconds(500))
+            do {
+                let pid = try await server.start()
+                owLog("[QwenASR] Started server (pid \(pid))")
+            } catch {
+                throw ServerError.failed("sunucu başlatılamadı: \(error.localizedDescription)")
             }
         }
-        throw ServerError.failed("180 sn içinde hazır olmadı")
+        progress(0.3)
+        switch await server.waitUntilReady(timeout: 180, poll: .milliseconds(500)) {
+        case .ready:
+            ready = true
+            progress(1.0)
+            owLog("[QwenASR] Server ready")
+        case .failed(let error):
+            throw ServerError.failed("model yüklenemedi: \(error). Log: \(server.logPath)")
+        case .exited(let status):
+            throw ServerError.failed("sunucu kapandı (\(status)). Log: \(server.logPath)")
+        case .timedOut:
+            try Task.checkCancellation()
+            throw ServerError.failed("180 sn içinde hazır olmadı")
+        }
     }
 
     /// Frees the model's memory when another speech model is picked.
-    func stop() {
+    func stop() async {
         ready = false
-        guard let process else { return }
-        self.process = nil
-        if process.isRunning {
-            process.terminate()
-            owLog("[QwenASR] Stopped server (pid \(process.processIdentifier))")
+        if let pid = await Self.server.stop() {
+            owLog("[QwenASR] Stopped server (pid \(pid))")
         }
     }
 
@@ -89,7 +78,7 @@ actor QwenASRServer {
         var body: [String: Any] = ["audio_pcm16_b64": pcm.base64EncodedString(), "language": language]
         if let hotwords, !hotwords.isEmpty { body["hotwords"] = hotwords }
 
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("transcribe"), timeoutInterval: 60)
+        var request = URLRequest(url: Self.server.baseURL.appendingPathComponent("transcribe"), timeoutInterval: 60)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -113,45 +102,6 @@ actor QwenASRServer {
             owLog(String(format: "[QwenASR] %.0f ms for %.1f s audio (hotwords: %d)", ms, seconds, hotwords?.count ?? 0))
         }
         return text
-    }
-
-    private func startServer() throws {
-        let logURL = Self.serverDirectory.appendingPathComponent("server.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let process = Process()
-        process.executableURL = Self.python
-        process.arguments = [Self.serverScript.path, "--port", "\(Self.port)",
-                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-        process.currentDirectoryURL = Self.serverDirectory
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        // setup.sh downloaded the model; don't ask the Hub for updates on every launch.
-        environment["HF_HUB_OFFLINE"] = "1"
-        process.environment = environment
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            process.standardOutput = log
-            process.standardError = log
-        }
-        do {
-            try process.run()
-        } catch {
-            throw ServerError.failed("sunucu başlatılamadı: \(error.localizedDescription)")
-        }
-        self.process = process
-        owLog("[QwenASR] Started server (pid \(process.processIdentifier))")
-    }
-
-    private enum Health: Equatable { case loading, ready, failed(String) }
-
-    private func health() async -> Health? {
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("health"), timeoutInterval: 1)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        if json["ready"] as? Bool == true { return .ready }
-        if let error = json["error"] as? String { return .failed(error) }
-        return .loading
     }
 }
 

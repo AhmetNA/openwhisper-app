@@ -23,12 +23,9 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
     nonisolated static let voiceModel = "omnivoice-bf16-steps32"
 
     static var serverDirectory: URL { JarvisVoice.supportDirectory.appendingPathComponent("tts") }
-    private static var python: URL { serverDirectory.appendingPathComponent(".venv/bin/python") }
-    private static var serverScript: URL { serverDirectory.appendingPathComponent("server.py") }
     private static var referenceClip: URL { serverDirectory.appendingPathComponent("jarvis_ref.wav") }
-    private static let baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
-    private var serverProcess: Process?
+    private let server = LocalModelServer(.init(port: port, directory: serverDirectory))
     private var serverReady = false
     private var preparing = false
     /// Hash of the reference clip, so a new voice doesn't replay the old one from the cache.
@@ -58,89 +55,40 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
         preparing = true
         defer { preparing = false }
 
-        if await health() == nil {
-            guard FileManager.default.isExecutableFile(atPath: Self.python.path),
-                  FileManager.default.fileExists(atPath: Self.serverScript.path)
-            else {
+        if await server.health() == nil {
+            guard server.isInstalled else {
                 owLog("[Voice] Local voice not installed — run app/tts_server/setup.sh. Replies stay silent")
                 return
             }
-            guard startServer() else { return }
-        }
-
-        let deadline = Date().addingTimeInterval(180)
-        while Date() < deadline {
-            switch await health() {
-            case .ready:
-                serverReady = true
-                owLog("[Voice] Local voice ready")
+            do {
+                let pid = try server.start()
+                owLog("[Voice] Started local voice server (pid \(pid))")
+            } catch {
+                owLog("[Voice] Could not start voice server: \(error)")
                 return
-            case .failed(let error):
-                owLog("[Voice] Local voice failed to load: \(error). Log: \(Self.serverDirectory.path)/server.log")
-                return
-            case .loading, nil:
-                if let serverProcess, !serverProcess.isRunning {
-                    owLog("[Voice] Voice server exited (\(serverProcess.terminationStatus)). Log: \(Self.serverDirectory.path)/server.log")
-                    self.serverProcess = nil
-                    return
-                }
-                try? await Task.sleep(for: .seconds(1))
             }
         }
-        owLog("[Voice] Local voice did not become ready within 180 s")
-    }
 
-    private func startServer() -> Bool {
-        let logURL = Self.serverDirectory.appendingPathComponent("server.log")
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        let process = Process()
-        process.executableURL = Self.python
-        process.arguments = [Self.serverScript.path, "--port", "\(Self.port)",
-                             "--parent-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
-        process.currentDirectoryURL = Self.serverDirectory
-        var environment = ProcessInfo.processInfo.environment
-        environment["PYTHONUNBUFFERED"] = "1"
-        // setup.sh downloaded the model; don't ask the Hub for updates on every launch.
-        environment["HF_HUB_OFFLINE"] = "1"
-        process.environment = environment
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            process.standardOutput = log
-            process.standardError = log
+        switch await server.waitUntilReady(timeout: 180, poll: .seconds(1)) {
+        case .ready:
+            serverReady = true
+            owLog("[Voice] Local voice ready")
+        case .failed(let error):
+            owLog("[Voice] Local voice failed to load: \(error). Log: \(server.logPath)")
+        case .exited(let status):
+            owLog("[Voice] Voice server exited (\(status)). Log: \(server.logPath)")
+        case .timedOut:
+            owLog("[Voice] Local voice did not become ready within 180 s")
         }
-        do {
-            try process.run()
-        } catch {
-            owLog("[Voice] Could not start voice server: \(error)")
-            return false
-        }
-        serverProcess = process
-        owLog("[Voice] Started local voice server (pid \(process.processIdentifier))")
-        return true
     }
 
     /// Stops the server we started, freeing its several GB. `prepare()` starts it again
     /// (~15 s) when the local voice is picked again.
     func suspend() {
         serverReady = false
-        guard let serverProcess else { return }
-        self.serverProcess = nil
-        if serverProcess.isRunning {
-            serverProcess.terminate()
-            owLog("[Voice] Stopped local voice server (pid \(serverProcess.processIdentifier))")
+        if let pid = server.stop() {
+            owLog("[Voice] Stopped local voice server (pid \(pid))")
         }
-    }
-
-    private enum Health { case loading, ready, failed(String) }
-
-    private func health() async -> Health? {
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("health"), timeoutInterval: 1)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        if json["ready"] as? Bool == true { return .ready }
-        if let error = json["error"] as? String { return .failed(error) }
-        return .loading
     }
 
     // MARK: - Synthesis
@@ -148,7 +96,7 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
     /// Synthesizing takes ~1–3 s; the music stays paused meanwhile, so the wait is bounded.
     func synthesize(_ text: String) async throws -> Data {
         guard serverReady else { throw SpeechSynthesisError.notReady(notReadyReason) }
-        var request = URLRequest(url: Self.baseURL.appendingPathComponent("speak"), timeoutInterval: 10)
+        var request = URLRequest(url: server.baseURL.appendingPathComponent("speak"), timeoutInterval: 10)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "language": "tr"])
