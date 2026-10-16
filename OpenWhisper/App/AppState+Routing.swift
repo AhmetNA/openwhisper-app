@@ -180,7 +180,17 @@ extension AppState {
             }
             guard !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
                 owLog("[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)")
-                if session.followsCommand { dismissFlowBarMessage() } else { showFlowBarMessage("Anlaşılamadı, tekrar söyler misin?") }
+                if session.followsCommand {
+                    dismissFlowBarMessage()
+                } else {
+                    // A voice session that asks "tekrar söyler misin?" must also listen for it.
+                    let ask = "Anlaşılamadı, tekrar söyler misin?"
+                    if listenForReplyAnswer(ask, heard: false, after: session) {
+                        holdMediaForReplyAnswer = true
+                    } else {
+                        showFlowBarMessage(ask)
+                    }
+                }
                 return
             }
 
