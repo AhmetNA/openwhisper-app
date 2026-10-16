@@ -13,17 +13,23 @@ final class SystemOutputReference: NSObject, SCStreamOutput, SCStreamDelegate, @
 
     private let queue = DispatchQueue(label: "com.openwhisper.aec-reference", qos: .userInitiated)
     /// Swappable so a recording can take over the wake listener's running stream.
-    private let handler: OSAllocatedUnfairLock<Handler>
+    ///
+    /// Boxed, not a bare closure (as in `HALInputCapture`): every `withLock` reabstracts a closure
+    /// state through the lock's generic `inout` storage and writes the extra thunks back, so the
+    /// chain grew with each buffer until calling or freeing it overflowed the stack (crashes of
+    /// 16 Oct 2026, after minutes of listening with music playing).
+    private let handler: OSAllocatedUnfairLock<HandlerBox>
     private var stream: SCStream?
     private var loggedTiming = false
 
     init(handler: @escaping Handler) {
-        self.handler = OSAllocatedUnfairLock(initialState: handler)
+        self.handler = OSAllocatedUnfairLock(initialState: HandlerBox(handler))
     }
 
     /// Sends later buffers to `handler` instead; the stream keeps running.
     func setHandler(_ handler: @escaping Handler) {
-        self.handler.withLock { $0 = handler }
+        let box = HandlerBox(handler)
+        self.handler.withLock { $0 = box }
     }
 
     /// Never prompts: without the permission the caller just runs without a reference.
@@ -76,11 +82,16 @@ final class SystemOutputReference: NSObject, SCStreamOutput, SCStreamDelegate, @
             let now = CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
             owLog(String(format: "[AEC] First reference buffer: pts − host now = %.1f ms", (pts - now) * 1000))
         }
-        let handler = handler.withLock { $0 }
+        let handler = handler.withLock { $0 }.call
         try? sampleBuffer.withAudioBufferList { buffers, _ in
             guard let first = buffers.first, let data = first.mData else { return }
             let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size
             handler(Array(UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self), count: count)), pts)
         }
     }
+}
+
+private final class HandlerBox: Sendable {
+    let call: SystemOutputReference.Handler
+    init(_ call: @escaping SystemOutputReference.Handler) { self.call = call }
 }
