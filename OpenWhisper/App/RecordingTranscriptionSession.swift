@@ -40,6 +40,9 @@ final class RecordingTranscriptionSession {
     /// A `.followUp` opened after a command: only a command is taken from it, and a bare
     /// "sonrakine geç" is read against this domain (`CommandFollowUp`).
     var followsCommand = false
+    /// A weak wake Whisper didn't confirm: kept open anyway; with media playing at the start
+    /// only a command is taken from it (the call may have come from the video).
+    var wakeUnconfirmed = false
     var commandFollowUpDomain: CommandFollowUp.Domain?
     /// Jarvis's reply that was playing when this follow-up opened; its echo is cut from the text.
     var precedingReply: String?

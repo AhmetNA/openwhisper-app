@@ -596,7 +596,7 @@ extension AppState {
             // when Accessibility could not determine the focus. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
                 // After a command only a command is taken (see the follow-up check below).
-                if session.followsCommand {
+                if session.followsCommand || session.wakeUnconfirmed && session.mediaWasPlaying {
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
                     dismissFlowBarMessage()
@@ -684,7 +684,7 @@ extension AppState {
             // The mic stayed open after a command: only a command is taken from it, never
             // dictation or chat (a TV, the song's lyrics, someone else in the room). A bare
             // "sonrakine geç" is about what the command just did.
-            if session.followsCommand {
+            if session.followsCommand || session.wakeUnconfirmed && session.mediaWasPlaying {
                 var isCommand: Bool {
                     switch route { case .command, .commands: true; default: false }
                 }

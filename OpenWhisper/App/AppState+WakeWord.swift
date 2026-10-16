@@ -135,10 +135,13 @@ extension AppState {
                         }
                     }
                 }
-                owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms — discarding session: %@",
-                             score, Int(Date().timeIntervalSince(started) * 1000), why))
-                self.hotkey?.externalCancelHandsFree()
-                self.discardActiveRecording(reason: "wake word not confirmed")
+                // Never cut the user off: Whisper mishears real calls ("Hey Jones", 16 Oct 2026,
+                // 22:58, while the user was talking). The session keeps listening and ends on
+                // silence like any other; with media playing only a command is taken from it.
+                self.activeTranscriptionSession?.wakeUnconfirmed = true
+                owLog(String(format: "[WakeWord] Weak detection %.2f not confirmed in %d ms — keeping the session open (%@): %@",
+                             score, Int(Date().timeIntervalSince(started) * 1000),
+                             self.mediaPlaying ? "media playing, commands only" : "nothing playing", why))
             }
         }
     }
