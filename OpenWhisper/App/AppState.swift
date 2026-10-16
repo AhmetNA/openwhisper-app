@@ -1232,7 +1232,9 @@ final class AppState {
         var smartTurnConfig = SmartTurnEndpointDetector.Config()
         // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
         let ignoredLeadingSeconds: TimeInterval = mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
-        var endpointFallbackConfig: VoiceEndpointDetector.Config = resolvedInputIsBluetooth ? .closeTalk : .init()
+        let recordingInputDeviceUID = resolvedInputDeviceUID(for: recordingTrigger)
+        let recordingInputIsBluetooth = Self.inputIsBluetooth(uid: recordingInputDeviceUID)
+        var endpointFallbackConfig: VoiceEndpointDetector.Config = recordingInputIsBluetooth ? .closeTalk : .init()
         // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
         // incomplete-turn safety limit and also keeps a model failure bounded.
         if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
@@ -1284,9 +1286,8 @@ final class AppState {
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
         // and delay this dispatch. Read everything the background block needs up front so the
         // dispatch itself has zero main-thread work between it and the guards above.
-        let recordingInputDeviceUID = resolvedInputDeviceUID
         let processingMode = audioProcessingMode
-        let echoCancellation = recordingEchoCancellationWanted
+        let echoCancellation = recordingEchoCancellationWanted(inputIsBluetooth: recordingInputIsBluetooth)
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
         let audioEngineRef = audioEngine
         let smartEndpoint = smartTurnEndpointDetector
@@ -4327,8 +4328,20 @@ final class AppState {
     /// by UID (close to the mouth, see `VoiceEndpointDetector.Config.closeTalk`); the wake word
     /// listener stays on the built-in mic so the buds only enter call mode while recording.
     var resolvedInputDeviceUID: String? {
+        resolvedInputDeviceUID(for: nil)
+    }
+
+    /// The input for a recording started by `trigger`. In automatic mode a key-started
+    /// recording (Fn, Fn+Space, the shortcut, the Jarvis key) records from connected Bluetooth
+    /// buds by UID even while `DefaultInputGuard` keeps the Mac mic as the default. The buds
+    /// enter call mode only while that recording runs; stopping it releases their mic, so music
+    /// goes back to full quality. Voice-started sessions keep the default input, which lets them
+    /// continue the wake listener's stream.
+    func resolvedInputDeviceUID(for trigger: RecordingTrigger?) -> String? {
         guard let inputDeviceUID else {
-            return AudioEngine.systemDefaultBluetoothInput()?.uid
+            if let uid = AudioEngine.systemDefaultBluetoothInput()?.uid { return uid }
+            guard let trigger, Self.keyStartedTriggers.contains(trigger) else { return nil }
+            return AudioEngine.connectedBluetoothInput()?.uid
         }
         let devices = AudioEngine.availableInputDevices()
         if devices.contains(where: { $0.uid == inputDeviceUID }) {
@@ -4341,9 +4354,9 @@ final class AppState {
     /// Echo-cancel this recording against what the Mac plays (`RecordingEchoCanceller`): only
     /// when opted in, something is playing, and there is a way to get the reference. Bluetooth
     /// mics sit in the ear (no speaker echo); voice processing already cancels echo itself.
-    private var recordingEchoCancellationWanted: Bool {
+    private func recordingEchoCancellationWanted(inputIsBluetooth: Bool) -> Bool {
         guard EchoCancellationSettings.recordingIsEnabled else { return false }
-        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && !resolvedInputIsBluetooth
+        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && !inputIsBluetooth
         guard wanted else { return false }
         guard SystemOutputReference.hasPermission else {
             owLog("[AEC] No Screen Recording permission — recording without echo cancellation")
@@ -4353,7 +4366,13 @@ final class AppState {
     }
 
     var resolvedInputIsBluetooth: Bool {
-        guard let uid = resolvedInputDeviceUID else { return false }
+        Self.inputIsBluetooth(uid: resolvedInputDeviceUID)
+    }
+
+    private static let keyStartedTriggers: Set<RecordingTrigger> = [.fnHold, .fnSpace, .keyboardShortcut, .jarvisKey]
+
+    private static func inputIsBluetooth(uid: String?) -> Bool {
+        guard let uid else { return false }
         return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false
     }
 

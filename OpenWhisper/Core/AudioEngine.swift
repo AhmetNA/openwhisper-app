@@ -1025,6 +1025,11 @@ final class AudioEngine: @unchecked Sendable {
         return availableInputDevices().first { $0.id == id }
     }
 
+    /// A connected Bluetooth input, the system default first, whether or not it is the default.
+    static func connectedBluetoothInput() -> AudioInputDevice? {
+        systemDefaultBluetoothInput() ?? availableInputDevices().first { $0.isBluetooth }
+    }
+
     /// Format for an input-node tap, taken from the hardware side. After `setDeviceID` the
     /// node's output format still describes the previous device (measured: Bluetooth default
     /// at 16 kHz, built-in mic selected, output still 16 kHz while the hardware runs 48 kHz),
