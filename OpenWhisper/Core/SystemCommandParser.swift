@@ -83,7 +83,7 @@ enum SystemCommandParser {
 
     // Whisper spellings seen for these words, after lowercasing with the Turkish locale.
     private static let bluetooth = #"(?:bluetooth|bluetoot|bluetut|blutut|blututh|blu tut|blue tooth|blotut|bulutut|bl[uü]t+el|blütut|bt)"#
-    private static let wifi = #"(?:wi-?fi|wifi|wi fi|vayfay|vay fay|wayfay|vaifai|kablosuz(?: ağ)?|internet)"#
+    private static let wifi = #"(?:wi ?-? ?fi|vayfay|vay fay|wayfay|vaifai|kablosuz(?: ağ)?|internet)"#
     private static let headset = #"(?:kulaklı[kğ]|airpods|buds|kulaklar)"#
     private static let offVerb = #"(?:kapat|kapa|devre dışı|kes|ayır|kopar|çıkar|turn off|disable|disconnect)"#
     private static let onVerb = #"(?:\baç|etkinleştir|başlat|bağla(?!ntı)|turn on|enable|connect)"#
@@ -95,13 +95,17 @@ enum SystemCommandParser {
 
     /// `installedApps`: app names to resolve "X'i aç / kapat" against (see `SystemController`).
     /// `shortcuts`: names from `shortcuts list`, for "X kısayolunu çalıştır".
+    /// The mail reply, calendar, browser, video and Mac rules, in `CommandRegistry` order.
     static func parse(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], now: Date = Date()) -> SystemCommand? {
-        // Dates and addresses need the raw text: cleaning turns "15:30" and "github.com" apart.
-        // The reply text keeps its case and punctuation, so it goes first.
-        if let reply = parseMailReply(text) { return reply }
-        if let event = CalendarEventParser.parse(text, now: now) { return .calendarEvent(event) }
-        if let browse = parseBrowserRequest(text) { return .browser(browse) }
-        if let video = parseVideoRequest(text) { return .video(video) }
+        let context = CommandRegistry.Context(installedApps: installedApps, shortcuts: { shortcuts }, now: now)
+        guard case .system(let command)? = CommandRegistry.match(text, in: CommandRegistry.systemDomains, context: context)
+        else { return nil }
+        return command
+    }
+
+    /// Everything but mail replies, calendar, browser requests and video: Wi-Fi, apps, mail,
+    /// brightness, …; `CommandRegistry` runs those first.
+    static func parseMac(_ text: String, installedApps: [String] = [], shortcuts: [String] = []) -> SystemCommand? {
         var cleaned = text.lowercased(with: locale)
             .replacingOccurrences(of: #"[.,!?;:"“”]"#, with: " ", options: .regularExpression)
         // A leading call to the assistant or a filler is not part of the command.
@@ -159,7 +163,7 @@ enum SystemCommandParser {
     }
 
     /// Words that mark a shortcut run; the plain verb alone only counts with a known name.
-    static let shortcutMention = #"kısayol|kısa yol|shortcut|çalıştır"#
+    static let shortcutMention = #"kısayol|kısa yol|shortcut|çalıştır|yürüt"#
 
     /// "Sabah Özeti kısayolunu çalıştır", "kısayol Jarvis'i başlat", "Sabah Özeti'ni çalıştır".
     private static func parseShortcut(_ text: String, shortcuts: [String]) -> SystemCommand? {

@@ -445,6 +445,8 @@ enum SystemController {
             owLog("[System] No Wi-Fi interface")
             return "Wi-Fi bulunamadı"
         }
+        // As with Bluetooth: say so when nothing changes, instead of "açıldı" for a no-op.
+        if interface.powerOn() == on { return on ? "Wi-Fi zaten açık" : "Wi-Fi zaten kapalı" }
         do {
             try interface.setPower(on)
             owLog("[System] Wi-Fi \(on ? "on" : "off")")

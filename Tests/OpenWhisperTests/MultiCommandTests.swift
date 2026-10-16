@@ -2,14 +2,14 @@ import XCTest
 @testable import OpenWhisper
 
 final class MultiCommandTests: XCTestCase {
-    private func plan(_ text: String, ringing: Bool = false, active: Bool = false) -> [MultiCommandStep]? {
-        MultiCommandStep.plan(text, ringing: ringing, active: active,
-                              installedApps: ["Safari", "Notes", "Spotify"], shortcuts: { [] })?.map(\.command)
+    private let context = CommandRegistry.Context(installedApps: ["Safari", "Notes", "Spotify"])
+
+    private func plan(_ text: String) -> [VoiceCommand]? {
+        CommandRegistry.plan(text, context: context)?.map(\.command)
     }
 
     private func texts(_ text: String) -> [String]? {
-        MultiCommandStep.plan(text, ringing: false, active: false,
-                              installedApps: ["Safari", "Notes", "Spotify"], shortcuts: { [] })?.map(\.text)
+        CommandRegistry.plan(text, context: context)?.map(\.text)
     }
 
     func testTwoSystemCommandsJoinedByVe() {
@@ -58,6 +58,59 @@ final class MultiCommandTests: XCTestCase {
     func testNothingRunsAfterLocking() {
         XCTAssertNil(plan("Ekranı kilitle ve Wi-Fi'yi kapat"))
         XCTAssertEqual(plan("Wi-Fi'yi kapat ve ekranı kilitle")?.last, .system(.lockScreen))
+    }
+
+    // MARK: - One verb for several objects
+
+    func testHemHemSharesTheVerb() {
+        XCTAssertEqual(plan("Hem Wi-Fi hem Bluetooth'u aç."), [.system(.wifi(on: true)), .system(.bluetooth(on: true))])
+        XCTAssertEqual(plan("Hem wifi hem bluetooth aç."), [.system(.wifi(on: true)), .system(.bluetooth(on: true))])
+        XCTAssertEqual(texts("Hem Wi-Fi hem Bluetooth'u aç"), ["Wi-Fi aç", "Bluetooth'u aç"])
+    }
+
+    func testVeSharesTheVerb() {
+        XCTAssertEqual(plan("Wi-Fi'yi ve Bluetooth'u kapat"), [.system(.wifi(on: false)), .system(.bluetooth(on: false))])
+        XCTAssertEqual(plan("Safari'yi ve Notes'u kapat"), [.system(.quitApp("Safari")), .system(.quitApp("Notes"))])
+    }
+
+    func testFreeTextNeverBorrowsTheVerb() {
+        // One search, not two; a song list is Spotify's to read.
+        XCTAssertNil(plan("Tarkan ve Sezen Aksu çal"))
+        XCTAssertNil(plan("Ekmek ve süt al"))
+    }
+
+    func testWhisperSpacedWiFi() {
+        // "Wi -Fi aç ve müziği başlat" went to Spotify as one search for "wi -fi ve".
+        let steps = plan("Wi -Fi aç ve müziği başlat.")
+        XCTAssertEqual(steps?.first, .system(.wifi(on: true)))
+        guard case .spotify = steps?.last else { return XCTFail("second step: \(String(describing: steps))") }
+    }
+
+    // MARK: - Registry
+
+    func testAgentDictationIsNeverCutIntoSteps() {
+        XCTAssertNil(plan("Claude Code'a yaz Wi-Fi'yi aç ve Bluetooth'u kapat"))
+        guard case .agent? = CommandRegistry.match("Claude Code'a yaz Wi-Fi'yi aç ve Bluetooth'u kapat", context: context)
+        else { return XCTFail("agent first") }
+    }
+
+    func testMailReplyIsNeverCutIntoSteps() {
+        let reply = "Son maile cevap yaz: Wi-Fi'yi açtım ve Bluetooth'u kapattım"
+        XCTAssertNil(plan(reply))
+        guard case .system(.mailReplyDraft)? = CommandRegistry.match(reply, context: context)
+        else { return XCTFail("mail reply: \(String(describing: CommandRegistry.match(reply, context: context)))") }
+    }
+
+    func testDeveloperModeIsNeverAStep() {
+        XCTAssertNil(plan("Developer modu aç ve Wi-Fi'yi kapat"))
+    }
+
+    func testRegistryOrderMatchesTheSystemParser() {
+        // A timer before the calendar, a browser search before Spotify.
+        guard case .timer? = CommandRegistry.match("Yarın saat 7'de beni uyandır", context: context)
+        else { return XCTFail("timer first") }
+        XCTAssertEqual(CommandRegistry.match("YouTube'da lofi ara", context: context), .system(.browser(.search(.youtube, "lofi"))))
+        XCTAssertEqual(SystemCommandParser.parse("Videoyu durdur"), .video(.pause))
     }
 
     func testCombinedReplyFoldsAcks() {

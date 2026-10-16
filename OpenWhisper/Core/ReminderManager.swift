@@ -93,6 +93,8 @@ final class ReminderManager {
     }
 
     private var pendingDeletion: PendingDeletion?
+    /// A deletion plan waits for "evet" / "hayır" (it may have expired meanwhile).
+    var hasPendingDeletion: Bool { pendingDeletion != nil }
     private static let deletionConfirmationTimeout: TimeInterval = 45
 
     private(set) var reminders: [Reminder] = []

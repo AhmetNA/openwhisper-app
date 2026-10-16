@@ -2,8 +2,8 @@ import XCTest
 @testable import OpenWhisper
 
 /// Every real transcript in `Fixtures/route_corpus.tsv` (built from the app's logs by
-/// `tools/route_corpus.py`) goes through the deterministic routing rules in the same order
-/// as `AppState.finishTranscription`, and the result must match `route_corpus_snapshot.tsv`.
+/// `tools/route_corpus.py`) goes through `VoiceRouter`, the rules `AppState.finishTranscription`
+/// runs, and the result must match `route_corpus_snapshot.tsv`.
 /// Ollama, SetFit and keyboard focus are left out: a row the rules don't claim ends as
 /// `none` (those models decide it in the app).
 ///
@@ -24,42 +24,51 @@ final class RouteCorpusTests: XCTestCase {
 
     private struct Row { let mode, logged, text: String }
 
-    /// Mirrors the rule part of `AppState.finishTranscription`; keep the order in sync.
+    /// The app's own routing rules (`VoiceRouter`), with the session a row came from. A voice
+    /// row has some app in front and unknown focus; a key row an editable field in an agent
+    /// app, so "… gönder" is a send in both. No timer runs and no deletion waits.
     static func ruleRoute(_ text: String, voice: Bool) -> String {
-        if let agent = AgentCommandParser.parse(text) {
+        let facts = VoiceRouter.Facts(
+            isVoiceCommand: voice,
+            acceptsCommands: true,
+            focus: voice ? .unknown : .editable,
+            hasTargetApp: true,
+            targetBundleID: voice ? nil : AgentApp.sendCapableBundleIdentifiers.sorted().first,
+            commandContext: { CommandRegistry.Context(installedApps: installedApps) })
+
+        func describe(_ command: VoiceCommand) -> String {
+            switch command {
+            case .timer(.alarm): return "timer:alarm"  // the date depends on today
+            case .timer(let timer): return "timer:\(timer)"
+            case .system(let system): return "system:\(system)"
+            case .spotify(let request): return "spotify-step:\(request)"
+            case .agent: return "agent"
+            }
+        }
+        switch VoiceRouter.route(text, facts: facts) {
+        case .agentWithoutForeground: return "agent-send:no-foreground"
+        case .agent(let agent):
             if let target = agent.target { return "agent:\(target.rawValue)" }
-            if agent.send { return agent.body.isEmpty ? "agent-send:empty" : "agent-send" }
+            return agent.body.isEmpty ? "agent-send:empty" : "agent-send"
+        case .typed: return "typed"
+        case .chat: return "chat"
+        case .greeting(let greeting): return "greeting:\(greeting) (unless a text field has focus)"
+        case .meta(let meta): return "meta:\(meta)"
+        case .memory(let memory): return "memory:\(memory)"
+        case .pastConversation(let query): return "memory-time:\(query.label)"
+        case .deletionConfirmation: return "deletion-confirmation"
+        case .commands(let steps): return "multi:" + steps.map { describe($0.command) }.joined(separator: " + ")
+        case .command(let command): return describe(command)
+        case .reminderDeletion: return "reminder-deletion"
+        case .reminder: return "reminder"
+        case .spotifyOrConversation(let firstSentence):
+            // The app asks the models here too; only the explicit Spotify rules are checked.
+            if let intent = SpotifyManager.explicitIntent(in: text) { return "spotify:\(Self.describe(intent))" }
+            if let firstSentence, let intent = SpotifyManager.explicitIntent(in: firstSentence) {
+                return "spotify:\(Self.describe(intent)) (first sentence)"
+            }
+            return "none"
         }
-        // Fn, Fn+Space and the recording shortcut accept commands too, so no voice check here.
-        if JarvisAddressee.leadingTypeCommand(text) != nil || JarvisAddressee.trailingTypeCommand(text) != nil {
-            return "typed"
-        }
-        if voice, JarvisAddressee.explicitChatCommand(text) != nil { return "chat" }
-        if voice, let meta = JarvisReply.meta(in: text) { return "meta:\(meta)" }
-        if voice, let memory = UserMemoryCommand.parse(text) { return "memory:\(memory)" }
-        if voice, let query = TimeQuery.parse(text) { return "memory-time:\(query.label)" }
-        if voice, let greeting = JarvisReply.greeting(in: text) { return "greeting:\(greeting) (unless a text field has focus)" }
-
-        // No timer is running or ringing in the corpus, so state-dependent forms stay out.
-        if let timer = TimerCommandParser.parse(text) {
-            if case .alarm = timer { return "timer:alarm" }  // the date depends on today
-            return "timer:\(timer)"
-        }
-
-        func system(_ candidate: String) -> SystemCommand? {
-            SystemCommandParser.parse(candidate, installedApps: installedApps, shortcuts: [])
-        }
-        let firstSentence = voice ? AppState.leadingSentence(of: text) : nil
-        if let command = system(text) ?? firstSentence.flatMap(system).flatMap({ $0 == .developerMode ? nil : $0 }) {
-            return "system:\(command)"
-        }
-        if ReminderManager.deletionRequest(text) != nil { return "reminder-deletion" }
-        if ReminderManager.isReminder(text) { return "reminder" }
-        if let intent = SpotifyManager.explicitIntent(in: text) { return "spotify:\(Self.describe(intent))" }
-        if let firstSentence, let intent = SpotifyManager.explicitIntent(in: firstSentence) {
-            return "spotify:\(Self.describe(intent)) (first sentence)"
-        }
-        return "none"
     }
 
     /// Search requests carry a lot of fields; the query text is what routing changes affect.

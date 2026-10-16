@@ -25,6 +25,7 @@ enum MultiCommandSplitter {
     private static let connectors = [
         "ve sonra da", "ve sonra", "ve ardından", "ve daha sonra", "daha sonra", "sonra da",
         "ardından da", "ardından", "ondan sonra", "bir de", "ayrıca", "ve de", "ve", "sonra",
+        "hem de", "hem",
     ]
     /// "10 dakika sonra", "iki saat sonra": this "sonra" belongs to the time, not a new command.
     private static let timeUnits: Set<String> = [
@@ -93,7 +94,13 @@ enum MultiCommandSplitter {
 
     /// The commands in `text`, in the order said, or nil when it isn't two or more of them.
     /// `parse` reads one candidate group; the grouping with the most commands wins.
-    static func plan<Command>(_ text: String, parse: (String) -> Command?) -> [Step<Command>]? {
+    ///
+    /// Turkish says the verb once, at the end: "hem Wi-Fi hem Bluetooth'u aç", "Wi-Fi'yi ve
+    /// Bluetooth'u kapat". A group that is no command on its own may borrow the last words of
+    /// the final piece, when that piece is a command itself; `sharingVerb` reads the result,
+    /// so a caller can keep free-text commands ("Tarkan ve Sezen Aksu çal") out of it.
+    static func plan<Command>(_ text: String, parse: (String) -> Command?,
+                              sharingVerb: (String) -> Command? = { _ in nil }) -> [Step<Command>]? {
         let ranges = pieces(of: text)
         guard ranges.count >= 2, ranges.count <= maxPieces else { return nil }
         let n = ranges.count
@@ -104,6 +111,25 @@ enum MultiCommandSplitter {
                 let group = clean(String(text[ranges[i].lowerBound..<ranges[j].upperBound]))
                 guard !group.isEmpty, let command = parse(group) else { continue }
                 parsed[i][j] = Step(text: group, command: command)
+            }
+        }
+
+        let last = clean(String(text[ranges[n - 1]]))
+        let lastWords = last.split(separator: " ")
+        if lastWords.count >= 2, parse(last) != nil {
+            for i in 0..<(n - 1) {
+                for j in i..<(n - 1) where parsed[i][j] == nil {
+                    let group = clean(String(text[ranges[i].lowerBound..<ranges[j].upperBound]))
+                    guard !group.isEmpty else { continue }
+                    // Shortest verb first: "aç", then "açar mısın"; never the whole piece.
+                    for k in 1..<lastWords.count {
+                        let borrowed = group + " " + lastWords.suffix(k).joined(separator: " ")
+                        if let command = sharingVerb(borrowed) {
+                            parsed[i][j] = Step(text: borrowed, command: command)
+                            break
+                        }
+                    }
+                }
             }
         }
 
@@ -148,49 +174,5 @@ enum MultiCommandSplitter {
         }
         if let s = start { ranges.append(s..<text.endIndex) }
         return ranges
-    }
-}
-
-/// One command of a multi-command transcript, read by the same parsers, in the same order, as
-/// the single-command route: timer, system, then Spotify. Spotify counts only on the rule gate
-/// (no model guess), so a song title with "ve" in it isn't cut into two requests.
-enum MultiCommandStep: Equatable {
-    case timer(TimerCommandParser.Command)
-    case system(SystemCommand)
-    /// The Spotify request as `SpotifyManager.handleCommand` should read it.
-    case spotify(String)
-
-    static func parse(_ text: String, ringing: Bool, active: Bool,
-                      installedApps: [String], shortcuts: () -> [String]) -> MultiCommandStep? {
-        if let timer = TimerCommandParser.parse(text, ringing: ringing, active: active) { return .timer(timer) }
-        let mentionsShortcut = text.range(of: SystemCommandParser.shortcutMention, options: [.regularExpression, .caseInsensitive]) != nil
-        if let system = SystemCommandParser.parse(text, installedApps: installedApps, shortcuts: mentionsShortcut ? shortcuts() : []) {
-            // Developer mode opens apps and starts music: only ever on its own.
-            return system == .developerMode ? nil : .system(system)
-        }
-        let spotify = SpotifyManager.commandModeText(
-            SpotifyManager.repairPlayVerbMishearing(SpotifyManager.repairVolumeMishearing(text)))
-        return SpotifyManager.explicitIntent(in: spotify) != nil ? .spotify(spotify) : nil
-    }
-
-    /// Sleep and lock stop the Mac listening, so nothing can run after them.
-    var endsSession: Bool {
-        guard case .system(let command) = self else { return false }
-        return ([.sleep, .displaySleep, .lockScreen] as [SystemCommand]).contains(command)
-    }
-
-    /// The commands in `text`, or nil for the single-command route: fewer than two, or one
-    /// that ends the session before the last.
-    static func plan(_ text: String, ringing: Bool, active: Bool,
-                     installedApps: [String], shortcuts: () -> [String]) -> [MultiCommandSplitter.Step<MultiCommandStep>]? {
-        var shortcutNames: [String]?
-        let steps = MultiCommandSplitter.plan(WakeWordVerifier.strippingLeadingWakeWord(text)) { group in
-            parse(group, ringing: ringing, active: active, installedApps: installedApps) {
-                if shortcutNames == nil { shortcutNames = shortcuts() }
-                return shortcutNames ?? []
-            }
-        }
-        guard let steps, !steps.dropLast().contains(where: { $0.command.endsSession }) else { return nil }
-        return steps
     }
 }

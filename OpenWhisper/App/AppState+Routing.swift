@@ -427,248 +427,17 @@ extension AppState {
                 }
             }
 
-            // A named target wins; otherwise a Jarvis send goes to the app that was frontmost
-            // when recording began. TextInjector still verifies that the destination is safe.
-            // "Claude Code'a geç ve şunu yolla …" is the same as naming the app in the command.
-            if let agent = AgentCommandParser.parseAfterSwitch(trimmed) ?? AgentCommandParser.parse(trimmed) {
-                if session.isVoiceCommand, agent.send, agent.target == nil, session.targetApp == nil {
-                    let status = "Önde bir uygulama bulamadım; mesaj gönderilmedi."
-                    owLog("[Agent] Send skipped: no foreground application")
-                    self.showFlowBarMessage(status, durationMs: 4500)
-                    await self.speakReply(status)
-                    return
-                }
-                let routeToAgent = agent.target != nil || (
-                    agent.send && session.targetApp != nil && (
-                        session.isVoiceCommand || (
-                            session.pasteContext.focusStatus == .editable
-                                && AgentApp.sendCapableBundleIdentifiers.contains(session.targetApp?.bundleIdentifier ?? "")
-                        )
-                    )
-                )
-                if routeToAgent {
-                    owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send), session: \(agent.session.rawValue))")
-                    // "Claude Code'da yeni session aç" alone just opens the session.
-                    guard !agent.body.isEmpty || agent.session == .new else {
-                        owLog("[Agent] Nothing to write after the command words, skipping")
-                        return
-                    }
-                    @MainActor func fail(_ status: String, spoken: String) async {
-                        if !agent.body.isEmpty { self.textInjector?.copyToClipboard(agent.body) }
-                        self.showFlowBarMessage(agent.body.isEmpty ? status : "\(status), panoya kopyalandı", durationMs: 4500)
-                        if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(spoken)) }
-                    }
-                    if agent.session != .current, agent.target != .claudeCode {
-                        await fail("Session seçimi yalnızca Claude Code'da var", spoken: "session seçimini yalnızca Claude Code'da yapabiliyorum")
-                        return
-                    }
-                    var targetApp = session.targetApp
-                    var pasteContext = session.pasteContext
-                    if let target = agent.target,
-                       !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false)
-                        || agent.session != .current {
-                        guard let app = await AgentAppActivator.activate(target) else {
-                            await fail("\(target.displayName) açılamadı", spoken: "\(target.displayName) açılamadı")
-                            return
-                        }
-                        targetApp = app
-                        pasteContext = PasteContext.capture(targetApp: app)
-                    }
-                    // Never fall back to whatever session happens to be open: a message meant
-                    // for a new or earlier conversation would land in the wrong one.
-                    if agent.session != .current, let app = targetApp {
-                        let switched: Bool
-                        switch agent.session {
-                        case .new:
-                            switched = await ClaudeSessionNavigator.openNewSession(app)
-                        case .last:
-                            guard let name = ClaudeSessionNavigator.lastSessionTitle else {
-                                await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
-                                return
-                            }
-                            switched = await ClaudeSessionNavigator.selectSession(app, titled: name)
-                        case .current:
-                            switched = true
-                        }
-                        guard switched else {
-                            let what = agent.session == .new ? "Yeni session açılamadı" : "Son session bulunamadı"
-                            await fail(what, spoken: what.lowercased(with: Locale(identifier: "tr_TR")))
-                            return
-                        }
-                        pasteContext = PasteContext.capture(targetApp: app)
-                        if agent.body.isEmpty {
-                            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.newAgentSession()) }
-                            return
-                        }
-                    }
-                    let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
-                    guard delivered else {
-                        owLog("[Agent] Not delivered to \(targetApp?.localizedName ?? "?"); not reporting success")
-                        await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
-                                   spoken: agent.send ? "mesajı gönderemedim" : "mesajı yazamadım")
-                        return
-                    }
-                    if agent.send, let app = targetApp,
-                       app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false {
-                        ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
-                    }
-                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
-                    return
-                }
-            }
-
-            // An explicit "buraya yaz …" or trailing "… bunu yaz" always means the captured
-            // text field, even when the words themselves resemble a Jarvis command. A trailing
-            // "gönder" outside agent apps is typed without Return, so Slack / Mail are never sent.
-            if session.acceptsCommands {
-                let typed = JarvisAddressee.leadingTypeCommand(trimmed)
-                    ?? JarvisAddressee.trailingTypeCommand(trimmed)
-                    ?? AgentCommandParser.parse(trimmed).flatMap { $0.send && !$0.body.isEmpty ? $0.body : nil }
-                if let typed {
-                    owLog("[Route] explicit dictation override: '\(typed)'")
-                    await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
-                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
-                    return
-                }
-            }
-
-            // An editable field normally routes to dictation. This explicit phrase lets the
-            // user talk to Jarvis without first clicking away from the field.
-            if session.isVoiceCommand,
-               let chatText = JarvisAddressee.explicitChatCommand(trimmed) {
-                session.latency.finishDecision(route: "Jarvis sohbet")
-                owLog("[Route] explicit Jarvis chat: '\(chatText)'")
-                self.lastTranscription = text
-                let actionStartedAt = session.latency.timestamp()
-                let answer = await self.chatReply(to: chatText)
-                session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
-                session.latency.markOutput("Jarvis cevabı")
-                if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
-                    holdMediaForReplyAnswer = true
-                }
-                return
-            }
-
-            // "Günaydın", "Selam Jarvis", "Nasılsın?": answered at once by the clock, no LLM.
-            // In a text field it stays dictation ("Selam nasılsın?" typed into WhatsApp).
-            if session.isVoiceCommand,
-               (VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus) != .editable,
-               let greeting = JarvisReply.greeting(in: trimmed) {
-                session.latency.finishDecision(route: "selamlama")
-                owLog("[Route] greeting (\(greeting))")
-                self.lastTranscription = text
-                let now = Date()
-                let hour = Calendar.current.component(.hour, from: now)
-                var reply = self.jarvisReply.greet(greeting, hour: hour)
-                // The first "günaydın" / "selam" of the morning brings the day's summary.
-                let today = Calendar.current.startOfDay(for: now).timeIntervalSince1970
-                if [.goodMorning, .hello, .howAreYou].contains(greeting), (5..<12).contains(hour),
-                   UserDefaults.standard.double(forKey: "jarvisLastMorningBriefing") != today,
-                   let summary = await JarvisContext.withTimeout(.seconds(3), { await DailyBriefing.build(dayOffset: 0, now: now) }) {
-                    UserDefaults.standard.set(today, forKey: "jarvisLastMorningBriefing")
-                    reply = reply.replacingOccurrences(of: " Nasıl yardımcı olabilirim?", with: "")
-                        .replacingOccurrences(of: " Emrinizdeyim.", with: "")
-                        .replacingOccurrences(of: " Buradayım.", with: "")
-                        + " " + summary.morningLine(now: now)
-                    owLog("[Briefing] Morning: \(summary.headline)")
-                }
-                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 6000) }
-                return
-            }
-
-            // "Ne dedin?" repeats the last reply; "Ne yapabilirsin?" lists what Jarvis does.
-            if session.isVoiceCommand, let meta = JarvisReply.meta(in: trimmed) {
-                session.latency.finishDecision(route: "Jarvis hakkında")
-                owLog("[Route] meta (\(meta))")
-                self.lastTranscription = text
-                let reply: String
-                switch meta {
-                case .repeatLast: reply = self.lastSpokenReply ?? "Henüz bir şey söylemedim."
-                case .help: reply = JarvisReply.helpText
-                }
-                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 8000) }
-                return
-            }
-
-            // "Bunu hatırla: …", "benim adım …", "hakkımda ne biliyorsun?", "… unut".
-            if session.isVoiceCommand, let memoryCommand = UserMemoryCommand.parse(trimmed) {
-                session.latency.finishDecision(route: "kişisel hafıza")
-                owLog("[Route] memory (\(memoryCommand))")
-                self.lastTranscription = text
-                let memory = UserMemory.shared
-                var removed = 0
-                switch memoryCommand {
-                case .remember(let fact): memory.remember(fact)
-                case .recall: break
-                case .forget(let topic): removed = memory.forget(topic)
-                case .forgetLast: removed = memory.forgetLast() == nil ? 0 : 1
-                case .forgetAll: removed = memory.facts.count; memory.forgetAll()
-                }
-                let reply = self.jarvisReply.memory(memoryCommand, facts: memory.facts.map(\.text), removed: removed)
-                JarvisJournal.shared.append(user: trimmed, reply: reply)
-                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 5000) }
-                return
-            }
-
-            // "Geçen hafta ne demiştim?", "dün ne konuşmuştuk?": only now is the journal read,
-            // and only that time's lines go to the model.
-            if session.isVoiceCommand, let query = TimeQuery.parse(trimmed) {
-                session.latency.finishDecision(route: "geçmiş sohbet")
-                self.lastTranscription = text
-                let recalled = JarvisJournal.shared.recall(query, facts: UserMemory.shared.facts)
-                owLog("[Route] memory-time (\(query.label), \(recalled.count) line(s))")
-                guard !recalled.isEmpty else {
-                    let reply = self.jarvisReply.nothingRecalled(query.label)
-                    if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: 5000) }
-                    return
-                }
-                let actionStartedAt = session.latency.timestamp()
-                let answer = await self.chatReply(to: trimmed, recalled: recalled)
-                session.latency.record(.action, since: actionStartedAt, detail: "geçmiş sohbet")
-                session.latency.markOutput("Jarvis cevabı")
-                if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
-                    holdMediaForReplyAnswer = true
-                }
-                return
-            }
-
-            // A destructive reminder action is always two-step. While a deletion confirmation
-            // is pending, only an explicit approval can execute the already-resolved plan; any
-            // other ordinary voice response discards it without touching reminders.
-            if session.isVoiceCommand,
-               let confirmation = await self.reminderManager?.handleDeletionConfirmation(
-                   trimmed, alternatives: session.heardVariants
-               ) {
-                session.latency.finishDecision(route: "hatırlatıcı silme onayı")
-                owLog("[Route] reminder deletion confirmation")
-                owLog("[Result] Reminder deletion confirmation: \(String(describing: confirmation))")
-                self.lastTranscription = text
-                let reply = self.jarvisReply.reminderDeletion(confirmation)
-                let heard = await self.speakReply(reply)
-                if confirmation == .confirmationUnclear {
-                    holdMediaForFollowUp = true
-                    Task { @MainActor [weak self] in
-                        try? await Task.sleep(for: .seconds(20))
-                        guard let self, self.recordingState != .recording else { return }
-                        self.recordingMedia.end(resuming: true)
-                    }
-                    if !heard { self.showFlowBarMessage(reply, durationMs: 6000) }
-                    self.startVoiceSession(trigger: .confirmation)
-                }
-                return
-            }
-
-            // Several commands at once: "sesi kıs ve Bluetooth'u kapat", "Wi-Fi'yi aç, sonra
-            // 10 dakikalık alarm kur". Only when every part is a command on its own; otherwise
-            // the transcript goes on to the single-command routes below.
+            // What the rules need for the command routes. Built only when one is reached:
+            // it lists the installed apps.
             let timers = TimerManager.shared
-            if session.acceptsCommands,
-               let steps = MultiCommandStep.plan(
-                   trimmed, ringing: timers.ringing != nil, active: !timers.timers.isEmpty,
-                   installedApps: SystemController.installedApps(), shortcuts: SystemController.shortcutNames
-               ) {
-                session.latency.finishDecision(route: "çoklu komut")
-                owLog("[Route] multi-command (\(steps.count)): \(steps.map { "'\($0.text)' → \($0.command)" }.joined(separator: ", "))")
+            @MainActor func commandContext() -> CommandRegistry.Context {
+                CommandRegistry.Context(
+                    ringing: timers.ringing != nil, timerActive: !timers.timers.isEmpty,
+                    installedApps: SystemController.installedApps(), shortcuts: SystemController.shortcutNames)
+            }
+
+            /// Runs the steps in order and answers once for all of them.
+            @MainActor func runCommands(_ steps: [MultiCommandSplitter.Step<VoiceCommand>], output: String) async {
                 self.lastTranscription = text
                 let actionStartedAt = session.latency.timestamp()
                 var statuses: [String] = []
@@ -680,6 +449,8 @@ extension AppState {
                     switch step.command {
                     case .timer(let timerCommand):
                         let status: String
+                        // A wall-clock alarm goes to the Clock app, which rings it even without Jarvis;
+                        // Jarvis keeps it only when that can't be done (no shortcut, more than a day away).
                         if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
                            await ClockAlarm.set(date, label: label) {
                             status = "Saat uygulamasına alarm kurdum: \(TimerManager.clock(date, sayDay: true))"
@@ -697,8 +468,13 @@ extension AppState {
                             }
                             replies = []
                         }
+                        // The local model takes several seconds on a long page.
                         if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
                         let status = await SystemController.perform(command)
+                        // Liked Songs now play; don't resume what the session paused over them.
+                        if command == .developerMode { resumeMediaAfterCommand = false }
+                        // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
+                        // lets the video the recording paused continue, and so does a failed command.
                         if case .video(let action) = command, action.changesPlayback,
                            !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
                         switch command {
@@ -715,79 +491,55 @@ extension AppState {
                         if handled, !resumes { resumeMediaAfterCommand = false }
                         statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")
                         replies.append(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
+                    case .agent:
+                        // Never a step: `CommandRegistry` keeps agent dictation on its own route.
+                        owLog("[Route] agent dictation reached the command runner; skipped")
                     }
                 }
-                session.latency.record(.action, since: actionStartedAt, detail: "çoklu komut")
-                session.latency.markOutput("çoklu komut tamamlandı")
+                session.latency.record(.action, since: actionStartedAt, detail: output)
+                session.latency.markOutput("\(output) tamamlandı")
                 let summary = statuses.joined(separator: " · ")
-                self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : 3500)
-                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.combined(replies)) }
-                return
-            }
-
-            // "20 dakikalık alarm kur", "10 dakika sonra beni uyar", "saat 7'de beni uyandır",
-            // "zamanlayıcı ne kadar kaldı"; while one rings, "tamam" / "5 dakika ertele".
-            if session.acceptsCommands,
-               let timerCommand = TimerCommandParser.parse(trimmed, ringing: timers.ringing != nil, active: !timers.timers.isEmpty) {
-                session.latency.finishDecision(route: "zamanlayıcı")
-                owLog("[Route] timer (\(timerCommand))")
-                self.lastTranscription = text
-                let status: String
-                // A wall-clock alarm goes to the Clock app, which rings it even without Jarvis;
-                // Jarvis keeps it only when that can't be done (no shortcut, more than a day away).
-                if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
-                   await ClockAlarm.set(date, label: label) {
-                    status = "Saat uygulamasına alarm kurdum: \(TimerManager.clock(date, sayDay: true))"
-                } else {
-                    status = timers.perform(timerCommand)
+                // A lone Mac action is a short confirmation; a timer or a list stays a bit longer.
+                let lone: Bool
+                if steps.count == 1, case .system = steps[0].command { lone = true } else { lone = false }
+                if !summary.isEmpty {
+                    self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : lone ? 2500 : 3500)
                 }
-                owLog("[Result] Timer: \(status)")
-                session.latency.markOutput("zamanlayıcı")
-                self.showFlowBarMessage(status, durationMs: 3500)
-                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.timer(timerCommand, status: status)) }
-                return
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.combined(replies)) }
             }
 
-            // "Bluetooth'u kapat", "Wi-Fi'yi aç", "kulaklığın bağlantısını kes": in a Jarvis
-            // session and with the dictation keys (`acceptsCommands`); "… bunu yaz" above types
-            // them instead. A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var öyle…"
-            // when the user turns to someone else): if the whole transcript is no command, the
-            // first sentence alone may be.
-            let firstSentence = session.isVoiceCommand ? Self.leadingSentence(of: trimmed) : nil
-            func parseSystem(_ candidate: String) -> SystemCommand? {
-                SystemCommandParser.parse(
-                    candidate,
-                    installedApps: SystemController.installedApps(),
-                    shortcuts: candidate.range(of: SystemCommandParser.shortcutMention, options: [.regularExpression, .caseInsensitive]) != nil
-                        ? SystemController.shortcutNames() : []
-                )
-            }
-            // Developer mode opens apps and starts music: only when it is the whole transcript.
-            if session.acceptsCommands,
-               let command = parseSystem(trimmed)
-                ?? firstSentence.flatMap(parseSystem).flatMap({ $0 == .developerMode ? nil : $0 }) {
-                session.latency.finishDecision(route: "sistem komutu")
-                owLog("[Route] system (\(command))")
-                // Going to sleep or locking: say it before the Mac stops listening.
-                let speaksFirst = ([.sleep, .displaySleep, .lockScreen] as [SystemCommand]).contains(command)
-                if speaksFirst && session.isVoiceCommand { await self.speakReply("Görüşürüz.") }
-                // The local model takes several seconds on a long page.
-                if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
-                let actionStartedAt = session.latency.timestamp()
-                let status = await SystemController.perform(command)
-                // Liked Songs now play; don't resume what the session paused over them.
-                if command == .developerMode { resumeMediaAfterCommand = false }
-                // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
-                // lets the video the recording paused continue, and so does a failed command.
-                if case .video(let action) = command, action.changesPlayback,
-                   !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
-                session.latency.record(.action, since: actionStartedAt, detail: "sistem komutu")
-                session.latency.markOutput("sistem komutu tamamlandı")
-                owLog("[Result] System command: \(status)")
+            /// Answers with the chat model and, when the answer asks something back, listens.
+            @MainActor func chat(_ chatText: String, recalled: [String] = [], detail: String) async {
                 self.lastTranscription = text
-                self.showFlowBarMessage(status, durationMs: status.count > 40 ? 6000 : 2500)
-                if !speaksFirst && session.isVoiceCommand { await self.speakReply(self.jarvisReply.system(command, status: status)) }
-                return
+                let actionStartedAt = session.latency.timestamp()
+                let answer = await self.chatReply(to: chatText, recalled: recalled)
+                session.latency.record(.action, since: actionStartedAt, detail: detail)
+                session.latency.markOutput("Jarvis cevabı")
+                if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
+                    holdMediaForReplyAnswer = true
+                }
+            }
+
+            /// Speaks `reply`, or shows it when the voice can't be heard.
+            @MainActor func say(_ reply: String, durationMs: Int) async {
+                if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: durationMs) }
+            }
+
+            /// Keeps the paused media paused while a follow-up question waits for its answer,
+            /// with a safety net if the answer's recording never starts.
+            @MainActor func askFollowUp(_ prompt: String, heard: Bool) {
+                holdMediaForFollowUp = true
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(20))
+                    guard let self, self.recordingState != .recording else { return }
+                    self.recordingMedia.end(resuming: true)
+                }
+                if !heard {
+                    // The voice failed; show the question so the listening window isn't a mystery.
+                    owLog("[Reminders] Confirmation prompt not heard; showing it on screen")
+                    self.showFlowBarMessage(prompt, durationMs: 6000)
+                }
+                self.startVoiceSession(trigger: .confirmation)
             }
 
             // For a Jarvis session that is not a command, keyboard focus is the primary signal:
@@ -822,62 +574,237 @@ extension AppState {
                     // it only if a rule then recognises the rephrased sentence.
                     if route == .chat, self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
                        let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel) {
-                        if let command = CommandRewriter.safeSystemCommand(rewritten, installedApps: SystemController.installedApps()) {
+                        if let command = CommandRewriter.safeCommand(rewritten, context: commandContext()) {
                             session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
-                            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → system (\(command))")
-                            self.lastTranscription = text
-                            let status = await SystemController.perform(command)
-                            if case .video(let action) = command, action.changesPlayback,
-                               !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
-                            owLog("[Result] System command: \(status)")
-                            self.showFlowBarMessage(status, durationMs: status.count > 40 ? 6000 : 2500)
-                            await self.speakReply(self.jarvisReply.system(command, status: status))
-                            return
-                        }
-                        if SpotifyManager.explicitIntent(in: rewritten) != nil {
-                            session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
-                            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → spotify")
-                            self.lastTranscription = text
-                            let handled = await SpotifyManager.shared.handleCommand(text: rewritten, targetApp: session.targetApp)
-                            owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(rewritten)'")
-                            if handled, !SpotifyManager.resumesPausedMedia(afterCommand: rewritten) { resumeMediaAfterCommand = false }
-                            await self.speakReply(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
+                            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
+                            await runCommands([MultiCommandSplitter.Step(text: rewritten, command: command)], output: "yeniden yorumlanan komut")
                             return
                         }
                         owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule; chatting")
                     }
                     if route == .chat {
                         session.latency.finishDecision(route: "Jarvis sohbet")
-                        self.lastTranscription = text
-                        let actionStartedAt = session.latency.timestamp()
-                        let answer = await self.chatReply(to: trimmed)
-                        session.latency.record(.action, since: actionStartedAt, detail: "Jarvis sohbet")
-                        session.latency.markOutput("Jarvis cevabı")
-                        if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
-                            holdMediaForReplyAnswer = true
-                        }
+                        await chat(trimmed, detail: "Jarvis sohbet")
                         return
                     }
                 }
                 await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
 
-            let reminderDeletion = session.acceptsCommands
-                ? ReminderManager.deletionRequest(trimmed)
-                : nil
-            let isReminderCommand = reminderDeletion == nil && ReminderManager.isReminder(text)
-            var commandText = text
-            var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
-                text, ollamaAvailable: self.ollamaAvailable, commandMode: session.acceptsCommands
-            )
-            if !isSpotifyCommand, !isReminderCommand, let firstSentence,
-               await SpotifyManager.isSpotifyCommand(firstSentence, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
-                owLog("[Route] first sentence is the command: '\(firstSentence)'")
-                commandText = firstSentence
-                isSpotifyCommand = true
+            // The rules decide where the transcript goes (`VoiceRouter`, in their order); this
+            // runs the decision.
+            var facts = VoiceRouter.Facts(
+                isVoiceCommand: session.isVoiceCommand,
+                acceptsCommands: session.acceptsCommands,
+                focus: VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus,
+                hasTargetApp: session.targetApp != nil,
+                targetBundleID: session.targetApp?.bundleIdentifier,
+                pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
+                commandContext: commandContext)
+            var route = VoiceRouter.route(text, facts: facts)
+
+            // While a deletion confirmation is pending, only an explicit approval can execute the
+            // already-resolved plan; any other ordinary voice response discards it without
+            // touching reminders. No answer at all (a new delete command, an expired plan):
+            // the transcript is routed as usual.
+            if case .deletionConfirmation = route {
+                if let confirmation = await self.reminderManager?.handleDeletionConfirmation(
+                    trimmed, alternatives: session.heardVariants
+                ) {
+                    session.latency.finishDecision(route: "hatırlatıcı silme onayı")
+                    owLog("[Route] reminder deletion confirmation")
+                    owLog("[Result] Reminder deletion confirmation: \(String(describing: confirmation))")
+                    self.lastTranscription = text
+                    let reply = self.jarvisReply.reminderDeletion(confirmation)
+                    let heard = await self.speakReply(reply)
+                    if confirmation == .confirmationUnclear { askFollowUp(reply, heard: heard) }
+                    return
+                }
+                facts.pendingDeletion = false
+                route = VoiceRouter.route(text, facts: facts)
             }
-            owLog("[Route] \(reminderDeletion != nil ? "reminder deletion" : isReminderCommand ? "reminder" : isSpotifyCommand ? "spotify" : "dictation")")
-            if let reminderDeletion {
+
+            switch route {
+            case .agentWithoutForeground:
+                let status = "Önde bir uygulama bulamadım; mesaj gönderilmedi."
+                owLog("[Agent] Send skipped: no foreground application")
+                self.showFlowBarMessage(status, durationMs: 4500)
+                await self.speakReply(status)
+
+            case .agent(let agent):
+                owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send), session: \(agent.session.rawValue))")
+                // "Claude Code'da yeni session aç" alone just opens the session.
+                guard !agent.body.isEmpty || agent.session == .new else {
+                    owLog("[Agent] Nothing to write after the command words, skipping")
+                    return
+                }
+                @MainActor func fail(_ status: String, spoken: String) async {
+                    if !agent.body.isEmpty { self.textInjector?.copyToClipboard(agent.body) }
+                    self.showFlowBarMessage(agent.body.isEmpty ? status : "\(status), panoya kopyalandı", durationMs: 4500)
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(spoken)) }
+                }
+                if agent.session != .current, agent.target != .claudeCode {
+                    await fail("Session seçimi yalnızca Claude Code'da var", spoken: "session seçimini yalnızca Claude Code'da yapabiliyorum")
+                    return
+                }
+                var targetApp = session.targetApp
+                var pasteContext = session.pasteContext
+                if let target = agent.target,
+                   !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false)
+                    || agent.session != .current {
+                    guard let app = await AgentAppActivator.activate(target) else {
+                        await fail("\(target.displayName) açılamadı", spoken: "\(target.displayName) açılamadı")
+                        return
+                    }
+                    targetApp = app
+                    pasteContext = PasteContext.capture(targetApp: app)
+                }
+                // Never fall back to whatever session happens to be open: a message meant
+                // for a new or earlier conversation would land in the wrong one.
+                if agent.session != .current, let app = targetApp {
+                    let switched: Bool
+                    switch agent.session {
+                    case .new:
+                        switched = await ClaudeSessionNavigator.openNewSession(app)
+                    case .last:
+                        guard let name = ClaudeSessionNavigator.lastSessionTitle else {
+                            await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
+                            return
+                        }
+                        switched = await ClaudeSessionNavigator.selectSession(app, titled: name)
+                    case .current:
+                        switched = true
+                    }
+                    guard switched else {
+                        let what = agent.session == .new ? "Yeni session açılamadı" : "Son session bulunamadı"
+                        await fail(what, spoken: what.lowercased(with: Locale(identifier: "tr_TR")))
+                        return
+                    }
+                    pasteContext = PasteContext.capture(targetApp: app)
+                    if agent.body.isEmpty {
+                        if session.isVoiceCommand { await self.speakReply(self.jarvisReply.newAgentSession()) }
+                        return
+                    }
+                }
+                let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                guard delivered else {
+                    owLog("[Agent] Not delivered to \(targetApp?.localizedName ?? "?"); not reporting success")
+                    await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
+                               spoken: agent.send ? "mesajı gönderemedim" : "mesajı yazamadım")
+                    return
+                }
+                if agent.send, let app = targetApp,
+                   app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false {
+                    ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
+                }
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
+
+            case .typed(let typed):
+                owLog("[Route] explicit dictation override: '\(typed)'")
+                await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
+
+            case .chat(let chatText):
+                session.latency.finishDecision(route: "Jarvis sohbet")
+                owLog("[Route] explicit Jarvis chat: '\(chatText)'")
+                await chat(chatText, detail: "Jarvis sohbet")
+
+            // "Günaydın", "Selam Jarvis", "Nasılsın?": answered at once by the clock, no LLM.
+            case .greeting(let greeting):
+                session.latency.finishDecision(route: "selamlama")
+                owLog("[Route] greeting (\(greeting))")
+                self.lastTranscription = text
+                let now = Date()
+                let hour = Calendar.current.component(.hour, from: now)
+                var reply = self.jarvisReply.greet(greeting, hour: hour)
+                // The first "günaydın" / "selam" of the morning brings the day's summary.
+                let today = Calendar.current.startOfDay(for: now).timeIntervalSince1970
+                if [.goodMorning, .hello, .howAreYou].contains(greeting), (5..<12).contains(hour),
+                   UserDefaults.standard.double(forKey: "jarvisLastMorningBriefing") != today,
+                   let summary = await JarvisContext.withTimeout(.seconds(3), { await DailyBriefing.build(dayOffset: 0, now: now) }) {
+                    UserDefaults.standard.set(today, forKey: "jarvisLastMorningBriefing")
+                    reply = reply.replacingOccurrences(of: " Nasıl yardımcı olabilirim?", with: "")
+                        .replacingOccurrences(of: " Emrinizdeyim.", with: "")
+                        .replacingOccurrences(of: " Buradayım.", with: "")
+                        + " " + summary.morningLine(now: now)
+                    owLog("[Briefing] Morning: \(summary.headline)")
+                }
+                await say(reply, durationMs: 6000)
+
+            // "Ne dedin?" repeats the last reply; "Ne yapabilirsin?" lists what Jarvis does.
+            case .meta(let meta):
+                session.latency.finishDecision(route: "Jarvis hakkında")
+                owLog("[Route] meta (\(meta))")
+                self.lastTranscription = text
+                let reply: String
+                switch meta {
+                case .repeatLast: reply = self.lastSpokenReply ?? "Henüz bir şey söylemedim."
+                case .help: reply = JarvisReply.helpText
+                }
+                await say(reply, durationMs: 8000)
+
+            // "Bunu hatırla: …", "benim adım …", "hakkımda ne biliyorsun?", "… unut".
+            case .memory(let memoryCommand):
+                session.latency.finishDecision(route: "kişisel hafıza")
+                owLog("[Route] memory (\(memoryCommand))")
+                self.lastTranscription = text
+                let memory = UserMemory.shared
+                var removed = 0
+                switch memoryCommand {
+                case .remember(let fact): memory.remember(fact)
+                case .recall: break
+                case .forget(let topic): removed = memory.forget(topic)
+                case .forgetLast: removed = memory.forgetLast() == nil ? 0 : 1
+                case .forgetAll: removed = memory.facts.count; memory.forgetAll()
+                }
+                let reply = self.jarvisReply.memory(memoryCommand, facts: memory.facts.map(\.text), removed: removed)
+                JarvisJournal.shared.append(user: trimmed, reply: reply)
+                await say(reply, durationMs: 5000)
+
+            // "Geçen hafta ne demiştim?", "dün ne konuşmuştuk?": only now is the journal read,
+            // and only that time's lines go to the model.
+            case .pastConversation(let query):
+                session.latency.finishDecision(route: "geçmiş sohbet")
+                self.lastTranscription = text
+                let recalled = JarvisJournal.shared.recall(query, facts: UserMemory.shared.facts)
+                owLog("[Route] memory-time (\(query.label), \(recalled.count) line(s))")
+                guard !recalled.isEmpty else {
+                    await say(self.jarvisReply.nothingRecalled(query.label), durationMs: 5000)
+                    return
+                }
+                await chat(trimmed, recalled: recalled, detail: "geçmiş sohbet")
+
+            case .deletionConfirmation:
+                // Answered above; a non-answer was routed again without it.
+                break
+
+            // "sesi kıs ve Bluetooth'u kapat", "Wi-Fi'yi aç, sonra 10 dakikalık alarm kur".
+            case .commands(let steps):
+                session.latency.finishDecision(route: "çoklu komut")
+                owLog("[Route] multi-command (\(steps.count)): \(steps.map { "'\($0.text)' → \($0.command)" }.joined(separator: ", "))")
+                await runCommands(steps, output: "çoklu komut")
+
+            // "20 dakikalık alarm kur", "Bluetooth'u kapat", "videoyu durdur", "YouTube'da lofi
+            // ara", "yarın 3'te toplantı ekle".
+            case .command(let command):
+                let isTimer: Bool
+                switch command {
+                case .timer(let timerCommand):
+                    isTimer = true
+                    owLog("[Route] timer (\(timerCommand))")
+                case .system(let systemCommand):
+                    isTimer = false
+                    owLog("[Route] system (\(systemCommand))")
+                default:
+                    isTimer = false
+                    owLog("[Route] command (\(command))")
+                }
+                let output = isTimer ? "zamanlayıcı" : "sistem komutu"
+                session.latency.finishDecision(route: output)
+                await runCommands([MultiCommandSplitter.Step(text: trimmed, command: command)], output: output)
+
+            case .reminderDeletion(let reminderDeletion):
+                owLog("[Route] reminder deletion")
                 session.latency.finishDecision(route: "hatırlatıcı silme")
                 owLog("[OpenWhisper] Reminder deletion detected: \(text)")
                 self.lastTranscription = text
@@ -888,22 +815,10 @@ extension AppState {
                 owLog("[Result] Reminder deletion request: \(String(describing: result))")
                 let prompt = self.jarvisReply.reminderDeletion(result)
                 let promptWasHeard = await self.speakReply(prompt)
-                if case .confirmationRequired = result {
-                    holdMediaForFollowUp = true
-                    Task { @MainActor [weak self] in
-                        // Safety net if the confirmation recording never starts.
-                        try? await Task.sleep(for: .seconds(20))
-                        guard let self, self.recordingState != .recording else { return }
-                        self.recordingMedia.end(resuming: true)
-                    }
-                    if !promptWasHeard {
-                        // The voice failed; show the question so the listening window isn't a mystery.
-                        owLog("[Reminders] Confirmation prompt not heard; showing it on screen")
-                        self.showFlowBarMessage(prompt, durationMs: 6000)
-                    }
-                    self.startVoiceSession(trigger: .confirmation)
-                }
-            } else if isReminderCommand {
+                if case .confirmationRequired = result { askFollowUp(prompt, heard: promptWasHeard) }
+
+            case .reminder:
+                owLog("[Route] reminder")
                 session.latency.finishDecision(route: "hatırlatıcı")
                 owLog("[OpenWhisper] Reminder detected: \(text)")
                 self.lastTranscription = text
@@ -919,7 +834,23 @@ extension AppState {
                 if session.isVoiceCommand {
                     await self.speakReply(self.jarvisReply.reminder(at: reminder.map { TimerManager.clock($0.fireDate, sayDay: true) }))
                 }
-            } else if isSpotifyCommand {
+
+            case .spotifyOrConversation(let firstSentence):
+                var commandText = text
+                var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
+                    text, ollamaAvailable: self.ollamaAvailable, commandMode: session.acceptsCommands
+                )
+                if !isSpotifyCommand, let firstSentence,
+                   await SpotifyManager.isSpotifyCommand(firstSentence, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
+                    owLog("[Route] first sentence is the command: '\(firstSentence)'")
+                    commandText = firstSentence
+                    isSpotifyCommand = true
+                }
+                owLog("[Route] \(isSpotifyCommand ? "spotify" : "dictation")")
+                guard isSpotifyCommand else {
+                    await dictateOrChat()
+                    return
+                }
                 session.latency.finishDecision(route: "Spotify")
                 owLog("[OpenWhisper] Spotify command detected: \(commandText)")
                 let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: commandText)
@@ -931,37 +862,26 @@ extension AppState {
                 session.latency.record(.action, since: actionStartedAt, detail: "Spotify")
                 if handled { session.latency.markOutput("Spotify komutu tamamlandı") }
                 owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
-                if handled {
-                    resumeMediaAfterCommand = resumesMedia
-                    self.lastTranscription = text
-                    // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
-                    if session.isVoiceCommand {
-                        await self.speakReply(self.jarvisReply.spotify(handled: true))
-                    }
-                    if !misheard.isEmpty {
-                        owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
-                        Task { @MainActor [weak self] in
-                            await self?.rerunCorrectedCommand(
-                                commandText, misheard: misheard, generation: generation, session: session
-                            )
-                        }
-                    }
-                } else {
+                guard handled else {
                     owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
                     await dictateOrChat()
+                    return
                 }
-            } else {
-                await dictateOrChat()
+                resumeMediaAfterCommand = resumesMedia
+                self.lastTranscription = text
+                // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
+                if session.isVoiceCommand {
+                    await self.speakReply(self.jarvisReply.spotify(handled: true))
+                }
+                if !misheard.isEmpty {
+                    owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")
+                    Task { @MainActor [weak self] in
+                        await self?.rerunCorrectedCommand(
+                            commandText, misheard: misheard, generation: generation, session: session
+                        )
+                    }
+                }
             }
         }
-    }
-
-    /// The first sentence when the transcript has more than one, for a command followed by
-    /// talk that wasn't meant for Jarvis.
-    nonisolated static func leadingSentence(of text: String) -> String? {
-        guard let end = text.firstIndex(where: { ".!?".contains($0) }) else { return nil }
-        let first = text[...end].trimmingCharacters(in: .whitespacesAndNewlines)
-        let rest = text[text.index(after: end)...].trimmingCharacters(in: .whitespacesAndNewlines)
-        return rest.isEmpty || first.split(separator: " ").count < 2 ? nil : first
     }
 }

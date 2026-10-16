@@ -224,10 +224,10 @@ final class SystemCommandParserTests: XCTestCase {
     }
 
     func testLeadingSentence() {
-        XCTAssertEqual(AppState.leadingSentence(of: "Şarkıyı durdur. Neden. Var öyle, sulamam gerekiyor."), "Şarkıyı durdur.")
-        XCTAssertNil(AppState.leadingSentence(of: "Şarkıyı durdur."))
-        XCTAssertNil(AppState.leadingSentence(of: "Tamam. Şarkıyı durdur."))
-        XCTAssertEqual(SystemCommandParser.parse(AppState.leadingSentence(of: "Ekranı kilitle. Sonra konuşuruz seninle.") ?? ""), .lockScreen)
+        XCTAssertEqual(VoiceRouter.leadingSentence(of: "Şarkıyı durdur. Neden. Var öyle, sulamam gerekiyor."), "Şarkıyı durdur.")
+        XCTAssertNil(VoiceRouter.leadingSentence(of: "Şarkıyı durdur."))
+        XCTAssertNil(VoiceRouter.leadingSentence(of: "Tamam. Şarkıyı durdur."))
+        XCTAssertEqual(SystemCommandParser.parse(VoiceRouter.leadingSentence(of: "Ekranı kilitle. Sonra konuşuruz seninle.") ?? ""), .lockScreen)
     }
 
     func testBriefingSaysWhenCalendarIsUnreadable() {
@@ -294,11 +294,10 @@ final class AppSwitchParserTests: XCTestCase {
     }
 
     func testSwitchChains() {
-        let plan = MultiCommandStep.plan("Safari'ye geç ve videoyu başlat", ringing: false, active: false,
-                                         installedApps: apps, shortcuts: { [] })
+        let context = CommandRegistry.Context(installedApps: apps)
+        let plan = CommandRegistry.plan("Safari'ye geç ve videoyu başlat", context: context)
         XCTAssertEqual(plan?.map(\.command), [.system(.switchToApp("Safari")), .system(.video(.play))])
-        let music = MultiCommandStep.plan("Safari'ye geç ve müziği başlat", ringing: false, active: false,
-                                          installedApps: apps, shortcuts: { [] })
+        let music = CommandRegistry.plan("Safari'ye geç ve müziği başlat", context: context)
         XCTAssertEqual(music?.first?.command, .system(.switchToApp("Safari")))
         XCTAssertEqual(music?.count, 2)
         if case .spotify = music?.last?.command {} else { XCTFail("müziği başlat → Spotify: \(String(describing: music))") }

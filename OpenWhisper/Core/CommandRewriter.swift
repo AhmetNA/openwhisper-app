@@ -63,16 +63,35 @@ enum CommandRewriter {
         """
     }
 
+    /// The rewrite read by `CommandRegistry` as a system or Spotify command (never a timer, an
+    /// agent message or a shortcut), unless it is one that shouldn't come from a guess.
+    static func safeCommand(_ rewritten: String, context: CommandRegistry.Context) -> VoiceCommand? {
+        var context = context
+        context.shortcuts = { [] }
+        switch CommandRegistry.match(rewritten, in: CommandRegistry.systemDomains.union([.spotify]), context: context) {
+        case .system(let command)?:
+            return isSafe(command) ? .system(command) : nil
+        case .spotify(let request)?:
+            return .spotify(request)
+        default:
+            return nil
+        }
+    }
+
     /// The rewrite as a system command, unless it is one that shouldn't come from a guess
     /// (quitting apps, sleeping, locking, marking mail read, mail replies, calendar entries, shortcuts).
     static func safeSystemCommand(_ rewritten: String, installedApps: [String]) -> SystemCommand? {
         guard let command = SystemCommandParser.parse(rewritten, installedApps: installedApps, shortcuts: []) else { return nil }
+        return isSafe(command) ? command : nil
+    }
+
+    private static func isSafe(_ command: SystemCommand) -> Bool {
         switch command {
         case .quitApp, .forceQuitApp, .sleep, .displaySleep, .lockScreen, .screenSaver, .mailMarkAllRead,
              .developerMode, .runShortcut, .calendarEvent, .headset, .mailReplyDraft:
-            return nil
+            return false
         default:
-            return command
+            return true
         }
     }
 }
