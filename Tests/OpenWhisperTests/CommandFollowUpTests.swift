@@ -50,6 +50,14 @@ final class CommandFollowUpTests: XCTestCase {
         }
     }
 
+    func testJarvissOwnReplyIsDroppedFromTheStart() {
+        XCTAssertEqual(CommandFollowUp.removingEcho(of: "Tamamdır.", from: "Tamamdır. Sonrakine geç."), "Sonrakine geç.")
+        XCTAssertEqual(CommandFollowUp.removingEcho(of: "Tamamdır.", from: "Tamam, sonrakine geç"), "sonrakine geç")
+        XCTAssertEqual(CommandFollowUp.removingEcho(of: "Oldu.", from: "Oldu"), "")
+        XCTAssertEqual(CommandFollowUp.removingEcho(of: "Oldu.", from: "sonrakine geç"), "sonrakine geç")
+        XCTAssertEqual(CommandFollowUp.removingEcho(of: nil, from: "Tamam geç"), "Tamam geç")
+    }
+
     func testDomainOfARunCommand() {
         XCTAssertEqual(CommandFollowUp.domain(of: .spotify("Tarkan çal")), .music)
         XCTAssertEqual(CommandFollowUp.domain(of: .system(.video(.play))), .video)

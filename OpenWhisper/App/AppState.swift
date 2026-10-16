@@ -415,6 +415,10 @@ final class AppState {
     nonisolated static let minimumRejectedWakeOpen: TimeInterval = 1
     /// Longest a command follow-up recording may run once something was heard.
     nonisolated static let commandFollowUpMaxDuration: TimeInterval = 6
+    /// The next command follow-up opens as Jarvis starts his reply, not after it.
+    @ObservationIgnored var commandFollowUpOverReply = false
+    /// That follow-up is recording while the reply plays: its window starts when the reply ends.
+    @ObservationIgnored var commandFollowUpAwaitingReplyEnd = false
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

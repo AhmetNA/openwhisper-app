@@ -51,12 +51,16 @@ extension AppState {
 
     /// Speaks Jarvis's reply and waits for it, so music paused for the command resumes only
     /// after he is done. Silent when the setting is off or a new recording already started.
+    /// `onStart` runs as the voice starts playing (a command opens its follow-up window there).
     @discardableResult
-    func speakReply(_ reply: String?) async -> Bool {
+    func speakReply(_ reply: String?, onStart: () -> Void = {}) async -> Bool {
         guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
         owLog("[Voice] Reply: '\(reply)'")
         lastSpokenReply = reply
-        let heard = await JarvisVoice.shared.speak(reply) { [weak self] in self?.jarvisActivity = .speaking }
+        let heard = await JarvisVoice.shared.speak(reply) { [weak self] in
+            self?.jarvisActivity = .speaking
+            onStart()
+        }
         jarvisActivity = .none
         return heard
     }
@@ -124,6 +128,7 @@ extension AppState {
         if !heard { showFlowBarMessage(reply, durationMs: 6000) }
         owLog("[FollowUp] Reply asks back (\(chain)/\(Self.maxReplyFollowUps)); opening the mic")
         pendingCommandFollowUp = nil
+        commandFollowUpOverReply = false
         startVoiceSession(trigger: .followUp)
         return true
     }
@@ -132,19 +137,32 @@ extension AppState {
     /// user can fix it ("müzik başlat" → "sonrakine geç"). Only a command is taken from that
     /// recording; `domain` tells a bare "sonrakine geç" what to skip. Media is left playing:
     /// the user is judging what the command started.
-    func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession) {
+    /// `overReply`: Jarvis's reply is starting now; the window opens with it and runs until 2 s
+    /// after it (`commandFollowUpReplyEnded`). Returns true when the mic opened.
+    @discardableResult
+    func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession,
+                            overReply: Bool = false) -> Bool {
         guard session.isVoiceCommand, !session.isCancelled, recordingState != .recording,
-              hotkey?.isIdle == true, microphoneGranted else { return }
+              hotkey?.isIdle == true, microphoneGranted else { return false }
+        // Opening the buds' mic puts them in call mode, which would break the reply playing in
+        // them: there the window opens after the reply (the caller's fallback).
+        if overReply, Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .followUp)) {
+            owLog("[FollowUp] Bluetooth input; opening the mic after the reply instead")
+            return false
+        }
         let chain = session.followsCommand ? commandFollowUpChain + 1 : 1
         guard chain <= Self.maxCommandFollowUps else {
             owLog("[FollowUp] \(Self.maxCommandFollowUps) command follow-ups in a row; not listening again")
-            return
+            return false
         }
         commandFollowUpChain = chain
         // The user who just gave the command is the one fixing it.
         pendingWakeSpeakerVerified = session.wakeSpeakerVerified
         pendingCommandFollowUp = .some(domain)
-        owLog("[FollowUp] Command done (\(domain?.rawValue ?? "no domain"), \(chain)/\(Self.maxCommandFollowUps)); opening the mic")
+        commandFollowUpOverReply = overReply
+        owLog("[FollowUp] Command done (\(domain?.rawValue ?? "no domain"), \(chain)/\(Self.maxCommandFollowUps)); opening the mic\(overReply ? " as the reply starts" : "")")
+        // The recording starts a moment later (`startRecording` consumes both flags).
         startVoiceSession(trigger: .followUp)
+        return hotkey?.isIdle == false
     }
 }

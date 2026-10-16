@@ -14,8 +14,10 @@ extension AppState {
         // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
         // first so it runs last, once the media and recording state below are settled.
         var commandFollowUp: CommandFollowUp.Domain?? = nil
+        // Opened already as Jarvis's reply started (`speakAfterCommand`).
+        var followUpOpenedOverReply = false
         defer {
-            if let commandFollowUp { listenAfterCommand(domain: commandFollowUp, after: session) }
+            if let commandFollowUp, !followUpOpenedOverReply { listenAfterCommand(domain: commandFollowUp, after: session) }
         }
         // Media paused when a voice session started plays again only after its command
         // (or dictation) is done, on every exit path below. A recording started meanwhile
@@ -27,7 +29,10 @@ extension AppState {
         // Same for a chat answer that asks something back (see `listenForReplyAnswer`).
         var holdMediaForReplyAnswer = false
         defer {
-            if session.isVoiceCommand && recordingState != .recording && !holdMediaForFollowUp && !holdMediaForReplyAnswer {
+            // The follow-up opened over the reply leaves media alone; this session still owns it.
+            let recordingIsOwnFollowUp = followUpOpenedOverReply && activeTranscriptionSession?.followsCommand == true
+            if session.isVoiceCommand && (recordingState != .recording || recordingIsOwnFollowUp)
+                && !holdMediaForFollowUp && !holdMediaForReplyAnswer {
                 recordingMedia.end(resuming: resumeMediaAfterCommand)
             }
         }
@@ -155,7 +160,10 @@ extension AppState {
             // still recognized; the list is the user's ses-benzerleri.txt.
             // Wake sessions now start at the wake itself, so the tail of "Jarvis" can be heard.
             let joined = AudioSegmentation.joinTranscripts(session.segmentTexts)
-            let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined) : joined
+            // A follow-up opened over Jarvis's reply heard the reply first.
+            let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined)
+                : session.precedingReply != nil ? CommandFollowUp.removingEcho(of: session.precedingReply, from: joined)
+                : joined
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
             let (text, soundAlikes) = SoundAlikeCorrector.correct(spoken, entries: SoundAlikeCorrector.loadEntries())
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
@@ -522,11 +530,21 @@ extension AppState {
                 if !summary.isEmpty {
                     self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : lone ? 2500 : 3500)
                 }
-                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.combined(replies)) }
                 // The Mac stops listening after sleep / lock; developer mode is a whole setup.
                 if !ran.isEmpty, !ran.contains(where: { $0.endsSession || $0 == .system(.developerMode) }) {
                     commandFollowUp = .some(ran.reversed().lazy.compactMap(CommandFollowUp.domain(of:)).first)
                 }
+                if session.isVoiceCommand { await speakAfterCommand(self.jarvisReply.combined(replies)) }
+            }
+
+            /// Says a command's reply; the follow-up window (`commandFollowUp`) opens as the
+            /// voice starts and lasts until 2 s after it. Without a voice the defer opens it.
+            @MainActor func speakAfterCommand(_ reply: String?) async {
+                await self.speakReply(reply) {
+                    guard let commandFollowUp, !followUpOpenedOverReply else { return }
+                    followUpOpenedOverReply = self.listenAfterCommand(domain: commandFollowUp, after: session, overReply: true)
+                }
+                if followUpOpenedOverReply { self.commandFollowUpReplyEnded() }
             }
 
             /// Answers with the chat model and, when the answer asks something back, listens.
@@ -944,7 +962,7 @@ extension AppState {
                 self.lastTranscription = text
                 // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
                 if session.isVoiceCommand {
-                    await self.speakReply(self.jarvisReply.spotify(handled: true))
+                    await speakAfterCommand(self.jarvisReply.spotify(handled: true))
                 }
                 if !misheard.isEmpty {
                     owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")

@@ -22,6 +22,28 @@ enum CommandFollowUp {
 
     private enum Action { case next, previous, pause, resume }
 
+    /// The window opens while Jarvis is still answering, so the recording starts with his own
+    /// reply ("Tamamdır. Sonrakine geç."). Drops those leading words; Whisper may cut them
+    /// short ("Tamam"), so a shared start of four letters is enough.
+    static func removingEcho(of reply: String?, from transcript: String) -> String {
+        guard let reply else { return transcript }
+        let replyWords = words(reply)
+        var tokens = transcript.split(whereSeparator: \.isWhitespace).map(String.init)
+        var dropped = 0
+        while dropped < replyWords.count + 1, let first = tokens.first, let word = words(first).first,
+              replyWords.contains(where: { $0 == word || ($0.count >= 4 && word.count >= 4 && $0.prefix(4) == word.prefix(4)) }) {
+            tokens.removeFirst()
+            dropped += 1
+        }
+        return tokens.joined(separator: " ")
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased(with: Locale(identifier: "tr_TR"))
+            .components(separatedBy: CharacterSet.letters.inverted)
+            .filter { !$0.isEmpty }
+    }
+
     /// A long sentence is something else ("sonra Ahmet'e geçen haftayı anlatırım"), not a fix.
     private static let maxWords = 5
 

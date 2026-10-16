@@ -13,8 +13,9 @@ extension AppState {
         let tStart = CACurrentMediaTime()
         let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
         owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
-        // A new command cuts Jarvis off, and his voice must not end up in the recording.
-        JarvisVoice.shared.stop()
+        // A new command cuts Jarvis off, and his voice must not end up in the recording. Not a
+        // command follow-up opened over his reply: it listens while he finishes.
+        if !(hotkey?.trigger == .followUp && commandFollowUpOverReply) { JarvisVoice.shared.stop() }
 
         if targetSpeakerEnrollmentActive {
             if targetSpeakerEnrollmentIsRecording {
@@ -36,6 +37,9 @@ extension AppState {
         let recordingTrigger = hotkey?.trigger ?? .fnHold
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
+        let overReply = commandFollowUp != nil && commandFollowUpOverReply
+        commandFollowUpOverReply = false
+        commandFollowUpAwaitingReplyEnd = overReply
 
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
@@ -49,7 +53,9 @@ extension AppState {
         // A reply follow-up behaves like "Hey Jarvis" once the user speaks (full command,
         // Smart Turn endpoint); only its no-speech window is short.
         let wakeLikeSession = [.wakeWord, .jarvisKey, .followUp].contains(recordingTrigger)
-        let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession
+        // Smart Turn would take Jarvis's reply for the user's speech, and its clock can't be
+        // moved past the reply: a follow-up over the reply uses the level detector alone.
+        let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession && !overReply
         let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
         let isReplyFollowUp = armVoiceAutoStop && recordingTrigger == .followUp
         var smartTurnConfig = SmartTurnEndpointDetector.Config()
@@ -88,6 +94,12 @@ extension AppState {
                 endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
                 smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
             }
+            if overReply {
+                // Jarvis is still speaking: nothing counts until `commandFollowUpReplyEnded`
+                // starts the window. These only bound a reply that never reports its end.
+                endpointFallbackConfig.noSpeechTimeout = 60
+                endpointFallbackConfig.maxDuration = 90
+            }
             owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
                          commandFollowUp != nil ? "a fix to the command" : "an answer", window))
         }
@@ -95,7 +107,8 @@ extension AppState {
             ? VoiceEndpointDetector(
                 startTime: sessionStart,
                 config: endpointFallbackConfig,
-                ignoreUntil: ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
+                ignoreUntil: overReply ? sessionStart + 60
+                    : ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
             )
             : nil
         smartTurnEndpointDetector = useSmartTurnEndpoint
@@ -228,6 +241,7 @@ extension AppState {
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp
+            if overReply { session.precedingReply = lastSpokenReply }
         }
         session.echoCancelled = echoCancellation
         session.playbackHeard = playbackHeard
@@ -944,7 +958,8 @@ extension AppState {
         // Heard in the buds: speak now, without looking at the bar.
         WakeChime.play()
         let now = CACurrentMediaTime()
-        if let detector = voiceEndpointDetector {
+        // Over Jarvis's reply the window starts when he is done, not when the mic is live.
+        if !commandFollowUpAwaitingReplyEnd, let detector = voiceEndpointDetector {
             voiceEndpointDetector = VoiceEndpointDetector(
                 startTime: now,
                 config: detector.config,
@@ -953,5 +968,23 @@ extension AppState {
         }
         smartTurnEndpointDetector?.restartClock(at: now)
         lastOwnVoiceCheck = now
+    }
+
+    /// Jarvis finished the reply a command follow-up opened over: the window for a fix
+    /// ("sonrakine geç") starts now. Speech that began during the reply and runs on is kept.
+    func commandFollowUpReplyEnded() {
+        // A recording not started yet opens as an ordinary window, counted from its start.
+        commandFollowUpOverReply = false
+        guard commandFollowUpAwaitingReplyEnd else { return }
+        commandFollowUpAwaitingReplyEnd = false
+        guard recordingState == .recording, activeTranscriptionSession?.followsCommand == true,
+              let detector = voiceEndpointDetector else { return }
+        let now = CACurrentMediaTime()
+        var config = detector.config
+        config.noSpeechTimeout = Self.commandFollowUpWindow
+        config.maxDuration = Self.commandFollowUpMaxDuration
+        voiceEndpointDetector = VoiceEndpointDetector(
+            startTime: now, config: config, ignoreUntil: now + Self.replyFollowUpEchoGuard)
+        owLog(String(format: "[FollowUp] Reply finished; listening %.1f s more for a fix", Self.commandFollowUpWindow))
     }
 }

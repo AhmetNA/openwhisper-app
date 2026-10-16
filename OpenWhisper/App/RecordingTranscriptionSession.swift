@@ -41,6 +41,8 @@ final class RecordingTranscriptionSession {
     /// "sonrakine geç" is read against this domain (`CommandFollowUp`).
     var followsCommand = false
     var commandFollowUpDomain: CommandFollowUp.Domain?
+    /// Jarvis's reply that was playing when this follow-up opened; its echo is cut from the text.
+    var precedingReply: String?
     var acceptsCommands: Bool {
         isVoiceCommand || [.fnHold, .fnSpace, .keyboardShortcut].contains(trigger)
     }
