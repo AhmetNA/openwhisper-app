@@ -1,7 +1,7 @@
 import AppKit
 
-/// The tiny tick played when "Hey Jarvis" starts a session: one soft E6 sine blip, about
-/// 60 ms, kept quiet so it only confirms the wake word. Synthesized once in memory, so there
+/// The tiny tick played when "Hey Jarvis" starts a session, and when Bluetooth buds' mic goes
+/// live after a key press: one soft E6 sine blip, about 60 ms, kept quiet so it only confirms. Synthesized once in memory, so there
 /// is no audio file to bundle.
 enum WakeChime {
     private static let sound: NSSound? = {

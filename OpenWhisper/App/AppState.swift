@@ -4404,11 +4404,13 @@ final class AppState {
         return true
     }
 
-    /// The Bluetooth mic is live: from here on the user can speak, so the auto-stop timeouts
+    /// The Bluetooth mic is live: from here on the user can speak (a tick says so), so the auto-stop timeouts
     /// (no-speech window, max duration) start now instead of at the key press.
     private func markRecordingInputReady(sessionID: UInt64) {
         guard !recordingInputReady, nextTranscriptionID == sessionID, recordingState == .recording else { return }
         recordingInputReady = true
+        // Heard in the buds: speak now, without looking at the bar.
+        WakeChime.play()
         let now = CACurrentMediaTime()
         if let detector = voiceEndpointDetector {
             voiceEndpointDetector = VoiceEndpointDetector(
