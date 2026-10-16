@@ -22,6 +22,8 @@ enum VoiceRouter {
         var targetBundleID: String?
         /// A reminder deletion waits for "evet" / "hayır".
         var pendingDeletion = false
+        /// Test mode reads TODO items aloud; "geçti" / "kaldı" / "atla" answer it.
+        var voiceTestActive = false
         /// Built only when a command rule is reached: it lists the installed apps.
         var commandContext: @MainActor () -> CommandRegistry.Context = { CommandRegistry.Context() }
     }
@@ -38,6 +40,8 @@ enum VoiceRouter {
         case greeting(JarvisReply.Greeting)
         case meta(JarvisReply.Meta)
         case memory(UserMemoryCommand)
+        /// "Test modunu başlat", then "geçti" / "kaldı …" / "atla" / "tekrar oku" / "bitir".
+        case voiceTest(VoiceTestCommand)
         /// "Dün ne konuşmuştuk?": answered from that day's journal lines.
         case pastConversation(TimeQuery)
         /// The answer to a pending reminder deletion. The app may find it is not one (a new
@@ -91,6 +95,7 @@ enum VoiceRouter {
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }
             // In a text field a greeting stays dictation ("Selam nasılsın?" typed into WhatsApp).
             if facts.focus != .editable, let greeting = JarvisReply.greeting(in: trimmed) { return .greeting(greeting) }
+            if let test = VoiceTestCommand.parse(trimmed, active: facts.voiceTestActive) { return .voiceTest(test) }
             if let meta = JarvisReply.meta(in: trimmed) { return .meta(meta) }
             if let memory = UserMemoryCommand.parse(trimmed) { return .memory(memory) }
             if let query = TimeQuery.parse(trimmed) { return .pastConversation(query) }

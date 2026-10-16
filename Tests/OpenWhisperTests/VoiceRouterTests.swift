@@ -35,6 +35,23 @@ final class VoiceRouterTests: XCTestCase {
         }
     }
 
+    func testTestModeAnswersOnlyWhileOn() {
+        guard case .voiceTest(.start) = VoiceRouter.route("Test modunu başlat", facts: facts()) else {
+            return XCTFail("test mode starts by voice")
+        }
+        var on = facts()
+        on.voiceTestActive = true
+        guard case .voiceTest(.passed) = VoiceRouter.route("Geçti", facts: on) else {
+            return XCTFail("while testing, \"geçti\" is the answer")
+        }
+        if case .voiceTest = VoiceRouter.route("Geçti", facts: facts()) {
+            XCTFail("outside test mode \"geçti\" is ordinary talk")
+        }
+        guard case .command = VoiceRouter.route("Wi-Fi'yi kapat", facts: on) else {
+            return XCTFail("commands still run while testing")
+        }
+    }
+
     func testSendWithNoAppInFront() {
         guard case .agentWithoutForeground = VoiceRouter.route("bunu düzelt gönder", facts: facts(hasTargetApp: false)) else {
             return XCTFail("a Jarvis send with nothing in front is refused")

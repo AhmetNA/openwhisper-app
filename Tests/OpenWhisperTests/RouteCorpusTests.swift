@@ -55,6 +55,7 @@ final class RouteCorpusTests: XCTestCase {
         case .greeting(let greeting): return "greeting:\(greeting) (unless a text field has focus)"
         case .meta(let meta): return "meta:\(meta)"
         case .memory(let memory): return "memory:\(memory)"
+        case .voiceTest(let command): return "voice-test:\(command)"
         case .pastConversation(let query): return "memory-time:\(query.label)"
         case .deletionConfirmation: return "deletion-confirmation"
         case .commands(let steps): return "multi:" + steps.map { describe($0.command) }.joined(separator: " + ")

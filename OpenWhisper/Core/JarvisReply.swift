@@ -213,6 +213,28 @@ struct JarvisReply {
         }
     }
 
+    /// Test mode: what happened to the answered item, then the next one to try.
+    func voiceTest(_ command: VoiceTestCommand, outcome: VoiceTestOutcome) -> String {
+        let done: String
+        switch command {
+        case .passed: done = "Geçti, listeden sildim. "
+        case .failed: done = "Kaldı olarak yazdım. "
+        case .skip: done = "Atladım. "
+        case .start, .repeatItem, .stop: done = ""
+        }
+        switch outcome {
+        case .next(let item, let remaining):
+            let intro = command == .start ? "Test modu açık, \(remaining) madde var. " : done
+            let ask = command == .start ? " Deneyince geçti ya da kaldı deyin." : " Geçti mi, kaldı mı?"
+            let spoken = item.spoken.hasSuffix(".") || item.spoken.hasSuffix("?") ? item.spoken : item.spoken + "."
+            return "\(intro)\(item.section): \(spoken)\(ask)"
+        case .finished: return done + "Denenmemiş madde kalmadı, test modunu kapattım."
+        case .todoMissing: return "TODO dosyasını bulamadım, bir şey yazmadım."
+        case .itemChanged: return "Bu madde bu arada dosyada değişmiş, dokunmadım. Sıradaki için atla deyin."
+        case .stopped: return "Test modunu kapattım."
+        }
+    }
+
     /// "Geçen hafta ne demiştim?" with nothing in the journal for that time.
     mutating func nothingRecalled(_ label: String) -> String {
         let when = label.prefix(1).uppercased(with: Locale(identifier: "tr_TR")) + label.dropFirst()

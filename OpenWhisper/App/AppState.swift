@@ -109,6 +109,8 @@ final class AppState {
     var setFitStatus = "Kapalı"
 
     @ObservationIgnored var jarvisReply = JarvisReply()
+    /// "Test modunu başlat": the TODO.md item being tried now.
+    @ObservationIgnored let voiceTest = VoiceTestSession()
     /// The last thing Jarvis said, for "ne dedin?".
     @ObservationIgnored var lastSpokenReply: String?
     enum JarvisActivity: Sendable, Equatable {

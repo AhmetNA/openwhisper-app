@@ -600,6 +600,7 @@ extension AppState {
                 hasTargetApp: session.targetApp != nil,
                 targetBundleID: session.targetApp?.bundleIdentifier,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
+                voiceTestActive: self.voiceTest.isActive,
                 commandContext: commandContext)
             var route = VoiceRouter.route(text, facts: facts)
 
@@ -760,6 +761,25 @@ extension AppState {
                 let reply = self.jarvisReply.memory(memoryCommand, facts: memory.facts.map(\.text), removed: removed)
                 JarvisJournal.shared.append(user: trimmed, reply: reply)
                 await say(reply, durationMs: 5000)
+
+            // Test mode: the next untested TODO.md item is read aloud; the answer is written back.
+            case .voiceTest(let command):
+                session.latency.finishDecision(route: "test modu")
+                owLog("[Route] voice test (\(command))")
+                self.lastTranscription = text
+                let outcome: VoiceTestOutcome
+                switch command {
+                case .start: outcome = self.voiceTest.start()
+                case .passed: outcome = self.voiceTest.pass()
+                case .failed(let note): outcome = self.voiceTest.fail(note: note)
+                case .skip: outcome = self.voiceTest.skip()
+                case .repeatItem:
+                    outcome = self.voiceTest.current.map { .next($0, remaining: 0) } ?? self.voiceTest.start()
+                case .stop: outcome = self.voiceTest.stop()
+                }
+                let reply = self.jarvisReply.voiceTest(command, outcome: outcome)
+                if case .next = outcome { self.showFlowBarMessage(reply, durationMs: 12000) }
+                await say(reply, durationMs: 8000)
 
             // "Geçen hafta ne demiştim?", "dün ne konuşmuştuk?": only now is the journal read,
             // and only that time's lines go to the model.
