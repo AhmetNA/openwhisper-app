@@ -99,23 +99,10 @@ enum ReplyTranslator {
     /// The English translation from the local model, or nil when Ollama is off, slow (> 8 s:
     /// a model that isn't loaded yet) or answers with something that isn't a translation.
     /// Honours task cancellation.
-    static func translate(_ text: String, model: String) async -> String? {
-        var request = URLRequest(url: URL(string: "http://localhost:11434/api/chat")!, timeoutInterval: 8)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": model,
-            "messages": [["role": "system", "content": prompt], ["role": "user", "content": text]],
-            "stream": false,
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "options": ["temperature": 0, "num_predict": 120],
-        ] as [String: Any])
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = (json["message"] as? [String: Any])?["content"] as? String
-        else { return nil }
+    static func translate(_ text: String, model: String, client: any LLMClient = LLM.default) async -> String? {
+        let request = LLMChatRequest(model: model, messages: [["role": "system", "content": prompt], ["role": "user", "content": text]],
+                                     timeout: 8, temperature: 0, maxTokens: 120)
+        guard let content = try? await client.chat(request) else { return nil }
         return cleaned(content, source: text)
     }
 

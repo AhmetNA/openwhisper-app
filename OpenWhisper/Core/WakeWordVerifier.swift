@@ -198,7 +198,6 @@ enum WakeWordVerifier {
 
     /// true = someone is calling the assistant, false = song/video/talk about it, nil = no answer.
     private static func askLLM(transcript: String, mediaPlaying: Bool, model: String) async -> Bool? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
         let prompt = """
             A voice assistant named Jarvis runs on a Mac and listens to the microphone. It heard a word \
             like "Jarvis" and transcribed the 3 seconds around it (Turkish speech-to-text, so Jarvis may \
@@ -213,25 +212,8 @@ enum WakeWordVerifier {
             Transcript: "\(transcript)"
             Answer with one word, YES or NO:
             """
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 4
-        let body: [String: Any] = [
-            "model": model,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "options": ["temperature": 0.0, "num_predict": 3]
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        request.httpBody = data
-        guard let (reply, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: reply) as? [String: Any],
-              let answer = (json["response"] as? String)?.uppercased()
-        else { return nil }
+        let request = LLMRequest(model: model, prompt: prompt, timeout: 4, temperature: 0.0, maxTokens: 3)
+        guard let answer = (try? await LLM.default.generate(request))?.uppercased() else { return nil }
         if answer.contains("YES") || answer.contains("EVET") { return true }
         if answer.contains("NO") || answer.contains("HAYIR") { return false }
         return nil

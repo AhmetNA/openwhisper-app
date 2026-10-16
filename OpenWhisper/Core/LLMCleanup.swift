@@ -1,8 +1,8 @@
 import Foundation
 
 final class LLMCleanup: Sendable {
-    private let baseURL = "http://localhost:11434"
     let model: String
+    private let client: any LLMClient
 
     /// Default model for cleanup, Spotify and reminders. Chosen after a side-by-side run
     /// (Tools/CleanupEval, Tools/SpotifyEval, 25 Sep 2026) on TR/EN code-switched dictation:
@@ -12,8 +12,9 @@ final class LLMCleanup: Sendable {
     /// 3s Spotify timeout. (llama3.2:3b, earlier, translated English phrases.)
     static let defaultModel = "gemma4:e4b-it-qat"
 
-    init(model: String = LLMCleanup.defaultModel) {
+    init(model: String = LLMCleanup.defaultModel, client: any LLMClient = LLM.default) {
         self.model = model
+        self.client = client
     }
 
     /// Cleanup models offered in Settings, fastest first. Each must be `ollama pull`-ed
@@ -401,73 +402,34 @@ final class LLMCleanup: Sendable {
     }
 
     /// Check if Ollama is running and responsive
-    static func checkAvailability() async -> Bool {
-        guard let url = URL(string: "http://localhost:11434/api/tags") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            return false
-        }
+    static func checkAvailability(client: any LLMClient = LLM.default) async -> Bool {
+        (try? await client.installedModels(timeout: 2)) != nil
     }
 
     /// Whether `model` shows up in Ollama's installed-model list. A tag without an explicit
     /// `:variant` matches its `:latest` entry.
-    static func isModelInstalled(_ model: String) async -> Bool {
-        guard let url = URL(string: "http://localhost:11434/api/tags") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 2
-
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let models = json["models"] as? [[String: Any]]
-        else { return false }
-
+    static func isModelInstalled(_ model: String, client: any LLMClient = LLM.default) async -> Bool {
+        guard let models = try? await client.installedModels(timeout: 2) else { return false }
         let wanted = model.contains(":") ? model : "\(model):latest"
-        return models.contains { ($0["name"] as? String) == wanted }
+        return models.contains(wanted)
     }
 
-    /// Loads `model` into memory ahead of the first dictation (an empty prompt makes Ollama
-    /// load the model without generating), so push-to-talk doesn't pay the cold load.
+    /// Loads `model` into memory ahead of the first dictation, so push-to-talk doesn't pay
+    /// the cold load.
     static func warmUp(model: String) async {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
-
-        let body: [String: Any] = ["model": model, "prompt": "", "keep_alive": keepAlive]
-        guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return }
-        request.httpBody = requestData
-        _ = try? await URLSession.shared.data(for: request)
+        try? await LLM.default.load(model: model, timeout: 120)
     }
 
     /// Drops `model` from memory right away (keep_alive 0) instead of after `keepAlive`, so a
     /// model switch in Settings doesn't leave two models sharing the 16 GB for half an hour.
     static func unload(model: String) async {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 10
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["model": model, "keep_alive": 0])
-        _ = try? await URLSession.shared.data(for: request)
+        try? await LLM.default.unload(model: model, timeout: 10)
     }
 
     /// Clean up transcribed text using local Ollama LLM. `misheard` are the words
     /// `MisheardWordDetector` found in `text`; only these may be replaced by other words.
     func cleanup(text: String, misheard: [MisheardWordDetector.Word] = []) async -> String {
         let text = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
-        guard let url = URL(string: "\(baseURL)/api/generate") else { return text }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60
 
         // Read glossary + learned corrections once per cleanup call (fresh from disk each
         // time, not cached across calls) and thread them through to both the prompt builder
@@ -475,69 +437,55 @@ final class LLMCleanup: Sendable {
         let glossaryTerms = GlossaryStore.terms()
         let corrections = Self.loadLearnedCorrections()
 
-        let body: [String: Any] = [
-            "model": model,
-            "prompt": "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections, misheard: misheard))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
-            "stream": false,
-            // Qwen 3.5 / Gemma 4 think by default: without this the answer arrives only after a
-            // long hidden reasoning pass (or the num_predict budget runs out inside it).
-            "think": false,
-            "keep_alive": Self.keepAlive,
-            "options": [
-                "temperature": 0.0,
-                // Turkish runs to ~1 token per 2-3 characters; a lower cap cut long dictations
-                // short and the faithfulness check then rejected the whole cleanup.
-                "num_predict": min(max(50, text.count + 30), 800),
-                "stop": ["\n", "\n\n", "</think>", "Transcript:"]
-            ]
-        ]
+        let request = LLMRequest(
+            model: model,
+            prompt: "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections, misheard: misheard))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
+            timeout: 60,
+            temperature: 0.0,
+            // Turkish runs to ~1 token per 2-3 characters; a lower cap cut long dictations
+            // short and the faithfulness check then rejected the whole cleanup.
+            maxTokens: min(max(50, text.count + 30), 800),
+            stop: ["\n", "\n\n", "</think>", "Transcript:"]
+        )
 
         let start = Date()
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let responseText = try await client.generate(request)
             let ms = Int(Date().timeIntervalSince(start) * 1000)
+            owLog("[LLMCleanup] Ollama (\(model), \(ms) ms) answered: \(responseText)")
+            let cleaned = TranscriptSanitizer.removeForbiddenArtifacts(
+                from: responseText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            )
 
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                owLog("[LLMCleanup] Ollama (\(model)) HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1) after \(ms) ms")
-                return text
+            // Sanity check: filter out Chinese characters or empty/huge outputs
+            let hasChinese = cleaned.unicodeScalars.contains { scalar in
+                (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
             }
 
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let responseText = json["response"] as? String {
-                owLog("[LLMCleanup] Ollama (\(model), \(ms) ms) answered: \(responseText)")
-                let cleaned = TranscriptSanitizer.removeForbiddenArtifacts(
-                    from: responseText
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                )
-
-                // Sanity check: filter out Chinese characters or empty/huge outputs
-                let hasChinese = cleaned.unicodeScalars.contains { scalar in
-                    (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
+            if !hasChinese && !cleaned.isEmpty && cleaned.count < text.count * 3 {
+                let misheardWords = Set(misheard.flatMap { Self.normalizedWords(from: $0.text) })
+                let knownCleanedWords: Set<String> = misheard.isEmpty ? [] : await MainActor.run {
+                    Set(Self.normalizedWords(from: cleaned).filter(MisheardWordDetector.isKnown))
                 }
-
-                if !hasChinese && !cleaned.isEmpty && cleaned.count < text.count * 3 {
-                    let misheardWords = Set(misheard.flatMap { Self.normalizedWords(from: $0.text) })
-                    let knownCleanedWords: Set<String> = misheard.isEmpty ? [] : await MainActor.run {
-                        Set(Self.normalizedWords(from: cleaned).filter(MisheardWordDetector.isKnown))
-                    }
-                    guard Self.isFaithfulCleanup(
-                        original: text,
-                        cleaned: cleaned,
-                        glossaryTerms: glossaryTerms,
-                        corrections: corrections,
-                        misheardWords: misheardWords,
-                        isKnownWord: knownCleanedWords.contains
-                    ) else {
-                        owLog("[LLMCleanup] Rejected unrelated cleanup output; using raw transcript")
-                        return text
-                    }
-                    return cleaned
-                } else if hasChinese {
-                    // Log internally if needed: print("[LLMCleanup] Detected Chinese hallucination")
+                guard Self.isFaithfulCleanup(
+                    original: text,
+                    cleaned: cleaned,
+                    glossaryTerms: glossaryTerms,
+                    corrections: corrections,
+                    misheardWords: misheardWords,
+                    isKnownWord: knownCleanedWords.contains
+                ) else {
+                    owLog("[LLMCleanup] Rejected unrelated cleanup output; using raw transcript")
+                    return text
                 }
+                return cleaned
+            } else if hasChinese {
+                // Log internally if needed: print("[LLMCleanup] Detected Chinese hallucination")
             }
+        } catch let LLMError.http(status) {
+            owLog("[LLMCleanup] Ollama (\(model)) HTTP \(status) after \(Int(Date().timeIntervalSince(start) * 1000)) ms")
         } catch {
             owLog("[LLMCleanup] Ollama (\(model)) request failed: \(error.localizedDescription)")
         }

@@ -462,7 +462,6 @@ final class ReminderManager {
 
     /// Ask Ollama to parse task description and target fireDate from voice text
     private func parseWithOllama(text: String) async -> ParsedReminder? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
 
         let now = Date()
         let cal = Calendar.current
@@ -516,39 +515,12 @@ final class ReminderManager {
             Voice command: "\(text)"
             """
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-
-        let body: [String: Any] = [
-            "model": selectedOllamaModel,
-            "prompt": prompt,
-            "stream": false,
-            // qwen3 (and other "thinking" models) emit a <think>...</think> block by default,
-            // which used to eat the whole num_predict budget and leave "response" empty
-            // (done_reason "length") before any JSON was produced. "think": false skips that,
-            // and a JSON schema makes Ollama constrain both the syntax and required fields.
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "format": Self.ollamaResponseSchema,
-            "options": [
-                "temperature": 0.1,
-                "num_predict": 150
-            ]
-        ]
+        // The JSON schema makes Ollama constrain both the syntax and the required fields.
+        let request = LLMRequest(model: selectedOllamaModel, prompt: prompt, timeout: 15,
+                                 temperature: 0.1, maxTokens: 150, schema: Self.ollamaResponseSchema)
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                owLog("[Reminders] Ollama HTTP error: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
-                return nil
-            }
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let responseText = json["response"] as? String else { return nil }
+            let responseText = try await LLM.default.generate(request)
 
             owLog("[Reminders] Ollama response: \(responseText)")
 
@@ -565,6 +537,9 @@ final class ReminderManager {
             }
 
             return ParsedReminder(task: task, fireDate: fireDate)
+        } catch let LLMError.http(status) {
+            owLog("[Reminders] Ollama HTTP error: \(status)")
+            return nil
         } catch {
             owLog("[Reminders] Ollama parse error: \(error)")
             return nil
@@ -815,7 +790,6 @@ final class ReminderManager {
         alternatives: [String] = [],
         names: [String]
     ) async -> DeletionConfirmationDecision? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
         let variants = ([answer] + alternatives).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         let heard = variants.map { "\"\($0)\"" }.joined(separator: " / ")
         let prompt = """
@@ -830,27 +804,18 @@ final class ReminderManager {
             Deleting is irreversible: when in doubt, answer "unclear", never "approve".
             Return ONLY JSON: {"decision": "approve" | "reject" | "unclear"}
             """
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 8
-        let body: [String: Any] = [
-            "model": selectedOllamaModel,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "format": Self.confirmationResponseSchema,
-            "options": ["temperature": 0, "num_predict": 20]
-        ]
+        let request = LLMRequest(model: selectedOllamaModel, prompt: prompt, timeout: 8,
+                                 temperature: 0, maxTokens: 20, schema: Self.confirmationResponseSchema)
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let started = Date()
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let responseText = json["response"] as? String,
-                  let decision = Self.extractJSONObject(from: responseText)?["decision"] else {
+            let responseText: String
+            do {
+                responseText = try await LLM.default.generate(request)
+            } catch is LLMError {
+                owLog("[Reminders] Ollama confirmation check gave no usable answer")
+                return nil
+            }
+            guard let decision = Self.extractJSONObject(from: responseText)?["decision"] else {
                 owLog("[Reminders] Ollama confirmation check gave no usable answer")
                 return nil
             }

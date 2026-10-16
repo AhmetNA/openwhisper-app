@@ -164,27 +164,9 @@ enum JarvisAddressee {
     }
 
     private static func llmScore(text: String, frontApp: String?, lastReply: String?, model: String) async -> Int? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 4
-        let body: [String: Any] = [
-            "model": model,
-            "prompt": prompt(text: text, frontApp: frontApp, lastReply: lastReply),
-            "stream": false,
-            "think": false,
-            "format": ollamaResponseSchema,
-            "keep_alive": LLMCleanup.keepAlive,
-            "options": ["temperature": 0.0, "num_predict": 16],
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        request.httpBody = data
-        guard let (reply, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: reply) as? [String: Any],
-              let answer = json["response"] as? String
-        else { return nil }
+        let request = LLMRequest(model: model, prompt: prompt(text: text, frontApp: frontApp, lastReply: lastReply),
+                                 timeout: 4, temperature: 0.0, maxTokens: 16, schema: ollamaResponseSchema)
+        guard let answer = try? await LLM.default.generate(request) else { return nil }
         return parseScore(answer)
     }
 

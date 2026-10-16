@@ -98,39 +98,8 @@ final class JarvisChat {
     // MARK: - Ollama
 
     private static func stream(messages: [[String: String]], model: String) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    var request = URLRequest(url: URL(string: "http://localhost:11434/api/chat")!, timeoutInterval: 10)
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.httpBody = try JSONSerialization.data(withJSONObject: [
-                        "model": model,
-                        "messages": messages,
-                        "stream": true,
-                        // Gemma 4 / Qwen 3.5 think first by default, which costs seconds here.
-                        "think": false,
-                        "keep_alive": LLMCleanup.keepAlive,
-                        "options": ["temperature": 0.6, "num_predict": 110],
-                    ] as [String: Any])
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                        throw URLError(.badServerResponse)
-                    }
-                    for try await line in bytes.lines {
-                        guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
-                        if let piece = (json["message"] as? [String: Any])?["content"] as? String, !piece.isEmpty {
-                            continuation.yield(piece)
-                        }
-                        if json["done"] as? Bool == true { break }
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        LLM.default.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 10,
+                                              temperature: 0.6, maxTokens: 110))
     }
 
     // MARK: - Text

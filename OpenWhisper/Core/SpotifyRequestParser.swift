@@ -414,41 +414,20 @@ enum SpotifyRequestParser {
 
     /// One structured-output call (Ollama `format` = JSON schema). Returns nil on any
     /// failure — timeout, model missing, malformed output — so callers fall back to rules.
-    static func queryOllama(transcript: String, model: String, timeout: TimeInterval = 3) async -> OllamaParse? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = timeout
-
-        let body: [String: Any] = [
-            "model": model,
-            "prompt": ollamaPrompt(transcript),
-            "stream": false,
-            // qwen3 (and other "thinking" models) otherwise spend the token budget on a
-            // <think> block and leave "response" empty. See ReminderManager.
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "format": ollamaSchema,
-            "options": [
-                "temperature": 0.0,
-                "num_predict": 100
-            ]
-        ]
-        guard let requestData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        request.httpBody = requestData
-
+    static func queryOllama(transcript: String, model: String, timeout: TimeInterval = 3,
+                            client: any LLMClient = LLM.default) async -> OllamaParse? {
+        let request = LLMRequest(model: model, prompt: ollamaPrompt(transcript), timeout: timeout,
+                                 temperature: 0.0, maxTokens: 100, schema: ollamaSchema)
         let start = Date()
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let ms = Int(Date().timeIntervalSince(start) * 1000)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let responseText = envelope["response"] as? String else {
-                owLog("[SpotifyParser] Ollama (\(model)) gave no usable answer in \(ms) ms")
+            let responseText: String
+            do {
+                responseText = try await client.generate(request)
+            } catch is LLMError {
+                owLog("[SpotifyParser] Ollama (\(model)) gave no usable answer in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
                 return nil
             }
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
             owLog("[SpotifyParser] Ollama (\(model), \(ms) ms) answered: \(responseText)")
             return decodeOllamaResponse(responseText)
         } catch {

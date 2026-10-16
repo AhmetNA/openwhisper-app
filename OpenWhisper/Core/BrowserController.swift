@@ -116,7 +116,6 @@ enum BrowserController {
     }
 
     private static func ollamaSummary(title: String, text: String) async -> String? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
         let prompt = """
             Aşağıda bir web sayfasının metni var. Sayfanın ne anlattığını Türkçe, en fazla 3 kısa \
             cümleyle özetle. Sadece özeti yaz; giriş cümlesi, başlık, madde işareti kullanma.
@@ -125,33 +124,18 @@ enum BrowserController {
             Sayfa metni:
             \(text)
             """
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 45
-        let body: [String: Any] = [
-            "model": UserDefaults.standard.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel,
-            "prompt": prompt,
-            "stream": false,
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "options": ["temperature": 0.2, "num_predict": 220],
-        ]
+        let request = LLMRequest(model: LLM.selectedModel, prompt: prompt, timeout: 45, temperature: 0.2, maxTokens: 220)
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
             let started = Date()
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let reply = json["response"] as? String else {
-                owLog("[Browser] Ollama summary HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1)")
-                return nil
-            }
+            let reply = try await LLM.default.generate(request)
             let summary = reply
                 .replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             owLog("[Browser] Summary in \(Int(Date().timeIntervalSince(started) * 1000)) ms: \(summary)")
             return summary.isEmpty ? nil : summary
+        } catch let LLMError.http(status) {
+            owLog("[Browser] Ollama summary HTTP \(status)")
+            return nil
         } catch {
             owLog("[Browser] Ollama summary failed: \(error)")
             return nil

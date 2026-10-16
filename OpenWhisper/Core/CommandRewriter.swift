@@ -18,25 +18,11 @@ enum CommandRewriter {
 
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,
     /// is unreachable or slow.
-    static func rewrite(_ text: String, model: String, timeout: TimeInterval = 4) async -> String? {
-        guard let url = URL(string: "http://localhost:11434/api/generate") else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: timeout)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "model": model,
-            "prompt": prompt(for: text),
-            "stream": false,
-            "think": false,
-            "keep_alive": LLMCleanup.keepAlive,
-            "options": ["temperature": 0.0, "num_predict": 40, "stop": ["\n"]],
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return nil }
-        request.httpBody = data
-        guard let (reply, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: reply) as? [String: Any],
-              let answer = json["response"] as? String else { return nil }
+    static func rewrite(_ text: String, model: String, timeout: TimeInterval = 4,
+                        client: any LLMClient = LLM.default) async -> String? {
+        let request = LLMRequest(model: model, prompt: prompt(for: text), timeout: timeout,
+                                 temperature: 0.0, maxTokens: 40, stop: ["\n"])
+        guard let answer = try? await client.generate(request) else { return nil }
         let line = answer.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'`")))
         guard !line.isEmpty, line.uppercased() != "YOK", line.count < 120 else { return nil }
         return line
