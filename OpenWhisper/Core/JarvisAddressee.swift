@@ -1,5 +1,14 @@
 import Foundation
 
+/// What Accessibility could prove about the keyboard focus when recording began. `unknown`
+/// deliberately differs from `notEditable`: a missing permission or failed cross-process AX
+/// request must not make Jarvis assume the user intentionally focused a non-text control.
+enum TextFocusStatus: String, Sendable, Equatable {
+    case editable
+    case notEditable
+    case unknown
+}
+
 /// Decides, for a "Jarvis" session that is no command, whether the user is talking to Jarvis
 /// (he answers out loud) or dictating / talking to someone else (the text is typed). Typing is
 /// the safe side: only a clearly addressed question or request reaches the chat.
@@ -10,22 +19,6 @@ enum JarvisAddressee {
         case type
         case chat
     }
-
-    /// Plain JSON mode can still return a differently named field or a string. This schema
-    /// matches `parseScore`'s preferred representation and keeps the value in the decision's
-    /// documented 0...100 range.
-    static let ollamaResponseSchema: [String: Any] = [
-        "type": "object",
-        "properties": [
-            "score": [
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100
-            ]
-        ],
-        "required": ["score"],
-        "additionalProperties": false
-    ]
 
     /// Chat only at or above this score (0–100). `defaults write com.openwhisper.app jarvisChatMinScore 60`
     static var minScore: Int {
@@ -138,73 +131,5 @@ enum JarvisAddressee {
         }
         let body = before.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;:-\"'“”‘’«»`")))
         return body.isEmpty ? nil : body
-    }
-
-    // MARK: - LLM score
-
-    /// 0–100: how likely the user is talking to Jarvis. nil when the model is unreachable,
-    /// slow or answers nonsense, which the caller treats as "type it".
-    static func score(text: String, frontApp: String?, lastReply: String?, model: String) async -> Int? {
-        // SetFit reads the sentence alone (no front app or last reply), so only a confident
-        // answer skips the LLM; its probability of "jarvis" becomes the same 0–100 score. In a
-        // messaging app the app itself is the strongest signal, so the LLM (which sees it) decides.
-        let messaging = ["whatsapp", "slack", "mail", "messages", "mesajlar", "telegram", "discord", "signal"]
-        let inMessagingApp = frontApp.map { name in messaging.contains { name.lowercased().contains($0) } } ?? false
-        guard !inMessagingApp, SetFitDecider.isActive else {
-            return await llmScore(text: text, frontApp: frontApp, lastReply: lastReply, model: model)
-        }
-        // Both start together; a confident SetFit answer cancels the LLM, otherwise its answer
-        // arrives no later than it would have alone.
-        let llm = Task { await llmScore(text: text, frontApp: frontApp, lastReply: lastReply, model: model) }
-        if let decision = await SetFitDecider.decide(.addressee, text: text), decision.confident {
-            llm.cancel()
-            return Int(((decision.probabilities["jarvis"] ?? 0) * 100).rounded())
-        }
-        return await llm.value
-    }
-
-    private static func llmScore(text: String, frontApp: String?, lastReply: String?, model: String) async -> Int? {
-        let request = LLMRequest(model: model, prompt: prompt(text: text, frontApp: frontApp, lastReply: lastReply),
-                                 timeout: 4, temperature: 0.0, maxTokens: 16, schema: ollamaResponseSchema)
-        guard let answer = try? await LLM.default.generate(request) else { return nil }
-        return parseScore(answer)
-    }
-
-    /// `{"score": 85}`, `{"score": "85"}` or a bare number, clamped to 0–100.
-    static func parseScore(_ answer: String) -> Int? {
-        let trimmed = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let json = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8)) as? [String: Any] {
-            if let number = json["score"] as? NSNumber { return min(max(number.intValue, 0), 100) }
-            if let string = json["score"] as? String, let value = Int(string) { return min(max(value, 0), 100) }
-            return nil
-        }
-        guard let value = Int(trimmed) else { return nil }
-        return min(max(value, 0), 100)
-    }
-
-    static func prompt(text: String, frontApp: String?, lastReply: String?) -> String {
-        let context = lastReply.map { "\nJarvis'in az önceki cevabı (devam sorusu olabilir): \"\($0)\"" } ?? ""
-        return """
-            Mac'te Jarvis adında sesli bir asistan var. Kullanıcı "Jarvis" diye seslendi, kayıt başladı; \
-            o seslenme zaten oldu, yani "Jarvis" kelimesi tek başına bir şey kanıtlamaz. Kayıt sırasında \
-            kullanıcı bazen Jarvis'le konuşur, bazen de odadaki birine döner, ya da bir mesaj / metin \
-            dikte eder. Dikte edilen metin önde duran uygulamaya yazılacak.
-            Önde duran uygulama: \(frontApp ?? "bilinmiyor")\(context)
-
-            Aşağıdaki cümle Jarvis'e mi söylendi? 0 ile 100 arası puan ver:
-            100 = açıkça Jarvis'e soru ya da istek (sohbet, bilgi, fikir sorma).
-            0 = açıkça başkasına söylenmiş ya da yazılacak bir mesaj / metin.
-            Emin değilsen 50 civarı ver.
-
-            Jarvis'e (yüksek puan): "kara deliği kısaca anlat", "sence bu mantıklı mı", "selam nasılsın", \
-            "bana bir espri yap", "yarın yağmur yağar mı sence", "peki neden" (az önceki cevaba devam).
-            Başkasına ya da yazılacak (düşük puan): "abi akşam geliyor musun", "tamam hocam hallederim", \
-            "arkadaşlar raporu cuma atıyorum", "Jarvis çok iyi çalışıyor bak", "anne yemek hazır mı", \
-            "toplantı yarın saat üçte başlıyor", "merhaba, dosyayı ekte gönderiyorum". \
-            WhatsApp, Slack, Mail, Messages, Telegram, Discord önde ise mesaj yazıyor olması daha olası.
-
-            Cümle: "\(text)"
-            Sadece JSON ver: {"score": <0-100>}
-            """
     }
 }

@@ -1,34 +1,6 @@
 import AppKit
 import Foundation
 
-/// A video by voice: "videoyu durdur", "başa sar", "10 saniye ileri sar", "hızı 1.5 yap".
-enum VideoAction: Equatable, Sendable {
-    case play
-    case pause
-    case restart
-    /// Relative jump in seconds; negative goes back.
-    case seekBy(Int)
-    /// Absolute position in seconds ("videoyu 5. dakikaya al").
-    case seekTo(Int)
-    /// Absolute playback rate (1 = normal).
-    case speed(Double)
-    /// One 0.25 step faster or slower.
-    case speedStep(faster: Bool)
-    case mute(Bool)
-    /// YouTube's subtitles button.
-    case subtitles(on: Bool)
-    /// YouTube's next-video button.
-    case next
-    /// YouTube's "f" key; there is no fullscreen without a real user gesture otherwise.
-    case fullscreen
-    /// "Videonun bitmesine ne kadar var?"
-    case remaining
-
-    /// Play and pause decide what should be playing after the command, so the video the
-    /// recording paused is not resumed over them. Everything else continues afterwards.
-    var changesPlayback: Bool { self == .play || self == .pause }
-}
-
 /// Drives the `<video>` in Safari through `do JavaScript`: precise (seek, speed, subtitles)
 /// and per tab, unlike media keys or MediaRemote, which only toggle whatever app holds Now
 /// Playing (often Spotify). Needs the same Safari setting as the recording pause: Develop >

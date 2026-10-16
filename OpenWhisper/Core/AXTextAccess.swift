@@ -1,15 +1,6 @@
 import AppKit
 import ApplicationServices
 
-/// What Accessibility could prove about the keyboard focus when recording began. `unknown`
-/// deliberately differs from `notEditable`: a missing permission or failed cross-process AX
-/// request must not make Jarvis assume the user intentionally focused a non-text control.
-enum TextFocusStatus: String, Sendable, Equatable {
-    case editable
-    case notEditable
-    case unknown
-}
-
 /// The destination captured while recording is active.  AXUIElement is a Core Foundation
 /// reference whose lifetime is managed by the system; it is intentionally carried through
 /// the asynchronous delivery path as an unchecked Sendable value.
