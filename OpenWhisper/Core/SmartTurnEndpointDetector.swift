@@ -78,7 +78,8 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         var lastProbability: Float?
     }
 
-    private let startTime: TimeInterval
+    /// Main thread only (set at init and by `restartClock`, read by `decision`).
+    private var startTime: TimeInterval
     private let config: Config
     private let status = OSAllocatedUnfairLock(initialState: Status())
     private let continuation: AsyncStream<Item>.Continuation
@@ -195,6 +196,12 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     /// Audio-thread safe. Work is queued to the detached consumer; the caller never runs ML.
     func feed(_ samples: [Float]) {
         continuation.yield(.samples(samples))
+    }
+
+    /// Starts the timeouts over at `time`: used once a Bluetooth mic actually delivers audio,
+    /// so its link setup doesn't eat the no-speech window.
+    func restartClock(at time: TimeInterval) {
+        startTime = time
     }
 
     func decision(at time: TimeInterval, levelSpeechDetected: Bool) -> Decision {

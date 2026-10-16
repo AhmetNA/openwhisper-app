@@ -157,6 +157,13 @@ final class AudioEngine: @unchecked Sendable {
     private var isEnginePrepared = false
     private var hasLoggedFirstBuffer = false
     private var hasLoggedFirstAudibleBuffer = false
+    /// Bluetooth buds send exact digital zeros for ~0.25–0.75 s while their call-mode link comes
+    /// up (measured 16 Oct 2026, Redmi Buds 5 Pro). Those buffers are dropped until the first
+    /// non-zero sample, which is when the mic is really live. Guarded by `lock`.
+    private var linkAudioWaitStart: CFTimeInterval?
+    private var onInputReady: (() -> Void)?
+    private var droppedLinkFrames = 0
+    static let linkAudioWaitLimit: CFTimeInterval = 1.5
     private var hasLoggedInputTruncation = false
     private var hasLoggedDeepFilterFirstFrame = false
 
@@ -255,6 +262,8 @@ final class AudioEngine: @unchecked Sendable {
         echoCancellation: Bool = false,
         playbackHeard: OSAllocatedUnfairLock<Bool>? = nil,
         handoff: WakeCaptureHandoff? = nil,
+        waitsForLinkAudio: Bool = false,
+        onInputReady: (() -> Void)? = nil,
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
         hasLoggedFirstBuffer = false
@@ -281,6 +290,9 @@ final class AudioEngine: @unchecked Sendable {
         leadingOverlapSampleCount = 0
         didLogInputChannelSelection = false
         pinnedInputChannelIndex = nil
+        linkAudioWaitStart = waitsForLinkAudio ? CACurrentMediaTime() : nil
+        self.onInputReady = onInputReady
+        droppedLinkFrames = 0
         lock.unlock()
 
         // Record through a bare AUHAL unit bound to the chosen device (or the system default)
@@ -428,6 +440,21 @@ final class AudioEngine: @unchecked Sendable {
             guard frameLength > 0 else { return }
 
             self.lock.lock()
+            if let waitStart = self.linkAudioWaitStart {
+                let waited = CACurrentMediaTime() - waitStart
+                if waited < Self.linkAudioWaitLimit, Self.isDigitalSilence(buffer) {
+                    self.droppedLinkFrames += frameLength
+                    self.lock.unlock()
+                    return
+                }
+                self.linkAudioWaitStart = nil
+                let ready = self.onInputReady
+                self.onInputReady = nil
+                owLog(String(format: "[AudioEngine] Bluetooth mic live after %.0f ms (dropped %d zero frames)%@",
+                             waited * 1000, self.droppedLinkFrames,
+                             waited >= Self.linkAudioWaitLimit ? " — wait limit reached" : ""))
+                ready?()
+            }
             let channelIndex: Int
             let rms: Float
             if let pinned = self.pinnedInputChannelIndex {
@@ -544,7 +571,22 @@ final class AudioEngine: @unchecked Sendable {
         return didFallBackFromDeepFilter
     }
 
+    /// True when every sample of every channel is exactly zero (a link that is not up yet).
+    private static func isDigitalSilence(_ buffer: AVAudioPCMBuffer) -> Bool {
+        guard let channels = buffer.floatChannelData else { return false }
+        let frames = Int(buffer.frameLength)
+        for channel in 0..<Int(buffer.format.channelCount) {
+            let samples = channels[channel]
+            for index in 0..<frames where samples[index] != 0 { return false }
+        }
+        return true
+    }
+
     func stopRecording() -> [CompletedAudioSegment] {
+        lock.lock()
+        linkAudioWaitStart = nil
+        onInputReady = nil
+        lock.unlock()
         if let halCapture {
             halCapture.stop()
             self.halCapture = nil

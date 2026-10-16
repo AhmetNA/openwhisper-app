@@ -373,6 +373,13 @@ final class AppState {
     }
 
     var audioLevel: Float = 0.0
+    /// False from the start of a Bluetooth recording until the buds' mic delivers real audio
+    /// (their call-mode link takes ~0.25–0.75 s). The flow bar says "connecting" until then.
+    var recordingInputReady = true
+    /// The Bluetooth input of the last key-started session, so a confirmation or follow-up it
+    /// leads to keeps recording from the buds. Nil when that session used the Mac mic.
+    private var chainedBluetoothInputUID: String?
+    private var recordingIgnoredLeadingSeconds: TimeInterval = 0
     /// True while a hands-free recording (⌘⌥⌃D, Fn+Space, openwhisper://) is running; the
     /// FlowBar shows a stop button then, since there is no held key to release.
     var handsFreeActive = false {
@@ -1232,8 +1239,14 @@ final class AppState {
         var smartTurnConfig = SmartTurnEndpointDetector.Config()
         // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
         let ignoredLeadingSeconds: TimeInterval = mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
+        recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
         let recordingInputDeviceUID = resolvedInputDeviceUID(for: recordingTrigger)
         let recordingInputIsBluetooth = Self.inputIsBluetooth(uid: recordingInputDeviceUID)
+        if ![.confirmation, .followUp].contains(recordingTrigger) {
+            chainedBluetoothInputUID = recordingInputIsBluetooth ? recordingInputDeviceUID : nil
+        }
+        // A handed-over wake stream is already live; a fresh Bluetooth capture is not.
+        let waitsForLinkAudio = recordingInputIsBluetooth
         var endpointFallbackConfig: VoiceEndpointDetector.Config = recordingInputIsBluetooth ? .closeTalk : .init()
         // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
         // incomplete-turn safety limit and also keeps a model failure bounded.
@@ -1286,8 +1299,15 @@ final class AppState {
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
         // and delay this dispatch. Read everything the background block needs up front so the
         // dispatch itself has zero main-thread work between it and the guards above.
-        let processingMode = audioProcessingMode
+        // Apple voice processing needs AVAudioEngine, which falls back to the wrong mic around
+        // Bluetooth buds; their in-ear mic has no speaker echo and call mode already denoises.
+        let processingMode: AudioProcessingMode = recordingInputIsBluetooth && audioProcessingMode == .appleVoiceProcessing
+            ? .off : audioProcessingMode
+        if processingMode != audioProcessingMode {
+            owLog("[AudioEngine] Bluetooth input: recording without Apple voice processing")
+        }
         let echoCancellation = recordingEchoCancellationWanted(inputIsBluetooth: recordingInputIsBluetooth)
+        let sessionID = nextTranscriptionID &+ 1
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
         let audioEngineRef = audioEngine
         let smartEndpoint = smartTurnEndpointDetector
@@ -1318,6 +1338,8 @@ final class AppState {
                 echoCancellation: echoCancellation,
                 playbackHeard: playbackHeard,
                 handoff: captureHandoff,
+                waitsForLinkAudio: waitsForLinkAudio,
+                onInputReady: { DispatchQueue.main.async { self?.markRecordingInputReady(sessionID: sessionID) } },
                 levelCallback: { rawLevel in
                     let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
                     // Stamped here, on the audio thread, so main-thread stalls can't distort
@@ -1345,6 +1367,15 @@ final class AppState {
         }
 
         // 2. Update recordingState so flow bar UI appears
+        recordingInputReady = !waitsForLinkAudio
+        if waitsForLinkAudio {
+            // A link that never delivers audio must not leave the bar on "connecting".
+            DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.linkAudioWaitLimit + 0.5) { [weak self] in
+                guard let self, !self.recordingInputReady, self.nextTranscriptionID == sessionID else { return }
+                owLog("[AudioEngine] Bluetooth mic sent no audio; showing the recording as live anyway")
+                self.markRecordingInputReady(sessionID: sessionID)
+            }
+        }
         recordingState = .recording
         recordingDuration = 0
         audioLevel = 0
@@ -4335,13 +4366,21 @@ final class AppState {
     /// recording (Fn, Fn+Space, the shortcut, the Jarvis key) records from connected Bluetooth
     /// buds by UID even while `DefaultInputGuard` keeps the Mac mic as the default. The buds
     /// enter call mode only while that recording runs; stopping it releases their mic, so music
-    /// goes back to full quality. Voice-started sessions keep the default input, which lets them
-    /// continue the wake listener's stream.
+    /// goes back to full quality. A confirmation or follow-up stays on the mic of the session
+    /// that led to it. Voice-started sessions keep the default input, which lets them continue
+    /// the wake listener's stream.
     func resolvedInputDeviceUID(for trigger: RecordingTrigger?) -> String? {
         guard let inputDeviceUID else {
             if let uid = AudioEngine.systemDefaultBluetoothInput()?.uid { return uid }
-            guard let trigger, Self.keyStartedTriggers.contains(trigger) else { return nil }
-            return AudioEngine.connectedBluetoothInput()?.uid
+            guard let trigger else { return nil }
+            if Self.keyStartedTriggers.contains(trigger) {
+                return AudioEngine.connectedBluetoothInput()?.uid
+            }
+            if [.confirmation, .followUp].contains(trigger), let uid = chainedBluetoothInputUID,
+               AudioEngine.audioDeviceID(forUID: uid) != nil {
+                return uid
+            }
+            return nil
         }
         let devices = AudioEngine.availableInputDevices()
         if devices.contains(where: { $0.uid == inputDeviceUID }) {
@@ -4363,6 +4402,23 @@ final class AppState {
             return false
         }
         return true
+    }
+
+    /// The Bluetooth mic is live: from here on the user can speak, so the auto-stop timeouts
+    /// (no-speech window, max duration) start now instead of at the key press.
+    private func markRecordingInputReady(sessionID: UInt64) {
+        guard !recordingInputReady, nextTranscriptionID == sessionID, recordingState == .recording else { return }
+        recordingInputReady = true
+        let now = CACurrentMediaTime()
+        if let detector = voiceEndpointDetector {
+            voiceEndpointDetector = VoiceEndpointDetector(
+                startTime: now,
+                config: detector.config,
+                ignoreUntil: recordingIgnoredLeadingSeconds > 0 ? now + recordingIgnoredLeadingSeconds : nil
+            )
+        }
+        smartTurnEndpointDetector?.restartClock(at: now)
+        lastOwnVoiceCheck = now
     }
 
     var resolvedInputIsBluetooth: Bool {

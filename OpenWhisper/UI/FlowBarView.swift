@@ -68,6 +68,7 @@ struct FlowBarView: View {
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
         .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
+        .animation(.easeInOut(duration: 0.15), value: appState.recordingInputReady)
         .animation(.easeInOut(duration: 0.25), value: appState.jarvisActivity)
         .animation(.easeInOut(duration: 0.25), value: appState.systemAudioIsRecording)
     }
@@ -144,7 +145,16 @@ struct FlowBarView: View {
 
     private var recordingContent: some View {
         HStack(spacing: 8) {
-            AudioWaveformView(level: appState.audioLevel)
+            if appState.recordingInputReady {
+                AudioWaveformView(level: appState.audioLevel)
+            } else {
+                // Bluetooth buds are still switching to call mode; speech now would be lost.
+                Text("connecting")
+                    .font(.custom("Bradley Hand", size: 16).weight(.medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.horizontal, 6)
+                    .frame(height: 26)
+            }
 
             // Hands-free sessions have no key to release, so offer a click target. The panel is
             // non-activating: clicking it leaves focus in the app the text will be pasted into.
