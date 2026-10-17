@@ -92,7 +92,12 @@ extension AppState {
         await VoiceTrace.$current.withValue(traceID) {
             defer { session.latency.finishIfNeeded() }
             guard !session.isCancelled else { return }
-            if !session.hadFailClosedPassthrough &&
+            if session.segmentTexts.isEmpty, !session.playbackCommandTexts.isEmpty, !session.hadFailClosedPassthrough {
+                session.segmentTexts = session.playbackCommandTexts
+                session.heardOnlyOverPlayback = true
+                owLog("[OpenWhisper] No batch matched your voice over the media; taking a command only")
+            }
+            if !session.hadFailClosedPassthrough && !session.heardOnlyOverPlayback &&
                 (session.hadSingleSpeakerUncertain ||
                  (session.hadDiarizationAttempt && session.segmentTexts.isEmpty) ||
                  TargetSpeakerOutputGate.shouldSkipPostProcessing(
@@ -596,7 +601,7 @@ extension AppState {
             // when Accessibility could not determine the focus. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
                 // After a command only a command is taken (see the follow-up check below).
-                if session.followsCommand || session.wakeUnconfirmed && session.mediaWasPlaying {
+                if session.takesOnlyCommands {
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
                     dismissFlowBarMessage()
@@ -657,6 +662,7 @@ extension AppState {
                 targetBundleID: session.targetApp?.bundleIdentifier,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
                 voiceTestActive: self.voiceTest.isActive,
+                commandAmongPlayback: session.heardOnlyOverPlayback,
                 commandContext: commandContext)
             var route = VoiceRouter.route(text, facts: facts)
 
@@ -684,7 +690,7 @@ extension AppState {
             // The mic stayed open after a command: only a command is taken from it, never
             // dictation or chat (a TV, the song's lyrics, someone else in the room). A bare
             // "sonrakine geç" is about what the command just did.
-            if session.followsCommand || session.wakeUnconfirmed && session.mediaWasPlaying {
+            if session.takesOnlyCommands {
                 var isCommand: Bool {
                     switch route { case .command, .commands: true; default: false }
                 }

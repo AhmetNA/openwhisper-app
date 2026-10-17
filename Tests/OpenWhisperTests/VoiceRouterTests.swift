@@ -5,10 +5,11 @@ import XCTest
 @MainActor
 final class VoiceRouterTests: XCTestCase {
     private func facts(voice: Bool = true, focus: TextFocusStatus = .unknown, hasTargetApp: Bool = true,
-                       targetBundleID: String? = nil, pendingDeletion: Bool = false) -> VoiceRouter.Facts {
+                       targetBundleID: String? = nil, pendingDeletion: Bool = false,
+                       overPlayback: Bool = false) -> VoiceRouter.Facts {
         VoiceRouter.Facts(isVoiceCommand: voice, acceptsCommands: true, focus: focus,
                           hasTargetApp: hasTargetApp, targetBundleID: targetBundleID,
-                          pendingDeletion: pendingDeletion)
+                          pendingDeletion: pendingDeletion, commandAmongPlayback: overPlayback)
     }
 
     func testGreetingIsDictationInATextField() {
@@ -65,6 +66,21 @@ final class VoiceRouterTests: XCTestCase {
         }
         guard case .typed = VoiceRouter.route("bunu düzelt gönder", facts: facts(voice: false, focus: .editable, targetBundleID: "com.tinyspeck.slackmacgap")) else {
             return XCTFail("Fn into Slack types without Return")
+        }
+    }
+
+    /// 17 Oct 2026: what Whisper heard of the user's command between a video's sentences.
+    func testCommandBetweenThePlaybacksSentences() {
+        let heard = "Bu da bir çeşit pratik falan görevli oldu. Videoyu durdur. Çok yavaş."
+        guard case .command(.system(.video)) = VoiceRouter.route(heard, facts: facts(focus: .notEditable, overPlayback: true)) else {
+            return XCTFail("over media any sentence may be the command")
+        }
+        if case .command = VoiceRouter.route(heard, facts: facts(focus: .notEditable)) {
+            XCTFail("elsewhere only the first sentence counts")
+        }
+        guard case .command(.system(.time)) = VoiceRouter.route(
+            "Saat kaç? Bu hikaye bir turist ile başlıyor. 1867'de özel bir hava.", facts: facts(focus: .notEditable, overPlayback: true)) else {
+            return XCTFail("the command first, then the video")
         }
     }
 }

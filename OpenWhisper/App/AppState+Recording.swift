@@ -607,6 +607,26 @@ extension AppState {
             }
             // What the Mac plays is never transcribed, shown or offered as "Bu benim sesimdi".
             guard !session.speakersPlayed else {
+                // A called "Jarvis" (the speakers didn't say it, and Whisper confirmed a weak
+                // one): look for the user's command in the words. Nothing else is taken from it.
+                if session.trigger == .wakeWord, !session.wakeUnconfirmed {
+                    do {
+                        let heard = try await transcriber.transcribe(
+                            audioData: segment.samples,
+                            language: language,
+                            overlapSampleCount: segment.overlapSampleCount
+                        ).trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !session.isCancelled else { return }
+                        if !heard.isEmpty, !heard.hasPrefix("[BLANK"), !heard.hasPrefix("(BLANK") {
+                            session.playbackCommandTexts.append(heard)
+                        }
+                        owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; transcribed for a command only: '\(heard)'")
+                        noteSpeakers { $0.notes.append("rejected while media played, transcribed for a command only") }
+                    } catch {
+                        owLog("[OpenWhisper] Batch \(segmentNumber) command transcription over media failed: \(error)")
+                    }
+                    return
+                }
                 owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; Whisper skipped (speaker audio is never salvaged)")
                 noteSpeakers { $0.notes.append("rejected while media played, Whisper skipped") }
                 return

@@ -24,6 +24,10 @@ enum VoiceRouter {
         var pendingDeletion = false
         /// Test mode reads TODO items aloud; "geçti" / "kaldı" / "atla" answer it.
         var voiceTestActive = false
+        /// The words came from audio the profile rejected while the Mac played a song or video
+        /// (`RecordingTranscriptionSession.heardOnlyOverPlayback`): the user's command can sit
+        /// between the video's sentences ("… Videonun durdur. Çok yavaş …"), so any one may be it.
+        var commandAmongPlayback = false
         /// Built only when a command rule is reached: it lists the installed apps.
         var commandContext: @MainActor () -> CommandRegistry.Context = { CommandRegistry.Context() }
     }
@@ -119,6 +123,12 @@ enum VoiceRouter {
                     .flatMap({ $0 == .system(.developerMode) ? nil : $0 }) {
                 return .command(command)
             }
+            if facts.commandAmongPlayback,
+               let command = sentences(of: trimmed).lazy
+                .compactMap({ CommandRegistry.match($0, in: CommandRegistry.systemDomains, context: context) })
+                .first(where: { $0 != .system(.developerMode) }) {
+                return .command(command)
+            }
             if let deletion = ReminderManager.deletionRequest(trimmed) { return .reminderDeletion(deletion) }
         }
         if ReminderManager.isReminder(text) { return .reminder }
@@ -127,6 +137,13 @@ enum VoiceRouter {
 
     /// The first sentence when the transcript has more than one, for a command followed by
     /// talk that wasn't meant for Jarvis.
+    /// Every sentence of the transcript, in order.
+    nonisolated static func sentences(of text: String) -> [String] {
+        text.split(omittingEmptySubsequences: true) { ".!?".contains($0) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     nonisolated static func leadingSentence(of text: String) -> String? {
         guard let end = text.firstIndex(where: { ".!?".contains($0) }) else { return nil }
         let first = text[...end].trimmingCharacters(in: .whitespacesAndNewlines)

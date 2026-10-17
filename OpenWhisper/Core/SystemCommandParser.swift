@@ -267,7 +267,13 @@ enum SystemCommandParser {
 
     /// Questions answered in the flow bar.
     private static func parseQuery(_ text: String) -> SystemCommand? {
-        if matches(text, #"^(?:saat kaç|saat ne|şu an saat kaç)"#) { return .time }
+        // "Şu an / şimdi saat kaç", "saat şu an kaç", "saati söyler misin". Not "saat kaçta"
+        // (when something is) or "kaç saat" (how long): `\b` keeps "kaçta" out.
+        let now = #"(?:şu ?an|şimdi)"#
+        if matches(text, #"^(?:\#(now) )?saat (?:\#(now) )?(?:kaç|ne)\b"#)
+            || matches(text, #"^(?:bana )?(?:\#(now) )?saati (?:söyle|söyler misin|söyleyebilir misin|öğrenebilir miyim)$"#) {
+            return .time
+        }
         if matches(text, #"(?:\bşarj|\bpil|batarya)\b.*(?:kaç|ne kadar|durum|yüzde|var mı|kaldı)|^(?:şarj|pil|batarya) (?:durumu|seviyesi)$"#) { return .battery }
         return nil
     }

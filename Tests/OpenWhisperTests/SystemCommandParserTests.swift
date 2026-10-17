@@ -89,6 +89,16 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Saat kaç?"), .time)
     }
 
+    func testTimeQuestions() {
+        for text in ["Saat kaç?", "Jarvis, saat kaç?", "Şu an saat kaç?", "Şuan saat kaç", "Şimdi saat kaç?",
+                     "Saat şu an kaç?", "Saat kaç oldu?", "Saat ne?", "Saati söyler misin?", "Bana saati söyle"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .time, text)
+        }
+        for text in ["Saat kaçta buluşuyoruz?", "Kaç saat sürer?", "Saatim bozuldu"] {
+            XCTAssertNotEqual(SystemCommandParser.parse(text), .time, text)
+        }
+    }
+
     func testApps() {
         XCTAssertEqual(SystemCommandParser.parse("Safari'yi aç.", installedApps: apps), .openApp("Safari"))
         XCTAssertEqual(SystemCommandParser.parse("Safariyi kapat", installedApps: apps), .quitApp("Safari"))
