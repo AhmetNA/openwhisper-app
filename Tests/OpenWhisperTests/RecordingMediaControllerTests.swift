@@ -16,6 +16,45 @@ final class RecordingMediaControllerTests: XCTestCase {
         func resume(_ receipt: MediaPlaybackSnapshot) { events.append("resume:\(receipt.playerID)") }
     }
 
+    private final class LeftoverTransport: RecordingMediaTransport {
+        var leftPlaying = false
+        func pausePlayingItems() -> [MediaPlaybackSnapshot] { [] }
+        func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
+            ([], leftPlaying)
+        }
+        func resume(_ receipt: MediaPlaybackSnapshot) {}
+    }
+
+    func testPlaybackLeftRunningFollowsThePauseResult() {
+        let transport = LeftoverTransport()
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0)
+        controller.begin(immediately: true)
+        controller.waitUntilIdle()
+        XCTAssertFalse(controller.playbackLeftRunning)
+        controller.end()
+
+        transport.leftPlaying = true
+        controller.begin(immediately: true)
+        controller.waitUntilIdle()
+        XCTAssertTrue(controller.playbackLeftRunning)
+        controller.end()
+        controller.waitUntilIdle()
+    }
+
+    @MainActor
+    func testBudsSessionCountsPlaybackOnlyWhenThePauseFailed() {
+        let session = RecordingTranscriptionSession(id: 1, targetApp: nil, targetSpeakerEnabled: true, targetSpeakerProfile: nil)
+        session.mediaWasPlaying = true
+        XCTAssertTrue(session.speakersPlayed)
+        var left = false
+        session.playbackSurvivedPause = { left }
+        XCTAssertFalse(session.speakersPlayed)
+        left = true
+        XCTAssertTrue(session.speakersPlayed)
+        session.mediaWasPlaying = false
+        XCTAssertFalse(session.speakersPlayed)
+    }
+
     func testResumesOnlyOneConfirmedPauseDespiteDuplicateEvents() {
         let transport = Transport()
         let controller = RecordingMediaController(transport: transport, pauseDelay: 0)

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct MediaPlaybackSnapshot: Equatable {
     let playerID: String
@@ -20,7 +21,15 @@ struct MediaPlaybackSnapshot: Equatable {
 
 protocol RecordingMediaTransport {
     func pausePlayingItems() -> [MediaPlaybackSnapshot]
+    /// Also says whether a playing item could not be paused.
+    func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool)
     func resume(_ receipt: MediaPlaybackSnapshot)
+}
+
+extension RecordingMediaTransport {
+    func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
+        (pausePlayingItems(), false)
+    }
 }
 
 /// The worker queue keeps slow OS calls away from the microphone/main thread. A release
@@ -33,6 +42,11 @@ final class RecordingMediaController {
     private var active = false
     private var pendingPause: DispatchWorkItem?
     private var receipts: [MediaPlaybackSnapshot] = []
+    private let leftRunning = OSAllocatedUnfairLock(initialState: false)
+
+    /// Something kept playing through the last pause (or the pause hasn't run yet). Buds
+    /// sessions read it: their mic hears what plays in the ear only if the pause failed.
+    var playbackLeftRunning: Bool { leftRunning.withLock { $0 } }
 
     init(transport: RecordingMediaTransport = NowPlayingTransport(), pauseDelay: TimeInterval = 2) {
         self.transport = transport
@@ -45,12 +59,15 @@ final class RecordingMediaController {
         queue.async { [self] in
             guard !active else { return }
             active = true
+            leftRunning.withLock { $0 = true }
 
             let pause = DispatchWorkItem { [weak self] in
                 guard let self, self.active else { return }
                 self.pendingPause = nil
-                self.receipts = self.transport.pausePlayingItems()
-                owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)")
+                let result = self.transport.pausePlayingItemsReportingLeftovers()
+                self.receipts = result.receipts
+                self.leftRunning.withLock { $0 = result.leftPlaying }
+                owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)" + (result.leftPlaying ? "; something is still playing" : ""))
             }
             pendingPause = pause
             if pauseDelay > 0 && !immediately {
@@ -130,6 +147,10 @@ struct NowPlayingTransport: RecordingMediaTransport {
     }
 
     func pausePlayingItems() -> [MediaPlaybackSnapshot] {
+        pausePlayingItemsReportingLeftovers().receipts
+    }
+
+    func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
         var scripted: [MediaPlaybackSnapshot] = []
         var covered = Set<String>()
         for player in players {
@@ -149,7 +170,8 @@ struct NowPlayingTransport: RecordingMediaTransport {
         let playing = remote.snapshots().filter {
             $0.isPlaying && !covered.contains(Self.bundleID(of: $0)) && seen.insert($0.playerID).inserted
         }
-        return playing.compactMap { pause($0) } + scripted
+        let paused = playing.compactMap { pause($0) }
+        return (paused + scripted, paused.count < playing.count)
     }
 
     /// Player IDs are "pid:bundle:player".

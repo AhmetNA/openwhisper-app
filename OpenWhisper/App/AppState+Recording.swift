@@ -151,7 +151,8 @@ extension AppState {
         // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
         // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
         // Not after a command: the user is judging the song or video it just started.
-        if commandFollowUp == nil, audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying) {
+        let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying))
+        if pausesMedia {
             recordingMedia.begin(immediately: recordingInputIsBluetooth)
         }
 
@@ -259,6 +260,10 @@ extension AppState {
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
         session.targetSpeakerMic = recordingInputIsBluetooth ? .buds : .mac
+        if recordingInputIsBluetooth && pausesMedia {
+            let media = recordingMedia
+            session.playbackSurvivedPause = { media.playbackLeftRunning }
+        }
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp

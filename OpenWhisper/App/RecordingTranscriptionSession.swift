@@ -35,7 +35,13 @@ final class RecordingTranscriptionSession {
     /// true while Safari merely has a paused video open.
     var echoCancelled = false
     var playbackHeard = OSAllocatedUnfairLock(initialState: false)
-    var speakersPlayed: Bool { echoCancelled ? playbackHeard.withLock { $0 } : mediaWasPlaying }
+    /// Buds sessions: media is paused before their mic goes live, so a rejected batch is the user
+    /// or someone nearby, never the Mac, unless the pause left something playing in the ear.
+    var playbackSurvivedPause: (() -> Bool)?
+    var speakersPlayed: Bool {
+        if let playbackSurvivedPause { return mediaWasPlaying && playbackSurvivedPause() }
+        return echoCancelled ? playbackHeard.withLock { $0 } : mediaWasPlaying
+    }
     /// Commands (system, Spotify, reminders, "… bunu yaz") run for voice sessions and for the
     /// dictation keys (Fn, Fn+Space, the recording shortcut) alike. Chat, the first-sentence
     /// split and spoken replies stay voice-only: at the keyboard a non-command is typed.
