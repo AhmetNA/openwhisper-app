@@ -148,7 +148,8 @@ extension AppState {
                         candidate: candidate,
                         text: rawCandidateText,
                         pasteContext: session.pasteContext,
-                        targetApp: session.targetApp
+                        targetApp: session.targetApp,
+                        mic: session.targetSpeakerMic
                     )
                     textInjector?.copyToClipboard(rawCandidateText)
                     showTargetSpeakerAppendOffer(message: "")

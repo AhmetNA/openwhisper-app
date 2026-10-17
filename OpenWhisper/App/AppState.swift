@@ -309,6 +309,23 @@ final class AppState {
     /// expected -- it is a profile-health signal, not a duplicate of the enrollment-time check.
     var targetSpeakerProfileCoherence: Float?
 
+    /// The buds' own profile, enrolled through their call-mode mic. Buds recordings are filtered
+    /// against it; without it they are not filtered at all (the Mac profile rejects them).
+    var budsTargetSpeakerProfile: TargetSpeakerProfile?
+    var budsTargetSpeakerProfileStatus: String = "Henüz kayıt yok"
+    var hasStoredBudsTargetSpeakerProfile = false
+    var hasBudsTargetSpeakerProfile: Bool {
+        budsTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
+    }
+    /// The mic the running enrollment builds a profile for.
+    var targetSpeakerEnrollmentMic: TargetSpeakerMic = .mac
+    /// The profile the on-demand sample is appended to, fixed when it starts.
+    var targetSpeakerSampleMic: TargetSpeakerMic = .mac
+    /// The profile the retained "Bu benim sesimdi" candidate belongs to.
+    var retainedConfirmationMic: TargetSpeakerMic = .mac
+    /// The profile `lastConfirmedAppendReceipt` was written to.
+    var lastConfirmedAppendMic: TargetSpeakerMic = .mac
+
     // MARK: - Components
 
     var audioEngine: AudioEngine?
@@ -324,6 +341,7 @@ final class AppState {
     var recordingTimer: Timer?
     var targetApp: NSRunningApplication?
     let targetSpeakerProfileStore: TargetSpeakerProfileStore
+    let budsTargetSpeakerProfileStore: TargetSpeakerProfileStore
     let targetSpeakerModel: TargetSpeakerModelProvider
     let targetSpeakerFilter: TargetSpeakerFilter
     let targetSpeakerDiarization: TargetSpeakerDiarizationService
@@ -493,6 +511,7 @@ final class AppState {
 
     init(
         profileStore: TargetSpeakerProfileStore = KeychainTargetSpeakerProfileStore(),
+        budsProfileStore: TargetSpeakerProfileStore? = nil,
         targetSpeakerModel: TargetSpeakerModelProvider = FluidAudioTargetSpeakerModel(),
         transcriptionService: WhisperTranscriptionService? = nil,
         textInjector: TextInjecting? = nil,
@@ -556,6 +575,10 @@ final class AppState {
         inputDeviceUID = defaults.string(forKey: "inputDeviceUID")
         audioDuckingEnabled = defaults.object(forKey: "audioDuckingEnabled") as? Bool ?? true
         targetSpeakerProfileStore = profileStore
+        // Tests pass an in-memory Mac store; never let them reach the real Keychain buds item.
+        budsTargetSpeakerProfileStore = budsProfileStore
+            ?? (profileStore is KeychainTargetSpeakerProfileStore
+                ? KeychainTargetSpeakerProfileStore(mic: .buds) : InMemoryTargetSpeakerProfileStore())
         self.targetSpeakerModel = targetSpeakerModel
         targetSpeakerFilter = TargetSpeakerFilter(model: targetSpeakerModel)
         self.targetSpeakerDiarization = targetSpeakerDiarization

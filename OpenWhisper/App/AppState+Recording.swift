@@ -123,13 +123,20 @@ extension AppState {
         // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
         // Jarvis's reply (the window waits for it to end).
         let watchesPlayback = mediaPlaying && !recordingInputIsBluetooth && !overReply
-        // The profile was enrolled on the Mac mic: the buds' call-mode mic scores 0.2–0.35
-        // against it, so every batch was rejected. Their in-ear mic hears only the wearer.
-        let targetSpeakerFiltersSession = targetSpeakerEnabled && !recordingInputIsBluetooth
+        // The buds' call-mode mic scores 0.2–0.35 against the Mac-mic profile, so every batch was
+        // rejected: buds recordings are filtered only against their own profile.
+        let sessionProfile = Self.sessionTargetSpeakerProfile(
+            inputIsBluetooth: recordingInputIsBluetooth, mac: targetSpeakerProfile, buds: budsTargetSpeakerProfile
+        )
+        let targetSpeakerFiltersSession = targetSpeakerEnabled && sessionProfile != nil
         if targetSpeakerEnabled && recordingInputIsBluetooth {
-            owLog("[TargetSpeaker] Bluetooth input: speaker filter off (profile enrolled on another mic)")
+            owLog(sessionProfile == nil
+                ? "[TargetSpeaker] Bluetooth input: speaker filter off (no buds profile)"
+                : "[TargetSpeaker] Bluetooth input: filtering against the buds profile")
         }
-        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession
+        // Not on buds yet: the stop gate scores every 0.5 s and cuts the session after ~2 s of
+        // "someone else", too risky before the buds profile has been checked in noise.
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && !recordingInputIsBluetooth
             && (targetSpeakerFiltersSession || watchesPlayback) && targetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
@@ -244,13 +251,14 @@ extension AppState {
         let session = RecordingTranscriptionSession(
             id: nextTranscriptionID,
             targetApp: targetApp,
-            targetSpeakerEnabled: targetSpeakerFiltersTranscription && !recordingInputIsBluetooth,
-            targetSpeakerProfile: targetSpeakerProfile,
+            targetSpeakerEnabled: targetSpeakerFiltersTranscription && sessionProfile != nil,
+            targetSpeakerProfile: sessionProfile,
             pasteContext: initialContext
         )
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
+        session.targetSpeakerMic = recordingInputIsBluetooth ? .buds : .mac
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp

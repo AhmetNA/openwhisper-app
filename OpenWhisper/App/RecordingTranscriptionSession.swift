@@ -20,6 +20,8 @@ final class RecordingTranscriptionSession {
     let continuation: AsyncStream<CompletedAudioSegment>.Continuation
     let targetSpeakerEnabled: Bool
     let targetSpeakerProfile: TargetSpeakerProfile?
+    /// The mic `targetSpeakerProfile` belongs to, so a confirmed sample grows that profile.
+    var targetSpeakerMic: TargetSpeakerMic = .mac
     /// Started by voice ("Jarvis", Vocal Shortcuts, openwhisper://start) rather than Fn:
     /// the user is giving a command, so Spotify intents are read less strictly.
     var isVoiceCommand = false

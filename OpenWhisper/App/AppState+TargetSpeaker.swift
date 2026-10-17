@@ -46,6 +46,97 @@ extension AppState {
             owLog("[TargetSpeaker] loadTargetSpeakerProfile error: \(error)")
         }
         refreshTargetSpeakerProfileCoherence()
+        loadBudsTargetSpeakerProfile()
+    }
+
+    /// Like `loadTargetSpeakerProfile` for the buds profile, except that a missing or stale one
+    /// leaves the filter switch alone: it only turns filtering off for buds recordings.
+    func loadBudsTargetSpeakerProfile() {
+        do {
+            let profile = try budsTargetSpeakerProfileStore.load()
+            hasStoredBudsTargetSpeakerProfile = profile != nil
+            guard let profile else {
+                budsTargetSpeakerProfile = nil
+                budsTargetSpeakerProfileStatus = "Henüz kayıt yok"
+                return
+            }
+            if profile.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) {
+                budsTargetSpeakerProfile = profile
+                budsTargetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                owLog("[TargetSpeaker] Buds profile loaded (embeddings=\(profile.embeddings.count))")
+            } else {
+                budsTargetSpeakerProfile = nil
+                budsTargetSpeakerProfileStatus = profile.audioProcessingMode != audioProcessingMode
+                    ? "Ses işleme modu değişti — yeniden kayıt gerekli"
+                    : "Model sürümü değişti — yeniden kayıt gerekli"
+                owLog("[TargetSpeaker] Buds profile incompatible (mode=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
+            }
+        } catch {
+            budsTargetSpeakerProfile = nil
+            hasStoredBudsTargetSpeakerProfile = false
+            budsTargetSpeakerProfileStatus = "Profil okunamadı — yeniden kayıt gerekli"
+            owLog("[TargetSpeaker] Buds profile load error: \(error)")
+        }
+    }
+
+    func targetSpeakerProfile(for mic: TargetSpeakerMic) -> TargetSpeakerProfile? {
+        mic == .mac ? targetSpeakerProfile : budsTargetSpeakerProfile
+    }
+
+    func targetSpeakerProfileStore(for mic: TargetSpeakerMic) -> TargetSpeakerProfileStore {
+        mic == .mac ? targetSpeakerProfileStore : budsTargetSpeakerProfileStore
+    }
+
+    /// Makes `profile` the active one for `mic` after an enrollment, append or undo saved it.
+    func adoptTargetSpeakerProfile(_ profile: TargetSpeakerProfile, for mic: TargetSpeakerMic, status: String = "Kayıtlı profil hazır") {
+        switch mic {
+        case .mac:
+            targetSpeakerProfile = profile
+            refreshTargetSpeakerProfileCoherence()
+            hasStoredTargetSpeakerProfile = true
+            targetSpeakerProfileStatus = status
+        case .buds:
+            budsTargetSpeakerProfile = profile
+            hasStoredBudsTargetSpeakerProfile = true
+            budsTargetSpeakerProfileStatus = status
+        }
+    }
+
+    /// The input an enrollment or sample for `mic` records from: the connected buds, or a
+    /// Mac-side mic even while the buds are the default input (that would put buds audio into
+    /// the Mac profile).
+    func targetSpeakerEnrollmentInputUID(for mic: TargetSpeakerMic) -> String? {
+        switch mic {
+        case .buds:
+            return AudioEngine.connectedBluetoothInput()?.uid
+        case .mac:
+            let uid = resolvedInputDeviceUID
+            guard Self.inputIsBluetooth(uid: uid) else { return uid }
+            let devices = AudioEngine.availableInputDevices()
+            return (devices.first { $0.isBuiltIn } ?? devices.first { !$0.isBluetooth })?.uid
+        }
+    }
+
+    /// Starts the capture for an enrollment or sample. The buds mic hears music played into the
+    /// ear, so media pauses for it whatever the ducking switch says.
+    func startTargetSpeakerCapture(for mic: TargetSpeakerMic, audioEngine: AudioEngine) {
+        if mic == .buds {
+            recordingMedia.begin(immediately: true)
+        } else if audioDuckingEnabled {
+            recordingMedia.begin()
+        }
+        audioEngine.startRecording(
+            deviceUID: targetSpeakerEnrollmentInputUID(for: mic),
+            audioProcessingMode: audioProcessingMode,
+            waitsForLinkAudio: mic == .buds,
+            levelCallback: { [weak self] rawLevel in
+                let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.audioLevel = target
+                }
+            }
+        )
     }
 
     /// Recomputes `targetSpeakerProfileCoherence` from the currently active profile. Called
@@ -142,6 +233,7 @@ extension AppState {
         retainedConfirmationText = nil
         retainedConfirmationPasteContext = nil
         retainedConfirmationTargetApp = nil
+        retainedConfirmationMic = .mac
     }
 
     /// Stores the candidate, transcript, and destination context as one retained confirmation
@@ -150,7 +242,8 @@ extension AppState {
         candidate: TargetSpeakerConfirmationCandidate,
         text: String,
         pasteContext: PasteContext?,
-        targetApp: NSRunningApplication?
+        targetApp: NSRunningApplication?,
+        mic: TargetSpeakerMic = .mac
     ) {
         guard !candidate.samples.isEmpty, !text.isEmpty else {
             owLog("[TargetSpeaker] retainConfirmation rejected empty candidate or text")
@@ -162,6 +255,7 @@ extension AppState {
         retainedConfirmationText = text
         retainedConfirmationPasteContext = pasteContext
         retainedConfirmationTargetApp = targetApp
+        retainedConfirmationMic = mic
     }
 
     /// Fired by the flow bar's "Bu benim sesimdi" tap. It delivers the retained transcript once
@@ -172,13 +266,14 @@ extension AppState {
               targetSpeakerAppendOfferActive,
               let candidate = retainedConfirmationCandidate,
               let textToPaste = retainedConfirmationText,
-              let profile = targetSpeakerProfile else {
+              let profile = targetSpeakerProfile(for: retainedConfirmationMic) else {
             owLog("[TargetSpeaker] confirmRetainedRecordingWasTargetSpeaker guard failed")
             return
         }
 
         let pasteContext = retainedConfirmationPasteContext
         let targetApp = retainedConfirmationTargetApp
+        let mic = retainedConfirmationMic
         confirmationOperationID &+= 1
         let operationID = confirmationOperationID
         isConfirmationInFlight = true
@@ -220,15 +315,13 @@ extension AppState {
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     candidate,
                     to: profile,
-                    store: self.targetSpeakerProfileStore,
+                    store: self.targetSpeakerProfileStore(for: mic),
                     audioProcessingMode: self.audioProcessingMode
                 )
                 guard self.confirmationOperationID == operationID else { return }
-                self.targetSpeakerProfile = receipt.appendedProfile
-                self.refreshTargetSpeakerProfileCoherence()
-                self.hasStoredTargetSpeakerProfile = true
-                self.targetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                self.adoptTargetSpeakerProfile(receipt.appendedProfile, for: mic)
                 self.lastConfirmedAppendReceipt = receipt
+                self.lastConfirmedAppendMic = mic
                 self.confirmationAppendSucceeded = true
                 self.confirmationAppendError = nil
                 owLog("[TargetSpeaker] Confirmed candidate appended successfully to profile: new count=\(receipt.appendedProfile.embeddings.count)")
@@ -319,19 +412,19 @@ extension AppState {
 
     func startTargetSpeakerSampleRecording() {
         owLog("[TargetSpeaker] startTargetSpeakerSampleRecording called")
+        // Buds in use and a buds profile to grow: the sample goes there.
+        let mic: TargetSpeakerMic = budsTargetSpeakerProfile != nil && Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .fnHold))
+            ? .buds : .mac
         guard recordingState == .idle,
               canCaptureTargetSpeakerSample,
-              targetSpeakerProfile != nil,
+              targetSpeakerProfile(for: mic) != nil,
               let audioEngine else {
-            owLog("[TargetSpeaker] startTargetSpeakerSampleRecording skipped (state=\(recordingState), canCapture=\(canCaptureTargetSpeakerSample), hasProfile=\(targetSpeakerProfile != nil))")
+            owLog("[TargetSpeaker] startTargetSpeakerSampleRecording skipped (state=\(recordingState), canCapture=\(canCaptureTargetSpeakerSample), mic=\(mic), hasProfile=\(targetSpeakerProfile(for: mic) != nil))")
             return
         }
 
         clearFlowBarMessage()
-
-        if audioDuckingEnabled {
-            recordingMedia.begin()
-        }
+        targetSpeakerSampleMic = mic
 
         targetSpeakerSampleIsRecording = true
         targetSpeakerSampleStatus = "Kaydediliyor — tanınmadığın koşulda konuş (en fazla 30 sn)."
@@ -339,17 +432,7 @@ extension AppState {
         recordingDuration = 0
         audioLevel = 0
         lastError = nil
-        audioEngine.startRecording(
-            deviceUID: resolvedInputDeviceUID,
-            audioProcessingMode: audioProcessingMode,
-            levelCallback: { [weak self] rawLevel in
-                let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.audioLevel = target
-                }
-            }
-        )
+        startTargetSpeakerCapture(for: mic, audioEngine: audioEngine)
         recordingTimer?.invalidate()
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -376,7 +459,7 @@ extension AppState {
             owLog("[TargetSpeaker] Sample recording returned 0 samples")
             return
         }
-        guard let profile = targetSpeakerProfile else {
+        guard let profile = targetSpeakerProfile(for: targetSpeakerSampleMic) else {
             targetSpeakerSampleStatus = "Önce \"Sesimi kaydet\" ile profil oluşturmalısın."
             return
         }
@@ -387,6 +470,7 @@ extension AppState {
 
     /// Shared append boundary so the capture path and deterministic state tests agree.
     func appendTargetSpeakerSample(_ samples: [Float], to profile: TargetSpeakerProfile) {
+        let mic = targetSpeakerSampleMic
         targetSpeakerSampleIsProcessing = true
         targetSpeakerSampleStatus = "Örnek doğrulanıyor…"
         // The profile records the processing chain it was built under and `appendConfirmedCandidate`
@@ -400,18 +484,16 @@ extension AppState {
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     samples,
                     to: profile,
-                    store: self.targetSpeakerProfileStore,
+                    store: self.targetSpeakerProfileStore(for: mic),
                     audioProcessingMode: mode
                 )
                 let added = receipt.appendedProfile.embeddings.count - receipt.previousProfile.embeddings.count
-                self.targetSpeakerProfile = receipt.appendedProfile
-                self.refreshTargetSpeakerProfileCoherence()
-                self.hasStoredTargetSpeakerProfile = true
-                self.targetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                self.adoptTargetSpeakerProfile(receipt.appendedProfile, for: mic)
                 self.lastConfirmedAppendReceipt = receipt
+                self.lastConfirmedAppendMic = mic
                 self.targetSpeakerSampleStatus =
-                    "\(added) örnek eklendi — profilde toplam \(receipt.appendedProfile.embeddings.count)."
-                owLog("[TargetSpeaker] On-demand sample appended: +\(added), new count=\(receipt.appendedProfile.embeddings.count)")
+                    "\(added) örnek eklendi — \(mic == .buds ? "kulaklık profilinde" : "profilde") toplam \(receipt.appendedProfile.embeddings.count)."
+                owLog("[TargetSpeaker] On-demand sample appended (\(mic)): +\(added), new count=\(receipt.appendedProfile.embeddings.count)")
             } catch {
                 self.targetSpeakerSampleStatus = error.localizedDescription
                 self.lastError = error.localizedDescription
@@ -440,14 +522,15 @@ extension AppState {
         return samples
     }
 
-    func beginTargetSpeakerEnrollment() {
-        owLog("[TargetSpeaker] beginTargetSpeakerEnrollment called")
+    func beginTargetSpeakerEnrollment(for mic: TargetSpeakerMic = .mac) {
+        owLog("[TargetSpeaker] beginTargetSpeakerEnrollment called (mic=\(mic))")
         guard recordingState == .idle, !targetSpeakerEnrollmentIsProcessing else {
             owLog("[TargetSpeaker] beginTargetSpeakerEnrollment skipped (state=\(recordingState), processing=\(targetSpeakerEnrollmentIsProcessing))")
             return
         }
         invalidateTargetSpeakerEnrollmentWork()
         _ = teardownTargetSpeakerEnrollmentRecording()
+        targetSpeakerEnrollmentMic = mic
         targetSpeakerEnrollmentActive = true
         targetSpeakerPreparationProgress = nil
         targetSpeakerPreparationMessage = ""
@@ -469,10 +552,6 @@ extension AppState {
 
         clearFlowBarMessage()
 
-        if audioDuckingEnabled {
-            recordingMedia.begin()
-        }
-
         targetSpeakerEnrollmentIsRecording = true
         recordingState = .recording
         recordingDuration = 0
@@ -480,17 +559,7 @@ extension AppState {
         targetSpeakerPreparationProgress = nil
         targetSpeakerPreparationMessage = ""
         lastError = nil
-        audioEngine.startRecording(
-            deviceUID: resolvedInputDeviceUID,
-            audioProcessingMode: audioProcessingMode,
-            levelCallback: { [weak self] rawLevel in
-                let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.audioLevel = target
-                }
-            }
-        )
+        startTargetSpeakerCapture(for: targetSpeakerEnrollmentMic, audioEngine: audioEngine)
         recordingTimer?.invalidate()
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -591,25 +660,26 @@ extension AppState {
                 self.targetSpeakerEnrollmentStep = TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount
                 self.targetSpeakerEnrollmentStatus = "İki kayıt doğrulandı; profil çıkarılıyor…"
                 owLog("[TargetSpeaker] Both enrollment samples validated. Creating profile...")
+                let mic = self.targetSpeakerEnrollmentMic
                 do {
                     let profile = try await self.targetSpeakerFilter.createProfile(
                         from: self.targetSpeakerEnrollmentRecordings,
-                        store: self.targetSpeakerProfileStore,
+                        store: self.targetSpeakerProfileStore(for: mic),
                         progressHandler: progressHandler,
                         audioProcessingMode: self.audioProcessingMode
                     )
                     guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
-                    self.targetSpeakerProfile = profile
-                    self.refreshTargetSpeakerProfileCoherence()
-                    self.hasStoredTargetSpeakerProfile = true
+                    self.adoptTargetSpeakerProfile(profile, for: mic)
                     self.lastConfirmedAppendReceipt = nil
-                    self.targetSpeakerEnabled = true
-                    self.startTargetSpeakerDiarizationPreparation()
-                    self.targetSpeakerProfileStatus = "Kayıtlı profil hazır"
+                    // A buds profile alone filters nothing on the Mac mic: the switch stays the user's.
+                    if mic == .mac {
+                        self.targetSpeakerEnabled = true
+                        self.startTargetSpeakerDiarizationPreparation()
+                    }
                     self.targetSpeakerEnrollmentStatus = "Profil hazır; farklı pozisyonlardaki sesin de işlenecek."
                     self.targetSpeakerEnrollmentActive = false
                     self.targetSpeakerPreparationProgress = nil
-                    owLog("[TargetSpeaker] Profile created and saved successfully! Total embeddings=\(profile.embeddings.count)")
+                    owLog("[TargetSpeaker] Profile created and saved successfully (\(mic))! Total embeddings=\(profile.embeddings.count)")
                 } catch {
                     guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                     let failedIndex: Int
@@ -647,6 +717,22 @@ extension AppState {
         targetSpeakerEnrollmentStatus = ""
     }
 
+    func deleteBudsTargetSpeakerProfile() {
+        owLog("[TargetSpeaker] deleteBudsTargetSpeakerProfile called")
+        if targetSpeakerEnrollmentMic == .buds { cancelTargetSpeakerEnrollment() }
+        do {
+            try budsTargetSpeakerProfileStore.delete()
+            budsTargetSpeakerProfile = nil
+            hasStoredBudsTargetSpeakerProfile = false
+            budsTargetSpeakerProfileStatus = "Henüz kayıt yok"
+            if lastConfirmedAppendMic == .buds { lastConfirmedAppendReceipt = nil }
+            owLog("[TargetSpeaker] Buds profile deleted")
+        } catch {
+            lastError = error.localizedDescription
+            owLog("[TargetSpeaker] Delete buds profile failed: \(error)")
+        }
+    }
+
     func deleteTargetSpeakerProfile() {
         owLog("[TargetSpeaker] deleteTargetSpeakerProfile called")
         invalidateTargetSpeakerEnrollmentWork()
@@ -656,7 +742,7 @@ extension AppState {
             targetSpeakerProfile = nil
             refreshTargetSpeakerProfileCoherence()
             hasStoredTargetSpeakerProfile = false
-            lastConfirmedAppendReceipt = nil
+            if lastConfirmedAppendMic == .mac { lastConfirmedAppendReceipt = nil }
             targetSpeakerEnabled = false
             targetSpeakerProfileStatus = "Henüz kayıt yok"
             targetSpeakerEnrollmentStatus = "Ses profili silindi."
@@ -682,27 +768,23 @@ extension AppState {
             return
         }
         do {
-            try targetSpeakerFilter.undoConfirmedAppend(receipt, store: targetSpeakerProfileStore)
-            targetSpeakerProfile = receipt.previousProfile
-            refreshTargetSpeakerProfileCoherence()
-            hasStoredTargetSpeakerProfile = true
-            targetSpeakerProfileStatus = "Son ekleme geri alındı"
+            try targetSpeakerFilter.undoConfirmedAppend(receipt, store: targetSpeakerProfileStore(for: lastConfirmedAppendMic))
+            adoptTargetSpeakerProfile(receipt.previousProfile, for: lastConfirmedAppendMic, status: "Son ekleme geri alındı")
             lastConfirmedAppendReceipt = nil
             lastError = nil
             owLog("[TargetSpeaker] Last confirmed append undone successfully; restored embeddings count=\(receipt.previousProfile.embeddings.count)")
         } catch {
             lastError = error.localizedDescription
-            targetSpeakerProfileStatus = error.localizedDescription
             owLog("[TargetSpeaker] Undo last confirmed append failed: \(error)")
         }
     }
 
-    func replaceTargetSpeakerProfile() {
-        owLog("[TargetSpeaker] replaceTargetSpeakerProfile called")
+    func replaceTargetSpeakerProfile(for mic: TargetSpeakerMic = .mac) {
+        owLog("[TargetSpeaker] replaceTargetSpeakerProfile called (mic=\(mic))")
         guard !targetSpeakerEnrollmentIsProcessing else { return }
         if targetSpeakerEnrollmentIsRecording {
             _ = teardownTargetSpeakerEnrollmentRecording()
         }
-        beginTargetSpeakerEnrollment()
+        beginTargetSpeakerEnrollment(for: mic)
     }
 }

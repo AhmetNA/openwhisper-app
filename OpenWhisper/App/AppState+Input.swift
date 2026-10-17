@@ -51,6 +51,14 @@ extension AppState {
         return AudioEngine.automaticInputDeviceUID()
     }
 
+    /// The profile a recording is filtered against: buds recordings only ever use the buds
+    /// profile (nil without one, so they stay unfiltered), everything else the Mac profile.
+    static func sessionTargetSpeakerProfile(
+        inputIsBluetooth: Bool, mac: TargetSpeakerProfile?, buds: TargetSpeakerProfile?
+    ) -> TargetSpeakerProfile? {
+        inputIsBluetooth ? buds : mac
+    }
+
     static func inputIsBluetooth(uid: String?) -> Bool {
         guard let uid else { return false }
         return AudioEngine.availableInputDevices().first(where: { $0.uid == uid })?.isBluetooth ?? false

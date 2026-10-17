@@ -289,6 +289,43 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertEqual(try store.load()?.embeddings.count, 30)
     }
 
+    func testBudsEnrollmentSavesOnlyTheBudsProfile() async throws {
+        let macStore = InMemoryTargetSpeakerProfileStore()
+        let budsStore = InMemoryTargetSpeakerProfileStore()
+        let appState = AppState(
+            profileStore: macStore,
+            budsProfileStore: budsStore,
+            targetSpeakerModel: IntegrationSpeakerModel(
+                voiceFrames: Array(repeating: true, count: 48)
+            )
+        )
+        let recording = validEnrollmentSamples()
+
+        appState.beginTargetSpeakerEnrollment(for: .buds)
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil { !appState.targetSpeakerEnrollmentIsProcessing && appState.targetSpeakerEnrollmentStep == 1 }
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil { !appState.targetSpeakerEnrollmentIsProcessing && !appState.targetSpeakerEnrollmentActive }
+
+        XCTAssertTrue(appState.hasBudsTargetSpeakerProfile)
+        XCTAssertEqual(try budsStore.load()?.embeddings.count, 30)
+        XCTAssertNil(try macStore.load())
+        XCTAssertNil(appState.targetSpeakerProfile)
+        XCTAssertFalse(appState.targetSpeakerEnabled)
+
+        appState.deleteBudsTargetSpeakerProfile()
+        XCTAssertNil(try budsStore.load())
+        XCTAssertFalse(appState.hasStoredBudsTargetSpeakerProfile)
+    }
+
+    func testBudsRecordingsUseOnlyTheBudsProfile() throws {
+        let mac = try TargetSpeakerProfile(modelIdentifier: "m", embeddings: [Array(repeating: 0.1, count: 256)])
+        let buds = try TargetSpeakerProfile(modelIdentifier: "m", embeddings: [Array(repeating: 0.2, count: 256)])
+        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: false, mac: mac, buds: buds), mac)
+        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: true, mac: mac, buds: buds), buds)
+        XCTAssertNil(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: true, mac: mac, buds: nil))
+    }
+
     /// Regression test for a retry-loop bug: `createProfile`'s per-recording coherence check can
     /// name recording 0 as the contaminated one, even though recording 0 is never the *most
     /// recently captured* recording once recording 1 exists. The generic catch-all (correct for

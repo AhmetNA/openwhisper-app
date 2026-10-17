@@ -104,9 +104,21 @@ protocol TargetSpeakerProfileStore: Sendable {
     func delete() throws
 }
 
+/// Which microphone a profile was enrolled on. The buds' call-mode mic scores 0.2–0.35
+/// against a Mac-mic profile, so each mic keeps its own.
+enum TargetSpeakerMic: String, Sendable {
+    case mac
+    case buds
+}
+
 final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unchecked Sendable {
     private let service = "com.openwhisper.target-speaker"
-    private let account = "default"
+    private let account: String
+
+    /// `default` is the Mac-mic profile (the account predates the buds one).
+    init(mic: TargetSpeakerMic = .mac) {
+        account = mic == .mac ? "default" : "buds"
+    }
 
     func load() throws -> TargetSpeakerProfile? {
         let query: [String: Any] = [
@@ -120,30 +132,30 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound {
-            owLog("[TargetSpeaker] Keychain profile load: not found (errSecItemNotFound)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) load: not found (errSecItemNotFound)")
             return nil
         }
         guard status == errSecSuccess else {
-            owLog("[TargetSpeaker] Keychain profile load failed: Keychain status=\(status)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) load failed: Keychain status=\(status)")
             throw TargetSpeakerProfileError.keychain(status)
         }
         guard let data = result as? Data else {
-            owLog("[TargetSpeaker] Keychain profile load failed: data encoding error")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) load failed: data encoding error")
             throw TargetSpeakerProfileError.encoding
         }
 
         do {
             let profile = try JSONDecoder().decode(TargetSpeakerProfile.self, from: data)
             guard profile.schemaVersion == TargetSpeakerProfile.currentSchemaVersion else {
-                owLog("[TargetSpeaker] Keychain profile load failed: schema mismatch (found \(profile.schemaVersion), expected \(TargetSpeakerProfile.currentSchemaVersion))")
+                owLog("[TargetSpeaker] Keychain profile (\(account)) load failed: schema mismatch (found \(profile.schemaVersion), expected \(TargetSpeakerProfile.currentSchemaVersion))")
                 throw TargetSpeakerProfileError.schemaMismatch
             }
-            owLog("[TargetSpeaker] Keychain profile loaded successfully: schema=\(profile.schemaVersion), embeddings=\(profile.embeddings.count), model=\(profile.modelIdentifier), audioProcessingMode=\(profile.audioProcessingMode.rawValue)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) loaded successfully: schema=\(profile.schemaVersion), embeddings=\(profile.embeddings.count), model=\(profile.modelIdentifier), audioProcessingMode=\(profile.audioProcessingMode.rawValue)")
             return profile
         } catch let error as TargetSpeakerProfileError {
             throw error
         } catch {
-            owLog("[TargetSpeaker] Keychain profile JSON decode failed: \(error)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) JSON decode failed: \(error)")
             throw TargetSpeakerProfileError.encoding
         }
     }
@@ -153,7 +165,7 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
         do {
             data = try JSONEncoder().encode(profile)
         } catch {
-            owLog("[TargetSpeaker] Keychain profile JSON encode failed: \(error)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) JSON encode failed: \(error)")
             throw TargetSpeakerProfileError.encoding
         }
 
@@ -169,11 +181,11 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if updateStatus == errSecSuccess {
-            owLog("[TargetSpeaker] Keychain profile updated: embeddings=\(profile.embeddings.count)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) updated: embeddings=\(profile.embeddings.count)")
             return
         }
         guard updateStatus == errSecItemNotFound else {
-            owLog("[TargetSpeaker] Keychain profile update failed: Keychain status=\(updateStatus)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) update failed: Keychain status=\(updateStatus)")
             throw TargetSpeakerProfileError.keychain(updateStatus)
         }
 
@@ -182,10 +194,10 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
-            owLog("[TargetSpeaker] Keychain profile add failed: Keychain status=\(addStatus)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) add failed: Keychain status=\(addStatus)")
             throw TargetSpeakerProfileError.keychain(addStatus)
         }
-        owLog("[TargetSpeaker] Keychain profile created: embeddings=\(profile.embeddings.count)")
+        owLog("[TargetSpeaker] Keychain profile (\(account)) created: embeddings=\(profile.embeddings.count)")
     }
 
     func delete() throws {
@@ -196,10 +208,10 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            owLog("[TargetSpeaker] Keychain profile delete failed: Keychain status=\(status)")
+            owLog("[TargetSpeaker] Keychain profile (\(account)) delete failed: Keychain status=\(status)")
             throw TargetSpeakerProfileError.keychain(status)
         }
-        owLog("[TargetSpeaker] Keychain profile deleted successfully")
+        owLog("[TargetSpeaker] Keychain profile (\(account)) deleted successfully")
     }
 }
 
