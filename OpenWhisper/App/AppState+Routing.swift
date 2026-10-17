@@ -92,7 +92,9 @@ extension AppState {
         await VoiceTrace.$current.withValue(traceID) {
             defer { session.latency.finishIfNeeded() }
             guard !session.isCancelled else { return }
-            if session.segmentTexts.isEmpty, !session.playbackCommandTexts.isEmpty, !session.hadFailClosedPassthrough {
+            // The weak-wake check may fail after a batch was already transcribed: the video called.
+            if session.segmentTexts.isEmpty, !session.playbackCommandTexts.isEmpty, !session.hadFailClosedPassthrough,
+               !session.wakeUnconfirmed {
                 session.segmentTexts = session.playbackCommandTexts
                 session.heardOnlyOverPlayback = true
                 owLog("[OpenWhisper] No batch matched your voice over the media; taking a command only")
