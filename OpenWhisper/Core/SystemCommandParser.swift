@@ -575,7 +575,7 @@ enum SystemCommandParser {
 
     private static func parseSwitchPhrase(_ text: String, installedApps: [String]) -> SystemCommand? {
         guard let spoken = group(
-            #"^(.+?)\s+(?:uygulamasına\s+|programına\s+)?(?:geç|geçiş yap|git|dön)(?:er misin|er mısın|sene|elim|ebilir misin)?(?: lütfen)?$"#,
+            #"^(.+?)\s+(?:uygulamasına\s+|programına\s+|sayfasına\s+|penceresine\s+)?(?:geç|geçiş yap|git|dön)(?:er misin|er mısın|sene|elim|ebilir misin)?(?: lütfen)?$"#,
             in: text
         ) else { return nil }
         if let agent = AgentCommandParser.agentApp(named: spoken) { return .switchToAgent(agent) }
@@ -612,7 +612,18 @@ enum SystemCommandParser {
                 .min { $0.distance < $1.distance }
             if let close { return close.name }
         }
+        // Whisper bends Turkish vowels: "Seferiye geçer misin" (Safari'ye). Same length and
+        // the same consonants in place still pick the name; "şarkıya geç" keeps its route.
+        for candidate in candidates where candidate.count >= 5 {
+            if let bent = folded.first(where: { differsOnlyInVowels($0.key, candidate) }) { return bent.name }
+        }
         return nil
+    }
+
+    private static func differsOnlyInVowels(_ a: String, _ b: String) -> Bool {
+        let vowels: Set<Character> = ["a", "e", "i", "o", "u"]
+        guard a.count == b.count else { return false }
+        return zip(a, b).allSatisfy { $0 == $1 || (vowels.contains($0) && vowels.contains($1)) }
     }
 
     private static func fold(_ text: String) -> String {

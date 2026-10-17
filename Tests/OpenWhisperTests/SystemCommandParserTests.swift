@@ -267,6 +267,13 @@ final class AppSwitchParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Xcode uygulamasına geç", installedApps: apps), .switchToApp("Xcode"))
         XCTAssertEqual(SystemCommandParser.parse("Safari'ye geçer misin", installedApps: apps), .switchToApp("Safari"))
         XCTAssertEqual(SystemCommandParser.parse("Safari'ye dön", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari'ye geç lütfen", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Lütfen Safari'ye geçer misin?", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Safari sayfasına geç", installedApps: apps), .switchToApp("Safari"))
+        // Whisper's vowels from the 2026-10-17 test: "Seferiye geçer misin?" was pasted as text.
+        XCTAssertEqual(SystemCommandParser.parse("Seferiye geçer misin?", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Seferi'ye geç", installedApps: apps), .switchToApp("Safari"))
+        XCTAssertEqual(SystemCommandParser.parse("Sefariye geç lütfen", installedApps: apps), .switchToApp("Safari"))
         // "Spotify'ı aç" belongs to SpotifyManager; switching to its window does not.
         XCTAssertEqual(SystemCommandParser.parse("Spotify'a geç", installedApps: apps), .switchToApp("Spotify"))
     }
