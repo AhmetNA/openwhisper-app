@@ -16,26 +16,23 @@ final class SetFitDecider {
 
     nonisolated static let port = 8768
     nonisolated static let defaultsKey = "decisionEngine"
+    /// `server.py --variant`. The EmbeddingGemma experiment is trained and compared from
+    /// `decision_model/` only; the app always serves MiniLM.
+    private static let variant = "minilm"
 
     enum Engine: String, CaseIterable, Identifiable {
         case ollama, setfit
-        /// Experiment: EmbeddingGemma-300M base (`train.py --base embeddinggemma`). Tasks that
-        /// have no such model yet use the MiniLM one.
-        case setfitGemma = "setfit-embeddinggemma"
         var id: String { rawValue }
         var label: String {
             switch self {
             case .ollama: return "Ollama (LLM)"
             case .setfit: return "SetFit (hızlı) + Ollama yedek"
-            case .setfitGemma: return "SetFit EmbeddingGemma (deneysel)"
             }
         }
         /// Used until the user picks one. Without the decider installed, every decision still
         /// falls through to Ollama (`prepare` reports "Kurulu değil").
         static let defaultEngine: Engine = .setfit
         var usesSetFit: Bool { self != .ollama }
-        /// `server.py --variant`.
-        var serverVariant: String { self == .setfitGemma ? "embeddinggemma" : "minilm" }
     }
 
     enum Task: String, Sendable {
@@ -83,22 +80,15 @@ final class SetFitDecider {
     // A menu-bar app's child otherwise runs at background QoS: efficiency cores and
     // coalesced timers made ~1 in 3 decisions take 300–400 ms instead of ~10 ms.
     private let server = LocalModelServer(.init(port: port, directory: supportDirectory,
-                                                extraArguments: ["--variant", Engine.setfit.serverVariant],
+                                                extraArguments: ["--variant", SetFitDecider.variant],
                                                 qualityOfService: .userInitiated))
     private var preparing = false
-    private var variant = Engine.setfit.serverVariant {
-        didSet { server.setExtraArguments(["--variant", variant]) }
-    }
 
     // MARK: - Server
 
     /// Starts the server if needed and waits until the models are loaded (~5 s). Safe to call
     /// repeatedly; `status` describes the outcome for Settings.
-    func prepare(engine: Engine = .setfit) async {
-        if variant != engine.serverVariant {
-            stop()
-            variant = engine.serverVariant
-        }
+    func prepare() async {
         guard !Self.isReady, !preparing else { return }
         preparing = true
         defer { preparing = false }
@@ -121,10 +111,10 @@ final class SetFitDecider {
         status = "Yükleniyor…"
         let outcome = await server.waitUntilReady(timeout: 90, poll: .milliseconds(500)) { json in
             let served = json["variant"] as? String ?? "minilm"
-            guard served == variant else {
+            guard served == Self.variant else {
                 // A server left from another run serves the other base model.
                 status = "Model değiştiriliyor…"
-                owLog("[Decider] SetFit server has \(served), reloading as \(variant)")
+                owLog("[Decider] SetFit server has \(served), reloading as \(Self.variant)")
                 await reload()
                 return false
             }
@@ -158,7 +148,7 @@ final class SetFitDecider {
     private func reload() async {
         var request = URLRequest(url: Self.baseURL.appendingPathComponent("reload"), timeoutInterval: 90)
         request.httpMethod = "POST"
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["variant": variant])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["variant": Self.variant])
         _ = try? await URLSession.shared.data(for: request)
     }
 
@@ -168,8 +158,7 @@ final class SetFitDecider {
             .sorted { $0.key < $1.key }
             .map { name, meta in
                 let accuracy = (meta["accuracy"] as? Double).map { String(format: "%%%.0f", $0 * 100) } ?? "?"
-                let base = meta["variant"] as? String == "embeddinggemma" ? " (Gemma)" : ""
-                return "\(name) \(accuracy)\(base)"
+                return "\(name) \(accuracy)"
             }
             .joined(separator: ", ")
     }

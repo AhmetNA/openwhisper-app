@@ -36,7 +36,7 @@ final class LocalModelServer {
 
     nonisolated let port: Int
     nonisolated let directory: URL
-    private var extraArguments: [String]
+    private let extraArguments: [String]
     private let qualityOfService: QualityOfService?
     private var process: Process?
 
@@ -65,9 +65,6 @@ final class LocalModelServer {
     /// The process we started is still there.
     var isRunning: Bool { process?.isRunning ?? false }
     var pid: Int32? { process?.processIdentifier }
-
-    /// Changes the extra arguments for the next start (SetFit's `--variant`).
-    func setExtraArguments(_ arguments: [String]) { extraArguments = arguments }
 
     // MARK: - Process
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › Modeller › Jarvis sohbeti: cloud or local, and which cloud model. Picking a model
+/// Settings › Jarvis › Sohbet: cloud or local, and which cloud model. Picking a model
 /// sends it one tiny message, so a model that can't chat or starts too late is flagged at once.
 struct CloudChatSettingsView: View {
     let ollamaModel: String

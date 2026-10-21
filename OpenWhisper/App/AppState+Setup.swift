@@ -21,7 +21,7 @@ extension AppState {
         }
         setFitStatus = "Başlatılıyor…"
         Task {
-            await SetFitDecider.shared.prepare(engine: decisionEngine)
+            await SetFitDecider.shared.prepare()
             setFitStatus = SetFitDecider.shared.status
         }
     }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings › API Anahtarları: one row per cloud service in `APIKeys.all`. A saved key is never
+/// Settings › Hesaplar: one row per cloud service in `APIKeys.all`. A saved key is never
 /// shown again, only whether there is one.
 struct APIKeysView: View {
     /// Called after a key was saved or deleted, so the caller can refresh what depends on it.
