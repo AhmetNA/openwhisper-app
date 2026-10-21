@@ -22,6 +22,12 @@ final class DeepFilterProcessor {
     /// stops. Plain scalars updated inline in `process()` — no allocation on the audio thread.
     private(set) var processedFrameCount = 0
     private var snrSum: Float = 0
+    private var computeNanoseconds: UInt64 = 0
+
+    /// Mean wall time `df_process_frame` took per 10 ms frame this recording (its real cost).
+    var averageFrameComputeMs: Double {
+        processedFrameCount > 0 ? Double(computeNanoseconds) / Double(processedFrameCount) / 1_000_000 : 0
+    }
 
     /// Mean of `df_process_frame`'s per-frame local SNR (dB) across this recording.
     var averageSNR: Float {
@@ -110,6 +116,7 @@ final class DeepFilterProcessor {
         ringBuffer.removeAll(keepingCapacity: true)
         processedFrameCount = 0
         snrSum = 0
+        computeNanoseconds = 0
     }
 
     /// Feeds `count` 48kHz mono samples starting at `input`, appending every fully processed
@@ -125,7 +132,9 @@ final class DeepFilterProcessor {
             ringBuffer.withUnsafeBufferPointer { buffer in
                 inFrame.update(from: buffer.baseAddress!.advanced(by: consumed), count: frameLength)
             }
+            let start = DispatchTime.now().uptimeNanoseconds
             let snr = df_process_frame(state, inFrame, outFrame)
+            computeNanoseconds += DispatchTime.now().uptimeNanoseconds - start
             snrSum += snr
             processedFrameCount += 1
             output.append(contentsOf: UnsafeBufferPointer(start: outFrame, count: frameLength))

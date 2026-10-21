@@ -162,12 +162,20 @@ extension AppState {
         // dispatch itself has zero main-thread work between it and the guards above.
         // Apple voice processing needs AVAudioEngine, which falls back to the wrong mic around
         // Bluetooth buds; their in-ear mic has no speaker echo and call mode already denoises.
-        let processingMode: AudioProcessingMode = recordingInputIsBluetooth && audioProcessingMode == .appleVoiceProcessing
+        var processingMode: AudioProcessingMode = recordingInputIsBluetooth && audioProcessingMode == .appleVoiceProcessing
             ? .off : audioProcessingMode
         if processingMode != audioProcessingMode {
             owLog("[AudioEngine] Bluetooth input: recording without Apple voice processing")
         }
         let echoCancellation = recordingEchoCancellationWanted(inputIsBluetooth: recordingInputIsBluetooth)
+        // Decided once here for the whole recording, never switched while it runs.
+        if processingMode != .appleVoiceProcessing {
+            processingMode = decideDeepFilter(
+                inputDeviceUID: recordingInputDeviceUID,
+                inputIsBluetooth: recordingInputIsBluetooth,
+                echoCancellation: echoCancellation
+            ) ? .deepFilterNet : .off
+        }
         let sessionID = nextTranscriptionID &+ 1
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
         let audioEngineRef = audioEngine
@@ -375,6 +383,7 @@ extension AppState {
             return
         }
         let segments = audioEngine.stopRecording()
+        noteRecordingNoiseFloor(audioEngine)
         session.latency.markRecordingStopped()
         // A voice command keeps media paused until it has run (see finishTranscription).
         if !session.isVoiceCommand {
@@ -831,6 +840,7 @@ extension AppState {
         session.task?.cancel()
         activeTranscriptionSession = nil
         _ = audioEngine?.stopRecording()  // discard captured samples — no transcription
+        if let audioEngine { noteRecordingNoiseFloor(audioEngine) }
         recordingMedia.end()
         recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
         recordingDuration = 0
@@ -996,6 +1006,30 @@ extension AppState {
             self.ownVoiceStopGate = nil
             self.hotkey?.externalCancelHandsFree()
             self.stopRecording()
+        }
+    }
+
+    /// Whether this recording runs DeepFilterNet (`DeepFilterAutoDecider`), logged with its inputs.
+    func decideDeepFilter(inputDeviceUID: String?, inputIsBluetooth: Bool, echoCancellation: Bool) -> Bool {
+        let device = inputDeviceUID ?? "default"
+        let floor = deepFilterAuto.floor(for: device)
+        let decision = deepFilterAuto.decide(
+            setting: deepFilterSetting,
+            device: device,
+            mediaPlaying: mediaPlaying,
+            echoCancellation: echoCancellation
+        )
+        let floorText = floor.map { String(format: "%.1f dBFS (%.1f s, %.0f s ago)", $0.dbfs, $0.seconds, Date().timeIntervalSince($0.measuredAt)) } ?? "none"
+        owLog("[DeepFilterAuto] \(decision.enabled ? "ON" : "OFF") (\(decision.reason)) | setting=\(deepFilterSetting.rawValue) device=\(device) bluetooth=\(inputIsBluetooth) media=\(mediaPlaying) aec=\(echoCancellation) floor=\(floorText)"
+            + String(format: " thresholds off<%.0f on>=%.0f", DeepFilterAutoDecider.cleanBelowDBFS, DeepFilterAutoDecider.noisyFromDBFS))
+        return decision.enabled
+    }
+
+    /// Files the stopped recording's raw noise floor for the next decision on the same input.
+    func noteRecordingNoiseFloor(_ audioEngine: AudioEngine) {
+        let floor = audioEngine.lastRawNoiseFloor
+        if deepFilterAuto.recordingStopped(floorDBFS: floor.dbfs, measuredSeconds: floor.seconds) {
+            owLog(String(format: "[DeepFilterAuto] Noted floor %.1f dBFS over %.1f s", floor.dbfs ?? .nan, floor.seconds))
         }
     }
 

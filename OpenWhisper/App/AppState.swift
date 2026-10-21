@@ -63,9 +63,18 @@ final class AppState {
             }
         }
     }
+    /// The chain speaker profiles are keyed to; `deepFilterSetting` drives it, and each
+    /// recording's actual mode comes from `deepFilterAuto` (see `startRecording`).
     var audioProcessingMode: AudioProcessingMode {
         didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
     }
+    var deepFilterSetting: DeepFilterSetting {
+        didSet {
+            UserDefaults.standard.set(deepFilterSetting.rawValue, forKey: "deepFilterSetting")
+            audioProcessingMode = deepFilterSetting.profileMode
+        }
+    }
+    @ObservationIgnored var deepFilterAuto = DeepFilterAutoDecider()
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
@@ -571,6 +580,16 @@ final class AppState {
             // silently reintroducing VP's latency.
             let legacyVoiceProcessing = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? false
             audioProcessingMode = legacyVoiceProcessing ? .appleVoiceProcessing : .off
+        }
+        if let raw = defaults.string(forKey: "deepFilterSetting"), let setting = DeepFilterSetting(rawValue: raw) {
+            deepFilterSetting = setting
+        } else {
+            // The old manual switch: DeepFilter becomes Otomatik, an explicit "Engelsiz" stays off.
+            let storedMode = defaults.string(forKey: "audioProcessingMode") ?? ""
+            let migrated: DeepFilterSetting = storedMode == AudioProcessingMode.deepFilterNet.rawValue ? .automatic : .off
+            deepFilterSetting = migrated
+            defaults.set(migrated.rawValue, forKey: "deepFilterSetting")
+            owLog("[DeepFilterAuto] Setting migrated from audioProcessingMode=\(storedMode) to \(migrated.rawValue)")
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
         damgaEnabled = defaults.object(forKey: "damgaEnabled") as? Bool ?? false

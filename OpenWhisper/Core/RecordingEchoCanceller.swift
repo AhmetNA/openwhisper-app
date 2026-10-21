@@ -330,8 +330,8 @@ final class PostEchoDenoiser {
         let tail = Self.convert(scratch, with: down, from: highFormat, to: lowFormat, end: false)
             + Self.convert([], with: down, from: highFormat, to: lowFormat, end: true)
         if processor.processedFrameCount > 0 {
-            owLog(String(format: "[DeepFilter] Recording summary (after echo cancellation): frames=%d processedMs=%.1f avgSNR=%.2fdB",
-                         processor.processedFrameCount, processor.processedDurationMs, processor.averageSNR))
+            owLog(String(format: "[DeepFilter] Recording summary (after echo cancellation): frames=%d processedMs=%.1f avgSNR=%.2fdB computeMsPerFrame=%.3f",
+                         processor.processedFrameCount, processor.processedDurationMs, processor.averageSNR, processor.averageFrameComputeMs))
         }
         return tail
     }

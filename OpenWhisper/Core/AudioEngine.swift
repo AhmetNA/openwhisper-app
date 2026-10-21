@@ -175,6 +175,10 @@ final class AudioEngine: @unchecked Sendable {
     private var inputLevelSumOfSquares: Double = 0
     private var inputLevelSampleCount: Int = 0
     private var inputLevelPeak: Float = 0
+    /// The raw input's room noise floor, fed alongside the level accumulators above.
+    private var noiseFloorMeter = RawNoiseFloorMeter()
+    /// The stopped recording's raw noise floor, for the next recording's DeepFilterNet choice.
+    private(set) var lastRawNoiseFloor: (dbfs: Double?, seconds: Double) = (nil, 0)
 
     /// Pre-warm the audio engine graph in the background so startRecording() takes < 2ms.
     func prewarm(deviceUID: String?, audioProcessingMode: AudioProcessingMode) {
@@ -273,6 +277,7 @@ final class AudioEngine: @unchecked Sendable {
         inputLevelSumOfSquares = 0
         inputLevelSampleCount = 0
         inputLevelPeak = 0
+        noiseFloorMeter = RawNoiseFloorMeter()
         let tStartCall = CACurrentMediaTime()
         let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
         owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
@@ -484,6 +489,7 @@ final class AudioEngine: @unchecked Sendable {
             if bufferPeak > self.inputLevelPeak {
                 self.inputLevelPeak = bufferPeak
             }
+            self.noiseFloorMeter.add(rms: rms, frames: frameLength, sampleRate: buffer.format.sampleRate)
             let echoCancelling = self.recordingEcho != nil
             self.lock.unlock()
 
@@ -649,13 +655,17 @@ final class AudioEngine: @unchecked Sendable {
                 meanRMS, rmsDBFS, peak, peakDBFS, inputLevelSampleCount
             ))
         }
+        lastRawNoiseFloor = (noiseFloorMeter.floorDBFS, noiseFloorMeter.measuredSeconds)
+        owLog("[AudioEngine] Raw noise floor: " + (lastRawNoiseFloor.dbfs.map { String(format: "%.1f dBFS", $0) } ?? "none")
+            + String(format: " over %.1f s", lastRawNoiseFloor.seconds))
 
         if let stoppedDeepFilter, stoppedDeepFilter.processedFrameCount > 0 {
             owLog(String(
-                format: "[DeepFilter] Recording summary: frames=%d processedMs=%.1f avgSNR=%.2fdB",
+                format: "[DeepFilter] Recording summary: frames=%d processedMs=%.1f avgSNR=%.2fdB computeMsPerFrame=%.3f",
                 stoppedDeepFilter.processedFrameCount,
                 stoppedDeepFilter.processedDurationMs,
-                stoppedDeepFilter.averageSNR
+                stoppedDeepFilter.averageSNR,
+                stoppedDeepFilter.averageFrameComputeMs
             ))
         }
 
