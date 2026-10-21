@@ -13,7 +13,7 @@ final class LocalPocketTTSProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "pocket",
         title: "Yerel — Pocket TTS (Türkçe)",
-        summary: "Bu Mac'te çalışan küçük Pocket TTS Turkish modeliyle, internetsiz ve ücretsiz. Jarvis sesini referans kayıttan klonlar. Kurulum bir kez: app/tts_pocket_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Kurulum: app/tts_pocket_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "Pocket TTS Turkish", detail: "Jarvis klonu, CPU'da çalışır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalPocketTTSProvider.shared }

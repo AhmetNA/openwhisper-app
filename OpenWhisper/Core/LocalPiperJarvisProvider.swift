@@ -13,7 +13,7 @@ final class LocalPiperJarvisProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "piper",
         title: "Yerel — Piper Jarvis (İngilizce)",
-        summary: "Bu Mac'te çalışan küçük Piper Jarvis modeliyle, internetsiz ve ücretsiz. Jarvis İngilizce cevap verir; Türkçe sistem cevapları yerel modelle (Ollama) İngilizceye çevrilir. Kurulum bir kez: app/tts_piper_server/setup.sh (brew install espeak-ng gerekir)",
+        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: brew install espeak-ng, sonra app/tts_piper_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "Piper Jarvis medium", detail: "İngilizce Jarvis sesi, CPU'da çalışır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalPiperJarvisProvider.shared }

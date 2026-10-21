@@ -8,7 +8,7 @@ struct APIKeysView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Anahtarlar bu Mac'in Anahtar Zinciri'nde saklanır.")
+            Text("Anahtarlar Anahtar Zinciri'nde saklanır.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             ForEach(APIKeys.all) { provider in

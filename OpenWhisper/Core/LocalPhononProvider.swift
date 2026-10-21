@@ -8,7 +8,7 @@ final class LocalPhononProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "phonon",
         title: "Yerel — Phonon 31m (İngilizce)",
-        summary: "Bu Mac'te çalışan küçük Phonon 31m modeliyle, internetsiz ve ücretsiz. Jarvis İngilizce cevap verir; Türkçe sistem cevapları yerel modelle (Ollama) İngilizceye çevrilir. Kurulum bir kez: app/tts_phonon_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: app/tts_phonon_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "Phonon 31m Q8", detail: "İngilizce ses; yanıta göre hafif, otomatik tonlama.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalPhononProvider.shared }

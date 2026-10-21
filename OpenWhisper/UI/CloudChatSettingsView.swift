@@ -59,7 +59,7 @@ struct CloudChatSettingsView: View {
                     if let listError { warning(listError) { EmptyView() } }
                     checkLine
                 }
-                Text("Bulut 1,5 sn'de cevaba başlamazsa yerel model (\(ollamaModel)) cevaplar.")
+                Text("Bulut 1,5 sn içinde cevap vermezse yerel model (\(ollamaModel)) cevaplar.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

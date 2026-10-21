@@ -7,7 +7,7 @@ struct PermissionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Jarvis'in kullandığı izinler. \"İzin iste\" daha önce sorulmamışsa macOS'un izin penceresini açar; reddedilmiş bir izin için Sistem Ayarları'ndaki ilgili sayfayı açar.")
+            Text("\"İzin iste\" macOS'un izin penceresini açar; daha önce reddettiyseniz Sistem Ayarları'nı açar.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -27,9 +27,6 @@ struct PermissionsView: View {
                     Label("Yenile", systemImage: "arrow.clockwise")
                 }
                 Spacer()
-                Text("Değişiklikler, Sistem Ayarları'ndan dönünce kendiliğinden görünür.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
         }
         .task { await manager.refresh() }

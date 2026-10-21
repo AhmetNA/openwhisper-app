@@ -12,7 +12,7 @@ final class LocalEMALightningProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "ema",
         title: "Yerel — EMA Lightning (deneysel)",
-        summary: "Bu Mac'te çalışan küçük EMA Lightning modeliyle, internetsiz ve ücretsiz. Tek sabit Türkçe ses. Kurulum bir kez: app/tts_ema_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Kurulum: app/tts_ema_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "EMA Lightning", detail: "Sabit Türkçe ses, CPU'da çalışır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalEMALightningProvider.shared }

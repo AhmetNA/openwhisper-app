@@ -9,7 +9,7 @@ final class GeminiSpeechProvider: SpeechSynthesisProvider {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "gemini",
         title: "Gemini API",
-        summary: "İnternete bağlanır: ses üretmek için Jarvis'in yanıt metni Google'a gönderilir. Kullanım Gemini API hesabınıza yazılır.",
+        summary: "Cevap metni sese çevrilmek üzere Google'a gönderilir; kullanım Gemini hesabınıza yazılır.",
         models: [
             SpeechModelOption(id: "gemini-3.8-flash-lite-tts", title: "Flash Lite",
                               detail: "Hızlı ve ucuz; kısa, gündelik cevaplar için."),

@@ -12,7 +12,7 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "local",
         title: "Yerel — OmniVoice",
-        summary: "Bu Mac'te çalışan OmniVoice modeliyle, internetsiz ve ücretsiz. Kurulum bir kez: app/tts_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Kurulum: app/tts_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "OmniVoice", detail: "Jarvis referans sesinden klonlanır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalOmniVoiceProvider.shared }

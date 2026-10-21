@@ -295,7 +295,7 @@ struct SettingsView: View {
             }
             Divider()
             Toggle("Türkçe sayı ve tarih biçimlendirme (Damga)", isOn: $appState.damgaEnabled)
-            Text("Yüz elli lira → 150 TL. Türkçe diktede sayı, tarih, saat ve iletişim bilgilerini çevrimdışı biçimlendirir. Deneysel; özgün metne değiştirme kısayoluyla dönebilirsiniz.")
+            Text("“Yüz elli lira” → “150 TL”. Sayı, tarih, saat ve iletişim bilgilerini biçimlendirir.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if appState.damgaEnabled {
@@ -305,7 +305,7 @@ struct SettingsView: View {
             }
             Divider()
             Toggle("Gülmeyi random'a çevir", isOn: $appState.laughterToRandomEnabled)
-            Text("Ha ha ha, haha ve kahkaha gibi ifadeleri klavye satırından üretilen 8–10 harflik random'a dönüştürür.")
+            Text("“Ha ha ha” gibi gülmeleri “asdfghjk” gibi rastgele harflere çevirir.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -379,16 +379,14 @@ struct SettingsView: View {
                 .disabled(switching)
             }
 
-            Text(downloaded.isEmpty
-                 ? "☁️ = henüz inmedi, seçince indirilir."
-                 : "İnmiş modeller: \(downloaded.sorted().joined(separator: ", ")). ☁️ = henüz inmedi, seçince indirilir.")
+            Text("☁️ = seçince indirilir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
             if LocalQwenASRProvider.isQwen(appState.transcriptionModel) {
                 Text(QwenASRServer.isInstalled
-                     ? "Qwen3-ASR ayrı bir yerel sunucuda (MLX) çalışır, ~2,5 GB bellek. \"+ sözlük\" sözlüğü ipucu olarak verir; kısa kayıtlarda sözlük kelimelerini uydurabilir."
-                     : "Qwen3-ASR kurulu değil — terminalde: app/asr_server/setup.sh (bir kez, ~2,5 GB indirir), sonra modeli yeniden seç.")
+                     ? "~2,5 GB bellek kullanır. \"+ sözlük\" sürümü kısa kayıtlarda sözlükteki kelimeleri uydurabilir."
+                     : "Qwen3-ASR kurulu değil. Terminalde app/asr_server/setup.sh çalıştırıp (~2,5 GB) modeli yeniden seçin.")
                     .font(.caption2)
                     .foregroundStyle(QwenASRServer.isInstalled ? Color.secondary : Color.orange)
             }
@@ -456,7 +454,7 @@ struct SettingsView: View {
                     .textSelection(.enabled)
 
                     if isResolved {
-                        Text("Bu, kullanıcı dizininden keşfedilen bir sağlayıcı. Onaylarsanız yukarıdaki yorumlayıcı, Jarvis'in mikrofon ve Accessibility izinlerini miras alarak çalıştırılır.")
+                        Text("Onaylarsanız bu yorumlayıcı Jarvis'in mikrofon ve erişilebilirlik izinleriyle çalışır.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -467,7 +465,7 @@ struct SettingsView: View {
                         }
                         .font(.caption)
                     } else {
-                        Text("Bu sağlayıcı güvenlik kontrolünden geçemediği için çalıştırılamaz; onaylanacak bir şey yok. Ayrıntı için /tmp/openwhisper.log dosyasına bakın.")
+                        Text("Güvenlik kontrolünden geçemediği için çalıştırılamaz. Ayrıntı: /tmp/openwhisper.log")
                             .font(.caption2)
                             .foregroundStyle(.red)
                             .fixedSize(horizontal: false, vertical: true)
@@ -531,7 +529,7 @@ struct SettingsView: View {
                     if on { DefaultInputGuard.shared.enforce() }
                     appState.refreshInputDevices()
                 }
-            Text("Bluetooth kulaklık bağlanınca macOS onun mikrofonunu seçer; bu açıkken giriş Mac mikrofonuna döner, kulaklık hep yüksek kalitede çalar.")
+            Text("Bluetooth kulaklık bağlanınca da giriş Mac mikrofonunda kalır, kulaklık sesi yüksek kalitede çalar.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -542,7 +540,7 @@ struct SettingsView: View {
                     Image(systemName: "info.circle")
                         .font(.system(size: 10))
                         .foregroundStyle(.orange)
-                    Text("Bluetooth kulaklıklar dikte sırasında düşük kaliteli görüşme moduna geçer; en iyi ses kalitesi için Mac mikrofonunu seçebilirsiniz.")
+                    Text("Kulaklık mikrofonu kullanılırken kulaklık sesi düşük kaliteye geçer.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -567,7 +565,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Safari, Spotify ve macOS medya denetimini destekleyen oynatıcılar kayıt sırasında duraklatılır. Kayıt bitince aynı içerik devam eder; ses seviyesi değişmez.")
+            Text("Kayıt sırasında çalan müzik ve video duraklar, kayıt bitince devam eder.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -605,7 +603,7 @@ struct SettingsView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                Text("“Jarvis”, “Hey Jarvis” veya “Selam Jarvis” dediğinizde kayıt başlar. İmleç bir yazı alanındaysa varsayılan olarak oraya yazar; değilse Jarvis yanıtlar. “Buraya yaz…” ve “Bana cevap ver…” diyerek hedefi o kayıt için değiştirebilirsiniz.")
+                Text("“Jarvis”, “Hey Jarvis” ya da “Selam Jarvis” deyince dinler. İmleç bir yazı alanındaysa oraya yazar, değilse cevap verir. “Buraya yaz…” ya da “Bana cevap ver…” diyerek seçebilirsiniz.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -648,16 +646,16 @@ struct SettingsView: View {
                 jarvisSlider("Doğrudan uyanma", value: $wakeWordThreshold, range: 0.10...0.90,
                              help: "Bu puanın üstünde hemen uyanır. Düşürürseniz daha az kaçırır ama yanlış uyanma artar.")
                 jarvisSlider("Emin olmadan uyanma", value: $wakeWordConfirmedScore, range: 0.10...0.95,
-                             help: "Doğrudan uyanma ile bu puan arası hemen başlar; Whisper arkada “Jarvis” duymazsa kayıt iptal edilir.")
+                             help: "Bu puanın üstünde hemen başlar; “Jarvis” doğrulanmazsa kayıt iptal edilir.")
                 jarvisSlider("Aday", value: $wakeWordCandidateThreshold, range: 0.05...0.50,
-                             help: "Bu puandan doğrudan uyanmaya kadar olan sesler önce Whisper ve Ollama ile kontrol edilir.")
+                             help: "Bu puanın üstündeki sesler önce doğrulanır, sonra uyanır.")
                 if wakeWordCandidateThreshold >= wakeWordThreshold {
                     Label("Aday eşiği doğrudan uyanma eşiğinden düşük olmalı.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
                 jarvisSlider("Ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
-                             help: "“Yalnızca benim sesim” açıkken kullanılır. Log'da kendi sesinizin puanı bunun altında kalıyorsa düşürün.")
+                             help: "Sesiniz tanınmıyorsa düşürün, başkası uyandırıyorsa yükseltin.")
                     .disabled(!jarvisSpeakerCheckOn)
             }
 
@@ -703,7 +701,7 @@ struct SettingsView: View {
                 .labelsHidden()
                 .frame(width: 260)
             }
-            Text("Jarvis çağrısı, Spotify komutu ve onay kararları. SetFit ~10 ms'de karar verir, emin olmazsa Ollama'ya sorar.")
+            Text("Jarvis çağrısı, Spotify komutları ve onaylar için karar verir.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if appState.decisionEngine.usesSetFit {
@@ -724,7 +722,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Komutlara kısa sesli cevap verir (“Saat 14:05, patron.”). Seçim yalnızca sesi değiştirir, cevabın içeriğini değil.")
+            Text("Komutlara kısa sesli cevap verir, ör. “Saat 14:05, patron.”")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -805,16 +803,14 @@ struct SettingsView: View {
             }
             switch sentenceTestState {
             case .idle:
-                Text("Seçili sesle \(JarvisVoice.testSentences.count) zor cümle okur (Türkçe harfler, soru, sayı, uzun cümle)\(voiceProvider.needsAPIKey ? ", \(JarvisVoice.testSentences.count) istek" : "").")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                EmptyView()
             case .preparing:
                 ProgressView().controlSize(.small)
                 Text("Ses hazırlanıyor…").foregroundStyle(.secondary)
             case .playing(let index):
                 Label("Cümle \(index)/\(JarvisVoice.testSentences.count)", systemImage: "speaker.wave.2.fill")
             case .done:
-                Label("Bitti — süreler log'da ([Voice] Test …)", systemImage: "checkmark.circle.fill")
+                Label("Bitti", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             case .failure(let message):
                 Label(message, systemImage: "xmark.octagon.fill")
@@ -838,7 +834,7 @@ struct SettingsView: View {
             case .notReady?:
                 sentenceTestState = .failure(voiceProvider.needsAPIKey
                     ? "API anahtarı yok."
-                    : "Yerel ses sunucusu açılamadı. Kurulumu (yukarıdaki setup.sh) ve log'u kontrol edin.")
+                    : "Yerel ses sunucusu açılamadı. Kurulumu kontrol edin.")
             case let error?: sentenceTestState = .failure(error.userMessage)
             }
             sentenceTestTask = nil
@@ -921,12 +917,6 @@ struct SettingsView: View {
                     Text("Örnek sayısı: \(appState.targetSpeakerEmbeddingCount)")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-
-                    if let coherence = appState.targetSpeakerProfileCoherence {
-                        Text("Profil tutarlılığı: \(String(format: "%.2f", coherence))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
 
                     if appState.canUndoTargetSpeakerAppend {
                         Spacer()
@@ -1067,8 +1057,8 @@ struct SettingsView: View {
                 Spacer()
             }
             Text(appState.hasBudsTargetSpeakerProfile
-                 ? "Kulaklık takılıyken kayıtlar bu profille süzülür; kafede başkalarının konuşması atılır."
-                 : "Kulaklık takılıyken filtre kapalı; kulaklığı bağlayıp sesini kulaklıkla kaydet.")
+                 ? "Kulaklık takılıyken başkalarının konuşması bu profille ayıklanır."
+                 : "Kulaklık için ayrı profil gerekir; kulaklığı bağlayıp sesinizi kaydedin.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1376,7 +1366,7 @@ struct SettingsView: View {
         let store = CorrectionStore.shared
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Öğrenilen Düzeltmeler")
+                Text("Düzeltmeleri öğren")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -1390,7 +1380,7 @@ struct SettingsView: View {
             }
 
             if store.learningEnabled {
-                Text("Düzenlemeyi bitirince ⌥⇧C ile farkları hemen onaya gönder.")
+                Text("Düzenledikten sonra ⌥⇧C ile düzeltmeleri hemen onaya gönderin.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -1421,7 +1411,7 @@ struct SettingsView: View {
                 .frame(width: 110)
             }
 
-            Text("Yapıştırılan metni elle düzeltmen için tanınan kontrol anları. Öğrenme kapalıyken kullanılmaz.")
+            Text("Yapıştırdıktan sonra düzeltmelerinize bakılan saniyeler.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
 
@@ -1564,10 +1554,6 @@ struct CorrectionsManagementView<Settings: View>: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Düzeltmeler")
                     .font(.title2.weight(.semibold))
-                Text("Öğrenilen düzeltmeleri inceleyin ve kullanılacak olanları seçin.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Label(pendingCount == 0 ? "Bekleyen yok" : "\(pendingCount) bekliyor",

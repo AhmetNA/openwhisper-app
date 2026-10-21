@@ -41,7 +41,7 @@ struct JarvisHotkeyRecorder: View {
                 }
             }
             if capturing && message == nil {
-                Text("Tuşa bastığınız halde bir şey olmuyorsa macOS o tuşu kendine ayırmıştır (F5 dikte/klavye ışığı gibi): fn'i basılı tutarak tekrar basın.")
+                Text("Tuş tepki vermiyorsa macOS onu kullanıyordur (ör. F5); fn ile birlikte basın.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -52,7 +52,7 @@ struct JarvisHotkeyRecorder: View {
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Bu tuşa basınca “Hey Jarvis” demişsiniz gibi dinlemeye başlar ve susunca kendiliğinden kapanır; kayıt sırasında tekrar basarsanız hemen bitirir. Fn'den ayrıdır. F tuşu (parlaklık/ses tuşlarında fn ile birlikte), sağ Option gibi tek bir tuş ya da ⌥J gibi bir kombinasyon olabilir.")
+            Text("Basınca Jarvis dinlemeye başlar, susunca durur; tekrar basarsanız hemen biter. Tek bir tuş (F tuşu, sağ Option) ya da ⌥J gibi bir kombinasyon olabilir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
