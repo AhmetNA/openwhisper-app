@@ -49,7 +49,8 @@ final class LocalModelServer {
 
     nonisolated static func allPorts() -> [Int] {
         [LocalOmniVoiceProvider.port, SetFitDecider.port, QwenASRServer.port,
-         LocalEMALightningProvider.port, LocalPocketTTSProvider.port, LocalPiperJarvisProvider.port]
+         LocalEMALightningProvider.port, LocalPocketTTSProvider.port, LocalPiperJarvisProvider.port,
+         LocalPhononProvider.port]
     }
 
     nonisolated var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }

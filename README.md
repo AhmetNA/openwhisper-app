@@ -302,3 +302,31 @@ CoreAudio reports running output IO, which can include a silent stream. Such app
 excluded with `defaults write com.openwhisper.app mediaActivityIgnoredApps -array com.example.app`.
 On macOS 14.0–14.1 the fallback checks default output device activity and cannot exclude
 individual processes.
+
+### Optional Phonon English voice
+
+Run `bash tts_phonon_server/setup.sh`, then rebuild with `bash build.sh`.
+In voice settings select **Yerel — Phonon 31m (İngilizce)**. Pocket remains the
+Turkish default. Selecting Phonon makes replies English using the existing local
+translation path; dynamic Turkish replies require Ollama.
+
+Phonon uses `ptts==0.4.0`, CPU Q8 weights and the bundled default voice from
+`gradium/phonon-31m-en` at revision `52433c46975bfa13144c56204c9f4ee1c5b148aa`.
+It loads only local files from `~/Library/Application Support/OpenWhisper/tts-phonon/model`.
+No Gradium account or API key is needed. The model is Apache-2.0; runtime code is
+MIT/Apache-2.0. See [upstream](https://github.com/gradium-ai/xn-ptts).
+
+`python3 tts_phonon_server/verify.py` checks the installed model through HTTP and
+writes `/tmp/jarvis-phonon-sample.wav`. A single warm Apple M5 run produced 5.68 s
+of 24 kHz mono audio in 0.131 s; this measures full WAV generation, not first-audio
+latency or an end-to-end microphone conversation. Playback uses the existing WAV
+path rather than streaming. Cancelling playback discards late audio; a synthesis
+already running on the server can finish. Switching providers stops its process.
+
+Phonon replies now use deterministic, lightweight prosody rules (no extra model):
+positive openings are faster, apologies/errors slightly slower, ellipses slower,
+and ordinary questions/factual replies neutral. Existing punctuation is preserved;
+words are never rewritten. These are delivery cues, not guaranteed emotion recognition.
+Selection happens after English translation. The prosody version is part of the cache
+identity so old neutral clips are regenerated. Tone selection and synthesis share a
+lock, and each request resets the speed condition. Other voices are unchanged.

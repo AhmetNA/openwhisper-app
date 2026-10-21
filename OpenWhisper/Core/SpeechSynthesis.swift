@@ -128,6 +128,7 @@ enum SpeechProviders {
     static let all: [SpeechProviderDescriptor] = [
         LocalPocketTTSProvider.descriptor,
         LocalPiperJarvisProvider.descriptor,
+        LocalPhononProvider.descriptor,
         LocalOmniVoiceProvider.descriptor,
         LocalEMALightningProvider.descriptor,
         GeminiSpeechProvider.descriptor,

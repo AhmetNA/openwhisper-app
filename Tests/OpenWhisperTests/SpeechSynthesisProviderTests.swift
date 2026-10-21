@@ -67,11 +67,24 @@ final class SpeechSynthesisProviderTests: XCTestCase {
     }
 
     func testRegistryListsBothProvidersWithGeminiModels() {
-        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "local", "ema", "gemini"])
+        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "phonon", "local", "ema", "gemini"])
         XCTAssertEqual(SpeechProviders.descriptor(for: "gemini").models.map(\.id),
                        ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"])
         XCTAssertFalse(SpeechProviders.descriptor(for: "local").needsAPIKey)
         XCTAssertTrue(SpeechProviders.descriptor(for: "gemini").needsAPIKey)
+    }
+
+    @MainActor
+    func testPhononSelectionUsesEnglishAndKeepsTurkishDefault() {
+        store.providerID = "phonon"
+        let reopened = SpeechSettingsStore(defaults: UserDefaults(suiteName: suiteName)!, secrets: secrets)
+        let provider = reopened.makeProvider()
+        XCTAssertTrue(provider === LocalPhononProvider.shared)
+        XCTAssertEqual(provider.replyLanguage, .english)
+        XCTAssertFalse(SpeechProviders.descriptor(for: "phonon").needsAPIKey)
+        XCTAssertNotEqual(provider.cacheIdentity, LocalPiperJarvisProvider.shared.cacheIdentity)
+        XCTAssertEqual(SpeechProviders.defaultID, "pocket")
+        XCTAssertEqual(Set(LocalModelServer.allPorts()).count, LocalModelServer.allPorts().count)
     }
 
     @MainActor

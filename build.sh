@@ -118,6 +118,13 @@ if [ -x "$PIPER_DEST/.venv/bin/python" ]; then
     echo "==> Updated Piper Jarvis server in $PIPER_DEST"
 fi
 
+# Optional offline English Phonon voice.
+PHONON_DEST="$HOME/Library/Application Support/OpenWhisper/tts-phonon"
+if [ -x "$PHONON_DEST/.venv/bin/python" ]; then
+    cp tts_phonon_server/server.py "$PHONON_DEST/"
+    echo "==> Updated Phonon server in $PHONON_DEST"
+fi
+
 # Alternative speech model (Settings › Konuşma modeli › Qwen3-ASR): keep the installed server
 # script in sync. The venv and the model come from asr_server/setup.sh (once).
 ASR_DEST="$HOME/Library/Application Support/OpenWhisper/asr"
