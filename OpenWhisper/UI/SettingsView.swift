@@ -289,6 +289,16 @@ struct SettingsView: View {
                 }
             }
             Divider()
+            Toggle("Türkçe sayı ve tarih biçimlendirme (Damga)", isOn: $appState.damgaEnabled)
+            Text("Yüz elli lira → 150 TL. Türkçe diktede sayı, tarih, saat ve iletişim bilgilerini çevrimdışı biçimlendirir. Deneysel; özgün metne değiştirme kısayoluyla dönebilirsiniz.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if appState.damgaEnabled {
+                Text(appState.language == "tr" ? DamgaNormalizer.shared.status : "Türkçe seçildiğinde çalışır.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Divider()
             Toggle("Gülmeyi random'a çevir", isOn: $appState.laughterToRandomEnabled)
             Text("Ha ha ha, haha ve kahkaha gibi ifadeleri klavye satırından üretilen 8–10 harflik random'a dönüştürür.")
                 .font(.caption)

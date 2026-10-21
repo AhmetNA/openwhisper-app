@@ -8,6 +8,16 @@ import QuartzCore
 import os
 
 extension AppState {
+    /// Called only after routing, on text that will be pasted or copied. Keep command
+    /// parsing and TTS's existing spokenForm independent of the ITN grammar.
+    func formatTurkishDictation(_ text: String) async -> String {
+        guard DamgaNormalizer.shouldNormalize(enabled: damgaEnabled, language: language, text: text) else { return text }
+        let terms = Array(Set((GlossaryStore.terms() ?? []) + CorrectionStore.shared.activePairs.map(\.right)))
+        let output = await DamgaNormalizer.shared.normalize(text, protectedTerms: terms)
+        guard damgaEnabled, language == "tr" else { return text }
+        return output
+    }
+
     /// Words in `text` that are neither Turkish nor English, minus the user's own glossary
     /// terms and learned corrections, which are often not dictionary words either.
     func misheardWords(in text: String) -> [MisheardWordDetector.Word] {

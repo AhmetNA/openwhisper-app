@@ -260,6 +260,7 @@ extension AppState {
                     }
                 }
 
+                initialText = await self.formatTurkishDictation(initialText)
                 initialText = TranscriptSanitizer.removeForbiddenArtifacts(from: initialText)
                 session.latency.record(.preprocessing, since: preprocessingStartedAt)
                 guard !initialText.isEmpty else {
@@ -359,7 +360,7 @@ extension AppState {
                                 self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
                                 self.swapTargetApp = targetApp
                                 self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
-                                self.lastInjectedIsCleaned = false
+                                self.lastInjectedIsCleaned = initialText != rawText
                                 self.lastInjectedText = initialText
                                 self.hotkey?.setSwapAvailable(true)
                                 DictationSnapshot.shared.capture(
@@ -381,7 +382,8 @@ extension AppState {
                                         let cleanupStartedAt = session.latency.timestamp()
                                         let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
                                         session.latency.record(.cleanup, since: cleanupStartedAt)
-                                        let trimmedCleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        let formatted = await self.formatTurkishDictation(cleaned)
+                                        let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                         guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
                                         if LLMCleanup.isNoOpCleanup(original: initialText, cleaned: trimmedCleaned) {

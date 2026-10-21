@@ -133,6 +133,13 @@ if [ -x "$ASR_DEST/.venv/bin/python" ]; then
     echo "==> Updated Qwen3-ASR server in $ASR_DEST"
 fi
 
+# Optional final-output Turkish ITN. setup.sh installs the pinned native runtime once.
+DAMGA_DEST="$HOME/Library/Application Support/OpenWhisper/damga"
+if [ -x "$DAMGA_DEST/.venv/bin/python" ]; then
+    cp damga_server/server.py "$DAMGA_DEST/"
+    echo "==> Updated Damga server in $DAMGA_DEST"
+fi
+
 # SetFit decision models (Settings › Karar motoru): keep the installed server script in sync.
 # The venv and the trained models come from decision_model/install.sh (retrain.sh runs it).
 DECIDER_DEST="$HOME/Library/Application Support/OpenWhisper/decider"

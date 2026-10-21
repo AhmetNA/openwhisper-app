@@ -40,6 +40,7 @@ extension AppState {
             audioEngineForPrewarm?.prewarmDeepFilter()
         }
         llmCleanup = LLMCleanup(model: ollamaModel)
+        if damgaEnabled && language == "tr" { Task { await DamgaNormalizer.shared.prepare() } }
         textInjector = TextInjector()
         flowBarController = FlowBarController(appState: self)
         syncFlowBarVisibility()

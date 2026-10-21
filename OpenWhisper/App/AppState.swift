@@ -54,13 +54,31 @@ final class AppState {
         didSet { UserDefaults.standard.set(transcriptionModel, forKey: "whisperModel") }
     }
     var language: String {
-        didSet { UserDefaults.standard.set(language, forKey: "language") }
+        didSet {
+            UserDefaults.standard.set(language, forKey: "language")
+            if damgaEnabled && language == "tr" {
+                Task { await DamgaNormalizer.shared.prepare() }
+            } else {
+                DamgaNormalizer.shared.stop()
+            }
+        }
     }
     var audioProcessingMode: AudioProcessingMode {
         didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
     }
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
+    }
+    /// Opt-in final-output formatting, independent of Ollama cleanup.
+    var damgaEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(damgaEnabled, forKey: "damgaEnabled")
+            if damgaEnabled && language == "tr" {
+                Task { await DamgaNormalizer.shared.prepare() }
+            } else {
+                DamgaNormalizer.shared.stop()
+            }
+        }
     }
     /// Jarvis answers voice commands out loud (`JarvisVoice`, with the provider below).
     var voiceRepliesEnabled: Bool {
@@ -555,6 +573,7 @@ final class AppState {
             audioProcessingMode = legacyVoiceProcessing ? .appleVoiceProcessing : .off
         }
         llmCleanupEnabled = defaults.object(forKey: "llmCleanupEnabled") as? Bool ?? true
+        damgaEnabled = defaults.object(forKey: "damgaEnabled") as? Bool ?? false
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
         voiceRepliesEnabled = defaults.object(forKey: "voiceRepliesEnabled") as? Bool ?? true
         voiceProviderID = SpeechSettingsStore.standard.providerID

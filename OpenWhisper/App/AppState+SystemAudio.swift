@@ -159,6 +159,7 @@ extension AppState {
         } else if llmCleanupEnabled && cleanupAvailable {
             output = await llmCleanup?.cleanup(text: output) ?? output
         }
+        output = await formatTurkishDictation(output)
         output = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !output.isEmpty else { return }
         lastTranscription = output

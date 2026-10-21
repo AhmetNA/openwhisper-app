@@ -139,6 +139,22 @@ After editing a pasted dictation, press `⌥⇧C` (Option–Shift–C) to compar
 
 When cleanup is enabled, Jarvis keeps the raw Whisper result and the cleaned result for the latest pasted dictation. Use the swap shortcut shown in the app to replace the inserted version with the other one.
 
+### Optional Turkish number and date formatting (Damga)
+
+Damga converts spoken forms such as `yüz elli lira` to `150 TL` after recognition. It runs on CPU, offline, independently of Ollama. It is experimental and **off by default**.
+
+From the application repository, install once:
+
+```bash
+bash damga_server/setup.sh
+```
+
+Rebuild with `bash build.sh`, select **Turkish**, then enable **Türkçe sayı ve tarih biçimlendirme (Damga)** in Settings. The app starts the runtime when enabled and frees it when disabled. Existing installations need a rebuild after changes to `damga_server/server.py`.
+
+Final dictation, replayed recordings and system-audio clipboard output use ITN. URLs, written e-mails/IBANs, code spans and glossary terms are protected. Errors and timeouts keep the original text. The swap shortcut restores raw dictation after a paste. Auto-detect does not enable ITN; inputs over 4,000 characters pass through unchanged.
+
+Local Apple M5 text tests measured **0.62 ms p50 / 1.81 ms p95**, about **56 MiB peak RSS** (native runtime, Python 3.12, 3,000 calls; excludes HTTP/Swift and ASR). See [research, limitations and verification](docs/DAMGA-ITN.md).
+
 ## Settings
 
 The menu-bar settings panel includes:
@@ -146,6 +162,7 @@ The menu-bar settings panel includes:
 - language selection, including Turkish and auto-detect;
 - konuşma modeli seçimi (WhisperKit veya keşfedilen yerel STT sağlayıcıları) ve indirme durumu;
 - Ollama cleanup toggle and model selection;
+- optional Turkish ITN formatting with Damga;
 - microphone/input-device selection;
 - launch-at-login and flow-bar preferences;
 - learned correction management;

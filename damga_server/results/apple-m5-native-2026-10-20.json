@@ -1,0 +1,17 @@
+{
+  "platform": "macOS-27.2-arm64-arm-64bit",
+  "machine": "arm64",
+  "cpu": "Apple M5",
+  "python": "3.12.14",
+  "damga": "1.0.3",
+  "backend": "native",
+  "cases": 30,
+  "failures": [],
+  "initialization_ms": 44.5700419950299,
+  "p50_ms": 0.6205409881658852,
+  "p95_ms": 1.8118750012945384,
+  "samples": 3000,
+  "rss_mib": 55.90625,
+  "peak_rss_mib": 56.15625,
+  "scope": "synthetic text -> protected ITN wrapper; no audio, no Swift/HTTP timing"
+}
