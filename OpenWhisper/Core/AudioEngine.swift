@@ -1155,6 +1155,11 @@ final class AudioEngine: @unchecked Sendable {
         return ids
     }
 
+    /// The UID of the system default input, for keying per-device state when no mic is chosen.
+    static func defaultInputDeviceUID() -> String? {
+        defaultInputDeviceID().flatMap { stringProperty(deviceID: $0, selector: kAudioDevicePropertyDeviceUID) }
+    }
+
     static func defaultInputDeviceID() -> AudioDeviceID? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,

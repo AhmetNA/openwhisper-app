@@ -1011,13 +1011,14 @@ extension AppState {
 
     /// Whether this recording runs DeepFilterNet (`DeepFilterAutoDecider`), logged with its inputs.
     func decideDeepFilter(inputDeviceUID: String?, inputIsBluetooth: Bool, echoCancellation: Bool) -> Bool {
-        let device = inputDeviceUID ?? "default"
+        let device = inputDeviceUID ?? AudioEngine.defaultInputDeviceUID() ?? "default"
         let floor = deepFilterAuto.floor(for: device)
         let decision = deepFilterAuto.decide(
             setting: deepFilterSetting,
             device: device,
             mediaPlaying: mediaPlaying,
-            echoCancellation: echoCancellation
+            echoCancellation: echoCancellation,
+            measuresRoom: !VoiceTestInjector.shared.isActive
         )
         let floorText = floor.map { String(format: "%.1f dBFS (%.1f s, %.0f s ago)", $0.dbfs, $0.seconds, Date().timeIntervalSince($0.measuredAt)) } ?? "none"
         owLog("[DeepFilterAuto] \(decision.enabled ? "ON" : "OFF") (\(decision.reason)) | setting=\(deepFilterSetting.rawValue) device=\(device) bluetooth=\(inputIsBluetooth) media=\(mediaPlaying) aec=\(echoCancellation) floor=\(floorText)"
@@ -1028,6 +1029,10 @@ extension AppState {
     /// Files the stopped recording's raw noise floor for the next decision on the same input.
     func noteRecordingNoiseFloor(_ audioEngine: AudioEngine) {
         let floor = audioEngine.lastRawNoiseFloor
+        guard !VoiceTestInjector.shared.isActive else {
+            deepFilterAuto.recordingStopped(floorDBFS: nil, measuredSeconds: 0)
+            return
+        }
         if deepFilterAuto.recordingStopped(floorDBFS: floor.dbfs, measuredSeconds: floor.seconds) {
             owLog(String(format: "[DeepFilterAuto] Noted floor %.1f dBFS over %.1f s", floor.dbfs ?? .nan, floor.seconds))
         }

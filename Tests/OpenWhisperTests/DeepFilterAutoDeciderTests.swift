@@ -112,6 +112,13 @@ final class DeepFilterAutoDeciderTests: XCTestCase {
         XCTAssertFalse(autoDecision(&decider, at: t0 + 20).enabled)
     }
 
+    func testVoiceTestRecordingsAreNotMeasurements() {
+        var decider = DeepFilterAutoDecider()
+        _ = decider.decide(setting: .automatic, device: mic, mediaPlaying: false, echoCancellation: false, measuresRoom: false, now: t0)
+        XCTAssertFalse(decider.recordingStopped(floorDBFS: -85, measuredSeconds: 5, at: t0 + 5))
+        XCTAssertNil(decider.floor(for: mic))
+    }
+
     func testStopWithoutAStartedDecisionFilesNothing() {
         var decider = DeepFilterAutoDecider()
         XCTAssertFalse(decider.recordingStopped(floorDBFS: -80, measuredSeconds: 5, at: t0))

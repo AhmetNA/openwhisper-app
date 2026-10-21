@@ -73,8 +73,9 @@ struct DeepFilterDecision: Equatable, Sendable {
 /// back on well before it gets noisy (hysteresis), and on whenever it doesn't know.
 /// Measurements taken while a recording runs only affect the next decision.
 struct DeepFilterAutoDecider {
-    /// Raw built-in-mic floors in this user's wake clips sit near -74 dBFS in a quiet room and
-    /// at -45…-25 dBFS with sound around; the band between the two thresholds keeps the last state.
+    /// The built-in mic's raw floor in a quiet room reads about -74…-78 dBFS (this user's wake
+    /// clips; the voice auto-stop's floor, 21 Oct 2026), and -45…-25 dBFS with sound around. The
+    /// band between the two thresholds keeps the last state.
     static let cleanBelowDBFS = -62.0
     static let noisyFromDBFS = -55.0
     static let maxMeasurementAge: TimeInterval = 10 * 60
@@ -92,9 +93,11 @@ struct DeepFilterAutoDecider {
         device: String,
         mediaPlaying: Bool,
         echoCancellation: Bool,
+        measuresRoom: Bool = true,
         now: Date = Date()
     ) -> DeepFilterDecision {
-        activeDevice = device
+        // A voice test replaces the mic with a clip over a synthetic floor: not this room.
+        activeDevice = measuresRoom ? device : nil
         switch setting {
         case .on: return DeepFilterDecision(enabled: true, reason: "setting on")
         case .off: return DeepFilterDecision(enabled: false, reason: "setting off")
