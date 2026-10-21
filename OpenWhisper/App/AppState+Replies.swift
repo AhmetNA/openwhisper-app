@@ -66,15 +66,15 @@ extension AppState {
     }
 
     /// A "Jarvis" session that is no command and not meant for Claude Code / Codex: the user is
-    /// talking to Jarvis, so the local LLM answers out loud. The voice starts on the first
+    /// talking to Jarvis, so the chat model (cloud or local) answers out loud. The voice starts on the first
     /// sentence while the rest is still being written. Without a voice the answer is shown.
     /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
     @discardableResult
     /// `recalled` is set for "geçen hafta ne demiştim?"; such a question is not journaled itself.
     func chatReply(to text: String, recalled: [String] = []) async -> (text: String?, heard: Bool) {
-        guard ollamaAvailable else {
-            owLog("[Chat] Ollama not available")
-            showFlowBarMessage("Ollama kapalı, sohbet edemiyorum")
+        guard ollamaAvailable || JarvisChat.cloudReady else {
+            owLog("[Chat] Neither Ollama nor the cloud model available")
+            showFlowBarMessage("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum")
             await speakReply(jarvisReply.failure("yerel model şu an kapalı"))
             return (nil, false)
         }

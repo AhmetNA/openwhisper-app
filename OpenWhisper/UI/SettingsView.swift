@@ -9,9 +9,7 @@ struct SettingsView: View {
     @State private var spotifyTestState: SpotifyTestState = .idle
     @State private var spotifyHasStoredSecret: Bool = false
     @State private var spotifyConnected: Bool = false
-    @State private var voiceAPIKeyInput: String = ""
     @State private var voiceAPIKeyStored: Bool = false
-    @State private var voiceAPIKeyError: String?
     @State private var voiceTestState: VoiceTestState = .idle
 
     private enum VoiceTestState: Equatable {
@@ -51,15 +49,15 @@ struct SettingsView: View {
     }
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, models, jarvis, voiceReplies, voice, recordings, spotify, corrections, permissions
+        case general, models, apiKeys, jarvis, voice, recordings, spotify, corrections, permissions
 
         var id: Self { self }
         var title: String {
             switch self {
             case .general: "Genel"
             case .models: "Modeller"
+            case .apiKeys: "API Anahtarları"
             case .jarvis: "Jarvis"
-            case .voiceReplies: "Sesli Cevap"
             case .voice: "Sesim"
             case .recordings: "Kayıtlar"
             case .spotify: "Spotify"
@@ -70,9 +68,9 @@ struct SettingsView: View {
         var symbol: String {
             switch self {
             case .general: "slider.horizontal.3"
-            case .models: "waveform"
+            case .models: "cpu"
+            case .apiKeys: "key"
             case .jarvis: "ear"
-            case .voiceReplies: "speaker.wave.2"
             case .voice: "person.wave.2"
             case .recordings: "waveform.badge.mic"
             case .spotify: "music.note"
@@ -178,19 +176,35 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
             }
         case .models:
+            modelCategory("Konuşma tanıma")
             transcriptionModelSection
-            Divider()
-            cleanupSection
             if appState.modelLoading {
                 ProgressView("Model yükleniyor…")
             } else if !appState.modelLoaded {
                 Label("Model hazır değil", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
             }
+            Divider()
+            modelCategory("Jarvis sohbeti (LLM)")
+            chatModelSection
+            Divider()
+            modelCategory("Metin temizleme")
+            cleanupSection
+            Divider()
+            modelCategory("Karar modelleri")
+            decisionSection
+            Divider()
+            modelCategory("Sesli cevap (TTS)")
+            voiceRepliesSection
+        case .apiKeys:
+            APIKeysView { provider in
+                guard provider.id == APIKeys.gemini.id else { return }
+                voiceTestState = .idle
+                refreshVoiceAPIKeyState()
+                if provider.hasKey, appState.voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
+            }
         case .jarvis:
             jarvisSection
-        case .voiceReplies:
-            voiceRepliesSection
         case .voice:
             targetSpeakerSection
         case .recordings:
@@ -258,7 +272,7 @@ struct SettingsView: View {
             }
             if appState.llmCleanupEnabled {
                 HStack {
-                    Text("AI Model")
+                    Text("Yerel model (Ollama)")
                     Spacer()
                     Picker("", selection: $appState.ollamaModel) {
                         ForEach(LLMCleanup.supportedModels, id: \.tag) { option in
@@ -273,26 +287,6 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-            }
-            Divider()
-            HStack {
-                Text("Karar motoru")
-                Spacer()
-                Picker("", selection: $appState.decisionEngine) {
-                    ForEach(SetFitDecider.Engine.allCases) { engine in
-                        Text(engine.label).tag(engine)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 260)
-            }
-            Text("Spotify komutu mu, gerçek \"Jarvis\" çağrısı mı, Jarvis'e mi konuşuluyor, hatırlatıcı silme onaylandı mı kararları. SetFit Jarvis verisiyle eğitilmiş yerel modellerle ~10 ms'de karar verir; emin olmadığında Ollama'ya sorar. Metin temizleme her zaman Ollama'da kalır.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if appState.decisionEngine.usesSetFit {
-                Text("SetFit: \(appState.setFitStatus)")
-                    .font(.caption)
-                    .foregroundStyle(appState.setFitStatus.hasPrefix("Hazır") ? Color.secondary : Color.orange)
             }
             Divider()
             Toggle("Gülmeyi random'a çevir", isOn: $appState.laughterToRandomEnabled)
@@ -711,6 +705,41 @@ struct SettingsView: View {
         SpeechProviders.descriptor(for: appState.voiceProviderID)
     }
 
+    private func modelCategory(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private var chatModelSection: some View {
+        CloudChatSettingsView(ollamaModel: appState.ollamaModel) { selectedTab = .apiKeys }
+    }
+
+    private var decisionSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Karar motoru")
+                Spacer()
+                Picker("", selection: $appState.decisionEngine) {
+                    ForEach(SetFitDecider.Engine.allCases) { engine in
+                        Text(engine.label).tag(engine)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 260)
+            }
+            Text("Jarvis çağrısı, Spotify komutu ve onay kararları. SetFit ~10 ms'de karar verir, emin olmazsa Ollama'ya sorar.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if appState.decisionEngine.usesSetFit {
+                Text("SetFit: \(appState.setFitStatus)")
+                    .font(.caption)
+                    .foregroundStyle(appState.setFitStatus.hasPrefix("Hazır") ? Color.secondary : Color.orange)
+            }
+        }
+    }
+
     private var voiceRepliesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -797,22 +826,10 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
-                SecureField(voiceAPIKeyStored ? "Yeni anahtarla değiştir" : "Gemini API anahtarı", text: $voiceAPIKeyInput)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(saveVoiceAPIKey)
-                Button("Kaydet", action: saveVoiceAPIKey)
-                    .disabled(voiceAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button("Sil", role: .destructive) {
-                    voiceAPIKeyError = SpeechSettingsStore.standard.deleteAPIKey(for: voiceProvider.id) ? nil : "Keychain'den silinemedi"
-                    voiceTestState = .idle
-                    refreshVoiceAPIKeyState()
-                }
-                .disabled(!voiceAPIKeyStored)
-            }
-            .controlSize(.small)
             HStack(spacing: 8) {
-                Button("Anahtarı test et", action: testVoice)
+                Button(voiceAPIKeyStored ? "Anahtarı değiştir" : "Anahtar ekle") { selectedTab = .apiKeys }
+                    .controlSize(.small)
+                Button("Sesi test et", action: testVoice)
                     .controlSize(.small)
                     .disabled(!voiceAPIKeyStored || voiceTestState == .testing)
                 switch voiceTestState {
@@ -831,24 +848,7 @@ struct SettingsView: View {
                 }
             }
             .font(.caption2)
-            if let voiceAPIKeyError {
-                Text(voiceAPIKeyError)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-            }
         }
-    }
-
-    private func saveVoiceAPIKey() {
-        let key = voiceAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return }
-        let saved = SpeechSettingsStore.standard.saveAPIKey(key, for: voiceProvider.id)
-        voiceAPIKeyError = saved ? nil : "Keychain'e kaydedilemedi"
-        // The field never shows a saved key again.
-        voiceAPIKeyInput = ""
-        voiceTestState = .idle
-        refreshVoiceAPIKeyState()
-        if saved, appState.voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
     }
 
     /// Reads `JarvisVoice.testSentences` with the chosen provider/model/voice, so voices can be

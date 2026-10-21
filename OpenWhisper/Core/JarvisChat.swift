@@ -1,7 +1,7 @@
 import Foundation
 
 /// Free conversation with Jarvis ("Selam diyebilir misin?", "Kara deliği kısaca anlat") through
-/// the local Ollama model. Used only for "Jarvis" sessions that are neither a command nor
+/// a cloud model (chosen in Settings) with the local Ollama model as its fallback. Used only for "Jarvis" sessions that are neither a command nor
 /// meant for Claude Code / Codex. The reply streams out sentence by sentence so the voice can
 /// start on the first sentence while the model is still writing the rest. The last few turns
 /// are remembered for half an hour, so follow-up questions work.
@@ -22,13 +22,14 @@ final class JarvisChat {
         Date().timeIntervalSince(lastTurn) <= Self.memory ? history.last(where: { $0["role"] == "assistant" })?["content"] : nil
     }
 
-    /// Sentences of the reply as they are written. Ends early (possibly empty) when Ollama is
-    /// unreachable or slow; the finished reply is added to the conversation history.
+    /// Sentences of the reply as they are written. Ends early (possibly empty) when no model is
+    /// reachable; the finished reply is added to the conversation history.
     /// `language` is the reply voice's: an English voice gets English answers.
     /// `context` is what Jarvis can see right now (`JarvisContext.promptLines`).
     /// `userFacts` is what the user asked Jarvis to remember (`UserMemory`).
     /// `recalled` is the journal of the past time the user asks about (`JarvisJournal`); empty
     /// for every other question, so the prompt stays short.
+    /// `model` is the Ollama model, used alone or when the cloud model fails.
     func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
         let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled)]]
@@ -71,18 +72,19 @@ final class JarvisChat {
                         continuation.yield(sentence)
                     }
                 }
+                let backend = Backend()
                 do {
-                    for try await piece in Self.stream(messages: messages, model: model) {
+                    for try await piece in Self.stream(messages: messages, ollamaModel: model, backend: backend) {
                         buffer += piece
                         emit(Self.takeSentences(from: &buffer))
                     }
                     emit([buffer])
                 } catch is CancellationError {
                 } catch {
-                    owLog("[Chat] Ollama request failed: \(error.localizedDescription)")
+                    owLog("[Chat] \(backend.value) request failed: \(error.localizedDescription)")
                 }
                 let total = Int(Date().timeIntervalSince(started) * 1000)
-                owLog("[Chat] '\(text)' → '\(full)' (first sentence \(firstSentenceMs ?? -1) ms, all \(total) ms)")
+                owLog("[Chat] '\(text)' → '\(full)' (\(backend.value), first sentence \(firstSentenceMs ?? -1) ms, all \(total) ms)")
                 self.lastReply = full
                 if !full.isEmpty {
                     self.history += [["role": "user", "content": text], ["role": "assistant", "content": full]]
@@ -95,12 +97,43 @@ final class JarvisChat {
         }
     }
 
-    // MARK: - Ollama
+    // MARK: - Models
 
-    private static func stream(messages: [[String: String]], model: String) -> AsyncThrowingStream<String, Error> {
-        LLM.default.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 10,
-                                              temperature: 0.6, maxTokens: 110))
+    /// The cloud model when it is chosen and set up, with Ollama taking over when it is slow or
+    /// failing (`ChatFallback`); otherwise Ollama alone. `backend` names who answered, for the log.
+    private static func stream(messages: [[String: String]], ollamaModel: String,
+                               backend: Backend) -> AsyncThrowingStream<String, Error> {
+        let local = { @Sendable in
+            LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: messages, timeout: 10,
+                                                  temperature: 0.6, maxTokens: 110))
+        }
+        guard ChatBackend.selected == .cloud, let (client, model) = CloudLLM.client() else {
+            backend.set("ollama \(ollamaModel)")
+            return local()
+        }
+        backend.set("cloud \(model)")
+        return ChatFallback.stream(
+            primary: {
+                client.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 10,
+                                                 temperature: 0.6, maxTokens: 110))
+            },
+            fallback: local,
+            onFallback: { reason in
+                owLog("[Chat] Cloud \(model): \(reason), falling back to Ollama")
+                backend.set("ollama \(ollamaModel) after cloud \(reason)")
+            })
     }
+
+    /// Who is answering; written from the fallback's task, read when the reply is logged.
+    final class Backend: @unchecked Sendable {
+        private let lock = NSLock()
+        private var name = ""
+        func set(_ value: String) { lock.withLock { name = value } }
+        var value: String { lock.withLock { name } }
+    }
+
+    /// The cloud model can answer on its own, without Ollama running.
+    static var cloudReady: Bool { ChatBackend.selected == .cloud && CloudLLM.client() != nil }
 
     // MARK: - Text
 
