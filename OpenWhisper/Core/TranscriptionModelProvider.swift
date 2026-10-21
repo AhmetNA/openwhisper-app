@@ -105,9 +105,9 @@ final class TranscriptionModelRegistry: @unchecked Sendable {
             owLog("[TranscriptionModelRegistry] WhisperKit model manifesti bulunamadı")
         }
 
-        // Deneysel alternatif (asr_server/setup.sh ile kurulur); iki seçenek aynı sunucuyu kullanır.
-        register(LocalQwenASRProvider(useGlossary: false))
-        register(LocalQwenASRProvider(useGlossary: true))
+        // Qwen3-ASR (LocalQwenASRProvider) is no longer offered: on the same 48-clip Turkish corpus
+        // it made more errors than Turbo (clean WER 12.6% / 14.0% with glossary vs 8.4%) and wrote
+        // sentences into silence. See tools/whisper-compare/results/qwen/summary.json.
 
         // Paket içi manifestler uygulamanın kendi koduyla aynı güvene sahip (.bundled): imzalı
         // app bundle'ının parçası, kullanıcı tarafından değiştirilemez.

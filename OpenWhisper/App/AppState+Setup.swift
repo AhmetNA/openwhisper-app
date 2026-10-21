@@ -222,6 +222,13 @@ extension AppState {
         modelLoaded = false
         modelLoading = true
         modelLoadProgress = 0
+        // A saved choice that is no longer offered (e.g. the removed Qwen3-ASR options) falls
+        // back to the default instead of leaving dictation without a model.
+        if transcriptionModelRegistry.provider(for: transcriptionModel) == nil,
+           transcriptionModel != TranscriptionModelRegistry.defaultModelID {
+            owLog("[OpenWhisper] Model \(transcriptionModel) no longer offered; using \(TranscriptionModelRegistry.defaultModelID)")
+            transcriptionModel = TranscriptionModelRegistry.defaultModelID
+        }
         guard let provider = transcriptionModelRegistry.provider(for: transcriptionModel) else {
             modelLoading = false
             lastError = "Seçili konuşma modeli bulunamadı: \(transcriptionModel)"

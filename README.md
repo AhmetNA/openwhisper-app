@@ -58,7 +58,7 @@ Accessibility API → text pasted into the active app
 | macOS | 14.0 or newer |
 | Build tools | Xcode Command Line Tools; the full Xcode app is not required |
 | Optional cleanup | Ollama plus `gemma4:e4b-it-qat` (default), `gemma4:e2b-it-qat` (faster) or `qwen3.5:4b` |
-| Optional voice add-ons | `uv` and Python 3.12 for the local voices, SetFit decider and Qwen3-ASR (see below) |
+| Optional voice add-ons | `uv` and Python 3.12 for the local voices and SetFit decider (see below) |
 | Optional Spotify | A Spotify Developer application and Spotify Premium for playback endpoints |
 
 Intel Macs are not supported by the current build.
@@ -227,11 +227,6 @@ scripts up to date afterwards.
 | Gemini | Cloud | API key in Settings; sends the reply text to Google |
 
 `tts_antalia_server/` is compare-only (`scripts/tts-compare/`); the app does not use it.
-
-### Alternative speech model
-
-**Settings › Konuşma modeli › Qwen3-ASR** uses Qwen3-ASR 1.7B on MLX instead of Whisper.
-Install once with `bash asr_server/setup.sh` (~2.5 GB).
 
 ## Optional Spotify setup
 

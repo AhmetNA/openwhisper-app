@@ -383,14 +383,6 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            if LocalQwenASRProvider.isQwen(appState.transcriptionModel) {
-                Text(QwenASRServer.isInstalled
-                     ? "~2,5 GB bellek kullanır. \"+ sözlük\" sürümü kısa kayıtlarda sözlükteki kelimeleri uydurabilir."
-                     : "Qwen3-ASR kurulu değil. Terminalde app/asr_server/setup.sh çalıştırıp (~2,5 GB) modeli yeniden seçin.")
-                    .font(.caption2)
-                    .foregroundStyle(QwenASRServer.isInstalled ? Color.secondary : Color.orange)
-            }
-
             if !appState.pendingProviderApprovals().isEmpty {
                 Label("Onay bekleyen konuşma sağlayıcısı var.", systemImage: "exclamationmark.shield")
                     .font(.caption2)
