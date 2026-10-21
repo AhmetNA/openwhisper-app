@@ -631,10 +631,6 @@ struct SettingsView: View {
 
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Çoğu kullanıcının değiştirmesi gerekmeyen ince ayarlar.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
             modelCategory("Jarvis uyanma hassasiyeti")
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
