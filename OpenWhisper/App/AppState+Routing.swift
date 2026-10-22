@@ -169,9 +169,11 @@ extension AppState {
             // still recognized; the list is the user's ses-benzerleri.txt.
             // Wake sessions now start at the wake itself, so the tail of "Jarvis" can be heard.
             let joined = AudioSegmentation.joinTranscripts(session.segmentTexts)
-            // A follow-up opened over Jarvis's reply heard the reply first.
+            // A follow-up opened over Jarvis's reply heard the reply first, and may itself
+            // start with "Hey Jarvis," (voice test 2026-10-22).
             let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined)
-                : session.precedingReply != nil ? CommandFollowUp.removingEcho(of: session.precedingReply, from: joined)
+                : session.followsCommand
+                    ? WakeWordVerifier.strippingLeadingWakeWord(CommandFollowUp.removingEcho(of: session.precedingReply, from: joined))
                 : joined
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
             let (text, soundAlikes) = session.appliesSpeechChecks

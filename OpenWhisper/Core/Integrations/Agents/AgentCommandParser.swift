@@ -130,9 +130,12 @@ enum AgentCommandParser {
     }()
 
     // "Claude Code'da yeni session aç" / "yeni bir konuşma aç": open it, write nothing.
+    // "CloudCode'da şu an yeni bir sesion aç" (voice test 2026-10-22): a time word or
+    // "lütfen" may sit around the command.
     private static let openNewSessionRegex: NSRegularExpression = {
         let word = "(?:\(sessionStem)|(?<spotify>spotify))\(sessionCase)?(?:y[ıi])?"
-        let pattern = "^\\s*(?:\(names)\(suffix)\\s+)?\(newSession)\\s+\(word)\\s+\(openVerb)(?:\\s+m[ıi]s[ıi]n)?[\\s.!?,]*$"
+        let extra = #"(?:\s*,?\s*(?:şu\s+an|şimdi|hemen|lütfen))?"#
+        let pattern = "^\\s*(?:\(names)\(suffix)\(extra)\\s+)?\(extra)\\s*\(newSession)\\s+\(word)\\s+\(openVerb)(?:\\s+m[ıi]s[ıi]n)?\(extra)[\\s.!?,]*$"
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 

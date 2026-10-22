@@ -159,6 +159,11 @@ final class AgentCommandParserTests: XCTestCase {
                        AgentDictation(target: .codex, body: "", send: false, session: .new))
         XCTAssertEqual(AgentCommandParser.parse("Kodekste yeni sohbet aç")?.target, .codex)
         XCTAssertEqual(AgentCommandParser.parse("Klod'da yeni sohbet açar mısın")?.session, .new)
+        // Real Whisper output from the 2026-10-22 voice test.
+        XCTAssertEqual(AgentCommandParser.parse("CloudCode'da şu an yeni bir sesion aç."),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Kodekste hemen yeni bir chat aç lütfen")?.target, .codex)
+        XCTAssertEqual(AgentCommandParser.parse("Şimdi yeni bir chat aç")?.session, .new)
         XCTAssertEqual(AgentCommandParser.parse("Codex'te yeni session'a şunu yaz merhaba"),
                        AgentDictation(target: .codex, body: "merhaba", send: false, session: .new))
     }
