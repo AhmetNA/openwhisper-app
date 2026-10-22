@@ -32,6 +32,12 @@ final class WhatsAppTests: XCTestCase {
     }
 
     func testUnreadQuestions() {
+        XCTAssertEqual(SystemCommandParser.parse("Son mesajlarında Whatsapp'ta"), .whatsAppUnread)
+        XCTAssertEqual(SystemCommandParser.parse("Batsak da son mesajeli."), .whatsAppUnread)
+        XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ta son mesajlara bak"), .whatsAppUnread)
+        XCTAssertEqual(SystemCommandParser.parse("Son mesajlara bak"), .whatsAppUnread)
+        XCTAssertEqual(SystemCommandParser.parse("Mesajlarımı kontrol et"), .whatsAppUnread)
+        XCTAssertNotEqual(SystemCommandParser.parse("Batsak da çıkarız"), .whatsAppUnread)
         XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ta okunmamış var mı"), .whatsAppUnread)
         XCTAssertEqual(SystemCommandParser.parse("Okunmamış mesajları oku"), .whatsAppUnread)
         XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ta yeni mesaj var mı"), .whatsAppUnread)

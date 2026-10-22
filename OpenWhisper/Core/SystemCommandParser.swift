@@ -259,15 +259,22 @@ enum SystemCommandParser {
     // "WhatsApp'ta", "vatsaptan", "watsapp'a" …
     private static let whatsApp = #"(?:whats ?app|vats ?app?|watsap|wotsap|wasap|vatsab)\S*"#
     private static let message = #"(?:mesaj|msj)\S*"#
+    // Whisper's other spellings of "WhatsApp'ta" ("Batsak da son mesajeli"): real words too,
+    // so they only count next to a word for messages.
+    private static let misheardWhatsApp = #"\b(?:batsa[pkb]|vatsa[pkb]|vatsup|whatsup|wats ?up)\S*"#
 
     /// After mail: "Ahmet'ten mail var mı" is mail, "Ahmet'ten mesaj var mı" WhatsApp.
     /// "WhatsApp'ı aç" is none of these and stays the app command.
     static func parseWhatsApp(_ text: String) -> SystemCommand? {
-        let mentionsApp = matches(text, whatsApp)
+        let mentionsApp = matches(text, whatsApp) || (matches(text, misheardWhatsApp) && matches(text, message))
         if let name = parseWhatsAppConversation(text) { return .whatsAppConversation(name) }
         if let name = parseWhatsAppSender(text) { return .whatsAppFrom(name) }
         if matches(text, #"okunmamış"#), mentionsApp || matches(text, message) { return .whatsAppUnread }
-        if mentionsApp, matches(text, #"\byeni\b|var mı|kim yazdı|ne var|kimden|\boku"#) { return .whatsAppUnread }
+        if mentionsApp, matches(text, #"\byeni\b|var mı|kim yazdı|ne var|kimden|\boku|\bson\b|\bbak|kontrol|\bmesaj"#) { return .whatsAppUnread }
+        // "Son mesajlara bak", "mesajlarımı kontrol et", "son gelen mesajlar".
+        if matches(text, #"^(?:bana )?(?:son )?(?:gelen )?mesajlar\S*(?: (?:bak|bakar mısın|oku|kontrol et|göster|neler|ne))?$|^son (?:gelen )?mesaj\S*(?: (?:bak|oku|neler|ne))?$"#) {
+            return .whatsAppUnread
+        }
         if matches(text, #"^(?:bana )?(?:kim yazdı|kimden mesaj var|kimlerden mesaj var|yeni mesaj(?:ım)? var mı|mesaj(?:ım)? var mı)$"#) {
             return .whatsAppUnread
         }

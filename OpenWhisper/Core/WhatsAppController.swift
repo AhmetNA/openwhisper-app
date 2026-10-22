@@ -15,8 +15,9 @@ enum WhatsAppController {
     /// out, as in WhatsApp's own badge.
     static func unreadSummary() async -> String {
         await read { url in
-            let unread = try WhatsAppStore.chats(at: url).filter { $0.unread > 0 && !$0.isArchived }
-            guard !unread.isEmpty else { return "Okunmamış WhatsApp mesajı yok" }
+            let chats = try WhatsAppStore.chats(at: url).filter { !$0.isArchived }
+            let unread = chats.filter { $0.unread > 0 }
+            guard !unread.isEmpty else { return try latestWriters(chats, at: url) }
             let people = unread.filter { !$0.isGroup }
             let groups = unread.filter(\.isGroup)
             var items: [String] = []
@@ -51,6 +52,18 @@ enum WhatsAppController {
     /// Messages handed to the model at most; the newest are kept.
     private static let summaryMessageLimit = 150
     private static let summaryCharacterLimit = 6000
+
+    /// With nothing unread, "son mesajlar" still answers: the people who wrote last.
+    private static func latestWriters(_ chats: [WhatsAppStore.Chat], at url: URL) throws -> String {
+        var items: [String] = []
+        for chat in chats where !chat.isGroup {
+            guard items.count < unreadChatsRead else { break }
+            guard let newest = try WhatsAppStore.messages(in: chat.id, limit: 6, at: url).first(where: { !$0.fromMe }) else { continue }
+            items.append("\(spokenName(chat)), \(spokenTime(newest.date)): \(shortened(newest.text))")
+        }
+        guard !items.isEmpty else { return "Okunmamış WhatsApp mesajı yok" }
+        return "Okunmamış mesaj yok. Son yazanlar — \(items.joined(separator: " · "))"
+    }
 
     /// "Dilay'la en son ne konuştuk": today's messages of that chat (or, with none today, the
     /// last exchange) summed up by the local model, so private messages stay on the Mac. The
