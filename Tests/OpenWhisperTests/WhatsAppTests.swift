@@ -131,7 +131,9 @@ final class WhatsAppTests: XCTestCase {
     }
 
     func testSpokenNameDropsEmoji() {
-        XCTAssertEqual(WhatsAppController.spokenName(chat(1, "Dilayimmm❤️❤️")), "Dilayimmm")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(1, "Dilayimmm❤️❤️")), "Dilayim")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(5, "Anneee")), "Anne")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(6, "Ali Ekber")), "Ali Ekber")
         XCTAssertEqual(WhatsAppController.spokenName(chat(2, "Aile 👨‍👩‍👧")), "Aile")
         XCTAssertEqual(WhatsAppController.spokenName(chat(3, "Ali 2")), "Ali 2")
         XCTAssertEqual(WhatsAppController.spokenName(chat(4, "🎉")), "🎉")

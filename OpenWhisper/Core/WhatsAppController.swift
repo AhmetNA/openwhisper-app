@@ -129,9 +129,10 @@ enum WhatsAppController {
             return "\(author): \(message.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))"
         }
         let head = "En son \(spokenTime(date)), \(result.chat.isGroup ? "\(who) grubunda" : "\(who) ile")"
-        let more = result.hits > 1 ? " · Toplam \(result.hits) mesajda\(result.chats > 1 ? ", \(result.chats) sohbette" : "") geçiyor" : ""
+        let more = result.hits > 1 ? " Toplam \(result.hits) mesajda\(result.chats > 1 ? ", \(result.chats) sohbette" : "") geçiyor." : ""
         if let summary = await summarize(transcript, with: who, isGroup: result.chat.isGroup, focus: topic) {
-            return "\(head): \(summary)\(more)"
+            let sentence = summary.last.map { ".!?".contains($0) } == true ? summary : summary + "."
+            return "\(head): \(sentence)\(more)"
         }
         return "\(head) — \(transcript.suffix(3).map(shortened).joined(separator: " · "))\(more)"
     }
@@ -250,7 +251,9 @@ enum WhatsAppController {
             !(scalar.properties.isEmojiPresentation || scalar.properties.isEmojiModifier
               || (scalar.properties.isEmoji && scalar.value > 0x238C) || scalar.value == 0xFE0F || scalar.value == 0x200D)
         }
+        // A letter held for affection ("Dilayimmm") is said once.
         let name = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: #"(\p{L})\1{2,}"#, with: "$1", options: .regularExpression)
         return name.isEmpty ? chat.name : name
     }
 
