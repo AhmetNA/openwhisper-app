@@ -250,6 +250,7 @@ final class AppState {
             }
             guard oldValue != inputDeviceUID else { return }
             owLog("[Input] Picked mic: \(inputDeviceName ?? inputDeviceUID ?? "automatic")")
+            syncWakeWordInput()
         }
     }
     /// Name of the picked mic, so Settings can show it while it is unplugged.

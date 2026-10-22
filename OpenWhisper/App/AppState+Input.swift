@@ -36,6 +36,7 @@ extension AppState {
             hotkey?.externalCancelHandsFree()
             stopRecording()
         }
+        syncWakeWordInput()
         // The picked mic stays picked while unplugged; recordings fall back until it returns.
         guard let uid = inputDeviceUID else { return }
         if added.contains(where: { $0.uid == uid }) {
@@ -45,6 +46,14 @@ extension AppState {
             let name = availableInputDevices.first { $0.uid == fallback }?.name ?? "system default"
             owLog("[Input] Picked mic \(inputDeviceName ?? uid) disconnected; next recording falls back to \(name)")
         }
+    }
+
+    /// Points the wake listener at the picked mic and, between recordings, moves it there (or
+    /// back to the Mac mic when it was unplugged). A recording's mic is never switched.
+    func syncWakeWordInput() {
+        wakeWordListener?.pickedInputUID = inputDeviceUID
+        guard recordingState != .recording else { return }
+        wakeWordListener?.inputDevicesChanged()
     }
 
     /// The input for a recording started by `trigger`. In automatic mode a key-started

@@ -43,4 +43,19 @@ final class InputDeviceSelectionTests: XCTestCase {
         XCTAssertNil(resolve(picked: nil, trigger: .wakeWord, devices: [mac, usb], defaultID: 2))
         XCTAssertEqual(resolve(picked: nil, trigger: .wakeWord, devices: [mac, buds], defaultID: 3), "buds")
     }
+
+    func testWakeListenerUsesConnectedPickedMicLikeTheVoiceSession() {
+        let device = WakeWordListener.listeningDevice(pickedUID: "usb", devices: [mac, usb, buds])
+        XCTAssertEqual(device?.uid, "usb")
+        // The handoff only works when the voice session resolves the same mic.
+        XCTAssertEqual(device?.uid, resolve(picked: "usb", trigger: .wakeWord, devices: [mac, usb, buds], defaultID: 3))
+    }
+
+    func testWakeListenerFallsBackToMacMic() {
+        XCTAssertEqual(WakeWordListener.listeningDevice(pickedUID: "usb", devices: [mac, buds])?.uid, "mac")
+        XCTAssertEqual(WakeWordListener.listeningDevice(pickedUID: nil, devices: [mac, usb])?.uid, "mac")
+        // Picked buds would enter call mode while the listener holds their mic.
+        XCTAssertEqual(WakeWordListener.listeningDevice(pickedUID: "buds", devices: [mac, buds])?.uid, "mac")
+        XCTAssertNil(WakeWordListener.listeningDevice(pickedUID: "buds", devices: [buds]))
+    }
 }

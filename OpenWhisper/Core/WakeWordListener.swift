@@ -5,8 +5,8 @@ import os
 ///
 /// Power: the embedding model is ~90% of the cost, so `WakeWordActivityGate` skips it while the
 /// room is quiet or the sound is not speech (`WakeVoiceActivity`; scores stay exact, see `WakeWordDetector`), and inference runs at utility QoS
-/// so it lands on the efficiency cores. Pinned to the built-in mic: holding a Bluetooth headset's
-/// mic open would switch it to call-quality audio.
+/// so it lands on the efficiency cores. Listens on the mic picked in Settings, else the built-in
+/// one; never on a Bluetooth headset's mic, as holding it open would switch it to call-quality audio.
 ///
 /// Plain microphone on purpose: measured on this Mac with Spotify playing, voice processing
 /// (VPIO) ducked the music and dropped the input to digital silence for 2–7 s at a time, while
@@ -167,7 +167,7 @@ final class WakeWordListener {
         updateEchoReference(playing: playing && isRunning)
     }
 
-    /// Main thread. Starts the reference when music plays and the built-in mic is in use;
+    /// Main thread. Starts the reference when music plays and a picked or built-in mic is in use;
     /// otherwise stops it and returns the mic to the plain path.
     private func updateEchoReference(playing: Bool) {
         let wanted = playing && capture != nil && EchoCancellationSettings.isEnabled
@@ -298,7 +298,7 @@ final class WakeWordListener {
         clearMicProblem()
     }
 
-    /// Main thread. Gives the running built-in-mic stream to a recording on the same device
+    /// Main thread. Gives the running mic stream to a recording on the same device
     /// instead of stopping it: the hardware keeps running, so nothing is lost to a restart
     /// (~0.45 s, then a near-silent first buffer, measured 28 Sep 2026). With `wakePreroll`, the
     /// audio since the last direct wake is passed on too, so "Hey Jarvis, <command>" in one
@@ -342,9 +342,34 @@ final class WakeWordListener {
         if problem != .modelMissing && problem != .modelLoadFailed { problem = nil }
     }
 
+    /// Main thread. The mic picked in Settings; `startEngine` listens on it while it is connected
+    /// and not Bluetooth (see `listeningDevice`).
+    var pickedInputUID: String?
+
+    /// The mic to listen on: the picked one while it is connected and not Bluetooth (holding buds'
+    /// mic open would switch them to call-quality audio), else the built-in mic. The list holds
+    /// no virtual devices. A voice session resolves the same picked mic, so the handoff matches.
+    static func listeningDevice(pickedUID: String?, devices: [AudioInputDevice]) -> AudioInputDevice? {
+        if let pickedUID, let picked = devices.first(where: { $0.uid == pickedUID && !$0.isBluetooth }) {
+            return picked
+        }
+        return devices.first(where: \.isBuiltIn)
+    }
+
+    /// Main thread. After a device change or a new pick: moves a running listener to the mic it
+    /// should now use. Never called while a recording runs (the listener is stopped then anyway).
+    func inputDevicesChanged() {
+        guard isRunning else { return }
+        let target = Self.listeningDevice(pickedUID: pickedInputUID, devices: AudioEngine.availableInputDevices())
+        guard target?.id != capture?.deviceID else { return }
+        owLog("[WakeWord] Input changed — moving to \(target?.name ?? "default input")")
+        stopEngine()
+        startEngine()
+    }
+
     private func startEngine() {
-        let builtIn = AudioEngine.availableInputDevices().first(where: \.isBuiltIn)
-        if builtIn == nil && AudioEngine.systemDefaultInputIsBluetooth() {
+        let device = Self.listeningDevice(pickedUID: pickedInputUID, devices: AudioEngine.availableInputDevices())
+        if device == nil && AudioEngine.systemDefaultInputIsBluetooth() {
             owLog("[WakeWord] Only a Bluetooth mic available — not listening (would force call-quality audio)")
             problem = .bluetoothOnly
             return
@@ -364,11 +389,11 @@ final class WakeWordListener {
             gate.warmupBlocks = 6
             detector.gate = gate
         }
-        // Built-in mic through a bare AUHAL unit: an AVAudioEngine pinned with setDeviceID fell
+        // A bare AUHAL unit on the chosen mic: an AVAudioEngine pinned with setDeviceID fell
         // back to Bluetooth buds that are the system default (see `HALInputCapture`).
-        if let builtIn {
+        if let device {
             do {
-                let capture = try HALInputCapture(deviceID: builtIn.id)
+                let capture = try HALInputCapture(deviceID: device.id)
                 let monoFormat = AVAudioFormat(standardFormatWithSampleRate: capture.format.sampleRate, channels: 1)!
                 converter = AVAudioConverter(from: monoFormat, to: targetFormat)
                 let ring = nativeRing
@@ -381,7 +406,7 @@ final class WakeWordListener {
                 updateEchoReference(playing: mediaPlayingOnMain)
                 peakSinceLog = 0
                 lastPeakLog = Date()
-                owLog("[WakeWord] Listening on \(builtIn.name) (\(Int(capture.format.sampleRate)) Hz), threshold \(Self.threshold)")
+                owLog("[WakeWord] Listening on \(device.name) (\(Int(capture.format.sampleRate)) Hz), threshold \(Self.threshold)")
                 if problem == .bluetoothOnly || problem == .micUnavailable { clearMicProblem() }
             } catch {
                 owLog("[WakeWord] Failed to start: \(error)")
