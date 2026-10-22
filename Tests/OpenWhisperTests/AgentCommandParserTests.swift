@@ -164,6 +164,9 @@ final class AgentCommandParserTests: XCTestCase {
                        AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
         XCTAssertEqual(AgentCommandParser.parse("Kodekste hemen yeni bir chat aç lütfen")?.target, .codex)
         XCTAssertEqual(AgentCommandParser.parse("Şimdi yeni bir chat aç")?.session, .new)
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da yeni çat aç."),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te yeni çete aç")?.target, .codex)
         XCTAssertEqual(AgentCommandParser.parse("Codex'te yeni session'a şunu yaz merhaba"),
                        AgentDictation(target: .codex, body: "merhaba", send: false, session: .new))
     }

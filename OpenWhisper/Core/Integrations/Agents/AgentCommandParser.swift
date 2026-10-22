@@ -99,7 +99,8 @@ enum AgentCommandParser {
     // keeps its "yeni", and it only takes a dative / locative ending: "son konuşmayı özetle"
     // or "yeni session butonunu" stay part of the message.
     // Whisper's spellings of "session" from real voice tests: "sesion", "seçeneğine" (2026-10-15).
-    private static let sessionStem = #"(?:session|sesion|sesyon|seşın|seşin|seşn|sesin|sesşın|seçene[kğ]|seans|oturum|konuşma|sohbet|chat(?!\s*(?:g?pt|y?pti?))|thread)"#
+    // "Cloud Code'da yeni çat aç" (2026-10-22): Whisper's Turkish spelling of "chat".
+    private static let sessionStem = #"(?:session|sesion|sesyon|seşın|seşin|seşn|sesin|sesşın|seçene[kğ]|seans|oturum|konuşma|sohbet|(?:chat|çat|çet)(?!\s*(?:g?pt|y?pti?|citi))|thread)"#
     private static let sessionCase = #"(?:['’`]\s*)?(?:s?[ıiuü]?n?[dt][ae]|s?[ıiuü]?n[ae]|y?[ae])"#
     private static let newSession = #"(?<new>(?:yeni|new)(?:\s+bir)?)"#
     // "Sağ seçeneğine" was Whisper's "son session'ına"; only counts before a session word.
