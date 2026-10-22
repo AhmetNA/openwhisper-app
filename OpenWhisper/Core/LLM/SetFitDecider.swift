@@ -40,6 +40,8 @@ final class SetFitDecider {
         case wakeCall = "wake_call"
         case addressee
         case reminderConfirm = "reminder_confirm"
+        /// add_event / query_events / none. Only add_event is acted on (`calendarEventRequest`).
+        case calendarIntent = "calendar_intent"
 
         /// Below this, the answer is ignored and Ollama decides. Measured on the dev set
         /// (27 Sep 2026): spotify at 0.9 was 96% right while answering 75% of the texts.
@@ -49,6 +51,8 @@ final class SetFitDecider {
             case .wakeCall, .addressee: return 0.8
             // Deleting is irreversible, so ReminderManager also never lets SetFit approve alone.
             case .reminderConfirm: return 0.9
+            // No Ollama behind it: below this the sentence is dictated or chatted as before.
+            case .calendarIntent: return 0.9
             }
         }
     }

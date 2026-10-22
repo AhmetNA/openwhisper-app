@@ -1045,6 +1045,21 @@ extension AppState {
                 }
 
             case .spotifyOrConversation(let firstSentence):
+                // "Yarına takvim etkinliği ekle saat 13'e": SetFit decides, no rule.
+                if session.acceptsCommands, let request = await self.calendarEventRequest(text) {
+                    switch request {
+                    case .event(let event):
+                        owLog("[Route] calendar (SetFit)")
+                        session.latency.finishDecision(route: "takvim")
+                        await runCommands([MultiCommandSplitter.Step(text: trimmed, command: .system(.calendarEvent(event)))],
+                                          output: "takvim")
+                    case .needsDate:
+                        owLog("[Route] calendar (SetFit) without a day or time")
+                        session.latency.finishDecision(route: "takvim, tarih yok")
+                        await say("Ne zaman ekleyeyim? Günüyle birlikte tekrar söyler misin?", durationMs: 6000)
+                    }
+                    return
+                }
                 var commandText = text
                 var isSpotifyCommand = await SpotifyManager.isSpotifyCommand(
                     text, ollamaAvailable: self.ollamaAvailable, commandMode: session.acceptsCommands

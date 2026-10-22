@@ -24,11 +24,11 @@ enum VoiceCommand: Equatable {
 /// calendar entry, "YouTube'da lofi ara" a browser search before a Spotify request.
 enum CommandRegistry {
     enum Domain: String, CaseIterable {
-        case agent, timer, mailReply, calendar, browser, video, system, spotify
+        case agent, timer, mailReply, browser, video, system, spotify
     }
 
     /// What `SystemController.perform` runs.
-    static let systemDomains: Set<Domain> = [.mailReply, .calendar, .browser, .video, .system]
+    static let systemDomains: Set<Domain> = [.mailReply, .browser, .video, .system]
     /// What the single-command route asks for before reminders; Spotify comes after them,
     /// with the models' help.
     static let commandDomains: Set<Domain> = systemDomains.union([.timer])
@@ -69,10 +69,7 @@ enum CommandRegistry {
         Entry(domain: .mailReply, chains: false, sharesVerb: false) { text, _ in
             SystemCommandParser.parseMailReply(text).map(VoiceCommand.system)
         },
-        // Dates and addresses need the raw text: cleaning turns "15:30" and "github.com" apart.
-        Entry(domain: .calendar, chains: true, sharesVerb: false) { text, context in
-            CalendarEventParser.parse(text, now: context.now).map { .system(.calendarEvent($0)) }
-        },
+        // Calendar events are SetFit's `calendar_intent` decision (`AppState.calendarEventRequest`).
         Entry(domain: .browser, chains: true, sharesVerb: false) { text, _ in
             SystemCommandParser.parseBrowserRequest(text).map { .system(.browser($0)) }
         },

@@ -6,9 +6,9 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
     /// Wednesday 30 September 2026, 10:00.
     private lazy var now = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 10))!
 
+    /// What the parser reads once SetFit has said the sentence asks for an event.
     private func event(_ text: String) -> CalendarEventParser.Event? {
-        guard case .calendarEvent(let event) = SystemCommandParser.parse(text, now: now) else { return nil }
-        return event
+        CalendarEventParser.extract(text, now: now)
     }
 
     private func date(day: Int, hour: Int = 0, minute: Int = 0, month: Int = 9, year: Int = 2026) -> Date {
@@ -76,7 +76,6 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertEqual(event("Yarın saat 3'te Kasım'la toplantı ekle")?.start, date(day: 1, hour: 15, month: 10))
         XCTAssertNil(event("Kasım'la toplantı ekle"))
         XCTAssertNil(event("Yeni etkinlik ekle uçuş Gaziantep"))
-        XCTAssertNil(event("Toplantı ekle demişti ama 7 Kasım'da gelemem"))
     }
 
     func testTimeSaidAfterTheVerb() {
@@ -86,31 +85,33 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertEqual(e?.title, "Etkinlik")
         XCTAssertEqual(event("Toplantı ekle yarın öğleden sonra 3'te")?.start, date(day: 1, hour: 15, month: 10))
         XCTAssertEqual(event("Takvime Mehmet'le toplantı ekle cuma saat 10'da")?.start, date(day: 2, hour: 10, month: 10))
-        // Anything but a time after the verb is still not a command.
-        XCTAssertNil(event("Toplantı ekle dedi ama yarın gelemem"))
+        XCTAssertEqual(event("Takvime Mehmet'le toplantı ekle cuma saat 10'da")?.title, "Mehmet'le toplantı")
+        XCTAssertEqual(event("Takvime ekle: yarın 9'da spor salonu")?.title, "Spor salonu")
     }
 
     @MainActor
-    func testVoiceRouteRunsTheFlight() {
+    func testNoRuleDecidesAnEvent() {
+        // Whether it is an event is SetFit's call: the rules leave these to the async step.
         let facts = VoiceRouter.Facts(isVoiceCommand: true, acceptsCommands: true, focus: .notEditable,
                                       hasTargetApp: true, targetBundleID: "com.apple.Safari")
-        guard case .command(.system(.calendarEvent(let e))) = VoiceRouter.route(
-            "Yeni etkinlik ekle tarih 7 Kasım 'a Gaziantep uçuş gidiş geliş", facts: facts) else {
-            return XCTFail("the spoken event reaches the calendar")
+        for text in ["Yeni etkinlik ekle tarih 7 Kasım 'a Gaziantep uçuş gidiş geliş", "Yarın saat 3'te Mehmet'le toplantı ekle"] {
+            guard case .spotifyOrConversation = VoiceRouter.route(text, facts: facts) else {
+                return XCTFail("'\(text)' was decided by a rule")
+            }
         }
-        XCTAssertEqual(e.title, "Gaziantep uçuş gidiş geliş")
+        // Once SetFit says add_event: the event, or a question for the day.
+        XCTAssertEqual(AppState.calendarRequest("Yarına takvim etkinliği ekle saat 13 'e.", now: now),
+                       .event(.init(title: "Etkinlik", start: date(day: 1, hour: 13, month: 10), allDay: false, minutes: 60)))
+        XCTAssertEqual(AppState.calendarRequest("Yeni etkinlik ekle uçuş Gaziantep", now: now), .needsDate)
     }
 
     func testNotEvents() {
         // Dictation, reminders and the briefing keep their routes.
-        XCTAssertNil(event("Toplantı yarın saat üçte"))
         XCTAssertNil(SystemCommandParser.parse("Yarın toplantıyı hatırlat ekle", now: now))
-        XCTAssertNil(event("Yarın saat 3'te toplantıyı bana hatırlat"))
         XCTAssertEqual(SystemCommandParser.parse("Takvimimde ne var", now: now), .briefing(dayOffset: 0))
+        // No day or a time that doesn't exist: the user is asked again.
         XCTAssertNil(event("Takvime toplantı ekle"))
-        XCTAssertNil(event("Yarın 3'te toplantı koy"))
         XCTAssertNil(event("Yarın saat 27'de toplantı ekle"))
-        XCTAssertNil(event("Yarın saat 3'te toplantı yaz"))
     }
 
     func testCalendarReply() {

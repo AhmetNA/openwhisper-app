@@ -1,9 +1,10 @@
 import Foundation
 
-/// "Yarın saat 3'te Mehmet'le toplantı ekle", "Cuma akşam 7'de yemek takvime ekle",
-/// "Pazartesi randevu oluştur" (all day). Pure: the day comes from `TurkishDateParser`, this
-/// adds the event-only rules on top (an event word plus an add verb, afternoon hours, all-day
-/// events, a length). Runs on the raw transcript so "15:30" keeps its colon.
+/// The when and the title of an event the user asked for: "Yarın saat 3'te Mehmet'le toplantı
+/// ekle", "Yarına takvim etkinliği ekle saat 13'e", "Pazartesi randevu oluştur" (all day).
+/// Whether a sentence asks for an event at all is SetFit's `calendar_intent` decision, not a
+/// rule here. Pure: the day comes from `TurkishDateParser`, this adds afternoon hours, all-day
+/// events and a length. Runs on the raw transcript so "15:30" keeps its colon.
 enum CalendarEventParser {
     struct Event: Equatable, Sendable {
         var title: String
@@ -13,51 +14,38 @@ enum CalendarEventParser {
     }
 
     static let defaultMinutes = 60
-    private static let maxWords = 16
+    private static let placeholder = "etkinlik"
     private static let locale = Locale(identifier: "tr_TR")
 
-    private static let eventNoun = #"\b(?:takvim\p{L}*|ajanda\p{L}*|etkinli\p{L}*|toplantı\p{L}*|randevu\p{L}*|görüşme\p{L}*|buluşma\p{L}*|meeting|event)"#
-    // No "yaz": a trailing "… yaz" types the sentence (`JarvisAddressee.trailingTypeCommand`).
-    private static let addVerb = #"\b(?:ekle|ekler misin|ekleyebilir misin|ekleyiver|oluştur|oluşturur musun|koy|koyar mısın|kaydet|ayarla|planla|gir)(?: lütfen)?$"#
-    /// Verbs that only make an event when the calendar itself is named ("takvime koy").
-    private static let calendarOnlyVerb = #"\b(?:koy|koyar mısın|kaydet|gir)(?: lütfen)?$"#
-    /// The command said first: "Yeni etkinlik ekle, 7 Kasım Gaziantep uçuşu", "Takvime ekle …".
-    /// Only right at the start and only with "takvim", "etkinlik" or "yeni", so "toplantı ekle
-    /// demişti ama …" stays dictation.
-    private static let leadingCommand = #"^(?:takvim\p{L}*\s+(?:yeni\s+)?(?:bir\s+)?(?:etkinlik\s+)?|(?:yeni\s+)?(?:bir\s+)?etkinlik\s+(?:takvim\p{L}*\s+)?|yeni\s+(?:bir\s+)?(?:toplantı|randevu|görüşme)\s+(?:takvim\p{L}*\s+)?)(?:ekle|oluştur)\b"#
+    /// The command words, wherever they are said; the rest is the title.
+    private static let commandWords = [
+        #"\b(?:ekle\p{L}*|ekler misin|ekleyebilir misin|oluştur\p{L}*|koy(?:ar mısın)?|kaydet|ayarla|planla|gir)\b"#,
+        #"\b(?:takvim|ajanda)\p{L}*"#,
+        #"\betkinli\p{L}*"#,
+        #"\b(?:lütfen|olarak|yeni|tarih(?:i|inde)?|başlık(?:ı)?)\b"#,
+        // Whisper's "Yarın da …" leaves a lone "da" behind.
+        #"^\s*(?:bir|da|de)\b"#,
+    ]
 
-    /// A word that only says when: "saat", "13'e", "yarın", "öğleden sonra", "cuma", "kasım'da".
-    private static let whenWord = #"(?:saat|\d{1,2}(?:[:.]\d{2})?(?:'\p{L}{1,3})?|(?:bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz|on)(?:'?\p{L}{1,3})?|(?:yarın|bugün|gün|sabah|öğle|akşam|gece|buçu|pazartesi|salı|çarşamba|perşembe|cuma|cumartesi|pazar|ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)\p{L}*|öbür|ertesi|haftaya|öğleden|sonra|yarım|saatlik)"#
-
-    static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Event? {
+    /// Nil when the sentence names no day and no time: the caller asks for it.
+    static func extract(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Event? {
         var working = text.lowercased(with: locale)
             .replacingOccurrences(of: "’", with: "'")
-            .replacingOccurrences(of: #"[,!?;"“”]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[,!?;:"“”](?!\d)"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\.\s*$"#, with: "", options: .regularExpression)
             // Whisper's "Yeni etkinlik ekle. Uçuş." and the diarizer's "Kasım 'a"; "15.30" stays.
             .replacingOccurrences(of: #"\.(?=\s)"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+'"#, with: "'", options: .regularExpression)
-            .replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)\s+)?(?:lütfen\s+)?"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        // "Yarına takvim etkinliği ekle saat 13'e": the verb with only the time after it.
-        // Moved to the end, it reads like "yarına takvim etkinliği saat 13'e ekle".
-        working = working.replacingOccurrences(
-            of: #"\b(ekle|oluştur)\s+((?:\#(whenWord)\s*)+)$"#, with: "$2 $1", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        let leading = matches(working, leadingCommand)
-        guard working.split(separator: " ").count <= maxWords,
-              leading || matches(working, addVerb), matches(working, eventNoun),
-              !matches(working, #"hatırlat|unutturma|remind"#) else { return nil }
-        if !leading, matches(working, calendarOnlyVerb), !matches(working, #"\b(?:takvim|ajanda)"#) { return nil }
-        // The leading verb would otherwise stay in the title ("Ekle Gaziantep uçuş"), and so
-        // would "tarih" before the date ("tarih 7 Kasım", not "tarih sınavı").
-        if leading {
-            working = working.replacingOccurrences(of: #"\b(?:ekle|oluştur)\b"#, with: " ", options: .regularExpression)
-                .replacingOccurrences(of: #"\btarih(?:i|inde)?\s+(?=\d)"#, with: " ", options: .regularExpression)
-                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)\s+)?"#, with: "", options: .regularExpression)
+        for pattern in commandWords {
+            working = working.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
         }
+        // `TurkishDateParser` wants something left besides the date ("yarına saat 13'e" alone
+        // is nothing); `title` drops this again, leaving the default "Etkinlik".
+        working = working.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces) + " \(placeholder)"
 
         // Spoken hours: "saat üçte" → "saat 3'te", "3 buçukta" → "3:30'da".
         working = spelledHours(working)
@@ -98,8 +86,7 @@ enum CalendarEventParser {
             if !namesDay, start <= now { start = calendar.date(byAdding: .day, value: 1, to: start) ?? start }
         }
 
-        guard let title = title(from: parsed.task, original: text) else { return nil }
-        return Event(title: title, start: start, allDay: allDay, minutes: minutes)
+        return Event(title: title(from: parsed.task, original: text), start: start, allDay: allDay, minutes: minutes)
     }
 
     /// Meetings at "3" are at 15:00: hours 1–7 without "sabah"/"gece" are afternoon hours,
@@ -116,17 +103,10 @@ enum CalendarEventParser {
 
     /// What is left once the date and the command words are gone, with the speaker's casing
     /// ("Mehmet'le toplantı").
-    private static func title(from task: String, original: String) -> String? {
+    private static func title(from task: String, original: String) -> String {
         var title = task.lowercased(with: locale)
-        for pattern in [
-            addVerb,
-            #"\b(?:takvim|ajanda)\p{L}*"#,
-            #"\b(?:etkinlik|etkinliği|etkinliğini)\b"#,
-            #"\b(?:lütfen|olarak|yeni)\b"#,
-            #"^\s*bir\b"#,
-        ] {
-            title = title.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
-        }
+            .replacingOccurrences(of: #"^\s*(?:da|de)\b"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b\#(placeholder)\s*$"#, with: "", options: .regularExpression)
         // "toplantıyı ekle" → "toplantı".
         for (object, noun) in [("toplantıyı", "toplantı"), ("randevuyu", "randevu"), ("görüşmeyi", "görüşme"), ("buluşmayı", "buluşma")] {
             title = title.replacingOccurrences(of: #"\b\#(object)\b"#, with: noun, options: .regularExpression)
@@ -138,7 +118,7 @@ enum CalendarEventParser {
         let restored = words.map { word in
             originalWords.first { $0.lowercased(with: locale) == word } ?? word
         }.joined(separator: " ")
-        guard let first = restored.first else { return nil }
+        guard let first = restored.first else { return "Etkinlik" }
         let upper = first == "i" ? "İ" : String(first).uppercased(with: locale)
         return upper + restored.dropFirst()
     }
