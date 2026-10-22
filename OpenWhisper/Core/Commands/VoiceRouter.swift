@@ -39,6 +39,8 @@ enum VoiceRouter {
         case agentWithoutForeground
         /// "Claude Code'a yaz …", or "… gönder" into the frontmost agent app.
         case agent(AgentDictation)
+        /// "Claude'da son session'ı özetle": two spoken sentences, then the next words go there.
+        case claudeSessionRecap
         /// "Buraya yaz …", "… bunu yaz": always typed, even if the words are a command.
         case typed(String)
         /// "Jarvis, …" said while a text field has focus.
@@ -109,6 +111,7 @@ enum VoiceRouter {
         if voice {
             // First: "evet" / "tamam" would otherwise read as a greeting or a meta answer.
             if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
+            if AgentCommandParser.isSessionSummaryRequest(trimmed) { return .claudeSessionRecap }
             // An editable field normally routes to dictation. This explicit phrase lets the
             // user talk to Jarvis without first clicking away from the field.
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }

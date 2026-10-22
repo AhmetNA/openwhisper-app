@@ -713,7 +713,10 @@ extension AppState {
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 commandContext: commandContext)
-            var route = VoiceRouter.route(text, facts: facts)
+            // The mic opened after a Claude session recap: all of it is the message for that session.
+            var route = session.sendsToRecappedClaudeSession
+                ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
+                : VoiceRouter.route(text, facts: facts)
 
             // While a deletion confirmation is pending, only an explicit approval can execute the
             // already-resolved plan; any other ordinary voice response discards it without
@@ -855,7 +858,11 @@ extension AppState {
                             await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
                             return
                         }
-                        switched = await ClaudeSessionNavigator.selectSession(app, titled: name)
+                        switched = if let id = ClaudeSessionNavigator.lastSessionID {
+                            await ClaudeSessionNavigator.openSession(app, id: id, title: name)
+                        } else {
+                            await ClaudeSessionNavigator.selectSession(app, titled: name)
+                        }
                     case .current:
                         switched = true
                     }
@@ -976,6 +983,30 @@ extension AppState {
                     return
                 }
                 await chat(trimmed, recalled: recalled, detail: "geçmiş sohbet")
+
+            // "Claude'da son session'ı özetle": two sentences on screen and aloud, then the mic
+            // stays open and whatever the user says goes to that session.
+            case .claudeSessionRecap:
+                session.latency.finishDecision(route: "Claude oturum özeti")
+                self.lastTranscription = text
+                guard let recapped = ClaudeSessionRecap.latestSession() else {
+                    owLog("[Agent] Claude recap: no session found")
+                    await say("Claude'da bir oturum bulamadım.", durationMs: 4000)
+                    return
+                }
+                owLog("[Route] Claude recap of \"\(recapped.title)\" (stored recap: \(recapped.storedRecap != nil))")
+                self.jarvisActivity = .thinking
+                let summary = await ClaudeSessionRecap.summary(of: recapped, ollamaModel: self.ollamaModel,
+                                                               ollamaAvailable: self.ollamaAvailable)
+                self.jarvisActivity = .none
+                guard let summary else {
+                    await say("\(recapped.title) oturumunda özetlenecek bir şey bulamadım.", durationMs: 4000)
+                    return
+                }
+                ClaudeSessionNavigator.rememberSession(id: recapped.id, title: recapped.title)
+                self.showFlowBarMessage(summary, durationMs: min(max(summary.count * 70, 5000), 15000))
+                await self.speakReply(summary)
+                if self.listenForClaudeMessage(after: session) { holdMediaForReplyAnswer = true }
 
             case .deletionConfirmation, .whatsAppConfirmation:
                 // Answered above; a non-answer was routed again without it.

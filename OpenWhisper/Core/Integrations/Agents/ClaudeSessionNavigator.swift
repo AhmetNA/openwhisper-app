@@ -15,10 +15,24 @@ enum ClaudeSessionNavigator {
     /// Only the newest send may set the last session.
     private static var rememberGeneration = 0
 
+    private static let lastSessionIDKey = "agent.claude.lastSessionID"
+
     /// The session Jarvis last sent to, kept across restarts.
     static var lastSessionTitle: String? {
         get { UserDefaults.standard.string(forKey: lastSessionKey) }
-        set { UserDefaults.standard.set(newValue, forKey: lastSessionKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: lastSessionKey)
+            UserDefaults.standard.removeObject(forKey: lastSessionIDKey)
+        }
+    }
+
+    /// The last session's id, when known (a summarized session): it opens by link, not by title.
+    static var lastSessionID: String? { UserDefaults.standard.string(forKey: lastSessionIDKey) }
+
+    /// The session just summarized becomes "son session", so the next message goes there.
+    static func rememberSession(id: String, title: String) {
+        lastSessionTitle = title
+        UserDefaults.standard.set(id, forKey: lastSessionIDKey)
     }
 
     /// Title of the session shown in the frontmost Claude window, nil outside the Code tab.

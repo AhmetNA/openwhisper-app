@@ -190,6 +190,29 @@ extension AppState {
         return true
     }
 
+    /// A Claude session was just recapped: listen `claudeMessageWindow` without the wake word;
+    /// what the user says then is sent to that session. Returns true when the mic opened, so the
+    /// caller keeps paused media paused for the message.
+    func listenForClaudeMessage(after session: RecordingTranscriptionSession) -> Bool {
+        guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled,
+              recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
+        pendingWakeSpeakerVerified = session.wakeSpeakerVerified
+        Task { @MainActor [weak self] in
+            // Safety net if the follow-up recording never starts.
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, self.recordingState != .recording else { return }
+            self.recordingMedia.end(resuming: true)
+        }
+        owLog("[FollowUp] Claude recap done; listening for the message to that session")
+        pendingCommandFollowUp = nil
+        commandFollowUpOverReply = false
+        pendingClaudeMessage = true
+        startVoiceSession(trigger: .followUp)
+        // Never started: a later follow-up must not be taken for the message.
+        if hotkey?.isIdle == true { pendingClaudeMessage = false }
+        return hotkey?.isIdle == false
+    }
+
     /// A command just ran: listen `commandFollowUpWindow` more without the wake word, so the
     /// user can fix it ("müzik başlat" → "sonrakine geç"). Only a command is taken from that
     /// recording; `domain` tells a bare "sonrakine geç" what to skip. Media is left playing:

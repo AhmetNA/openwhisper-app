@@ -37,6 +37,8 @@ extension AppState {
         let recordingTrigger = hotkey?.trigger ?? .fnHold
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
+        let claudeMessage = recordingTrigger == .followUp && pendingClaudeMessage
+        pendingClaudeMessage = false
         let overReply = commandFollowUp != nil && commandFollowUpOverReply
         commandFollowUpOverReply = false
         commandFollowUpAwaitingReplyEnd = overReply
@@ -87,7 +89,8 @@ extension AppState {
             // Jarvis has just asked something back (or run a command the user may want to
             // fix): no speech within the window closes the mic quietly. Both detectors need
             // it — while Smart Turn is ready, it alone decides.
-            let window = commandFollowUp != nil ? Self.commandFollowUpWindow : Self.replyFollowUpWindow
+            let window = commandFollowUp != nil ? Self.commandFollowUpWindow
+                : claudeMessage ? Self.claudeMessageWindow : Self.replyFollowUpWindow
             endpointFallbackConfig.noSpeechTimeout = window
             smartTurnConfig.noSpeechTimeout = window
             if commandFollowUp != nil {
@@ -102,7 +105,7 @@ extension AppState {
                 endpointFallbackConfig.maxDuration = 90
             }
             owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
-                         commandFollowUp != nil ? "a fix to the command" : "an answer", window))
+                         commandFollowUp != nil ? "a fix to the command" : claudeMessage ? "the Claude message" : "an answer", window))
         }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
@@ -278,6 +281,7 @@ extension AppState {
             let media = recordingMedia
             session.playbackSurvivedPause = { media.playbackLeftRunning }
         }
+        session.sendsToRecappedClaudeSession = claudeMessage
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp

@@ -260,6 +260,23 @@ enum AgentCommandParser {
         return nil
     }
 
+    // "Claude'da son session'ı özetle", "Cloud Code son sesinden özet", "son session'da ne
+    // yaptık", "Claude'da nerede kalmıştık": a Claude name or a last-session word, then a
+    // summary ask that ends the sentence. A bare "ne yaptık" names neither, so it stays chat.
+    private static let summaryRegex: NSRegularExpression = {
+        let session = "(?:(?:en\\s+)?(?:son|sağ)\\s+\(sessionStem)\\p{L}*(?:['’`]\\p{L}*)?)"
+        let head = "(?:\(claudeName)(?:['’`]?\\p{L}*)?(?:\\s+\(session))?|\(session))"
+        let ask = #"(?:bana\s+)?(?:(?:bir\s+)?özet\p{L}*(?:\s+(?:ver|geç|çıkar|yap|söyle)\p{L}*)?|(?:en\s+son\s+)?ne\s+(?:yaptık|yaptın|yapmıştık|yapmıştın|yaptınız|yapıldı|oldu)|nerede\s+kal(?:dık|mıştık))(?:\s+m[ıi]s[ıi]n)?"#
+        let pattern = "^\\s*\(head)(?:\\s+(?:neler|ne)\\s+yaptığını)?[\\s,]+\(ask)[\\s.!?]*$"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    /// "Claude'da son session'ı özetle": Jarvis reads out what the last Claude Code session did.
+    static func isSessionSummaryRequest(_ text: String) -> Bool {
+        let lowered = WakeWordVerifier.strippingLeadingWakeWord(text).lowercased(with: locale)
+        return summaryRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
+    }
+
     /// Returns nil when the text is neither addressed to an agent nor ends with "gönder".
     static func parse(_ text: String) -> AgentDictation? {
         parse(text, allowProject: true)
