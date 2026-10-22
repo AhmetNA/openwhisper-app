@@ -843,7 +843,8 @@ final class SpotifyManager: @unchecked Sendable {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let text = commandMode ? commandModeText(heard) : heard
         var rules = explicitIntent(in: text)
-        if rules == nil, let candidate = runtimeCandidate(text) {
+        // Only a Jarvis session: with the dictation keys "konuyu sıraya ekle" is text to type.
+        if rules == nil, commandMode, let candidate = runtimeCandidate(text) {
             rules = await confirm(candidate)
         }
         if let rules, rules.isRuleOnly || rules == .playLikedSongs {

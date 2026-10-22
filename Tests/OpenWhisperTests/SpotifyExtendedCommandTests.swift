@@ -127,4 +127,16 @@ final class SpotifyExtendedCommandTests: XCTestCase {
         XCTAssertTrue(SpotifyManager.speaksFailure(afterCommand: "Karışık çal"))
         XCTAssertFalse(SpotifyManager.speaksFailure(afterCommand: "Müziği durdur"))
     }
+
+    func testPlaylistNamesMatchWholeWords() {
+        func list(_ names: String...) -> [SpotifyWebAPI.Playlist] {
+            names.map { SpotifyWebAPI.Playlist(id: $0, uri: "spotify:playlist:\($0)", name: $0, ownerID: "u", collaborative: false) }
+        }
+        XCTAssertEqual(SpotifyController.matchPlaylist(named: "spor", in: list("Esports Anthems", "Spor"))?.name, "Spor")
+        XCTAssertNil(SpotifyController.matchPlaylist(named: "spor", in: list("Esports Anthems")))
+        XCTAssertEqual(SpotifyController.matchPlaylist(named: "spor", in: list("Spor 2024", "Yolculuk"))?.name, "Spor 2024")
+        XCTAssertNil(SpotifyController.matchPlaylist(named: "spor", in: list("Spor 2024", "Sabah Spor")))
+        XCTAssertNil(SpotifyController.matchPlaylist(named: "alışveriş", in: list("İş", "a")))
+        XCTAssertEqual(SpotifyController.matchPlaylist(named: "çalışma", in: list("Calisma"))?.name, "Calisma")
+    }
 }

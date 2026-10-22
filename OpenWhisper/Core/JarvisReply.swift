@@ -77,7 +77,10 @@ struct JarvisReply {
 
     /// A Spotify answer or result said as is: "Sıradaki şarkı: …", "Müzik 30 dakika sonra kapanacak".
     mutating func spotifyResult(_ message: String) -> String {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "Çalıyor: ♪ Sezen Aksu — Begonvil" reads without the note.
+        let trimmed = message.replacingOccurrences(of: "♪", with: "")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return addressing(trimmed.hasSuffix(".") ? trimmed : trimmed + ".")
     }
 

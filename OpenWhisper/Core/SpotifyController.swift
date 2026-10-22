@@ -815,8 +815,8 @@ extension SpotifyController {
 
     private static let playlistCache = OSAllocatedUnfairLock<(date: Date, items: [SpotifyWebAPI.Playlist])?>(initialState: nil)
 
-    /// The user's playlist named `name` (folded words equal, else one name containing the
-    /// other). `writable`: only playlists the user owns or that are collaborative.
+    /// The user's playlist named `name` (see `matchPlaylist`). `writable`: only playlists the
+    /// user owns or that are collaborative.
     func findPlaylist(named name: String, writable: Bool) async throws -> SpotifyWebAPI.Playlist? {
         let playlists: [SpotifyWebAPI.Playlist]
         if let cached = Self.playlistCache.withLock({ $0 }), Date().timeIntervalSince(cached.date) < 300 {
@@ -827,14 +827,22 @@ extension SpotifyController {
         }
         let userID = writable ? try await SpotifyWebAPI.shared.fetchUserID() : ""
         let candidates = playlists.filter { !writable || $0.ownerID == userID || $0.collaborative }
-        let wanted = SpotifyRequestParser.foldedWords(name)
-        guard !wanted.isEmpty else { return nil }
-        if let exact = candidates.first(where: { SpotifyRequestParser.foldedWords($0.name) == wanted }) { return exact }
-        let joined = wanted.joined(separator: " ")
-        return candidates.first { playlist in
-            let words = SpotifyRequestParser.foldedWords(playlist.name).joined(separator: " ")
-            return !words.isEmpty && (words.contains(joined) || joined.contains(words))
+        return Self.matchPlaylist(named: name, in: candidates)
+    }
+
+    /// Same folded words wins. Otherwise the one playlist whose words include every word
+    /// asked for ("spor" → "Spor 2024"), never a substring ("spor" is not "Esports"); two
+    /// such playlists are ambiguous, so none.
+    static func matchPlaylist(named name: String, in playlists: [SpotifyWebAPI.Playlist]) -> SpotifyWebAPI.Playlist? {
+        // Folding keeps the dotless ı, so "çalışma" would miss a playlist typed "Calisma".
+        func words(_ text: String) -> [String] {
+            SpotifyRequestParser.foldedWords(text).map { $0.replacingOccurrences(of: "ı", with: "i") }
         }
+        let wanted = words(name)
+        guard !wanted.isEmpty else { return nil }
+        if let exact = playlists.first(where: { words($0.name) == wanted }) { return exact }
+        let containing = playlists.filter { Set(words($0.name)).isSuperset(of: wanted) }
+        return containing.count == 1 ? containing[0] : nil
     }
 
     func ownPlaylist(named name: String, writable: Bool) async -> SpotifyWebAPI.Playlist? {
