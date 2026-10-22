@@ -136,6 +136,8 @@ final class AppState {
     var setFitStatus = "Kapalı"
 
     @ObservationIgnored var jarvisReply = JarvisReply()
+    /// "Dilayım'a yaz: …": the draft waiting for "evet" / "hayır".
+    @ObservationIgnored lazy var whatsAppSender = WhatsAppSender(pressReturn: { pid in TextInjector().pressReturn(inPID: pid) })
     /// "Test modunu başlat": the TODO.md item being tried now.
     @ObservationIgnored let voiceTest = VoiceTestSession()
     /// The last thing Jarvis said, for "ne dedin?".

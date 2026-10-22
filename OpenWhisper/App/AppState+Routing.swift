@@ -75,6 +75,7 @@ extension AppState {
             // A re-asked confirmation (holdMediaForFollowUp) keeps its plan for the next answer.
             if session.trigger == .confirmation && !holdMediaForFollowUp {
                 self.reminderManager?.cancelPendingDeletion()
+                self.whatsAppSender.cancel()
             }
             // Break the session ↔ worker reference cycle once the worker has drained the
             // session's stream and the final output step is complete.
@@ -596,6 +597,19 @@ extension AppState {
                 if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: durationMs) }
             }
 
+            /// Says a WhatsApp status; a read-back draft then listens for "evet" / "hayır".
+            @MainActor func sayWhatsApp(_ prepared: WhatsAppSender.Prepared) async {
+                switch prepared {
+                case .confirm(let prompt):
+                    owLog("[Result] WhatsApp draft read back, awaiting confirmation")
+                    let heard = await self.speakReply(prompt)
+                    askFollowUp(prompt, heard: heard)
+                case .done(let status):
+                    owLog("[Result] WhatsApp: \(status)")
+                    await say(status, durationMs: 5000)
+                }
+            }
+
             /// Keeps the paused media paused while a follow-up question waits for its answer,
             /// with a safety net if the answer's recording never starts.
             @MainActor func askFollowUp(_ prompt: String, heard: Bool) {
@@ -604,6 +618,7 @@ extension AppState {
                 if session.trigger == .typed {
                     self.openTypedRequestPanel(prompt: prompt) { [weak self] in
                         self?.reminderManager?.cancelPendingDeletion()
+                        self?.whatsAppSender.cancel()
                     }
                     return
                 }
@@ -686,6 +701,7 @@ extension AppState {
                 hasTargetApp: session.targetApp != nil,
                 targetBundleID: session.targetApp?.bundleIdentifier,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
+                pendingWhatsAppSend: self.whatsAppSender.hasPending,
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 commandContext: commandContext)
@@ -709,6 +725,20 @@ extension AppState {
                     return
                 }
                 facts.pendingDeletion = false
+                route = VoiceRouter.route(text, facts: facts)
+            }
+
+            // Only a plain yes sends the pending WhatsApp message; anything unclear is asked once
+            // more, then dropped. A new message request replaces it and is routed as usual.
+            if case .whatsAppConfirmation = route {
+                if let answer = await self.whatsAppSender.handleConfirmation(trimmed) {
+                    session.latency.finishDecision(route: "WhatsApp gönderme onayı")
+                    owLog("[Route] WhatsApp send confirmation")
+                    self.lastTranscription = text
+                    await sayWhatsApp(answer)
+                    return
+                }
+                facts.pendingWhatsAppSend = false
                 route = VoiceRouter.route(text, facts: facts)
             }
 
@@ -905,9 +935,15 @@ extension AppState {
                 }
                 await chat(trimmed, recalled: recalled, detail: "geçmiş sohbet")
 
-            case .deletionConfirmation:
+            case .deletionConfirmation, .whatsAppConfirmation:
                 // Answered above; a non-answer was routed again without it.
                 break
+
+            case .whatsAppSend(let outgoing):
+                owLog("[Route] WhatsApp send (\(outgoing.body.isEmpty ? "open chat" : "\(outgoing.body.count) chars"))")
+                session.latency.finishDecision(route: "WhatsApp mesajı")
+                self.lastTranscription = text
+                await sayWhatsApp(await self.whatsAppSender.prepare(outgoing))
 
             // "sesi kıs ve Bluetooth'u kapat", "Wi-Fi'yi aç, sonra 10 dakikalık alarm kur".
             case .commands(let steps):

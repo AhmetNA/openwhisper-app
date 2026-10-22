@@ -22,6 +22,8 @@ enum VoiceRouter {
         var targetBundleID: String?
         /// A reminder deletion waits for "evet" / "hayır".
         var pendingDeletion = false
+        /// A WhatsApp message waits for "evet" / "hayır" (`WhatsAppSender`).
+        var pendingWhatsAppSend = false
         /// Test mode reads TODO items aloud; "geçti" / "kaldı" / "atla" answer it.
         var voiceTestActive = false
         /// The words came from audio the profile rejected while the Mac played a song or video
@@ -51,6 +53,11 @@ enum VoiceRouter {
         /// The answer to a pending reminder deletion. The app may find it is not one (a new
         /// delete command, an expired plan): it then routes again without `pendingDeletion`.
         case deletionConfirmation
+        /// "Dilayım'a yaz: akşam geliyorum": read back, sent only after a yes.
+        case whatsAppSend(WhatsAppOutgoing)
+        /// The answer to a pending WhatsApp message; like `deletionConfirmation`, the app
+        /// routes again without `pendingWhatsAppSend` when it is no answer.
+        case whatsAppConfirmation
         /// Several commands at once: "sesi kıs ve Bluetooth'u kapat".
         case commands([MultiCommandSplitter.Step<VoiceCommand>])
         case command(VoiceCommand)
@@ -83,6 +90,12 @@ enum VoiceRouter {
             if toAgent { return .agent(agent) }
         }
 
+        // "Dilayım'a yaz: …", "Ali'ye mesaj at …": before the typed rule, which would read a
+        // trailing "… mesaj yaz" as dictation. Nothing is sent before a spoken yes.
+        if facts.acceptsCommands, let outgoing = WhatsAppSendParser.parse(trimmed) {
+            return .whatsAppSend(outgoing)
+        }
+
         // An explicit "buraya yaz …" or trailing "… bunu yaz" always means the captured
         // text field, even when the words themselves resemble a Jarvis command. A trailing
         // "gönder" outside agent apps is typed without Return, so Slack / Mail are never sent.
@@ -94,6 +107,8 @@ enum VoiceRouter {
         }
 
         if voice {
+            // First: "evet" / "tamam" would otherwise read as a greeting or a meta answer.
+            if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
             // An editable field normally routes to dictation. This explicit phrase lets the
             // user talk to Jarvis without first clicking away from the field.
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }

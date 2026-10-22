@@ -832,6 +832,7 @@ extension AppState {
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         if session.trigger == .confirmation {
             reminderManager?.cancelPendingDeletion()
+            whatsAppSender.cancel()
         }
         recordingTimer?.invalidate()
         recordingTimer = nil

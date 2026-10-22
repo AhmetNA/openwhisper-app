@@ -107,12 +107,19 @@ enum WhatsAppController {
         }.value
         switch result {
         case .success(let status): return status
-        case .failure(WhatsAppStore.Failure.notInstalled):
+        case .failure(let error): return await status(for: error)
+        }
+    }
+
+    /// What to say when the store could not be read.
+    static func status(for error: Error) async -> String {
+        switch error {
+        case WhatsAppStore.Failure.notInstalled:
             return "Bu Mac'te WhatsApp verisi yok"
-        case .failure(WhatsAppStore.Failure.noAccess):
+        case WhatsAppStore.Failure.noAccess:
             await openFullDiskAccessSettings()
             return "WhatsApp okunamadı: Jarvis'e Tam Disk Erişimi ver, ayarları açtım"
-        case .failure(let error):
+        default:
             owLog("[WhatsApp] read failed: \(error)")
             return "WhatsApp verisi okunamadı"
         }

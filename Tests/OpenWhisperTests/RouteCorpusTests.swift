@@ -58,6 +58,8 @@ final class RouteCorpusTests: XCTestCase {
         case .voiceTest(let command): return "voice-test:\(command)"
         case .pastConversation(let query): return "memory-time:\(query.label)"
         case .deletionConfirmation: return "deletion-confirmation"
+        case .whatsAppSend(let outgoing): return outgoing.body.isEmpty ? "whatsapp-send:open" : "whatsapp-send"
+        case .whatsAppConfirmation: return "whatsapp-confirmation"
         case .commands(let steps): return "multi:" + steps.map { describe($0.command) }.joined(separator: " + ")
         case .command(let command): return describe(command)
         case .reminderDeletion: return "reminder-deletion"
