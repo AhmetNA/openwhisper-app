@@ -65,7 +65,7 @@ extension AppState {
             owLog("[WhatsApp] announcement skipped: WhatsApp is in front")
             return
         }
-        if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
+        if RemoteControl.screenIsLocked {
             // Kept for "Sen yokken …" after the unlock; the newest chat goes first.
             missedWhatsAppChats = announcement.chatIDs + missedWhatsAppChats.filter { !announcement.chatIDs.contains($0) }
             owLog("[WhatsApp] screen locked: kept for after the unlock (\(missedWhatsAppChats.count) chat(s))")

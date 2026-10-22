@@ -149,6 +149,7 @@ extension AppState {
         owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
 
         setupWakeWordListener()
+        setupRemoteControl()
 
         // Check Ollama availability
         await refreshOllamaStatus()

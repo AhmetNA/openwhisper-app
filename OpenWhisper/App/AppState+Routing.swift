@@ -223,6 +223,13 @@ extension AppState {
                 pasteContext: PasteContext,
                 send: Bool
             ) async -> Bool {
+                // Never type into the lock screen.
+                guard !RemoteControl.screenIsLocked else {
+                    owLog("[Result] Screen locked; nothing pasted")
+                    session.latency.finishDecision(route: "Mac kilitli")
+                    await self.speakReply(self.jarvisReply.answer(RemoteControl.lockedAnswer))
+                    return false
+                }
                 session.latency.finishDecision(route: send ? "agent yazma" : "dikte")
                 let preprocessingStartedAt = session.latency.timestamp()
                 var initialText = rawText
@@ -649,7 +656,8 @@ extension AppState {
                 }
                 let front = session.targetApp?.bundleIdentifier
                 if session.isVoiceCommand {
-                    let focusStatus = session.routingFocus
+                    // The lock screen's password field has focus, but nobody dictates into it.
+                    let focusStatus = RemoteControl.screenIsLocked ? .notEditable : session.routingFocus
                     let needsScore = focusStatus == .unknown
                     let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
@@ -764,6 +772,16 @@ extension AppState {
                     dismissFlowBarMessage()
                     return
                 }
+            }
+
+            // Locked: nothing can be typed into an app or done on screen. Say so instead of
+            // failing silently (or typing into the lock screen); the rest runs as usual.
+            if RemoteControl.needsUnlockedScreen(route), RemoteControl.screenIsLocked {
+                session.latency.finishDecision(route: "Mac kilitli")
+                owLog("[Route] Screen locked; not running: '\(trimmed)'")
+                self.lastTranscription = text
+                await say(self.jarvisReply.answer(RemoteControl.lockedAnswer), durationMs: 5000)
+                return
             }
 
             switch route {

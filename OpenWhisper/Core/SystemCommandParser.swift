@@ -14,6 +14,10 @@ enum SystemCommand: Equatable, Sendable {
     case scroll(up: Bool, large: Bool)
     case lockScreen
     case displaySleep
+    /// "Ekranı aç / uyandır": lights the display from sleep (the lock screen shows if locked).
+    case displayWake
+    /// "Kilidi aç", "şifremi gir": never done by voice; the answer points to Apple Watch.
+    case unlockRequest
     case sleep
     case screenSaver
     case screenshot
@@ -455,6 +459,8 @@ enum SystemCommandParser {
            matches(text, #"\baç|geç|etkinleştir|yap"#) { return .darkMode(on: false) }
         if matches(text, #"(?:ekranı|bilgisayarı|mac'?i|makineyi) kilitl[ei]|^kilitle$|lock (?:the )?screen"#) { return .lockScreen }
         if matches(text, #"^ekranı (?:kapat|kapa|söndür|uyut)"#) { return .displaySleep }
+        if matches(text, #"^(?:ekranı|monitörü) (?:aç|uyandır)(?:ar mısın|abilir misin|ır mısın|abilir mısın)?(?: lütfen)?$"#) { return .displayWake }
+        if matches(text, #"(?:^|\b(?:ekranın|bilgisayarın|mac'?in|ekran|bilgisayar) )kilid(?:i|ini) (?:aç|kaldır)|^(?:şifremi|şifreyi|parolamı|parolayı) (?:gir|yaz)"#) { return .unlockRequest }
         if matches(text, #"(?:bilgisayarı|mac'?i|makineyi|sistemi) (?:uyut|uykuya al|uyku moduna al)|^uyku moduna (?:geç|al)$"#) { return .sleep }
         if matches(text, #"ekran koruyucu"#), !matches(text, #"kapat"#) { return .screenSaver }
         if matches(text, #"ekran (?:görüntüsü|resmi)|screenshot|ekranı kaydet$"#) { return .screenshot }

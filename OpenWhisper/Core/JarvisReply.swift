@@ -36,6 +36,10 @@ struct JarvisReply {
              .mailReadLatest, .mailFrom, .mailReplyDraft, .whatsAppUnread, .whatsAppFrom,
              .whatsAppConversation, .whatsAppSearch:
             return answer(Self.speakable(Self.shortened(status, for: command)))
+        case .unlockRequest:
+            return answer(Self.speakable(status))
+        case .displayWake:
+            return Self.isFailure(status) ? failure(Self.speakable(status)) : ack()
         case .calendarEvent:
             // Say the date and time back, so a wrong hour is caught right away.
             if Self.isFailure(status) { return failure(Self.speakable(status)) }

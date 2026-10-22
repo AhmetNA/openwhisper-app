@@ -440,8 +440,17 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(wakeWordEnabled, forKey: "wakeWordEnabled")
             updateWakeWordListener()
+            updateRemoteControl()
         }
     }
+    /// Settings › Jarvis: keeps the Mac awake and "Jarvis" listening while the display sleeps.
+    var remoteControlEnabled = UserDefaults.standard.bool(forKey: "remoteControlEnabled") {
+        didSet {
+            UserDefaults.standard.set(remoteControlEnabled, forKey: "remoteControlEnabled")
+            updateRemoteControl()
+        }
+    }
+    @ObservationIgnored let remoteControl = RemoteControl()
     /// Settings › Jarvis: a key that starts the same session as "Hey Jarvis" (nil = not set).
     var jarvisHotkey: JarvisHotkey? = JarvisHotkey.load() {
         didSet {

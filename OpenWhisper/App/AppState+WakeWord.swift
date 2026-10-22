@@ -241,7 +241,8 @@ extension AppState {
 
     /// System sleep stops the listener; `didWake` only arrives on a full wake, so the DarkWakes of
     /// Power Nap never reopen the mic. With the display asleep and nothing playing, the open mic
-    /// would be the only thing keeping the Mac from idle sleep, so the listener pauses then too.
+    /// would be the only thing keeping the Mac from idle sleep, so the listener pauses then too,
+    /// unless remote control holds the Mac awake on purpose (`RemoteControl`).
     func observeSleepForWakeWord() {
         let center = NSWorkspace.shared.notificationCenter
         let handlers: [(Notification.Name, (AppState) -> Void)] = [
@@ -267,7 +268,7 @@ extension AppState {
     func updateWakeWordListener() {
         guard let listener = wakeWordListener else { return }
         let busy = recordingState == .recording || targetSpeakerEnrollmentIsRecording || systemAudioEnabled
-        let paused = systemAsleep || (screensAsleep && !mediaPlaying)
+        let paused = systemAsleep || (screensAsleep && !mediaPlaying && !remoteControl.isHoldingAwake)
         let shouldRun = wakeWordEnabled && modelLoaded && !busy && !paused
         if shouldRun && !listener.isRunning {
             listener.start()

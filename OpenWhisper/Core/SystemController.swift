@@ -18,6 +18,8 @@ enum SystemController {
         case .scroll(let up, let large): return scroll(up: up, large: large)
         case .lockScreen: return lockScreen()
         case .displaySleep: return run("/usr/bin/pmset", ["displaysleepnow"], done: "Ekran kapatıldı")
+        case .displayWake: return RemoteControl.wakeDisplay() ? "Ekran açıldı" : "Ekran açılamadı"
+        case .unlockRequest: return RemoteControl.unlockAnswer
         case .sleep: return run("/usr/bin/pmset", ["sleepnow"], done: "Uyku moduna geçiliyor")
         case .screenSaver: return openScreenSaver()
         case .screenshot: return takeScreenshot()

@@ -622,6 +622,22 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Uzaktan kontrol", systemImage: "dot.radiowaves.left.and.right")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.remoteControlEnabled },
+                                             set: { appState.remoteControlEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!appState.wakeWordEnabled)
+                }
+                Text("Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Divider()
 
             JarvisHotkeyRecorder()
