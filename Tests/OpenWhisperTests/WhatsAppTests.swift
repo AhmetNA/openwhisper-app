@@ -25,6 +25,12 @@ final class WhatsAppTests: XCTestCase {
         XCTAssertNotEqual(SystemCommandParser.parse("Dün ne konuşmuştuk"), .whatsAppConversation("Dün"))
     }
 
+    func testSummaryGetsShorterWithMoreMessages() {
+        XCTAssertEqual(WhatsAppController.summaryLength(messageCount: 3), "tek kısa cümle")
+        XCTAssertEqual(WhatsAppController.summaryLength(messageCount: 20), "en fazla 2 kısa cümle")
+        XCTAssertTrue(WhatsAppController.summaryLength(messageCount: 120).hasPrefix("en fazla 3 kısa cümle"))
+    }
+
     func testUnreadQuestions() {
         XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ta okunmamış var mı"), .whatsAppUnread)
         XCTAssertEqual(SystemCommandParser.parse("Okunmamış mesajları oku"), .whatsAppUnread)
