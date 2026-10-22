@@ -1157,26 +1157,29 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack {
-                Text("Redirect URI")
-                    .font(.caption)
-                    .frame(width: 90, alignment: .leading)
-                Text(SpotifyWebAPI.redirectURI)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary))
-                Button {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    pasteboard.setString(SpotifyWebAPI.redirectURI, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
+            // Only needed to register the app in Spotify's dashboard, before connecting.
+            if !spotifyConnected {
+                HStack {
+                    Text("Redirect URI")
+                        .font(.caption)
+                        .frame(width: 90, alignment: .leading)
+                    Text(SpotifyWebAPI.redirectURI)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(.quaternary))
+                    Button {
+                        let pasteboard = NSPasteboard.general
+                        pasteboard.clearContents()
+                        pasteboard.setString(SpotifyWebAPI.redirectURI, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Kopyala")
                 }
-                .buttonStyle(.plain)
-                .help("Kopyala")
             }
 
             HStack(spacing: 8) {
