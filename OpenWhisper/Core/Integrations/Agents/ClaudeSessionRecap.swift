@@ -72,6 +72,14 @@ enum ClaudeSessionRecap {
         return result.isEmpty ? nil : result
     }
 
+    /// The whole answer after a recap is a "no" ("Boş ver.", "Vazgeçtim", "İptal et"): nothing
+    /// is sent. Only the phrase alone, so "iptal butonunu düzelt" is still a message.
+    static func isCancel(_ text: String) -> Bool {
+        let lowered = text.lowercased(with: Locale(identifier: "tr_TR"))
+        let pattern = #"^\s*(?:(?:tamam|yok|hayır)[\s,]+)?(?:boş\s*ver\p{L}*|vazgeç\p{L}*|iptal(?:\s+et\p{L}*)?|gerek\s+yok|göndermeyelim|gönderme|unut\s+gitsin)(?:[\s,]+(?:o\s+zaman|şimdilik|lütfen|teşekkürler|sağ\s+ol))*[\s.!,]*$"#
+        return lowered.range(of: pattern, options: .regularExpression) != nil
+    }
+
     /// Without a model: the app's recap, or the first two sentences of the last message.
     static func fallbackSummary(storedRecap: String?, lastMessage: String?) -> String? {
         if let storedRecap { return twoSentences(storedRecap) }

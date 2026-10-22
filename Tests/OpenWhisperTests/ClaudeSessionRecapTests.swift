@@ -101,6 +101,15 @@ final class ClaudeSessionRecapTests: XCTestCase {
         XCTAssertNil(ClaudeSessionRecap.fallbackSummary(storedRecap: nil, lastMessage: nil))
     }
 
+    func testCancelAfterRecap() {
+        for text in ["Boş ver.", "boşver", "Vazgeç", "Vazgeçtim", "İptal", "İptal et", "Gerek yok", "Tamam, boş ver şimdilik", "Gönderme"] {
+            XCTAssertTrue(ClaudeSessionRecap.isCancel(text), text)
+        }
+        for text in ["İptal butonunu düzelt", "Boş verilen alanı kontrol et", "Testleri çalıştır", "Vazgeç düğmesini kaldır"] {
+            XCTAssertFalse(ClaudeSessionRecap.isCancel(text), text)
+        }
+    }
+
     func testModelAnswerCutToTwoSentences() {
         XCTAssertEqual(ClaudeSessionRecap.twoSentences("Bir bitti. İki kaldı. Üç de"), "Bir bitti. İki kaldı.")
         XCTAssertEqual(ClaudeSessionRecap.twoSentences("Takvim düzeldi"), "Takvim düzeldi")

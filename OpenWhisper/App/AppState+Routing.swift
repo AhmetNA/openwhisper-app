@@ -715,7 +715,14 @@ extension AppState {
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 commandContext: commandContext)
-            // The mic opened after a Claude session recap: all of it is the message for that session.
+            // The mic opened after a Claude session recap: all of it is the message for that
+            // session, unless the user called it off ("boş ver", "vazgeç").
+            if session.sendsToRecappedClaudeSession, ClaudeSessionRecap.isCancel(trimmed) {
+                session.latency.finishDecision(route: "Claude mesajı iptal")
+                owLog("[Agent] Claude recap message called off: '\(trimmed)'")
+                await say("Tamam, göndermedim.", durationMs: 3000)
+                return
+            }
             var route = session.sendsToRecappedClaudeSession
                 ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
                 : VoiceRouter.route(text, facts: facts)
