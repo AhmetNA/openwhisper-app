@@ -224,22 +224,36 @@ enum WhatsAppController {
         }
     }
 
-    /// The silent notice under the screen, no message text: "WhatsApp · Ali'den 3 mesaj" for one
-    /// chat, else "WhatsApp · 5 mesaj · 2 kişi, 1 grup" over "Ali, Ayşe, Aile".
+    /// The silent notice under the screen: `Ali: "akşam geliyor musun"` when one person wrote,
+    /// else counts and names only ("WhatsApp · 5 mesaj · 2 kişi, 1 grup" over "Ali, Ayşe, Aile").
     static func notice(forChats ids: [Int64]) async -> String? {
         let chats = (try? await Task.detached(priority: .utility) { try WhatsAppStore.chats() }.value) ?? []
-        return notice(for: ids.compactMap { id in chats.first { $0.id == id } })
+        let found = ids.compactMap { id in chats.first { $0.id == id } }
+        var newest: String?
+        if found.count == 1, let only = found.first, !only.isGroup {
+            let recent = (try? await Task.detached(priority: .utility) { try WhatsAppStore.messages(in: only.id, limit: 12) }.value) ?? []
+            newest = recent.first { !$0.fromMe }?.text
+        }
+        return notice(for: found, newestText: newest)
     }
 
     /// Names shown at most; the rest are only counted.
     static let noticeNames = 4
 
-    static func notice(for chats: [WhatsAppStore.Chat]) -> String? {
+    /// Characters of a message shown at most.
+    static let noticeTextLimit = 80
+
+    static func notice(for chats: [WhatsAppStore.Chat], newestText: String? = nil) -> String? {
         guard !chats.isEmpty else { return nil }
         let messages = chats.reduce(0) { $0 + max($1.unread, 1) }
-        // One chat needs no count of people: "WhatsApp · Ali'den 3 mesaj".
         if chats.count == 1, let only = chats.first {
             let name = spokenName(only)
+            // One person: their newest message, with the count when there are more.
+            if !only.isGroup, let text = newestText?.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces), !text.isEmpty {
+                let cut = text.count > noticeTextLimit ? String(text.prefix(noticeTextLimit)) + "…" : text
+                return "\(name)\(messages > 1 ? " (\(messages))" : ""): \"\(cut)\""
+            }
             return "WhatsApp · " + (only.isGroup ? "\(name) grubunda \(messages) mesaj" : "\(WhatsAppWatcher.ablative(name)) \(messages) mesaj")
         }
         let groups = chats.filter(\.isGroup).count, people = chats.count - groups
