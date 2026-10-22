@@ -46,81 +46,115 @@ extension AppState {
             owLog("[TargetSpeaker] loadTargetSpeakerProfile error: \(error)")
         }
         refreshTargetSpeakerProfileCoherence()
-        loadBudsTargetSpeakerProfile()
+        loadMicTargetSpeakerProfile(.buds)
+        loadMicTargetSpeakerProfile(.external)
     }
 
-    /// Like `loadTargetSpeakerProfile` for the buds profile, except that a missing or stale one
-    /// leaves the filter switch alone: it only turns filtering off for buds recordings.
-    func loadBudsTargetSpeakerProfile() {
+    /// Like `loadTargetSpeakerProfile` for the buds or external-mic profile, except that a missing
+    /// or stale one leaves the filter switch alone: it only turns filtering off for that mic.
+    func loadMicTargetSpeakerProfile(_ mic: TargetSpeakerMic) {
+        guard mic != .mac else { return }
         do {
-            let profile = try budsTargetSpeakerProfileStore.load()
-            hasStoredBudsTargetSpeakerProfile = profile != nil
+            let profile = try targetSpeakerProfileStore(for: mic).load()
             guard let profile else {
-                budsTargetSpeakerProfile = nil
-                budsTargetSpeakerProfileStatus = "Henüz kayıt yok"
+                setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Henüz kayıt yok")
                 return
             }
             if profile.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) {
-                budsTargetSpeakerProfile = profile
-                budsTargetSpeakerProfileStatus = "Kayıtlı profil hazır"
-                owLog("[TargetSpeaker] Buds profile loaded (embeddings=\(profile.embeddings.count))")
+                setMicTargetSpeakerProfile(mic, profile: profile, stored: true, status: "Kayıtlı profil hazır")
+                owLog("[TargetSpeaker] \(mic) profile loaded (embeddings=\(profile.embeddings.count))")
             } else {
-                budsTargetSpeakerProfile = nil
-                budsTargetSpeakerProfileStatus = profile.audioProcessingMode != audioProcessingMode
+                setMicTargetSpeakerProfile(mic, profile: nil, stored: true, status: profile.audioProcessingMode != audioProcessingMode
                     ? "Ses işleme modu değişti — yeniden kayıt gerekli"
-                    : "Model sürümü değişti — yeniden kayıt gerekli"
-                owLog("[TargetSpeaker] Buds profile incompatible (mode=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
+                    : "Model sürümü değişti — yeniden kayıt gerekli")
+                owLog("[TargetSpeaker] \(mic) profile incompatible (mode=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
             }
         } catch {
-            budsTargetSpeakerProfile = nil
-            hasStoredBudsTargetSpeakerProfile = false
-            budsTargetSpeakerProfileStatus = "Profil okunamadı — yeniden kayıt gerekli"
-            owLog("[TargetSpeaker] Buds profile load error: \(error)")
+            setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Profil okunamadı — yeniden kayıt gerekli")
+            owLog("[TargetSpeaker] \(mic) profile load error: \(error)")
+        }
+    }
+
+    /// The buds and external-mic profile state; the Mac profile has its own bookkeeping.
+    func setMicTargetSpeakerProfile(_ mic: TargetSpeakerMic, profile: TargetSpeakerProfile?, stored: Bool, status: String) {
+        switch mic {
+        case .mac:
+            return
+        case .buds:
+            budsTargetSpeakerProfile = profile
+            hasStoredBudsTargetSpeakerProfile = stored
+            budsTargetSpeakerProfileStatus = status
+        case .external:
+            externalTargetSpeakerProfile = profile
+            hasStoredExternalTargetSpeakerProfile = stored
+            externalTargetSpeakerProfileStatus = status
         }
     }
 
     func targetSpeakerProfile(for mic: TargetSpeakerMic) -> TargetSpeakerProfile? {
-        mic == .mac ? targetSpeakerProfile : budsTargetSpeakerProfile
+        switch mic {
+        case .mac: return targetSpeakerProfile
+        case .buds: return budsTargetSpeakerProfile
+        case .external: return externalTargetSpeakerProfile
+        }
     }
 
     func targetSpeakerProfileStore(for mic: TargetSpeakerMic) -> TargetSpeakerProfileStore {
-        mic == .mac ? targetSpeakerProfileStore : budsTargetSpeakerProfileStore
+        switch mic {
+        case .mac: return targetSpeakerProfileStore
+        case .buds: return budsTargetSpeakerProfileStore
+        case .external: return externalTargetSpeakerProfileStore
+        }
     }
 
     /// Makes `profile` the active one for `mic` after an enrollment, append or undo saved it.
     func adoptTargetSpeakerProfile(_ profile: TargetSpeakerProfile, for mic: TargetSpeakerMic, status: String = "Kayıtlı profil hazır") {
-        switch mic {
-        case .mac:
-            targetSpeakerProfile = profile
-            refreshTargetSpeakerProfileCoherence()
-            hasStoredTargetSpeakerProfile = true
-            targetSpeakerProfileStatus = status
-        case .buds:
-            budsTargetSpeakerProfile = profile
-            hasStoredBudsTargetSpeakerProfile = true
-            budsTargetSpeakerProfileStatus = status
+        guard mic == .mac else {
+            setMicTargetSpeakerProfile(mic, profile: profile, stored: true, status: status)
+            return
         }
+        targetSpeakerProfile = profile
+        refreshTargetSpeakerProfileCoherence()
+        hasStoredTargetSpeakerProfile = true
+        targetSpeakerProfileStatus = status
     }
 
-    /// The input an enrollment or sample for `mic` records from: the connected buds, or a
-    /// Mac-side mic even while the buds are the default input (that would put buds audio into
-    /// the Mac profile).
+    /// The mic the wake listener hears through, so the wake clip is scored against its profile.
+    var wakeTargetSpeakerMic: TargetSpeakerMic {
+        TargetSpeakerMic(device: WakeWordListener.listeningDevice(
+            pickedUID: inputDeviceUID, devices: AudioEngine.availableInputDevices()))
+    }
+
+    var wakeTargetSpeakerProfile: TargetSpeakerProfile? {
+        targetSpeakerProfile(for: wakeTargetSpeakerMic)
+    }
+
+    /// The connected external mic: the picked one, else the first one plugged in.
+    static func connectedExternalInput(picked: String?, devices: [AudioInputDevice]) -> AudioInputDevice? {
+        let external = devices.filter { TargetSpeakerMic(device: $0) == .external }
+        return external.first { $0.uid == picked } ?? external.first
+    }
+
+    /// The input an enrollment or sample for `mic` records from: the connected buds, the
+    /// external mic, or the Mac's own mic even while another one is picked or the default (that
+    /// would put another mic's audio into the Mac profile).
     func targetSpeakerEnrollmentInputUID(for mic: TargetSpeakerMic) -> String? {
+        let devices = AudioEngine.availableInputDevices()
         switch mic {
         case .buds:
             return AudioEngine.connectedBluetoothInput()?.uid
+        case .external:
+            return Self.connectedExternalInput(picked: inputDeviceUID, devices: devices)?.uid
         case .mac:
-            let uid = resolvedInputDeviceUID
-            guard Self.inputIsBluetooth(uid: uid) else { return uid }
-            let devices = AudioEngine.availableInputDevices()
-            return (devices.first { $0.isBuiltIn } ?? devices.first { !$0.isBluetooth })?.uid
+            return devices.first { $0.isBuiltIn }?.uid
         }
     }
 
     /// Starts the capture for an enrollment or sample. The buds mic hears music played into the
-    /// ear, so media pauses for it whatever the ducking switch says.
+    /// ear and an external mic hears the Mac's speakers without echo cancellation, so media
+    /// pauses for them whatever the ducking switch says.
     func startTargetSpeakerCapture(for mic: TargetSpeakerMic, audioEngine: AudioEngine) {
-        if mic == .buds {
+        if mic != .mac {
             recordingMedia.begin(immediately: true)
         } else if audioDuckingEnabled {
             recordingMedia.begin()
@@ -412,9 +446,9 @@ extension AppState {
 
     func startTargetSpeakerSampleRecording() {
         owLog("[TargetSpeaker] startTargetSpeakerSampleRecording called")
-        // Buds in use and a buds profile to grow: the sample goes there.
-        let mic: TargetSpeakerMic = budsTargetSpeakerProfile != nil && Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .fnHold))
-            ? .buds : .mac
+        // Buds or an external mic in use and its own profile to grow: the sample goes there.
+        let inUse = TargetSpeakerMic(device: AudioEngine.availableInputDevices().first { $0.uid == resolvedInputDeviceUID(for: .fnHold) })
+        let mic: TargetSpeakerMic = targetSpeakerProfile(for: inUse) != nil ? inUse : .mac
         guard recordingState == .idle,
               canCaptureTargetSpeakerSample,
               targetSpeakerProfile(for: mic) != nil,
@@ -492,7 +526,7 @@ extension AppState {
                 self.lastConfirmedAppendReceipt = receipt
                 self.lastConfirmedAppendMic = mic
                 self.targetSpeakerSampleStatus =
-                    "\(added) örnek eklendi — \(mic == .buds ? "kulaklık profilinde" : "profilde") toplam \(receipt.appendedProfile.embeddings.count)."
+                    "\(added) örnek eklendi — \(mic == .buds ? "kulaklık profilinde" : mic == .external ? "harici mikrofon profilinde" : "profilde") toplam \(receipt.appendedProfile.embeddings.count)."
                 owLog("[TargetSpeaker] On-demand sample appended (\(mic)): +\(added), new count=\(receipt.appendedProfile.embeddings.count)")
             } catch {
                 self.targetSpeakerSampleStatus = error.localizedDescription
@@ -717,19 +751,19 @@ extension AppState {
         targetSpeakerEnrollmentStatus = ""
     }
 
-    func deleteBudsTargetSpeakerProfile() {
-        owLog("[TargetSpeaker] deleteBudsTargetSpeakerProfile called")
-        if targetSpeakerEnrollmentMic == .buds { cancelTargetSpeakerEnrollment() }
+    /// Deletes the buds or external-mic profile; the Mac one goes through `deleteTargetSpeakerProfile`.
+    func deleteMicTargetSpeakerProfile(_ mic: TargetSpeakerMic) {
+        owLog("[TargetSpeaker] deleteMicTargetSpeakerProfile called (mic=\(mic))")
+        guard mic != .mac else { return }
+        if targetSpeakerEnrollmentActive && targetSpeakerEnrollmentMic == mic { cancelTargetSpeakerEnrollment() }
         do {
-            try budsTargetSpeakerProfileStore.delete()
-            budsTargetSpeakerProfile = nil
-            hasStoredBudsTargetSpeakerProfile = false
-            budsTargetSpeakerProfileStatus = "Henüz kayıt yok"
-            if lastConfirmedAppendMic == .buds { lastConfirmedAppendReceipt = nil }
-            owLog("[TargetSpeaker] Buds profile deleted")
+            try targetSpeakerProfileStore(for: mic).delete()
+            setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Henüz kayıt yok")
+            if lastConfirmedAppendMic == mic { lastConfirmedAppendReceipt = nil }
+            owLog("[TargetSpeaker] \(mic) profile deleted")
         } catch {
             lastError = error.localizedDescription
-            owLog("[TargetSpeaker] Delete buds profile failed: \(error)")
+            owLog("[TargetSpeaker] Delete \(mic) profile failed: \(error)")
         }
     }
 

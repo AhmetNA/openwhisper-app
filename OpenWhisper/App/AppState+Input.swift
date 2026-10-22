@@ -99,12 +99,16 @@ extension AppState {
         return automatic ?? devices.first { $0.isBuiltIn }?.uid
     }
 
-    /// The profile a recording is filtered against: buds recordings only ever use the buds
-    /// profile (nil without one, so they stay unfiltered), everything else the Mac profile.
+    /// The profile a recording is filtered against: buds and external-mic recordings only ever
+    /// use their own profile (nil without one, so they stay unfiltered), the Mac mic the Mac one.
     static func sessionTargetSpeakerProfile(
-        inputIsBluetooth: Bool, mac: TargetSpeakerProfile?, buds: TargetSpeakerProfile?
+        mic: TargetSpeakerMic, mac: TargetSpeakerProfile?, buds: TargetSpeakerProfile?, external: TargetSpeakerProfile?
     ) -> TargetSpeakerProfile? {
-        inputIsBluetooth ? buds : mac
+        switch mic {
+        case .mac: return mac
+        case .buds: return buds
+        case .external: return external
+        }
     }
 
     static func inputIsBluetooth(uid: String?) -> Bool {

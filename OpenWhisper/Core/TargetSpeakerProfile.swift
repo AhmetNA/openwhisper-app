@@ -109,6 +109,15 @@ protocol TargetSpeakerProfileStore: Sendable {
 enum TargetSpeakerMic: String, Sendable {
     case mac
     case buds
+    /// A wired, USB or wireless-receiver mic: it sounds different from the Mac mic, so the Mac
+    /// profile rejects the user's own voice through it.
+    case external
+
+    /// The profile a recording from `device` belongs to; the system default (nil) counts as Mac.
+    init(device: AudioInputDevice?) {
+        guard let device, !device.isBuiltIn else { self = .mac; return }
+        self = device.isBluetooth ? .buds : .external
+    }
 }
 
 final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unchecked Sendable {
@@ -117,7 +126,7 @@ final class KeychainTargetSpeakerProfileStore: TargetSpeakerProfileStore, @unche
 
     /// `default` is the Mac-mic profile (the account predates the buds one).
     init(mic: TargetSpeakerMic = .mac) {
-        account = mic == .mac ? "default" : "buds"
+        account = mic == .mac ? "default" : mic.rawValue
     }
 
     func load() throws -> TargetSpeakerProfile? {

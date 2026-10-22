@@ -313,17 +313,61 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertNil(appState.targetSpeakerProfile)
         XCTAssertFalse(appState.targetSpeakerEnabled)
 
-        appState.deleteBudsTargetSpeakerProfile()
+        appState.deleteMicTargetSpeakerProfile(.buds)
         XCTAssertNil(try budsStore.load())
         XCTAssertFalse(appState.hasStoredBudsTargetSpeakerProfile)
+    }
+
+    func testExternalEnrollmentSavesOnlyTheExternalProfile() async throws {
+        let macStore = InMemoryTargetSpeakerProfileStore()
+        let budsStore = InMemoryTargetSpeakerProfileStore()
+        let externalStore = InMemoryTargetSpeakerProfileStore()
+        let appState = AppState(
+            profileStore: macStore,
+            budsProfileStore: budsStore,
+            externalProfileStore: externalStore,
+            targetSpeakerModel: IntegrationSpeakerModel(
+                voiceFrames: Array(repeating: true, count: 48)
+            )
+        )
+        let recording = validEnrollmentSamples()
+
+        appState.beginTargetSpeakerEnrollment(for: .external)
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil { !appState.targetSpeakerEnrollmentIsProcessing && appState.targetSpeakerEnrollmentStep == 1 }
+        appState.processTargetSpeakerEnrollmentSamples(recording)
+        try await waitUntil { !appState.targetSpeakerEnrollmentIsProcessing && !appState.targetSpeakerEnrollmentActive }
+
+        XCTAssertTrue(appState.hasExternalTargetSpeakerProfile)
+        XCTAssertEqual(try externalStore.load()?.embeddings.count, 30)
+        XCTAssertNil(try macStore.load())
+        XCTAssertNil(try budsStore.load())
+        XCTAssertFalse(appState.targetSpeakerEnabled)
+
+        appState.deleteMicTargetSpeakerProfile(.external)
+        XCTAssertNil(try externalStore.load())
+        XCTAssertFalse(appState.hasStoredExternalTargetSpeakerProfile)
+    }
+
+    func testMicKindFollowsTheRecordingDevice() {
+        func device(builtIn: Bool, bluetooth: Bool) -> AudioInputDevice {
+            AudioInputDevice(id: 1, uid: "x", name: "x", isBluetooth: bluetooth, hasOutputStream: false, isBuiltIn: builtIn)
+        }
+        XCTAssertEqual(TargetSpeakerMic(device: nil), .mac)
+        XCTAssertEqual(TargetSpeakerMic(device: device(builtIn: true, bluetooth: false)), .mac)
+        XCTAssertEqual(TargetSpeakerMic(device: device(builtIn: false, bluetooth: true)), .buds)
+        XCTAssertEqual(TargetSpeakerMic(device: device(builtIn: false, bluetooth: false)), .external)
     }
 
     func testBudsRecordingsUseOnlyTheBudsProfile() throws {
         let mac = try TargetSpeakerProfile(modelIdentifier: "m", embeddings: [Array(repeating: 0.1, count: 256)])
         let buds = try TargetSpeakerProfile(modelIdentifier: "m", embeddings: [Array(repeating: 0.2, count: 256)])
-        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: false, mac: mac, buds: buds), mac)
-        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: true, mac: mac, buds: buds), buds)
-        XCTAssertNil(AppState.sessionTargetSpeakerProfile(inputIsBluetooth: true, mac: mac, buds: nil))
+        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(mic: .mac, mac: mac, buds: buds, external: nil), mac)
+        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(mic: .buds, mac: mac, buds: buds, external: nil), buds)
+        XCTAssertNil(AppState.sessionTargetSpeakerProfile(mic: .buds, mac: mac, buds: nil, external: nil))
+        // The USB mic scored 0.33–0.43 against the Mac profile: it never falls back to it.
+        XCTAssertNil(AppState.sessionTargetSpeakerProfile(mic: .external, mac: mac, buds: buds, external: nil))
+        XCTAssertEqual(AppState.sessionTargetSpeakerProfile(mic: .external, mac: mac, buds: buds, external: buds), buds)
     }
 
     /// Regression test for a retry-loop bug: `createProfile`'s per-recording coherence check can

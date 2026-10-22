@@ -73,7 +73,7 @@ extension AppState {
 
     /// With the voice guard off but a profile enrolled, the wake clip is still scored for the log.
     func recordWakeSpeakerScoreOnly(audio: [Float], clipID: UUID?) {
-        guard clipID != nil, let profile = targetSpeakerProfile else { return }
+        guard clipID != nil, let profile = wakeTargetSpeakerProfile else { return }
         let filter = targetSpeakerFilter
         Task { [weak self] in
             guard let score = try? await filter.wakeSpeakerScore(samples: audio, profile: profile), self != nil else { return }
@@ -161,7 +161,7 @@ extension AppState {
     /// Whether the wake clip sounds like the enrolled user; true when the check is off. A model
     /// error lets the wake through: a failed download must not silence "Jarvis" altogether.
     func wakeSpeakerMatches(audio: [Float], clipID: UUID? = nil) async -> Bool {
-        guard targetSpeakerGuardsWakeWord, let profile = targetSpeakerProfile else { return true }
+        guard targetSpeakerGuardsWakeWord, let profile = wakeTargetSpeakerProfile else { return true }
         let threshold = TargetSpeakerFilter.wakeThreshold
         let started = Date()
         do {

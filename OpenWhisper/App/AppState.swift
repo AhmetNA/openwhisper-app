@@ -216,9 +216,10 @@ final class AppState {
         targetSpeakerEnabled && targetSpeakerScope.coversTranscription
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
     }
-    /// "Jarvis" wakes only for the enrolled voice.
+    /// "Jarvis" wakes only for the enrolled voice, checked against the profile of the mic the
+    /// wake listener hears through (none for that mic: the check is off).
     var targetSpeakerGuardsWakeWord: Bool {
-        targetSpeakerEnabled && targetSpeakerScope.coversWakeWord && targetSpeakerProfile != nil
+        targetSpeakerEnabled && targetSpeakerScope.coversWakeWord && wakeTargetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
     }
     var launchAtLogin: Bool {
@@ -364,6 +365,14 @@ final class AppState {
     var hasBudsTargetSpeakerProfile: Bool {
         budsTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
     }
+    /// The external (USB, wired) mic's own profile, kept like the buds one: without it recordings
+    /// from such a mic are not filtered at all.
+    var externalTargetSpeakerProfile: TargetSpeakerProfile?
+    var externalTargetSpeakerProfileStatus: String = "Henüz kayıt yok"
+    var hasStoredExternalTargetSpeakerProfile = false
+    var hasExternalTargetSpeakerProfile: Bool {
+        externalTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
+    }
     /// The mic the running enrollment builds a profile for.
     var targetSpeakerEnrollmentMic: TargetSpeakerMic = .mac
     /// The profile the on-demand sample is appended to, fixed when it starts.
@@ -389,6 +398,7 @@ final class AppState {
     var targetApp: NSRunningApplication?
     let targetSpeakerProfileStore: TargetSpeakerProfileStore
     let budsTargetSpeakerProfileStore: TargetSpeakerProfileStore
+    let externalTargetSpeakerProfileStore: TargetSpeakerProfileStore
     let targetSpeakerModel: TargetSpeakerModelProvider
     let targetSpeakerFilter: TargetSpeakerFilter
     let targetSpeakerDiarization: TargetSpeakerDiarizationService
@@ -573,6 +583,7 @@ final class AppState {
     init(
         profileStore: TargetSpeakerProfileStore = KeychainTargetSpeakerProfileStore(),
         budsProfileStore: TargetSpeakerProfileStore? = nil,
+        externalProfileStore: TargetSpeakerProfileStore? = nil,
         targetSpeakerModel: TargetSpeakerModelProvider = FluidAudioTargetSpeakerModel(),
         transcriptionService: WhisperTranscriptionService? = nil,
         textInjector: TextInjecting? = nil,
@@ -652,6 +663,9 @@ final class AppState {
         budsTargetSpeakerProfileStore = budsProfileStore
             ?? (profileStore is KeychainTargetSpeakerProfileStore
                 ? KeychainTargetSpeakerProfileStore(mic: .buds) : InMemoryTargetSpeakerProfileStore())
+        externalTargetSpeakerProfileStore = externalProfileStore
+            ?? (profileStore is KeychainTargetSpeakerProfileStore
+                ? KeychainTargetSpeakerProfileStore(mic: .external) : InMemoryTargetSpeakerProfileStore())
         self.targetSpeakerModel = targetSpeakerModel
         targetSpeakerFilter = TargetSpeakerFilter(model: targetSpeakerModel)
         self.targetSpeakerDiarization = targetSpeakerDiarization

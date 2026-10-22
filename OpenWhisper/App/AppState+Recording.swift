@@ -64,6 +64,7 @@ extension AppState {
         recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
         let recordingInputDeviceUID = resolvedInputDeviceUID(for: recordingTrigger)
         let recordingInputIsBluetooth = Self.inputIsBluetooth(uid: recordingInputDeviceUID)
+        let recordingMic = TargetSpeakerMic(device: AudioEngine.availableInputDevices().first { $0.uid == recordingInputDeviceUID })
         if ![.confirmation, .followUp].contains(recordingTrigger) {
             chainedBluetoothInputUID = recordingInputIsBluetooth ? recordingInputDeviceUID : nil
         }
@@ -122,21 +123,22 @@ extension AppState {
         // the speakers' residual after echo cancellation keeps Silero hearing "speech" forever.
         // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
         // Jarvis's reply (the window waits for it to end).
-        let watchesPlayback = mediaPlaying && !recordingInputIsBluetooth && !overReply
-        // The buds' call-mode mic scores 0.2–0.35 against the Mac-mic profile, so every batch was
-        // rejected: buds recordings are filtered only against their own profile.
+        // An external mic gets the buds treatment: media pauses at once instead.
+        let watchesPlayback = mediaPlaying && recordingMic == .mac && !overReply
+        // The buds' call-mode mic scores 0.2–0.35 against the Mac-mic profile and a USB mic
+        // 0.33–0.43, so every batch was rejected: they are filtered only against their own profile.
         let sessionProfile = Self.sessionTargetSpeakerProfile(
-            inputIsBluetooth: recordingInputIsBluetooth, mac: targetSpeakerProfile, buds: budsTargetSpeakerProfile
+            mic: recordingMic, mac: targetSpeakerProfile, buds: budsTargetSpeakerProfile, external: externalTargetSpeakerProfile
         )
         let targetSpeakerFiltersSession = targetSpeakerEnabled && sessionProfile != nil
-        if targetSpeakerEnabled && recordingInputIsBluetooth {
+        if targetSpeakerEnabled && recordingMic != .mac {
             owLog(sessionProfile == nil
-                ? "[TargetSpeaker] Bluetooth input: speaker filter off (no buds profile)"
-                : "[TargetSpeaker] Bluetooth input: filtering against the buds profile")
+                ? "[TargetSpeaker] \(recordingMic) input: speaker filter off (no \(recordingMic) profile)"
+                : "[TargetSpeaker] \(recordingMic) input: filtering against the \(recordingMic) profile")
         }
-        // Not on buds yet: the stop gate scores every 0.5 s and cuts the session after ~2 s of
-        // "someone else", too risky before the buds profile has been checked in noise.
-        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && !recordingInputIsBluetooth
+        // Mac mic only: the gate scores against the Mac profile every 0.5 s and cuts the session
+        // after ~2 s of "someone else", too risky before the other profiles were checked in noise.
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && recordingMic == .mac
             && (targetSpeakerFiltersSession || watchesPlayback) && targetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
@@ -150,10 +152,11 @@ extension AppState {
         // The Settings switch decides for every trigger, voice sessions included. Buds are the
         // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
         // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
+        // So does an external mic, which Mac playback must not reach either.
         // Not after a command: the user is judging the song or video it just started.
-        let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingInputIsBluetooth && mediaPlaying))
+        let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
         if pausesMedia {
-            recordingMedia.begin(immediately: recordingInputIsBluetooth)
+            recordingMedia.begin(immediately: recordingMic != .mac)
         }
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
@@ -271,8 +274,8 @@ extension AppState {
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
-        session.targetSpeakerMic = recordingInputIsBluetooth ? .buds : .mac
-        if recordingInputIsBluetooth && pausesMedia {
+        session.targetSpeakerMic = recordingMic
+        if recordingMic != .mac && pausesMedia {
             let media = recordingMedia
             session.playbackSurvivedPause = { media.playbackLeftRunning }
         }

@@ -960,7 +960,8 @@ struct SettingsView: View {
             }
 
             if appState.targetSpeakerEnrollmentActive {
-                Text((appState.targetSpeakerEnrollmentMic == .buds ? "Kulaklık — " : "")
+                Text((appState.targetSpeakerEnrollmentMic == .buds ? "Kulaklık — "
+                      : appState.targetSpeakerEnrollmentMic == .external ? "Harici mikrofon — " : "")
                      + (appState.targetSpeakerEnrollmentIsRecording
                      ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
                      : appState.targetSpeakerEnrollmentStatus))
@@ -1014,7 +1015,7 @@ struct SettingsView: View {
                 .disabled(appState.targetSpeakerEnrollmentIsProcessing
                           || appState.targetSpeakerSampleIsRecording
                           || appState.targetSpeakerSampleIsProcessing
-                          || (appState.targetSpeakerEnrollmentActive && appState.targetSpeakerEnrollmentMic == .buds))
+                          || (appState.targetSpeakerEnrollmentActive && appState.targetSpeakerEnrollmentMic != .mac))
 
                 // Adding one sample to an existing profile, available any time rather than only
                 // through the short-lived offer that follows a rejected dictation.
@@ -1062,67 +1063,77 @@ struct SettingsView: View {
 
             }
 
-            budsSpeakerProfileRow
+            micSpeakerProfileRow(.buds)
+            if appState.hasStoredExternalTargetSpeakerProfile
+                || appState.availableInputDevices.contains(where: { TargetSpeakerMic(device: $0) == .external }) {
+                micSpeakerProfileRow(.external)
+            }
         }
     }
 
-    /// The buds keep their own profile: their call-mode mic doesn't match the Mac one, and
-    /// without it buds recordings go unfiltered.
-    private var budsSpeakerProfileRow: some View {
-        let budsConnected = appState.availableInputDevices.contains { $0.isBluetooth }
-        let enrollingBuds = appState.targetSpeakerEnrollmentActive && appState.targetSpeakerEnrollmentMic == .buds
+    /// The buds and an external mic keep their own profile: their sound doesn't match the Mac
+    /// mic, and without it their recordings go unfiltered.
+    private func micSpeakerProfileRow(_ mic: TargetSpeakerMic) -> some View {
+        let isBuds = mic == .buds
+        let connected = appState.availableInputDevices.contains { TargetSpeakerMic(device: $0) == mic }
+        let enrolling = appState.targetSpeakerEnrollmentActive && appState.targetSpeakerEnrollmentMic == mic
+        let ready = isBuds ? appState.hasBudsTargetSpeakerProfile : appState.hasExternalTargetSpeakerProfile
+        let stored = isBuds ? appState.hasStoredBudsTargetSpeakerProfile : appState.hasStoredExternalTargetSpeakerProfile
+        let status = isBuds ? appState.budsTargetSpeakerProfileStatus : appState.externalTargetSpeakerProfileStatus
+        let name = isBuds ? "Kulaklık" : "Harici mikrofon"
         return VStack(alignment: .leading, spacing: 6) {
             Divider()
             HStack(spacing: 8) {
-                Image(systemName: appState.hasBudsTargetSpeakerProfile ? "checkmark.circle.fill" : "airpodspro")
-                    .foregroundStyle(appState.hasBudsTargetSpeakerProfile ? .green : .secondary)
-                Text("Kulaklık profili: \(appState.budsTargetSpeakerProfileStatus)"
-                     + (appState.hasStoredBudsTargetSpeakerProfile
-                        ? " · \(appState.budsTargetSpeakerProfile?.embeddings.count ?? 0) örnek" : ""))
+                Image(systemName: ready ? "checkmark.circle.fill" : isBuds ? "airpodspro" : "mic")
+                    .foregroundStyle(ready ? .green : .secondary)
+                Text("\(name) profili: \(status)"
+                     + (stored ? " · \(appState.targetSpeakerProfile(for: mic)?.embeddings.count ?? 0) örnek" : ""))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Spacer()
             }
-            Text(appState.hasBudsTargetSpeakerProfile
-                 ? "Kulaklık takılıyken başkalarının konuşması bu profille ayıklanır."
-                 : "Kulaklık için ayrı profil gerekir; kulaklığı bağlayıp sesinizi kaydedin.")
+            Text(ready
+                 ? (isBuds ? "Kulaklık takılıyken" : "Harici mikrofonla kayıtta") + " başkalarının konuşması bu profille ayıklanır."
+                 : (isBuds ? "Kulaklık için ayrı profil gerekir; kulaklığı" : "Harici mikrofon için ayrı profil gerekir; mikrofonu")
+                    + " bağlayıp sesinizi kaydedin.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                Button(enrollingBuds && appState.targetSpeakerEnrollmentIsRecording
+                Button(enrolling && appState.targetSpeakerEnrollmentIsRecording
                        ? "Kaydı bitir"
-                       : appState.hasStoredBudsTargetSpeakerProfile && !enrollingBuds ? "Kulaklıkla yeniden kaydet" : "Kulaklıkla kaydet") {
-                    if enrollingBuds && appState.targetSpeakerEnrollmentIsRecording {
-                        owLog("[TargetSpeaker] User clicked 'Kaydı bitir' (buds) in SettingsView")
+                       : stored && !enrolling ? "\(isBuds ? "Kulaklıkla" : "Harici mikrofonla") yeniden kaydet"
+                       : "\(isBuds ? "Kulaklıkla" : "Harici mikrofonla") kaydet") {
+                    if enrolling && appState.targetSpeakerEnrollmentIsRecording {
+                        owLog("[TargetSpeaker] User clicked 'Kaydı bitir' (\(mic)) in SettingsView")
                         appState.stopTargetSpeakerEnrollmentRecording()
                     } else {
-                        owLog("[TargetSpeaker] User clicked 'Kulaklıkla kaydet' in SettingsView")
-                        if !enrollingBuds {
-                            appState.beginTargetSpeakerEnrollment(for: .buds)
+                        owLog("[TargetSpeaker] User clicked enroll (\(mic)) in SettingsView")
+                        if !enrolling {
+                            appState.beginTargetSpeakerEnrollment(for: mic)
                         }
                         appState.startTargetSpeakerEnrollmentRecording()
                     }
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(!budsConnected
+                .disabled(!connected
                           || appState.targetSpeakerEnrollmentIsProcessing
                           || appState.targetSpeakerSampleIsRecording
                           || appState.targetSpeakerSampleIsProcessing
-                          || (appState.targetSpeakerEnrollmentActive && !enrollingBuds))
+                          || (appState.targetSpeakerEnrollmentActive && !enrolling))
 
-                if !budsConnected {
-                    Text("Kulaklık bağlı değil")
+                if !connected {
+                    Text("\(name) bağlı değil")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
-                if appState.hasStoredBudsTargetSpeakerProfile {
+                if stored {
                     Button("Sil") {
-                        owLog("[TargetSpeaker] User clicked 'Sil' buds profile in SettingsView")
-                        appState.deleteBudsTargetSpeakerProfile()
+                        owLog("[TargetSpeaker] User clicked 'Sil' \(mic) profile in SettingsView")
+                        appState.deleteMicTargetSpeakerProfile(mic)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.red)
