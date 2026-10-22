@@ -81,7 +81,12 @@ extension AppState {
         }
         showFlowBarMessage(announcement.text, durationMs: 8000)
         whatsAppSender.offerRead(announcement.chatIDs)
-        guard await speakReply(announcement.text), hotkey?.isIdle == true, microphoneGranted else {
+        // Out loud in the room it is quieter than a reply; in headphones as loud.
+        let headphones = OutputRoute.isHeadphones()
+        let system = OutputRoute.systemVolume()
+        let volume = JarvisVoice.announcementVolume(systemVolume: system, headphones: headphones)
+        owLog("[WhatsApp] announcing at gain \(String(format: "%.2f", volume)) (headphones: \(headphones), system: \(system.map { String(format: "%.0f%%", $0 * 100) } ?? "?"))")
+        guard await speakReply(announcement.text, volume: volume), hotkey?.isIdle == true, microphoneGranted else {
             whatsAppSender.cancel()
             return
         }
@@ -113,11 +118,11 @@ extension AppState {
     /// after he is done. Silent when the setting is off or a new recording already started.
     /// `onStart` runs as the voice starts playing (a command opens its follow-up window there).
     @discardableResult
-    func speakReply(_ reply: String?, onStart: () -> Void = {}) async -> Bool {
+    func speakReply(_ reply: String?, volume: Float = JarvisVoice.replyVolume, onStart: () -> Void = {}) async -> Bool {
         guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
         owLog("[Voice] Reply: '\(reply)'")
         lastSpokenReply = reply
-        let heard = await JarvisVoice.shared.speak(reply) { [weak self] in
+        let heard = await JarvisVoice.shared.speak(reply, volume: volume) { [weak self] in
             self?.jarvisActivity = .speaking
             onStart()
         }

@@ -24,7 +24,17 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
     /// Replies play 20% quieter than the system volume (80% → heard at 64%). This is the
     /// player's own gain; the system output volume itself is never changed.
-    static let replyVolume: Float = 0.8
+    nonisolated static let replyVolume: Float = 0.8
+
+    /// The player gain for an unasked announcement ("Dilayım'dan mesaj var"): as loud as a
+    /// reply in headphones; out loud in the room, half the system volume (80% → heard at 40%)
+    /// but never under 20%. The system volume itself is never changed, so below 20% it can
+    /// only be as loud as the system is.
+    nonisolated static func announcementVolume(systemVolume: Float?, headphones: Bool) -> Float {
+        guard !headphones, let system = systemVolume, system > 0 else { return replyVolume }
+        let heard = max(system * 0.5, 0.2)
+        return min(heard / system, 1)
+    }
     private var finished: CheckedContinuation<Void, Never>?
     /// Bumped by `stop()` so a reply still being synthesized doesn't start playing afterwards.
     private var generation: UInt64 = 0
@@ -234,14 +244,14 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     /// hold back resuming music until Jarvis is done talking. `onStart` runs once the audio is
     /// actually playing, after the (possibly slow) synthesis.
     @discardableResult
-    func speak(_ text: String, onStart: () -> Void = {}) async -> Bool {
+    func speak(_ text: String, volume: Float = replyVolume, onStart: () -> Void = {}) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return false }
         stop()
         let myGeneration = generation
         let started = Date()
         guard let audio = await audio(for: text) else { return false }
-        return await play(audio, text: text, started: started, generation: myGeneration, onStart: onStart)
+        return await play(audio, text: text, started: started, generation: myGeneration, volume: volume, onStart: onStart)
     }
 
     /// Speaks sentences as they arrive, e.g. a chat reply the model is still writing: each one
@@ -272,7 +282,8 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     }
 
     /// Plays one clip and waits for it to end. False when it didn't play or was cut short.
-    private func play(_ audio: Data, text: String, started: Date, generation myGeneration: UInt64, onStart: () -> Void = {}) async -> Bool {
+    private func play(_ audio: Data, text: String, started: Date, generation myGeneration: UInt64,
+                      volume: Float = replyVolume, onStart: () -> Void = {}) async -> Bool {
         guard myGeneration == generation else {
             owLog("[Voice] Reply dropped, interrupted while synthesizing: '\(text)'")
             return false
@@ -284,7 +295,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             for attempt in 1...4 {
                 let candidate = try AVAudioPlayer(data: audio)
                 candidate.delegate = self
-                candidate.volume = VoiceTestInjector.shared.mutesOutput ? 0 : Self.replyVolume
+                candidate.volume = VoiceTestInjector.shared.mutesOutput ? 0 : volume
                 self.player = candidate
                 candidate.prepareToPlay()
                 if candidate.play() {

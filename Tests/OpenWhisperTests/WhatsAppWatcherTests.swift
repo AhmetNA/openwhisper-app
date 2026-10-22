@@ -43,6 +43,17 @@ final class WhatsAppWatcherTests: XCTestCase {
         XCTAssertNil(WhatsAppWatcher.missedAnnouncement([2, 3], chats: chats))
     }
 
+    func testAnnouncementVolume() {
+        let gain = { (system: Float?, headphones: Bool) in JarvisVoice.announcementVolume(systemVolume: system, headphones: headphones) }
+        XCTAssertEqual(gain(0.8, true), JarvisVoice.replyVolume)
+        // Heard level = system × gain: 80% → 40%, 100% → 50%, 30% → 20% floor, 10% → only 10%.
+        XCTAssertEqual(0.8 * gain(0.8, false), 0.4, accuracy: 0.001)
+        XCTAssertEqual(1.0 * gain(1.0, false), 0.5, accuracy: 0.001)
+        XCTAssertEqual(0.3 * gain(0.3, false), 0.2, accuracy: 0.001)
+        XCTAssertEqual(gain(0.1, false), 1, accuracy: 0.001)
+        XCTAssertEqual(gain(nil, false), JarvisVoice.replyVolume)
+    }
+
     func testReadAnswers() {
         XCTAssertEqual(WhatsAppSender.readDecision("Evet, oku."), .approve)
         XCTAssertEqual(WhatsAppSender.readDecision("Oku"), .approve)
