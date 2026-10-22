@@ -64,7 +64,18 @@ enum BrowserController {
             return await open(url, done: "\(url.host ?? address) açıldı")
         case .search(let engine, let query):
             guard let url = searchURL(engine, query) else { return "Adres açılamadı" }
-            return await open(url, done: "\(engine == .youtube ? "YouTube" : "Google")'da aranıyor: \(query)")
+            let searching = "\(engine == .youtube ? "YouTube" : "Google")'da aranıyor: \(query)"
+            guard engine == .youtube else { return await open(url, done: searching) }
+            let status = await YouTubeList.read(url, path: "/results") { await open($0, done: searching) }
+            // The results are on screen even when they couldn't be read.
+            return status == YouTubeList.notFound ? searching : status
+        case .youtubeHome:
+            guard let url = URL(string: "https://www.youtube.com/") else { return "Adres açılamadı" }
+            return await YouTubeList.read(url, path: "/") { await open($0, done: "YouTube açıldı") }
+        case .youtubeMore:
+            return YouTubeList.more()
+        case .youtubePick(let number):
+            return await YouTubeList.play(number) { await open($0, done: "Video açıldı") }
         case .summarize:
             return await summarizeCurrentPage()
         }
@@ -144,7 +155,7 @@ enum BrowserController {
 
     // MARK: - Helpers
 
-    private static func open(_ url: URL, done: String) async -> String {
+    static func open(_ url: URL, done: String) async -> String {
         guard let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
             return "Safari'ye ulaşılamadı"
         }

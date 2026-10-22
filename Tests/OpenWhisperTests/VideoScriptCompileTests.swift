@@ -5,7 +5,7 @@ import XCTest
 /// "Safari'ye ulaşılamadı" in use (2026-10-15: `before`/`after` are AppleScript keywords).
 /// Compiling them catches that without Safari.
 final class VideoScriptCompileTests: XCTestCase {
-    private func compile(_ source: String) throws -> String {
+    func compile(_ source: String) throws -> String {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }

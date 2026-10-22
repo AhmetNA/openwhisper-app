@@ -83,8 +83,15 @@ enum BrowserAction: Equatable, Sendable {
     case previousTab
     /// A full URL ("https://github.com").
     case open(String)
+    /// YouTube searches also read the first three results (`YouTubeList`).
     case search(Engine, String)
     case summarize
+    /// "YouTube'da ne var?": opens the home page and reads the first three recommendations.
+    case youtubeHome
+    /// "Başka": the next three of the list just read.
+    case youtubeMore
+    /// "İkinciyi aç": a video of the list just read, counted from its top; 0 = the last one read.
+    case youtubePick(Int)
 }
 
 /// A video by voice: "videoyu durdur", "başa sar", "10 saniye ileri sar", "hızı 1.5 yap".
@@ -491,6 +498,17 @@ enum SystemCommandParser {
             .trimmingCharacters(in: .whitespaces)
         guard !raw.isEmpty, raw.split(separator: " ").count <= 14 else { return nil }
         let polite = #"(?: lütfen)?$"#
+
+        if let number = YouTubeList.pick(in: raw, requireVerb: true) { return .youtubePick(number) }
+        // "YouTube'u aç", "YouTube'da ne var", "YouTube önerilerini oku", "YouTube'a gir".
+        if matches(raw, #"^\#(youtube)(?:'?y?[uü]|'?y?a)? (?:aç|açar mısın|gir|git)\#(polite)"#)
+            || matches(raw, #"^\#(youtube)\#(at) (?:ne|neler) (?:var|önerili?yor|izlesem)(?: bakalım)?\#(polite)"#)
+            || matches(raw, #"^\#(youtube)(?:'?n?[uü]n)? (?:önerileri|önerilerini|ana ?sayfası|ana ?sayfasını)(?: oku| söyle| aç| neler)?\#(polite)"#) {
+            return .youtubeHome
+        }
+        if matches(raw, #"^(?:başka|diğer|sonraki) (?:öneri|video|sonuç)\p{L}*(?: (?:oku|söyle|var mı))?\#(polite)"#) {
+            return .youtubeMore
+        }
 
         for (engine, site) in [(BrowserAction.Engine.youtube, youtube), (.google, google)] {
             let place = #"(?:\#(site)\#(at)|\#(site)\s?'?(?:dan|den|tan|ten))"#

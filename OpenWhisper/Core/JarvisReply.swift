@@ -46,7 +46,10 @@ struct JarvisReply {
             return answer(Self.speakable(status.replacingOccurrences(of: "Takvime eklendi:", with: "Takvime ekledim:")))
         case .browser(let action):
             // A summary or a search query may contain "yok"; only the fixed statuses are failures.
-            if BrowserController.failures.contains(status) { return failure(Self.speakable(status)) }
+            if BrowserController.failures.contains(status) || YouTubeList.failures.contains(status) {
+                return failure(Self.speakable(status))
+            }
+            if YouTubeList.isListing(status) { return answer(status) }
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
         case .switchToApp, .switchToAgent:

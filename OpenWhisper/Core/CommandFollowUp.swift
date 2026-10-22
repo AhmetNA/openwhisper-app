@@ -9,13 +9,17 @@ enum CommandFollowUp {
     enum Domain: String, Equatable, Sendable {
         case music
         case video
+        /// Videos were just read out: "ikincisi", "aç", "başka".
+        case youtubeList
     }
 
     /// The domain a command that ran sets for its follow-up; nil when "sonraki" means nothing.
     static func domain(of command: VoiceCommand) -> Domain? {
         switch command {
         case .spotify: .music
-        case .system(.video): .video
+        case .system(.browser(.youtubeHome)), .system(.browser(.youtubeMore)),
+             .system(.browser(.search(.youtube, _))): .youtubeList
+        case .system(.video), .system(.browser(.youtubePick)): .video
         default: nil
         }
     }
@@ -49,6 +53,12 @@ enum CommandFollowUp {
 
     /// The command a bare answer means after a `domain` command, or nil when it is none.
     static func resolve(_ text: String, after domain: Domain) -> VoiceCommand? {
+        if domain == .youtubeList {
+            if let number = YouTubeList.pick(in: text, requireVerb: false) { return .system(.browser(.youtubePick(number))) }
+            if YouTubeList.isBarePlay(text) { return .system(.browser(.youtubePick(1))) }
+            if YouTubeList.isMore(text) { return .system(.browser(.youtubeMore)) }
+            return nil
+        }
         guard let action = action(in: text) else { return nil }
         switch (domain, action) {
         case (.music, .next): return .spotify("sonraki şarkıya geç")
@@ -58,7 +68,7 @@ enum CommandFollowUp {
         case (.video, .next): return .system(.video(.next))
         case (.video, .pause): return .system(.video(.pause))
         case (.video, .resume): return .system(.video(.play))
-        case (.video, .previous): return nil
+        case (.video, .previous), (.youtubeList, _): return nil
         }
     }
 
