@@ -787,7 +787,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Biri WhatsApp'tan yazınca “Dilayım'dan mesaj var, okuyayım mı?” der; “evet” dersen okur. Gruplar haber verilmez.")
+            Text("Biri WhatsApp'tan yazınca altta kimden, kaç mesaj ve kısaca ne hakkında olduğunu gösterir; sesli okumaz, müziği durdurmaz. Gruplar haber verilmez.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

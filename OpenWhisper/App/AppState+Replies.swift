@@ -42,7 +42,7 @@ extension AppState {
         }
     }
 
-    /// "Sen yokken Dilayım'dan mesaj var, okuyayım mı?" a moment after the unlock.
+    /// The messages that came while the screen was locked, shown a moment after the unlock.
     func announceMissedWhatsApp() async {
         guard !missedWhatsAppChats.isEmpty else { return }
         try? await Task.sleep(for: .seconds(2))
@@ -56,42 +56,29 @@ extension AppState {
         await announceWhatsApp(announcement)
     }
 
-    /// "Dilayım'dan mesaj var, okuyayım mı?", then a short window for "evet" / "hayır"
-    /// (`WhatsAppSender.handleConfirmation`). Not while WhatsApp is in front (the user sees
-    /// it) or the screen is locked; after a command in progress has finished.
+    /// "Dilayım · 2 mesaj · uçak bileti hakkında" under the screen. Silent on purpose: no voice,
+    /// no listening, so music keeps playing and the mic is left alone. Not while WhatsApp is in
+    /// front (the user sees it); kept for after the unlock while the screen is locked.
     func announceWhatsApp(_ announcement: WhatsAppWatcher.Announcement) async {
-        guard whatsAppAnnouncementsEnabled, voiceRepliesEnabled else { return }
+        guard whatsAppAnnouncementsEnabled else { return }
         if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == WhatsAppSender.bundleIdentifier {
             owLog("[WhatsApp] announcement skipped: WhatsApp is in front")
             return
         }
         if RemoteControl.screenIsLocked {
-            // Kept for "Sen yokken …" after the unlock; the newest chat goes first.
+            // Kept for after the unlock; the newest chat goes first.
             missedWhatsAppChats = announcement.chatIDs + missedWhatsAppChats.filter { !announcement.chatIDs.contains($0) }
             owLog("[WhatsApp] screen locked: kept for after the unlock (\(missedWhatsAppChats.count) chat(s))")
             return
         }
+        guard let notice = await WhatsAppController.notice(forChats: announcement.chatIDs) else { return }
+        // A command in progress keeps the bar; the notice waits for it.
         let deadline = Date().addingTimeInterval(30)
         while recordingState == .recording || isTranscribing || jarvisActivity != .none, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(300))
         }
-        guard recordingState != .recording, !whatsAppSender.hasPending, !(reminderManager?.hasPendingDeletion ?? false) else {
-            owLog("[WhatsApp] announcement skipped: Jarvis is busy")
-            return
-        }
-        showFlowBarMessage(announcement.text, durationMs: 8000)
-        whatsAppSender.offerRead(announcement.chatIDs)
-        // Out loud in the room it is quieter than a reply; in headphones as loud.
-        let headphones = OutputRoute.isHeadphones()
-        let system = OutputRoute.systemVolume()
-        let volume = JarvisVoice.announcementVolume(systemVolume: system, headphones: headphones)
-        owLog("[WhatsApp] announcing at gain \(String(format: "%.2f", volume)) (headphones: \(headphones), system: \(system.map { String(format: "%.0f%%", $0 * 100) } ?? "?"))")
-        guard await speakReply(announcement.text, volume: volume), hotkey?.isIdle == true, microphoneGranted else {
-            whatsAppSender.cancel()
-            return
-        }
-        owLog("[WhatsApp] Listening for the answer to the announcement")
-        startVoiceSession(trigger: .confirmation)
+        owLog("[WhatsApp] notice shown for \(announcement.chatIDs.count) chat(s)")
+        showFlowBarMessage(notice, durationMs: 10000)
     }
 
     /// The first chimes are already playing: say what it was for, then listen briefly for
