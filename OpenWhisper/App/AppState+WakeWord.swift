@@ -269,6 +269,7 @@ extension AppState {
         guard let listener = wakeWordListener else { return }
         let busy = recordingState == .recording || targetSpeakerEnrollmentIsRecording || systemAudioEnabled
         let paused = systemAsleep || (screensAsleep && !mediaPlaying && !remoteControl.isHoldingAwake)
+        updateDisplayAsleepWork()
         let shouldRun = wakeWordEnabled && modelLoaded && !busy && !paused
         if shouldRun && !listener.isRunning {
             listener.start()

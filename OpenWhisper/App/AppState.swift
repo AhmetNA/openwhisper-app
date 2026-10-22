@@ -451,6 +451,8 @@ final class AppState {
         }
     }
     @ObservationIgnored let remoteControl = RemoteControl()
+    /// `updateDisplayAsleepWork` has slowed the display-only work down.
+    @ObservationIgnored var displayAsleepWorkReduced = false
     /// Settings › Jarvis: a key that starts the same session as "Hey Jarvis" (nil = not set).
     var jarvisHotkey: JarvisHotkey? = JarvisHotkey.load() {
         didSet {

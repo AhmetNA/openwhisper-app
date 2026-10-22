@@ -30,10 +30,21 @@ final class SystemMediaActivityMonitor {
     func start() {
         guard timer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: 1.0, leeway: .milliseconds(200))
+        timer.schedule(deadline: .now(), repeating: Self.pollInterval, leeway: .milliseconds(200))
         timer.setEventHandler { [weak self] in self?.poll() }
         timer.resume()
         self.timer = timer
+    }
+
+    static let pollInterval: TimeInterval = 1
+    /// While the display sleeps: music starting is noticed a few seconds later, for a fifth of the polls.
+    static let displayAsleepPollInterval: TimeInterval = 5
+
+    func setDisplayAsleep(_ asleep: Bool) {
+        let interval = asleep ? Self.displayAsleepPollInterval : Self.pollInterval
+        queue.async { [weak self] in
+            self?.timer?.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(Int(interval * 200)))
+        }
     }
 
     private func poll() {

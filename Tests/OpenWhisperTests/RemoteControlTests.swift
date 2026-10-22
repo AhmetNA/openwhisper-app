@@ -59,4 +59,22 @@ final class RemoteControlTests: XCTestCase {
         XCTAssertFalse(RemoteControl.needsUnlockedScreen(route("10 dakikalık zamanlayıcı kur")))
         XCTAssertFalse(RemoteControl.needsUnlockedScreen(route("Saat kaç")))
     }
+
+    func testDisplayAsleepVoiceDetectorRunsOnlyAroundSound() {
+        var feed = QuietVoiceFeed()
+        // Quiet room: nothing fed.
+        XCTAssertEqual(feed.decide(levelDB: 40, floor: 40, mediaAudible: false, now: 0), .skip)
+        XCTAssertEqual(feed.decide(levelDB: 41, floor: 40, mediaAudible: false, now: 1), .skip)
+        // Sound above the room: fed again, from a fresh state.
+        XCTAssertEqual(feed.decide(levelDB: 50, floor: 40, mediaAudible: false, now: 2), .resume)
+        XCTAssertEqual(feed.decide(levelDB: 52, floor: 40, mediaAudible: false, now: 2.1), .feed)
+        // Kept through a pause between words, dropped after it.
+        XCTAssertEqual(feed.decide(levelDB: 40, floor: 40, mediaAudible: false, now: 3.5), .feed)
+        XCTAssertEqual(feed.decide(levelDB: 40, floor: 40, mediaAudible: false, now: 3.7), .skip)
+        // Under audible media the gate ignores the VAD, so it isn't run.
+        XCTAssertEqual(feed.decide(levelDB: 70, floor: 40, mediaAudible: true, now: 4), .skip)
+        // No floor learned yet: fed.
+        var fresh = QuietVoiceFeed()
+        XCTAssertEqual(fresh.decide(levelDB: 30, floor: nil, mediaAudible: false, now: 0), .feed)
+    }
 }

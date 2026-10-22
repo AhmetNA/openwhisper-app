@@ -81,6 +81,9 @@ final class WakeWordListener {
     private var referenceAudibility = ReferenceAudibility()
     /// Silero VAD in front of the gate; nil if disabled. Queue-confined.
     private var voiceActivity: WakeVoiceActivity?
+    /// Display asleep: the VAD runs only around sound (`QuietVoiceFeed`). Queue-confined.
+    private var lowPower = false
+    private var voiceFeed = QuietVoiceFeed()
     /// Echo cancellation while something plays (see `EchoCanceller`); queue-confined state.
     private var aecActive = false
     /// A reference stream may stay open for hours while its app is paused. Keep the stream so a
@@ -153,6 +156,18 @@ final class WakeWordListener {
                 owLog("[WakeWord] Model load failed: \(error)")
                 self.report(.modelLoadFailed)
             }
+        }
+    }
+
+    /// While the display sleeps nobody watches the bar, and every CPU cycle is battery: the
+    /// speech detector runs only on sound above the room (`QuietVoiceFeed`).
+    func setLowPower(_ on: Bool) {
+        queue.async { [weak self] in
+            guard let self, self.lowPower != on else { return }
+            self.lowPower = on
+            // Its memory is of audio from before the gap.
+            if !on, self.voiceFeed.skipping { self.voiceActivity?.reset() }
+            self.voiceFeed = QuietVoiceFeed()
         }
     }
 
@@ -604,7 +619,16 @@ final class WakeWordListener {
         detector.gate?.mediaPlaying = mediaAudible
         // Speech under music is unproven for Silero: while media is audible, energy alone decides.
         if let voiceActivity {
-            voiceActivity.feed(raw.map { min(max($0 * Self.inputGain, -1), 1) })
+            var feeds = true
+            if lowPower {
+                switch voiceFeed.decide(levelDB: WakeWordDetector.levelDB(samples), floor: detector.gate?.floor,
+                                        mediaAudible: mediaAudible, now: now) {
+                case .feed: break
+                case .resume: voiceActivity.reset()
+                case .skip: feeds = false
+                }
+            }
+            if feeds { voiceActivity.feed(raw.map { min(max($0 * Self.inputGain, -1), 1) }) }
             detector.gate?.voice = mediaAudible ? nil : voiceActivity.voice(at: now)
         }
         let scores: [Float]
@@ -783,5 +807,30 @@ struct ReferenceAudibility {
     func isAudible(at now: TimeInterval) -> Bool {
         guard let lastAudible else { return false }
         return now - lastAudible <= holdSeconds
+    }
+}
+
+/// Display asleep: Silero runs only around sound above the room's floor, and not under audible
+/// media (where the gate ignores it anyway). Without fresh chunks its verdict goes stale, which
+/// the gate reads as "no verdict" and decides by energy alone, so no "Jarvis" is lost to it.
+struct QuietVoiceFeed {
+    /// Below the gate's own margin, so the VAD has started by the time the gate would open.
+    static let marginDB: Float = 3
+    /// Fed this long after the last loud chunk: pauses between words, the end of "Jarvis".
+    static let holdSeconds: TimeInterval = 1.5
+
+    enum Decision { case feed, resume, skip }
+
+    private(set) var skipping = false
+    private var lastLoud: TimeInterval?
+
+    /// `resume`: feeding starts again after a gap, so the VAD's stream state should be reset.
+    mutating func decide(levelDB: Float, floor: Float?, mediaAudible: Bool, now: TimeInterval) -> Decision {
+        let loud = !mediaAudible && (floor.map { levelDB >= $0 + Self.marginDB } ?? true)
+        if loud { lastLoud = now }
+        let feed = !mediaAudible && (loud || lastLoud.map { now - $0 <= Self.holdSeconds } == true)
+        defer { skipping = !feed }
+        guard feed else { return .skip }
+        return skipping ? .resume : .feed
     }
 }

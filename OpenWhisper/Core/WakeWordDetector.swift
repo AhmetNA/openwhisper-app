@@ -139,7 +139,7 @@ final class WakeWordDetector {
     }
 
     /// Block RMS in dB (int16 scale, so absolute values only matter relative to each other).
-    private static func levelDB(_ block: [Float]) -> Float {
+    static func levelDB(_ block: [Float]) -> Float {
         var sum: Float = 0
         for x in block { sum += x * x }
         return 10 * log10(max(sum / Float(block.count), 1))

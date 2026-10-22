@@ -78,6 +78,49 @@ final class RemoteControl {
         return capacity
     }
 
+    // MARK: - Power log
+
+    private var cpuLogTimer: Timer?
+    private var asleepSince: (cpu: Double, uptime: TimeInterval)?
+    private var lastSample: (cpu: Double, uptime: TimeInterval)?
+
+    /// While the display sleeps, Jarvis's own CPU use once a minute and for the whole stretch, so
+    /// the cost of listening with the display off is in the log (`[Power]`).
+    func logPower(displayAsleep: Bool) {
+        cpuLogTimer?.invalidate()
+        cpuLogTimer = nil
+        let now = (cpu: Self.processCPUSeconds(), uptime: ProcessInfo.processInfo.systemUptime)
+        if displayAsleep {
+            asleepSince = now
+            lastSample = now
+            cpuLogTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let last = self.lastSample else { return }
+                    let sample = (cpu: Self.processCPUSeconds(), uptime: ProcessInfo.processInfo.systemUptime)
+                    owLog(String(format: "[Power] Display asleep: Jarvis used %.1f%% of one core in the last minute",
+                                 Self.percent(from: last, to: sample)))
+                    self.lastSample = sample
+                }
+            }
+        } else if let since = asleepSince {
+            asleepSince = nil
+            owLog(String(format: "[Power] Display was asleep %.0f min: Jarvis used %.1f%% of one core on average",
+                         (now.uptime - since.uptime) / 60, Self.percent(from: since, to: now)))
+        }
+    }
+
+    private static func percent(from a: (cpu: Double, uptime: TimeInterval), to b: (cpu: Double, uptime: TimeInterval)) -> Double {
+        b.uptime > a.uptime ? (b.cpu - a.cpu) / (b.uptime - a.uptime) * 100 : 0
+    }
+
+    /// User + system CPU time of this process so far.
+    private static func processCPUSeconds() -> Double {
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        func seconds(_ t: timeval) -> Double { Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000 }
+        return seconds(usage.ru_utime) + seconds(usage.ru_stime)
+    }
+
     // MARK: - Display and lock
 
     private static var userActivityID: IOPMAssertionID = 0
