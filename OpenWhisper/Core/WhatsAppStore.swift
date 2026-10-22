@@ -191,7 +191,8 @@ enum WhatsAppStore {
         for chat in chats {
             let chatWords = words(chat.name)
             var score = 0
-            if !chatWords.isEmpty, chatWords == spoken { score = 4 }
+            // The whole name, word for word, a case ending allowed ("Aliy" ~ "Ali").
+            if chatWords.count == spoken.count, zip(spoken, chatWords).allSatisfy({ $0 == $1 || withEnding($0, $1) }) { score = 4 }
             else if contactNames.contains(fold(chat.name)) { score = 3 }
             else if !chat.isGroup, let number = chat.jid.split(separator: "@").first,
                     contactPhones.contains(where: { number.hasSuffix($0) }) { score = 3 }
@@ -208,12 +209,16 @@ enum WhatsAppStore {
     }
 
     /// Endings Whisper leaves on a name when it drops the apostrophe: "Aliden", "Metinin", "Ayşeye".
-    private static let suffixes = ["nin", "nun", "den", "dan", "ten", "tan", "in", "un", "ye", "ya", "e", "a"]
+    private static let suffixes = ["nin", "nun", "den", "dan", "ten", "tan", "in", "un", "ye", "ya", "e", "a", "y"]
 
     /// A spoken word against a word of the chat name: a start of it ("Meh" ~ "Mehmet"), or the
     /// whole of it with a case ending ("Aliden" ~ "Ali").
     private static func matches(_ spoken: String, _ word: String) -> Bool {
-        if word.hasPrefix(spoken) { return true }
+        word.hasPrefix(spoken) || withEnding(spoken, word)
+    }
+
+    /// `spoken` is `word` with a case ending: "aliden" ~ "ali".
+    private static func withEnding(_ spoken: String, _ word: String) -> Bool {
         guard spoken.hasPrefix(word), word.count >= 2 else { return false }
         return suffixes.contains(String(spoken.dropFirst(word.count)))
     }

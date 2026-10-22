@@ -46,6 +46,33 @@ enum WhatsAppController {
         }
     }
 
+    /// How many messages of the last exchange are read, and the silence that ends it.
+    private static let conversationLimit = 8
+    private static let conversationGap: TimeInterval = 3600
+
+    /// "Dilay'la en son ne konuştuk": the last exchange, both sides, oldest first.
+    static func conversation(with name: String) async -> String {
+        let contacts = await matchingContacts(name)
+        return await read { url in
+            guard let (chat, _) = WhatsAppStore.bestChat(for: name, in: try WhatsAppStore.chats(at: url), contacts: contacts)
+            else { return "WhatsApp'ta \(name) adında sohbet bulunamadı" }
+            let recent = try WhatsAppStore.messages(in: chat.id, limit: 30, at: url)
+            guard let newest = recent.first else { return "\(spokenName(chat)) ile hiç mesajınız yok" }
+            var exchange = [newest]
+            for message in recent.dropFirst() {
+                guard exchange.count < conversationLimit,
+                      exchange.last.map({ $0.date.timeIntervalSince(message.date) < conversationGap }) == true else { break }
+                exchange.append(message)
+            }
+            let who = spokenName(chat)
+            let lines = exchange.reversed().map { message -> String in
+                let author = message.fromMe ? "Sen" : (chat.isGroup ? (message.sender ?? "Biri") : who)
+                return "\(author): \(shortened(message.text))"
+            }
+            return "\(who) ile son konuşma, \(spokenTime(newest.date)) — \(lines.joined(separator: " · "))"
+        }
+    }
+
     /// The newest messages of these chats, one line each: after "Dilayım'dan mesaj var,
     /// okuyayım mı?" is answered yes.
     static func latest(inChats ids: [Int64]) async -> String {

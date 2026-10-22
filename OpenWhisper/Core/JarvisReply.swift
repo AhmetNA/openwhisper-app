@@ -33,7 +33,8 @@ struct JarvisReply {
         case .mute(true), .sleep, .displaySleep, .lockScreen, .screenSaver:
             return nil
         case .time, .battery, .mailCount, .mailCheck, .mailLatest, .mailReadUnread, .mailOpen, .briefing,
-             .mailReadLatest, .mailFrom, .mailReplyDraft, .whatsAppUnread, .whatsAppFrom:
+             .mailReadLatest, .mailFrom, .mailReplyDraft, .whatsAppUnread, .whatsAppFrom,
+             .whatsAppConversation:
             return answer(Self.speakable(Self.shortened(status, for: command)))
         case .calendarEvent:
             // Say the date and time back, so a wrong hour is caught right away.

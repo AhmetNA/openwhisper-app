@@ -15,6 +15,16 @@ final class WhatsAppTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Metin'in mesajını oku"), .whatsAppFrom("Metin"))
     }
 
+    func testConversationQuestions() {
+        XCTAssertEqual(SystemCommandParser.parse("dilayla en son ne konuştuk whatsappta"), .whatsAppConversation("Dilay"))
+        XCTAssertEqual(SystemCommandParser.parse("whatsappda dilayla son ne konuştum"), .whatsAppConversation("Dilay"))
+        XCTAssertEqual(SystemCommandParser.parse("Annemle ne konuşmuştuk?"), .whatsAppConversation("Annem"))
+        XCTAssertEqual(SystemCommandParser.parse("Ali ile son konuşmamız neydi"), .whatsAppConversation("Ali"))
+        XCTAssertEqual(SystemCommandParser.parse("Mehmet'le en son ne yazıştık"), .whatsAppConversation("Mehmet"))
+        XCTAssertEqual(SystemCommandParser.parse("Aliyle son ne konuştuk"), .whatsAppConversation("Aliy"))
+        XCTAssertNotEqual(SystemCommandParser.parse("Dün ne konuşmuştuk"), .whatsAppConversation("Dün"))
+    }
+
     func testUnreadQuestions() {
         XCTAssertEqual(SystemCommandParser.parse("WhatsApp'ta okunmamış var mı"), .whatsAppUnread)
         XCTAssertEqual(SystemCommandParser.parse("Okunmamış mesajları oku"), .whatsAppUnread)
@@ -53,6 +63,8 @@ final class WhatsAppTests: XCTestCase {
         XCTAssertEqual(WhatsAppStore.bestChat(for: "Meti", in: chats)?.chat.id, 5)
         XCTAssertEqual(WhatsAppStore.bestChat(for: "Metinin", in: chats)?.chat.id, 5)
         XCTAssertNil(WhatsAppStore.bestChat(for: "Zeynep", in: chats))
+        XCTAssertEqual(WhatsAppStore.bestChat(for: "Aliy", in: chats)?.chat.id, 2)
+        XCTAssertEqual(WhatsAppStore.bestChat(for: "Dilay", in: [chat(9, "Dilayimmm❤️❤️")])?.chat.id, 9)
     }
 
     func testBestChatThroughContacts() {

@@ -48,6 +48,8 @@ enum SystemCommand: Equatable, Sendable {
     case whatsAppUnread
     /// "Ali ne yazdı", "Annemden mesaj var mı": the newest messages of the chat the name means.
     case whatsAppFrom(String)
+    /// "Dilay'la en son ne konuştuk": the last exchange of that chat, both sides.
+    case whatsAppConversation(String)
     /// "Bugün ne var?": calendar, reminders and mail for today (0) or tomorrow (1).
     case briefing(dayOffset: Int)
     /// A Shortcuts.app shortcut by its exact name.
@@ -257,11 +259,40 @@ enum SystemCommandParser {
     /// "WhatsApp'ı aç" is none of these and stays the app command.
     static func parseWhatsApp(_ text: String) -> SystemCommand? {
         let mentionsApp = matches(text, whatsApp)
+        if let name = parseWhatsAppConversation(text) { return .whatsAppConversation(name) }
         if let name = parseWhatsAppSender(text) { return .whatsAppFrom(name) }
         if matches(text, #"okunmamış"#), mentionsApp || matches(text, message) { return .whatsAppUnread }
         if mentionsApp, matches(text, #"\byeni\b|var mı|kim yazdı|ne var|kimden|\boku"#) { return .whatsAppUnread }
         if matches(text, #"^(?:bana )?(?:kim yazdı|kimden mesaj var|kimlerden mesaj var|yeni mesaj(?:ım)? var mı|mesaj(?:ım)? var mı)$"#) {
             return .whatsAppUnread
+        }
+        return nil
+    }
+
+    /// "Dilayla en son ne konuştuk", "WhatsApp'ta annemle son ne yazıştık", "Ali ile son
+    /// konuşmamız neydi" → the name as heard ("Dilay", "Annem", "Ali"). Without an apostrophe
+    /// a "-yla" may keep its y ("Aliyle" → "Aliy"); the chat matching allows for that.
+    static func parseWhatsAppConversation(_ text: String) -> String? {
+        let bare = text.replacingOccurrences(of: whatsApp, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let with = #"(?: ile|['’]y?la|['’]y?le|la|le)"#
+        let talked = #"(?:konuştuk|konuşmuştuk|konuştum|konuşmuşum|konuşmuştum|yazıştık|yazışmıştık|mesajlaştık|mesajlaşmıştık|yazdık)"#
+        let patterns = [
+            #"^(.+?)\#(with) (?:en )?(?:son )?(?:ne|neler) \#(talked)(?: en son)?$"#,
+            #"^(.+?)\#(with) (?:en )?son (?:konuşma|yazışma|mesajlaşma)\S*(?: ne(?:ydi)?| oku| neydi| ne hakkındaydı)?$"#,
+        ]
+        let notNames: Set<String> = ["kim", "o", "bu", "şu", "sen", "siz", "ben", "biz", "onlar", "bugün", "dün", "jarvis",
+                                     "claude", "cloud", "codex", "chatgpt", "seninle", "sen"]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: bare, range: NSRange(bare.startIndex..., in: bare)),
+                  let range = Range(match.range(at: 1), in: bare) else { continue }
+            let name = bare[range].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, name.split(separator: " ").count <= 3, !notNames.contains(name) else { return nil }
+            return name.split(separator: " ").map { word in
+                word.prefix(1).uppercased(with: locale) + word.dropFirst()
+            }.joined(separator: " ")
         }
         return nil
     }
