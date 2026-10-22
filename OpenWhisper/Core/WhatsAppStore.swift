@@ -17,6 +17,8 @@ enum WhatsAppStore {
         let unread: Int
         let isGroup: Bool
         let lastDate: Date?
+        /// Archived chats don't count towards WhatsApp's own unread badge either.
+        var isArchived = false
     }
 
     struct Message: Equatable {
@@ -48,8 +50,9 @@ enum WhatsAppStore {
         let type = columns.contains("ZSESSIONTYPE") ? "IFNULL(ZSESSIONTYPE, 0)" : "0"
         let last = columns.contains("ZLASTMESSAGEDATE") ? "ZLASTMESSAGEDATE" : "NULL"
         let removed = columns.contains("ZREMOVED") ? "AND IFNULL(ZREMOVED, 0) = 0" : ""
+        let archived = columns.contains("ZARCHIVED") ? "IFNULL(ZARCHIVED, 0)" : "0"
         let sql = """
-            SELECT Z_PK, IFNULL(ZPARTNERNAME, ''), IFNULL(ZCONTACTJID, ''), \(unread), \(type), \(last)
+            SELECT Z_PK, IFNULL(ZPARTNERNAME, ''), IFNULL(ZCONTACTJID, ''), \(unread), \(type), \(last), \(archived)
             FROM ZWACHATSESSION
             WHERE IFNULL(ZCONTACTJID, '') NOT LIKE '%@broadcast'
               AND IFNULL(ZCONTACTJID, '') NOT LIKE '%@newsletter' \(removed)
@@ -59,7 +62,8 @@ enum WhatsAppStore {
             let jid = row.text(2)
             return Chat(id: row.int(0), name: row.text(1), jid: jid, unread: Int(row.int(3)),
                         isGroup: row.int(4) == 1 || jid.hasSuffix("@g.us"),
-                        lastDate: row.isNull(5) ? nil : Date(timeIntervalSinceReferenceDate: row.double(5)))
+                        lastDate: row.isNull(5) ? nil : Date(timeIntervalSinceReferenceDate: row.double(5)),
+                        isArchived: row.int(6) != 0)
         }
     }
 
@@ -85,7 +89,7 @@ enum WhatsAppStore {
             """
         let messages: [Message?] = try db.rows(sql) { row in
             let raw = row.isNull(0) ? "" : row.text(0).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let text = raw.isEmpty ? mediaLabel(Int(row.int(3))) : raw else { return nil }
+            guard let text = readableText(raw, type: Int(row.int(3))) else { return nil }
             let name = row.isNull(4) ? "" : row.text(4)
             return Message(text: text, fromMe: row.int(1) != 0, sender: name.isEmpty ? nil : name,
                            date: Date(timeIntervalSinceReferenceDate: row.double(2)))
@@ -93,7 +97,32 @@ enum WhatsAppStore {
         return Array(messages.compactMap { $0 }.prefix(limit))
     }
 
-    /// What a message without text was, by `ZMESSAGETYPE`; nil for group events and calls.
+    /// The kinds of the newest rows of a chat ("0<", "3>", "46<·": type, < theirs, > mine, · no
+    /// text), without any message text, for the log when nothing readable was found.
+    static func messageKinds(in chatID: Int64, limit: Int, at url: URL = defaultURL) throws -> String {
+        let db = try Connection(url)
+        let type = db.columns(of: "ZWAMESSAGE").contains("ZMESSAGETYPE") ? "IFNULL(ZMESSAGETYPE, 0)" : "0"
+        let sql = """
+            SELECT \(type), IFNULL(ZISFROMME, 0), ZTEXT IS NULL OR ZTEXT = ''
+            FROM ZWAMESSAGE WHERE ZCHATSESSION = \(chatID) ORDER BY ZMESSAGEDATE DESC LIMIT \(limit)
+            """
+        return try db.rows(sql) { row in
+            "\(row.int(0))\(row.int(1) != 0 ? ">" : "<")\(row.int(2) != 0 ? "·" : "")"
+        }.joined(separator: " ")
+    }
+
+    /// The text to read for a message of `type`. Only plain text (0) and links (7) are read as
+    /// they are: other types carry WhatsApp's own data in `ZTEXT` (a group's settings as JSON,
+    /// event descriptions), so media are named and everything else is skipped.
+    static func readableText(_ raw: String, type: Int) -> String? {
+        if type == 0 || type == 7 {
+            guard !raw.isEmpty, !(raw.hasPrefix("{") && raw.hasSuffix("}")) else { return nil }
+            return raw
+        }
+        return mediaLabel(type)
+    }
+
+    /// What a media message was, by `ZMESSAGETYPE`; nil for group events and calls.
     static func mediaLabel(_ type: Int) -> String? {
         switch type {
         case 1: return "Fotoğraf"

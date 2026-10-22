@@ -10,23 +10,29 @@ enum WhatsAppController {
     /// Chats read out for "okunmamışlar"; the rest are only counted.
     private static let unreadChatsRead = 3
 
-    /// "WhatsApp'ta okunmamış var mı": the chats with unread messages, newest first, each with
-    /// its newest unread messages.
+    /// "WhatsApp'ta okunmamış var mı": how many people and groups wrote, then the newest
+    /// unread messages of the first few chats, people before groups. Archived chats are left
+    /// out, as in WhatsApp's own badge.
     static func unreadSummary() async -> String {
         await read { url in
-            let unread = try WhatsAppStore.chats(at: url).filter { $0.unread > 0 }
+            let unread = try WhatsAppStore.chats(at: url).filter { $0.unread > 0 && !$0.isArchived }
             guard !unread.isEmpty else { return "Okunmamış WhatsApp mesajı yok" }
+            let people = unread.filter { !$0.isGroup }
+            let groups = unread.filter(\.isGroup)
             var items: [String] = []
-            for chat in unread.prefix(unreadChatsRead) {
+            for chat in (people + groups).prefix(unreadChatsRead) {
                 let incoming = try WhatsAppStore.messages(in: chat.id, limit: 8, at: url).filter { !$0.fromMe }
                 let newest = Array(incoming.prefix(min(chat.unread, 2)).reversed())
-                guard !newest.isEmpty else { items.append(chat.name); continue }
-                items.append(line(for: chat, newest))
+                if newest.isEmpty {
+                    owLog("[WhatsApp] nothing readable in an unread chat; newest kinds: \(try WhatsAppStore.messageKinds(in: chat.id, limit: 12, at: url))")
+                    items.append(chat.name)
+                } else {
+                    items.append(line(for: chat, newest))
+                }
             }
-            let rest = unread.count - items.count
-            let head = unread.count == 1 ? "1 sohbette okunmamış mesaj" : "\(unread.count) sohbette okunmamış mesaj"
-            let tail = rest > 0 ? " · ve \(rest) sohbet daha" : ""
-            return "\(head) — \(items.joined(separator: " · "))\(tail)"
+            let counts = [people.isEmpty ? nil : "\(people.count) kişiden", groups.isEmpty ? nil : "\(groups.count) gruptan"]
+                .compactMap { $0 }.joined(separator: " ve ")
+            return "\(counts) okunmamış mesaj — \(items.joined(separator: " · "))"
         }
     }
 

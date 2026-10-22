@@ -81,7 +81,8 @@ final class WhatsAppTests: XCTestCase {
             INSERT INTO ZWAMESSAGE VALUES (1, 1, 1, 'Naber', 100, 0, NULL);
             INSERT INTO ZWAMESSAGE VALUES (2, 1, 0, 'İyi, sen?', 200, 0, NULL);
             INSERT INTO ZWAMESSAGE VALUES (3, 1, 0, NULL, 300, 3, NULL);
-            INSERT INTO ZWAMESSAGE VALUES (4, 2, 0, NULL, 150, 6, NULL);
+            INSERT INTO ZWAMESSAGE VALUES (4, 2, 0, '{"is_hidden_sub_group":false}', 150, 6, NULL);
+            INSERT INTO ZWAMESSAGE VALUES (6, 2, 0, '{"linked_groups":[]}', 160, 0, NULL);
             INSERT INTO ZWAMESSAGE VALUES (5, 2, 0, 'Yemek hazır', 200, 0, 1);
             """
         XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
@@ -99,6 +100,16 @@ final class WhatsAppTests: XCTestCase {
         let family = try WhatsAppStore.messages(in: 2, limit: 5, at: url)
         XCTAssertEqual(family.map(\.text), ["Yemek hazır"])
         XCTAssertEqual(family.first?.sender, "Annem")
+    }
+
+    func testOnlyTextAndMediaAreRead() {
+        XCTAssertEqual(WhatsAppStore.readableText("Selam", type: 0), "Selam")
+        XCTAssertEqual(WhatsAppStore.readableText("https://x.com", type: 7), "https://x.com")
+        XCTAssertNil(WhatsAppStore.readableText("{\"is_hidden_sub_group\":false}", type: 6))
+        XCTAssertNil(WhatsAppStore.readableText("{\"a\":1}", type: 0))
+        XCTAssertNil(WhatsAppStore.readableText("Ali gruba katıldı", type: 6))
+        XCTAssertEqual(WhatsAppStore.readableText("caption", type: 1), "Fotoğraf")
+        XCTAssertNil(WhatsAppStore.readableText("", type: 0))
     }
 
     func testMissingFolderIsNotInstalled() {
