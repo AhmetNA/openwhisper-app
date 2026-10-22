@@ -40,8 +40,48 @@ enum ClaudeSessionNavigator {
         }
         rowTitlesBeforeNew = await sidebarRowTitles(app)
         press(button)
-        // The composer is reused across sessions, so wait for the title to change (or the
-        // field to be empty) before handing it to the paste path.
+        return await waitForNewSession(app, before: before)
+    }
+
+    /// Opens a new Code session in `folder` through Claude's own link (the one its Dock menu
+    /// uses), so the session starts in that project.
+    static func openNewSession(_ app: NSRunningApplication, folder: String) async -> Bool {
+        var components = URLComponents(string: "claude://code/new")!
+        components.queryItems = [URLQueryItem(name: "folder", value: folder), URLQueryItem(name: "source", value: "desktop_action")]
+        let before = currentSessionTitle(app)
+        rowTitlesBeforeNew = await sidebarRowTitles(app)
+        guard let url = components.url, await AgentAppActivator.openLink(url) else { return false }
+        return await waitForNewSession(app, before: before)
+    }
+
+    /// Switches to session `id` through Claude's link; its sidebar row when the link does
+    /// nothing (Claude can turn these links off).
+    static func openSession(_ app: NSRunningApplication, id: String, title: String) async -> Bool {
+        if !title.isEmpty, currentSessionTitle(app) == title {
+            if let prompt = promptField(app) { focus(prompt) }
+            return true
+        }
+        var components = URLComponents(string: "claude://code/continue")!
+        components.queryItems = [URLQueryItem(name: "session", value: id), URLQueryItem(name: "source", value: "desktop_action")]
+        if let url = components.url, await AgentAppActivator.openLink(url) {
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                if currentSessionTitle(app) == title, let prompt = promptField(app) {
+                    focus(prompt)
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    owLog("[Agent] Claude: opened session \"\(title)\" by link")
+                    return true
+                }
+            }
+        }
+        guard !title.isEmpty, await AgentAppActivator.bringToFront(app) else { return false }
+        return await selectSession(app, titled: title)
+    }
+
+    /// The composer is reused across sessions, so wait for the title to change (or the
+    /// field to be empty) before handing it to the paste path.
+    private static func waitForNewSession(_ app: NSRunningApplication, before: String?) async -> Bool {
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -96,7 +136,11 @@ enum ClaudeSessionNavigator {
             if let prompt = promptField(app) { focus(prompt) }
             return true
         }
-        let isRow: (AXUIElement) -> Bool = { role($0) == kAXButtonRole && title($0) == name }
+        // A running or spawned session's row title also carries "Running" / "Started by …",
+        // so its first text is compared too.
+        let isRow: (AXUIElement) -> Bool = {
+            role($0) == kAXButtonRole && (title($0) == name || (title($0)?.hasPrefix(name + " ") == true && rowName($0) == name))
+        }
         var row = await sidebarElement(app, where: isRow)
         if row == nil, let sidebar = await sidebarElement(app, where: { _ in true }, wantSidebar: true) {
             // "Show 3 more in Today": older rows of a day are only listed after expanding it.
@@ -240,6 +284,11 @@ enum ClaudeSessionNavigator {
     /// The message list can hold thousands of nodes and never contains what we look for.
     private static func isChatTranscript(_ element: AXUIElement) -> Bool {
         description(element) == "Chat messages"
+    }
+
+    /// The first text inside a sidebar row: the session's own title.
+    private static func rowName(_ row: AXUIElement) -> String? {
+        find(in: row, maxDepth: 4, where: { role($0) == kAXStaticTextRole }).flatMap(value)
     }
 
     // MARK: - AX primitives

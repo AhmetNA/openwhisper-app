@@ -151,6 +151,67 @@ final class AgentCommandParserTests: XCTestCase {
         XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da yeni Spotify aç")?.session, .new)
         XCTAssertNil(AgentCommandParser.parse("Yeni Spotify aç"))
     }
+
+    func testNewChatInCodexAndClaude() {
+        XCTAssertEqual(AgentCommandParser.parse("Claude'da yeni sohbet aç"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te yeni session aç"),
+                       AgentDictation(target: .codex, body: "", send: false, session: .new))
+        XCTAssertEqual(AgentCommandParser.parse("Kodekste yeni sohbet aç")?.target, .codex)
+        XCTAssertEqual(AgentCommandParser.parse("Klod'da yeni sohbet açar mısın")?.session, .new)
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te yeni session'a şunu yaz merhaba"),
+                       AgentDictation(target: .codex, body: "merhaba", send: false, session: .new))
+    }
+
+    func testProjectWithoutAppAssumesClaude() {
+        XCTAssertEqual(AgentCommandParser.parse("Bitirme projesine yaz: raporu güncelle"),
+                       AgentDictation(target: .claudeCode, body: "raporu güncelle", send: false, project: "Bitirme", targetAssumed: true))
+        XCTAssertEqual(AgentCommandParser.parse("Voice2TextLocal projesine şunu gönder testleri çalıştır"),
+                       AgentDictation(target: .claudeCode, body: "testleri çalıştır", send: true, project: "Voice2TextLocal", targetAssumed: true))
+        XCTAssertEqual(AgentCommandParser.parse("Voice to text local projesine yaz build'i kontrol et gönder"),
+                       AgentDictation(target: .claudeCode, body: "build'i kontrol et", send: true, project: "Voice to text local", targetAssumed: true))
+    }
+
+    func testProjectThenNamedApp() {
+        XCTAssertEqual(AgentCommandParser.parse("Voice2TextLocal projesinde Claude'a şunu yaz: README'yi güncelle"),
+                       AgentDictation(target: .claudeCode, body: "README'yi güncelle", send: false, project: "Voice2TextLocal"))
+        XCTAssertEqual(AgentCommandParser.parse("Bitirme projesinde Cloud Code'a şunu gönder selam"),
+                       AgentDictation(target: .claudeCode, body: "selam", send: true, project: "Bitirme"))
+        XCTAssertEqual(AgentCommandParser.parse("Bitirme projesinde kodekse yaz merhaba"),
+                       AgentDictation(target: .codex, body: "merhaba", send: false, project: "Bitirme"))
+    }
+
+    func testAppThenProject() {
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te Bitirme projesine yaz merhaba"),
+                       AgentDictation(target: .codex, body: "merhaba", send: false, project: "Bitirme"))
+        XCTAssertEqual(AgentCommandParser.parse("Klod'da OpenWhisper projesine şunu gönder: testleri çalıştır"),
+                       AgentDictation(target: .claudeCode, body: "testleri çalıştır", send: true, project: "OpenWhisper"))
+    }
+
+    func testNewSessionInProject() {
+        XCTAssertEqual(AgentCommandParser.parse("Bitirme projesinde yeni session aç"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new, project: "Bitirme", targetAssumed: true))
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te Bitirme projesinde yeni sohbet aç"),
+                       AgentDictation(target: .codex, body: "", send: false, session: .new, project: "Bitirme"))
+        XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da Voice2TextLocal projesinde yeni session'a şunu gönder merhaba"),
+                       AgentDictation(target: .claudeCode, body: "merhaba", send: true, session: .new, project: "Voice2TextLocal"))
+    }
+
+    func testSwitchToProject() {
+        XCTAssertEqual(AgentCommandParser.parse("Bitirme projesine geç"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, project: "Bitirme", targetAssumed: true))
+        XCTAssertEqual(AgentCommandParser.parse("Codex'te Bitirme projesini aç"),
+                       AgentDictation(target: .codex, body: "", send: false, project: "Bitirme"))
+    }
+
+    func testProjectWordInsideDictationIsNoCommand() {
+        XCTAssertNil(AgentCommandParser.parse("Bitirme projesine bugün çok çalıştım"))
+        XCTAssertNil(AgentCommandParser.parse("Bu projeye yaz bunu"))
+        XCTAssertNil(AgentCommandParser.parse("Yeni projede şunu yaz merhaba"))
+        // A "projesine" inside the message stays in the message.
+        XCTAssertEqual(AgentCommandParser.parse("Claude'a şunu yaz Bitirme projesine bak gönder"),
+                       AgentDictation(target: .claudeCode, body: "Bitirme projesine bak", send: true))
+    }
 }
 
 final class AgentSwitchParserTests: XCTestCase {
@@ -180,5 +241,48 @@ final class AgentSwitchParserTests: XCTestCase {
         XCTAssertNil(AgentCommandParser.parseAfterSwitch("Safari'ye geç ve şunu yolla merhaba"))
         XCTAssertNil(AgentCommandParser.parseAfterSwitch("Claude'a geç ve Wi-Fi'yi kapat"))
         XCTAssertNil(AgentCommandParser.parseAfterSwitch("Claude'a geçtim ve şunu yolla merhaba"))
+    }
+}
+
+final class AgentProjectMatcherTests: XCTestCase {
+    private let projects = [
+        AgentProject(name: "Voice2TextLocal", folder: "/u/Github/Voice2TextLocal"),
+        AgentProject(name: "Bitirme", folder: "/u/Github/Bitirme"),
+        AgentProject(name: "OpenWhisper", folder: "/u/Kişisel Projeler/Voice2TextLocal"),
+        AgentProject(name: "Yeni Nesil", folder: "/u/YeniNesilWeb"),
+        AgentProject(name: "4x1", folder: "/u/Okul/4x1"),
+    ]
+
+    private func name(_ spoken: String) -> String? {
+        if case .found(let project) = AgentProjectMatcher.match(spoken, in: projects) { return project.name }
+        return nil
+    }
+
+    func testSpokenFormsFindTheProject() {
+        XCTAssertEqual(name("Bitirme"), "Bitirme")
+        XCTAssertEqual(name("bitirme"), "Bitirme")
+        XCTAssertEqual(name("Open Whisper"), "OpenWhisper")
+        XCTAssertEqual(name("Open Visper"), "OpenWhisper")
+        XCTAssertEqual(name("yeni nesil web"), "Yeni Nesil")
+        XCTAssertEqual(name("dört x bir"), "4x1")
+    }
+
+    func testSameNameInTwoFoldersIsAmbiguousOnlyWhenNamesDiffer() {
+        // "Voice2TextLocal" is the folder of both the Voice2TextLocal and OpenWhisper entries.
+        guard case .ambiguous(let names) = AgentProjectMatcher.match("voice to text local", in: projects) else { return XCTFail() }
+        XCTAssertEqual(Set(names), ["Voice2TextLocal", "OpenWhisper"])
+        let moved = [
+            AgentProject(name: "Bitirme", folder: "/old/Bitirme",
+                         latestSession: AgentProjectSession(id: "a", title: "eski", lastActivity: Date(timeIntervalSince1970: 1))),
+            AgentProject(name: "Bitirme", folder: "/new/Bitirme",
+                         latestSession: AgentProjectSession(id: "b", title: "yeni", lastActivity: Date(timeIntervalSince1970: 2))),
+        ]
+        guard case .found(let project) = AgentProjectMatcher.match("bitirme", in: moved) else { return XCTFail() }
+        XCTAssertEqual(project.folder, "/new/Bitirme")
+    }
+
+    func testUnknownProjectIsNotGuessed() {
+        XCTAssertEqual(AgentProjectMatcher.match("Spotify", in: projects), .none)
+        XCTAssertEqual(AgentProjectMatcher.match("Roomly", in: projects), .none)
     }
 }

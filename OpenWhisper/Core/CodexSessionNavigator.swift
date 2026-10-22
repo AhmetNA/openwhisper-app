@@ -1,0 +1,82 @@
+import AppKit
+import ApplicationServices
+
+/// Opens a new Codex chat (optionally in a project folder) or an existing one through the
+/// app's own codex:// links, then focuses the composer so the paste path can write there.
+@MainActor
+enum CodexSessionNavigator {
+    /// `codex://threads/new`, with `?path=` to start it in that project.
+    static func openNewThread(_ app: NSRunningApplication, folder: String?) async -> Bool {
+        var components = URLComponents(string: "codex://threads/new")!
+        if let folder { components.queryItems = [URLQueryItem(name: "path", value: folder)] }
+        guard let url = components.url, await AgentAppActivator.openLink(url) else { return false }
+        // The composer placeholder sits in its value, so an empty field cannot be told apart;
+        // give the new chat a moment to replace the old one.
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        guard await focusComposer(app, timeout: 2.5) else { return false }
+        owLog("[Agent] Codex: opened a new chat\(folder.map { " in \($0)" } ?? "")")
+        return true
+    }
+
+    /// `codex://threads/<id>`; true once the window shows the chat titled `title`.
+    static func openThread(_ app: NSRunningApplication, id: String, title: String) async -> Bool {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "codex://threads/\(encoded)"),
+              await AgentAppActivator.openLink(url) else { return false }
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if windowTitle(app) == title {
+                guard await focusComposer(app, timeout: 1.5) else { return false }
+                owLog("[Agent] Codex: opened chat \"\(title)\"")
+                return true
+            }
+        }
+        owLog("[Agent] Codex: chat \"\(title)\" did not open in time")
+        return false
+    }
+
+    private static func focusComposer(_ app: NSRunningApplication, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let root = appElement(app)
+            let window = attribute(root, kAXFocusedWindowAttribute).map { $0 as! AXUIElement } ?? root
+            if let composer = find(in: window, maxDepth: 40, where: { attribute($0, kAXRoleAttribute) as? String == kAXTextAreaRole }) {
+                AXUIElementSetAttributeValue(composer, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        } while Date() < deadline
+        owLog("[Agent] Codex: no composer found")
+        return false
+    }
+
+    private static func windowTitle(_ app: NSRunningApplication) -> String? {
+        guard let window = attribute(appElement(app), kAXFocusedWindowAttribute) else { return nil }
+        return attribute(window as! AXUIElement, kAXTitleAttribute) as? String
+    }
+
+    private static func appElement(_ app: NSRunningApplication) -> AXUIElement {
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetMessagingTimeout(element, 0.5)
+        return element
+    }
+
+    private static func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        return value
+    }
+
+    /// Depth-first, skipping the conversation: it can hold thousands of nodes.
+    private static func find(in element: AXUIElement, maxDepth: Int, where predicate: (AXUIElement) -> Bool) -> AXUIElement? {
+        if predicate(element) { return element }
+        guard maxDepth > 0, attribute(element, kAXDescriptionAttribute) as? String != "Conversation" else { return nil }
+        for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+            if let match = find(in: child, maxDepth: maxDepth - 1, where: predicate) { return match }
+        }
+        return nil
+    }
+}

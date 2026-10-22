@@ -59,6 +59,14 @@ final class VoiceRouterTests: XCTestCase {
         }
     }
 
+    func testProjectAndCodexSessionCommandsGoToTheAgent() {
+        for text in ["Bitirme projesine geç", "Codex'te yeni session aç", "Voice2TextLocal projesinde Claude'a şunu yaz merhaba"] {
+            guard case .agent = VoiceRouter.route(text, facts: facts(hasTargetApp: false)) else {
+                return XCTFail("'\(text)' goes to the agent")
+            }
+        }
+    }
+
     func testKeySendOnlyIntoAnEditableAgentApp() {
         let agentApp = AgentApp.sendCapableBundleIdentifiers.sorted().first
         guard case .agent = VoiceRouter.route("bunu düzelt gönder", facts: facts(voice: false, focus: .editable, targetBundleID: agentApp)) else {

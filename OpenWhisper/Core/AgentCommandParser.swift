@@ -66,6 +66,10 @@ struct AgentDictation: Equatable, Sendable {
     let body: String
     let send: Bool
     var session: AgentSession = .current
+    /// Spoken project name ("Bitirme projesine yaz …"), matched against the app's projects.
+    var project: String? = nil
+    /// No app was named, so Claude is assumed; a project only Codex knows goes to Codex.
+    var targetAssumed = false
 }
 
 /// Pure parsing, no app or keyboard access. Works on the raw Whisper transcript, so it
@@ -153,6 +157,75 @@ enum AgentCommandParser {
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
     }()
 
+    // "Bitirme projesine yaz …", "Voice2TextLocal projesinde Claude'a şunu yaz …", "Codex'te
+    // Bitirme projesinde yeni session aç": up to four words of project name right before a
+    // "projesi…" word, then the usual command. Only at the start, so a "projesine" inside a
+    // message stays text.
+    private static let projectRegex: NSRegularExpression = {
+        let word = #"[\p{L}\p{N}][\p{L}\p{N}._\-]*"#
+        let projectWord = #"(?:proje(?:s[iı]|y|d|n)\p{L}*|projects?\p{L}*)"#
+        let pattern = "^\\s*(?:\(names)\(suffix)\\s+)?(?<project>\(word)(?:\\s+\(word)){0,3}?)\\s+\(projectWord)[\\s,:;.-]+(?:ve\\s+)?(?<rest>\\S.*)$"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+    }()
+
+    // "Bitirme projesine geç" / "… projesini aç": switch to the project's session only.
+    private static let projectSwitchRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"^(?:geç|git|dön|aç)\p{L}*(?:\s+m[ıi]s[ıi]n)?[\s.!?,]*$"#, options: [.caseInsensitive])
+    }()
+
+    /// Words that point at a project without naming it ("bu projeye", "yeni projede").
+    private static let projectPronouns: Set<String> = [
+        "bu", "şu", "o", "bir", "yeni", "eski", "benim", "bizim", "senin", "sizin", "diğer", "başka", "hangi", "her", "aynı", "son",
+    ]
+    /// Command words never belong to a project name: "Claude'a şunu yaz bu projeye …" is a message.
+    private static let commandWords: Set<String> = [
+        "yaz", "gönder", "gonder", "yolla", "söyle", "sor", "şunu", "bunu", "şöyle", "sunu",
+    ]
+
+    /// "<name> projesine/projesinde …": the command that follows, carrying the project, or nil.
+    private static func parseWithProject(_ text: String) -> AgentDictation? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased(with: locale)
+        guard lowered.utf16.count == trimmed.utf16.count,
+              let match = projectRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)),
+              let projectRange = Range(match.range(withName: "project"), in: trimmed),
+              let restRange = Range(match.range(withName: "rest"), in: trimmed) else { return nil }
+        let project = String(trimmed[projectRange])
+        let projectLowered = project.lowercased(with: locale)
+        let words = projectLowered.split(separator: " ").map(String.init)
+        guard let first = words.first, !projectPronouns.contains(first), !words.contains(where: commandWords.contains),
+              agentApp(named: project) == nil else { return nil }
+        let rest = String(trimmed[restRange])
+        let restLowered = rest.lowercased(with: locale)
+        let leadTarget = targetApp(for: match)
+
+        if projectSwitchRegex.firstMatch(in: restLowered, range: NSRange(restLowered.startIndex..., in: restLowered)) != nil {
+            return AgentDictation(target: leadTarget ?? .claudeCode, body: "", send: false, project: project, targetAssumed: leadTarget == nil)
+        }
+        // The rest names the app itself ("… projesinde Claude'a şunu yaz"), or it gets the
+        // app named before the project, Claude when none was.
+        let restNamesApp = restLowered.range(of: "^\\s*\(names)\(suffix)(?!\\p{L})", options: [.regularExpression, .caseInsensitive]) != nil
+        let command = restNamesApp ? rest : "\(callName(leadTarget ?? .claudeCode)) \(rest)"
+        let commandLowered = command.lowercased(with: locale)
+        let range = NSRange(commandLowered.startIndex..., in: commandLowered)
+        // Only a command with its verb right there: "Bitirme projesine bugün çalıştım" is no message.
+        guard openNewSessionRegex.firstMatch(in: commandLowered, range: range) != nil
+                || targetRegex.firstMatch(in: commandLowered, range: range) != nil,
+              var dictation = parse(command, allowProject: false), dictation.target != nil else { return nil }
+        dictation.project = project
+        dictation.targetAssumed = leadTarget == nil && !restNamesApp
+        return dictation
+    }
+
+    /// How a command names the app ("Claude'a …"), so a rewritten command parses as if said.
+    private static func callName(_ app: AgentApp) -> String {
+        switch app {
+        case .claudeCode: return "Claude'a"
+        case .codex: return "Codex'e"
+        case .chatGPT: return "ChatGPT'ye"
+        }
+    }
+
     /// The coding agent a spoken name means ("claude code'a", "cloud koda", "chatgpt'ye").
     static func agentApp(named spoken: String) -> AgentApp? {
         let lowered = spoken.lowercased(with: locale)
@@ -171,13 +244,7 @@ enum AgentCommandParser {
               let target = targetApp(for: match),
               let tailRange = Range(match.range(withName: "tail"), in: trimmed) else { return nil }
         let tail = String(trimmed[tailRange])
-        let name: String
-        switch target {
-        case .claudeCode: name = "Claude'a"
-        case .codex: name = "Codex'e"
-        case .chatGPT: name = "ChatGPT'ye"
-        }
-        if let dictation = parse("\(name) \(tail)"), dictation.target == target { return dictation }
+        if let dictation = parse("\(callName(target)) \(tail)"), dictation.target == target { return dictation }
         if let body = JarvisAddressee.trailingTypeCommand(tail) {
             return AgentDictation(target: target, body: body, send: false)
         }
@@ -186,6 +253,11 @@ enum AgentCommandParser {
 
     /// Returns nil when the text is neither addressed to an agent nor ends with "gönder".
     static func parse(_ text: String) -> AgentDictation? {
+        parse(text, allowProject: true)
+    }
+
+    private static func parse(_ text: String, allowProject: Bool) -> AgentDictation? {
+        if allowProject, let dictation = parseWithProject(text) { return dictation }
         var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var target: AgentApp?
         var sendVerb = false

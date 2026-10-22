@@ -77,6 +77,19 @@ enum AgentAppActivator {
         }
     }
 
+    /// Opens an app's own link (claude://, codex://) and brings that app to the front.
+    static func openLink(_ url: URL) async -> Bool {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        do {
+            _ = try await NSWorkspace.shared.open(url, configuration: configuration)
+            return true
+        } catch {
+            owLog("[Agent] Could not open \(url.scheme ?? "?") link: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     /// Brings a running app (back) to the front and waits until it is frontmost. Opening its
     /// bundle works from a background menu-bar app and switches to its full-screen Space too.
     static func bringToFront(_ app: NSRunningApplication, timeout: TimeInterval = 2) async -> Bool {

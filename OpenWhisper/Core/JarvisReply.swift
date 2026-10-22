@@ -95,6 +95,11 @@ struct JarvisReply {
         addressing("Yeni session açtım.")
     }
 
+    /// "Bitirme projesine geç" / "Bitirme projesinde yeni session aç" with nothing to write.
+    mutating func agentProject(_ name: String, isNew: Bool) -> String {
+        addressing(isNew ? "\(name) projesinde yeni session açtım." : "\(name) projesine geçtim.")
+    }
+
     /// `when` is the reminder's time ("bugün 15:46"), nil when it couldn't be set. Saying the
     /// time back catches a misheard one right away.
     mutating func reminder(at when: String?) -> String? {

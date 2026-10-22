@@ -775,8 +775,8 @@ extension AppState {
 
             case .agent(let agent):
                 owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send), session: \(agent.session.rawValue))")
-                // "Claude Code'da yeni session aç" alone just opens the session.
-                guard !agent.body.isEmpty || agent.session == .new else {
+                // "Claude Code'da yeni session aç" / "Bitirme projesine geç" alone just open it.
+                guard !agent.body.isEmpty || agent.session == .new || agent.project != nil else {
                     owLog("[Agent] Nothing to write after the command words, skipping")
                     return
                 }
@@ -785,8 +785,30 @@ extension AppState {
                     self.showFlowBarMessage(agent.body.isEmpty ? status : "\(status), panoya kopyalandı", durationMs: 4500)
                     if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(spoken)) }
                 }
-                if agent.session != .current, agent.target != .claudeCode {
-                    await fail("Session seçimi yalnızca Claude Code'da var", spoken: "session seçimini yalnızca Claude Code'da yapabiliyorum")
+                if let project = agent.project {
+                    switch await AgentProjectNavigator.open(project, target: agent.target ?? .claudeCode,
+                                                            assumed: agent.targetAssumed, newSession: agent.session == .new) {
+                    case .failed(let status, let spoken):
+                        await fail(status, spoken: spoken)
+                    case .opened(let app, let projectAgent, let found, let isNew):
+                        guard !agent.body.isEmpty else {
+                            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agentProject(found.name, isNew: isNew)) }
+                            return
+                        }
+                        let delivered = await pasteAsDictation(agent.body, targetApp: app, pasteContext: PasteContext.capture(targetApp: app), send: agent.send)
+                        guard delivered else {
+                            owLog("[Agent] Not delivered to \(found.name) in \(projectAgent.displayName); not reporting success")
+                            await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
+                                       spoken: agent.send ? "mesajı gönderemedim" : "mesajı yazamadım")
+                            return
+                        }
+                        if agent.send, projectAgent == .claudeCode { ClaudeSessionNavigator.rememberSession(app, wasNew: isNew) }
+                        if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
+                    }
+                    return
+                }
+                if agent.session == .last, agent.target != .claudeCode {
+                    await fail("Son session yalnızca Claude Code'da var", spoken: "son session'ı yalnızca Claude Code'da bulabiliyorum")
                     return
                 }
                 var targetApp = session.targetApp
@@ -807,7 +829,9 @@ extension AppState {
                     let switched: Bool
                     switch agent.session {
                     case .new:
-                        switched = await ClaudeSessionNavigator.openNewSession(app)
+                        switched = agent.target == .claudeCode
+                            ? await ClaudeSessionNavigator.openNewSession(app)
+                            : await CodexSessionNavigator.openNewThread(app, folder: nil)
                     case .last:
                         guard let name = ClaudeSessionNavigator.lastSessionTitle else {
                             await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
