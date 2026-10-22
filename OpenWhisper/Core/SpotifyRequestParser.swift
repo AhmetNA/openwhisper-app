@@ -438,6 +438,34 @@ enum SpotifyRequestParser {
         }
     }
 
+    /// The same parse from the cloud model, used instead of Ollama while Jarvis's chat is on the
+    /// cloud, so Gemma isn't loaded for a command. No JSON schema here (not every
+    /// OpenAI-compatible server takes one): the prompt's examples set the shape, and the JSON
+    /// object is cut out of whatever comes back. Nil on any failure; callers fall back to rules.
+    static func queryCloud(transcript: String, client: any ChatStreaming, model: String,
+                           timeout: TimeInterval = 3) async -> OllamaParse? {
+        let request = LLMChatRequest(model: model, messages: [["role": "user", "content": ollamaPrompt(transcript)]],
+                                     timeout: timeout, temperature: 0.0, maxTokens: 100)
+        let start = Date()
+        do {
+            var responseText = ""
+            for try await piece in client.streamChat(request) { responseText += piece }
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            owLog("[SpotifyParser] Cloud (\(model), \(ms) ms) answered: \(responseText)")
+            return decodeCloudResponse(responseText)
+        } catch {
+            owLog(Task.isCancelled ? "[SpotifyParser] Cloud skipped: SetFit answered first"
+                                   : "[SpotifyParser] Cloud (\(model)) gave no usable answer in \(Int(Date().timeIntervalSince(start) * 1000)) ms: \(ChatFallback.describe(error))")
+            return nil
+        }
+    }
+
+    /// The first `{` to the last `}`, so a ```json fence or a word around the object is dropped.
+    static func decodeCloudResponse(_ text: String) -> OllamaParse? {
+        guard let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close else { return nil }
+        return decodeOllamaResponse(String(text[open...close]))
+    }
+
     static func decodeOllamaResponse(_ text: String) -> OllamaParse? {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

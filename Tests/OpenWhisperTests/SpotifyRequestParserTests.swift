@@ -201,6 +201,15 @@ final class SpotifyRequestParserTests: XCTestCase {
         XCTAssertNil(SpotifyRequestParser.decodeOllamaResponse(#"{"is_music_command":true,"type":"none","title":"","artist":""}"#))
     }
 
+    func testDecodeCloudResponseCutsTheObjectOutOfAFence() {
+        let parse = SpotifyRequestParser.decodeCloudResponse(
+            "```json\n{\"intent\":\"search\",\"type\":\"track\",\"title\":\"Yellow\",\"artist\":\"Coldplay\"}\n```"
+        )
+        XCTAssertEqual(parse, SpotifyRequestParser.OllamaParse(intent: .search, kind: .track, title: "Yellow", artist: "Coldplay"))
+        XCTAssertEqual(SpotifyRequestParser.decodeCloudResponse(#"{"intent":"pause","type":"none","title":"","artist":""}"#)?.intent, .pause)
+        XCTAssertNil(SpotifyRequestParser.decodeCloudResponse("Bunu bir müzik komutu olarak görmüyorum."))
+    }
+
     func testRulesSplitSearchSkipsOllamaOnlyForGrammaticalSplits() {
         XCTAssertTrue(SpotifyManager.rulesSplitSearch("Eğlenceli bir şeyler çal Spotify'da."))
         XCTAssertTrue(SpotifyManager.rulesSplitSearch("Tarkan'ın Şımarık şarkısını çal"))

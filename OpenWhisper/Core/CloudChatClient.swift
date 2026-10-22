@@ -8,7 +8,7 @@ protocol ChatStreaming: Sendable {
 extension OllamaClient: ChatStreaming {}
 
 /// Any OpenAI-compatible service (`/chat/completions`, `/models`) at the address the user gave.
-/// Only `JarvisChat` talks to it; commands, cleanup and decisions stay on the local models.
+/// `JarvisChat` and the Spotify command parse use it; cleanup and other decisions stay local.
 struct CloudChatClient: ChatStreaming {
     let baseURL: URL
     let apiKey: String

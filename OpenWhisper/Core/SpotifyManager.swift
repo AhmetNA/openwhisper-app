@@ -772,8 +772,12 @@ final class SpotifyManager: @unchecked Sendable {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let text = commandMode ? commandModeText(heard) : heard
         let rules = explicitIntent(in: text)
+        // With Jarvis's chat on the cloud, the cloud model parses instead of Ollama, so Gemma
+        // stays unloaded; if it fails, the rules and SetFit decide alone.
+        let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
+        let llmAvailable = ollamaAvailable || cloud != nil
         // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down.
-        let modelAvailable = ollamaAvailable || SetFitDecider.isActive
+        let modelAvailable = llmAvailable || SetFitDecider.isActive
         let command = commandMode && rules == nil && modelAvailable && isCommandCandidate(text)
         let promotion = rules == nil && modelAvailable && isPromotionCandidate(text)
         // Cheapest checks first: the word test, then the playback query (which never
@@ -790,15 +794,25 @@ final class SpotifyManager: @unchecked Sendable {
         // A voice session warms the model when it starts, but a cold load still takes
         // several seconds; dictation keeps the short timeout so pasting isn't held up.
         let model = selectedOllamaModel
-        let ollama: Task<SpotifyRequestParser.OllamaParse?, Never>? = ollamaAvailable
-            ? Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: commandMode ? 15 : 3) }
-            : nil
-        var parse = SetFitDecider.isActive ? await setFitParse(text, ollamaAvailable: ollamaAvailable) : nil
+        let timeout: TimeInterval = commandMode ? 15 : 3
+        let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let (client, cloudModel) = cloud {
+            Task { await SpotifyRequestParser.queryCloud(transcript: text, client: client, model: cloudModel, timeout: timeout) }
+        } else if ollamaAvailable {
+            Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: timeout) }
+        } else {
+            nil
+        }
+        let llmName = cloud == nil ? "Ollama" : "Cloud"
+        var parse = SetFitDecider.isActive ? await setFitParse(text, ollamaAvailable: llmAvailable) : nil
         if parse != nil {
-            ollama?.cancel()
-        } else if let ollama {
-            parse = await ollama.value
-            if let parse { owLog("[Spotify] Ollama parse for '\(text)': \(parse)") }
+            llm?.cancel()
+        } else if let llm {
+            parse = await llm.value
+            if let parse { owLog("[Spotify] \(llmName) parse for '\(text)': \(parse)") }
+            // A search SetFit left to the LLM goes ahead with the rule-based split.
+            if parse == nil, cloud != nil, SetFitDecider.isActive {
+                parse = await setFitParse(text, ollamaAvailable: false)
+            }
         }
         let decision = decide(rules: rules, parse: parse, text: text, spotifyPlaying: spotifyPlaying, commandMode: commandMode)
         if let decision { decisionCache.store(decision, for: transcript) }

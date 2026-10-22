@@ -858,7 +858,8 @@ extension AppState {
         if trigger == .wakeWord { WakeChime.play() }
         // Load the model while the user is still speaking; after an idle night Ollama has
         // unloaded it and the cold load alone outlasts a command's wait.
-        if ollamaAvailable {
+        // With the chat on the cloud, commands are parsed there too and Gemma isn't needed.
+        if ollamaAvailable && !JarvisChat.cloudReady {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }
