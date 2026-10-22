@@ -1497,6 +1497,7 @@ struct CorrectionsManagementView<Settings: View>: View {
     @State private var newRight = ""
     @State private var filter: Filter = .candidate
     @State private var pendingDeleteID: String?
+    @State private var retainedStatuses: [String: CorrectionStore.Status] = [:]
 
     enum Filter: String, CaseIterable, Identifiable {
         case candidate, all, active, disabled
@@ -1535,7 +1536,8 @@ struct CorrectionsManagementView<Settings: View>: View {
 
     private var filteredRecords: [CorrectionStore.Record] {
         records.filter { record in
-            switch filter {
+            if retainedStatuses[record.id] != nil { return true }
+            return switch filter {
             case .candidate: record.status == .candidate
             case .all: true
             case .active: record.status == .active
@@ -1543,8 +1545,8 @@ struct CorrectionsManagementView<Settings: View>: View {
             }
         }
         .sorted { left, right in
-            let leftPriority = statusPriority(left.status)
-            let rightPriority = statusPriority(right.status)
+            let leftPriority = statusPriority(retainedStatuses[left.id] ?? left.status)
+            let rightPriority = statusPriority(retainedStatuses[right.id] ?? right.status)
             return leftPriority == rightPriority ? left.lastSeen > right.lastSeen : leftPriority < rightPriority
         }
     }
@@ -1553,12 +1555,12 @@ struct CorrectionsManagementView<Settings: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.horizontal, 24)
-                .padding(.top, 24)
+                .padding(.top, 16)
                 .padding(.bottom, 14)
 
             settings
                 .padding(.horizontal, 24)
-                .padding(.bottom, 18)
+                .padding(.bottom, 12)
 
             HStack(spacing: 8) {
                 ForEach(Filter.allCases) { option in
@@ -1566,7 +1568,7 @@ struct CorrectionsManagementView<Settings: View>: View {
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.bottom, 18)
+            .padding(.bottom, 12)
 
             Divider()
 
@@ -1575,21 +1577,22 @@ struct CorrectionsManagementView<Settings: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 10) {
+                    LazyVStack(spacing: 0) {
                         ForEach(filteredRecords) { record in
                             correctionCard(record)
+                            Divider()
                         }
                     }
-                    .padding(20)
+                    .padding(16)
                     .frame(maxWidth: .infinity)
                 }
             }
 
             Divider()
             manualAddSection
-                .padding(20)
+                .padding(16)
         }
-        .frame(minWidth: 520, minHeight: 540)
+        .frame(minWidth: 520, minHeight: 420)
         .confirmationDialog(
             "Düzeltme silinsin mi?",
             isPresented: Binding(
@@ -1604,6 +1607,7 @@ struct CorrectionsManagementView<Settings: View>: View {
         } message: {
             Text("Bu düzeltme kayıtlı listeden kaldırılacak.")
         }
+        .onChange(of: filter) { _, _ in retainedStatuses.removeAll() }
         .onAppear {
             filter = pendingCount > 0 ? .candidate : .all
         }
@@ -1639,25 +1643,17 @@ struct CorrectionsManagementView<Settings: View>: View {
         return Button {
             filter = option
         } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                Image(systemName: option.symbol)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(option.tint)
-                Text("\(count)")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+            HStack(spacing: 6) {
                 Text(option.title)
-                    .font(.caption)
+                Text("\(count)")
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(11)
-            .background(isSelected ? option.tint.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 10))
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(isSelected ? option.tint.opacity(0.55) : Color.primary.opacity(0.06))
-            }
+            .font(.caption.weight(isSelected ? .semibold : .regular))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(option.title): \(count)")
@@ -1692,91 +1688,87 @@ struct CorrectionsManagementView<Settings: View>: View {
 
     private func correctionCard(_ record: CorrectionStore.Record) -> some View {
         let store = CorrectionStore.shared
-        return VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .top, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(record.wrong)
                         .foregroundStyle(.secondary)
                         .strikethrough()
                     Image(systemName: "arrow.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     Text(record.right)
-                        .fontWeight(.semibold)
+                        .fontWeight(.medium)
                 }
-                .font(.system(size: 16))
+                .font(.system(size: 13))
                 .lineLimit(2)
                 .help("\(record.wrong) → \(record.right)")
-                Spacer(minLength: 4)
-                Label(statusText(record.status), systemImage: statusSymbol(record.status))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(statusColor(record.status))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(statusColor(record.status).opacity(0.10), in: Capsule())
-            }
-
-            HStack(spacing: 8) {
-                Text("\(record.count) kez görüldü")
-                Text("·")
-                Text(record.appliedCount == 0 ? "Henüz uygulanmadı" : "\(record.appliedCount) kez uygulandı")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                switch record.status {
-                case .candidate:
-                    Button("Onayla") { store.approve(id: record.id) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                    Button("Reddet") { store.reject(id: record.id) }
-                        .buttonStyle(.bordered)
-                        .help("Bu düzeltmeyi kapalı tutar; yeniden otomatik etkinleşmez.")
-                    Spacer()
-                    Button("Önemsiz") { store.discard(id: record.id) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Bu öneriyi listeden kaldırır.")
-                case .active, .disabled:
-                    Toggle("Aktif", isOn: Binding(
-                        get: { store.records.first(where: { $0.id == record.id })?.status == .active },
-                        set: { store.setDisabled(id: record.id, disabled: !$0) }
-                    ))
-                    .toggleStyle(.switch)
-                    Spacer()
-                    Button {
-                        pendingDeleteID = record.id
-                    } label: {
-                        Label("Sil", systemImage: "trash")
-                    }
-                    .buttonStyle(.borderless)
+                Text("\(record.count) gözlem · \(record.appliedCount) uygulama")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .help("Bu düzeltmeyi sil")
-                }
             }
-            .controlSize(.small)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            switch record.status {
+            case .candidate:
+                Button("Onayla") {
+                    retainRow(record)
+                    store.approve(id: record.id)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Reddet") {
+                    retainRow(record)
+                    store.reject(id: record.id)
+                }
+                .buttonStyle(.bordered)
+                Button { store.discard(id: record.id) } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .help("Öneriyi kaldır")
+                .accessibilityLabel("Öneriyi kaldır")
+            case .active, .disabled:
+                Toggle(record.status == .active ? "Aktif" : "Kapalı", isOn: Binding(
+                    get: { store.records.first(where: { $0.id == record.id })?.status == .active },
+                    set: {
+                        retainRow(record)
+                        store.setDisabled(id: record.id, disabled: !$0)
+                    }
+                ))
+                .toggleStyle(.switch)
+                .font(.caption)
+                .help("Durum değişince satır 3 saniye burada kalır.")
+                Button { pendingDeleteID = record.id } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Düzeltmeyi sil")
+                .accessibilityLabel("Düzeltmeyi sil")
+            }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.primary.opacity(0.06))
+        .controlSize(.small)
+        .padding(.vertical, 9)
+        .task(id: record.status) {
+            guard retainedStatuses[record.id] != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(3))
+                retainedStatuses.removeValue(forKey: record.id)
+            } catch {
+                // Repeated toggles restart the grace period; leaving the list cancels it.
+            }
+        }
+    }
+
+    private func retainRow(_ record: CorrectionStore.Record) {
+        if retainedStatuses[record.id] == nil {
+            retainedStatuses[record.id] = record.status
         }
     }
 
     private var manualAddSection: some View {
         let store = CorrectionStore.shared
         return VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Label("Elle düzeltme ekle", systemImage: "plus.circle")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("Onaylanmış olarak eklenir")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             HStack(spacing: 9) {
                 TextField("Yanlış duyulan", text: $newWrong)
                     .textFieldStyle(.roundedBorder)

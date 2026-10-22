@@ -48,7 +48,10 @@ enum ClaudeSessionNavigator {
     /// Presses the sidebar's "New session" and waits for its empty composer to take focus.
     static func openNewSession(_ app: NSRunningApplication) async -> Bool {
         let before = currentSessionTitle(app)
-        guard let button = await sidebarElement(app, where: { description($0) == "New session" }) else {
+        // Newer Claude versions label it with the title "New" instead (2026-10-22).
+        guard let button = await sidebarElement(app, where: {
+            description($0) == "New session" || (role($0) == kAXButtonRole && title($0) == "New")
+        }) else {
             owLog("[Agent] Claude: no \"New session\" button found")
             return false
         }
