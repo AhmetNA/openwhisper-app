@@ -14,6 +14,15 @@ enum AgentApp: String, CaseIterable, Sendable {
         }
     }
 
+    /// "Claude'da", "Codex'te": where something is, for spoken replies.
+    var locative: String {
+        switch self {
+        case .claudeCode: return "Claude'da"
+        case .codex: return "Codex'te"
+        case .chatGPT: return "ChatGPT'de"
+        }
+    }
+
     /// Codex and ChatGPT are two names for the same desktop app on this machine.
     /// Resolve both through its bundle ID rather than assuming an app path.
     var bundleIdentifiers: [String] {

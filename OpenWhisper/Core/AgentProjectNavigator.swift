@@ -29,7 +29,7 @@ enum AgentProjectNavigator {
                 let list = names.prefix(3).joined(separator: ", ")
                 return .failed(status: "Hangi proje: \(list)?", spoken: "hangi projeyi kastettiğinizi anlayamadım: \(names.prefix(3).joined(separator: " mi, ")) mi")
             }
-            let place = assumed ? "" : "\(target.displayName)'da "
+            let place = assumed ? "" : "\(target.locative) "
             return .failed(status: "\(place)\(spoken) projesi bulunamadı", spoken: "\(place)\(spoken) adında bir proje bulamadım")
         }
         owLog("[Agent] Project '\(spoken)' → \(agent.displayName) \(project.folder) (session: \(project.latestSession?.title ?? "-"))")

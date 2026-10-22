@@ -18,15 +18,18 @@ enum CodexSessionNavigator {
         return true
     }
 
-    /// `codex://threads/<id>`; true once the window shows the chat titled `title`.
+    /// `codex://threads/<id>`; true once the window shows that chat. An unnamed chat's title
+    /// is its first message, which the window may shorten, so a changed title also counts.
     static func openThread(_ app: NSRunningApplication, id: String, title: String) async -> Bool {
+        let before = windowTitle(app)
         guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "codex://threads/\(encoded)"),
               await AgentAppActivator.openLink(url) else { return false }
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
-            if windowTitle(app) == title {
+            let current = windowTitle(app)
+            if current == title || (current != nil && current != before) {
                 guard await focusComposer(app, timeout: 1.5) else { return false }
                 owLog("[Agent] Codex: opened chat \"\(title)\"")
                 return true
