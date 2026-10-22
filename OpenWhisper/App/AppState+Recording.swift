@@ -187,6 +187,7 @@ extension AppState {
             uid == recordingInputDeviceUID ? " (picked mic)" : " (picked mic \(inputDeviceName ?? uid) not connected; fallback)"
         } ?? " (automatic)"
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")\(pickedNote)")
+        activeRecordingInputUID = recordingInputDeviceUID ?? AudioEngine.defaultInputDeviceUID()
         // Voice sessions continue the wake listener's running mic stream (same device only)
         // instead of restarting the hardware; after "Hey Jarvis" the audio since the wake comes
         // along, so a command said without a pause keeps its first words. Taken here, before

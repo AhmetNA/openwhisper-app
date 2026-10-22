@@ -25,6 +25,17 @@ extension AppState {
         let removed = previous.filter { device in !availableInputDevices.contains { $0.uid == device.uid } }
         guard !previous.isEmpty, !(added.isEmpty && removed.isEmpty) else { return }
         owLog("[Input] Devices changed: +[\(added.map(\.name).joined(separator: ", "))] -[\(removed.map(\.name).joined(separator: ", "))]")
+        // A dead mic sends no more audio, so voice auto-stop would never fire: end the recording
+        // with what it has. The next one picks a connected mic; nothing is switched mid-recording.
+        if recordingState == .recording, !targetSpeakerEnrollmentActive, let uid = activeRecordingInputUID,
+           removed.contains(where: { $0.uid == uid }) {
+            owLog("[Input] Recording mic \(removed.first { $0.uid == uid }?.name ?? uid) disconnected; ending the recording")
+            voiceEndpointDetector = nil
+            smartTurnEndpointDetector = nil
+            ownVoiceStopGate = nil
+            hotkey?.externalCancelHandsFree()
+            stopRecording()
+        }
         // The picked mic stays picked while unplugged; recordings fall back until it returns.
         guard let uid = inputDeviceUID else { return }
         if added.contains(where: { $0.uid == uid }) {

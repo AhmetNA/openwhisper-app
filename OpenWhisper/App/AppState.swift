@@ -507,6 +507,8 @@ final class AppState {
     @ObservationIgnored var armVoiceAutoStopForNextRecording = false
     /// Present only for voice-triggered sessions; ends them after the speaker goes quiet.
     @ObservationIgnored var voiceEndpointDetector: VoiceEndpointDetector?
+    /// The mic the running recording captures from, to end it if that mic is unplugged.
+    @ObservationIgnored var activeRecordingInputUID: String?
     /// Model-based endpointing for Jarvis sessions. The level detector above remains only as a
     /// fail-open fallback when either local model is unavailable.
     @ObservationIgnored var smartTurnEndpointDetector: SmartTurnEndpointDetector?
