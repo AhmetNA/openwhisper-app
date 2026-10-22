@@ -121,7 +121,7 @@ final class WhatsAppWatcher {
     }
 
     /// "Dilayım" → "Dilayım'dan", "Mehmet" → "Mehmet'ten", "Ayşe" → "Ayşe'den".
-    static func ablative(_ name: String) -> String {
+    nonisolated static func ablative(_ name: String) -> String {
         let lower = name.lowercased(with: Locale(identifier: "tr_TR"))
         let back = Set("aıou"), front = Set("eiöü")
         let lastVowel = lower.last { back.contains($0) || front.contains($0) }

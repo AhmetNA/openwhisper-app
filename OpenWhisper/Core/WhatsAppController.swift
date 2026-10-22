@@ -224,8 +224,8 @@ enum WhatsAppController {
         }
     }
 
-    /// The silent notice under the screen, two lines and no message text:
-    /// "WhatsApp · 5 mesaj · 2 kişi, 1 grup" over "Ali, Ayşe, Aile".
+    /// The silent notice under the screen, no message text: "WhatsApp · Ali'den 3 mesaj" for one
+    /// chat, else "WhatsApp · 5 mesaj · 2 kişi, 1 grup" over "Ali, Ayşe, Aile".
     static func notice(forChats ids: [Int64]) async -> String? {
         let chats = (try? await Task.detached(priority: .utility) { try WhatsAppStore.chats() }.value) ?? []
         return notice(for: ids.compactMap { id in chats.first { $0.id == id } })
@@ -237,6 +237,11 @@ enum WhatsAppController {
     static func notice(for chats: [WhatsAppStore.Chat]) -> String? {
         guard !chats.isEmpty else { return nil }
         let messages = chats.reduce(0) { $0 + max($1.unread, 1) }
+        // One chat needs no count of people: "WhatsApp · Ali'den 3 mesaj".
+        if chats.count == 1, let only = chats.first {
+            let name = spokenName(only)
+            return "WhatsApp · " + (only.isGroup ? "\(name) grubunda \(messages) mesaj" : "\(WhatsAppWatcher.ablative(name)) \(messages) mesaj")
+        }
         let groups = chats.filter(\.isGroup).count, people = chats.count - groups
         let who = [people > 0 ? "\(people) kişi" : nil, groups > 0 ? "\(groups) grup" : nil].compactMap { $0 }
         var names = chats.prefix(noticeNames).map(spokenName).joined(separator: ", ")

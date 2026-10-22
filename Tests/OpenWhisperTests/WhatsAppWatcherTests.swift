@@ -48,7 +48,9 @@ final class WhatsAppWatcherTests: XCTestCase {
     func testNotice() {
         XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Ali", unread: 2), chat(2, "Ayşe"), chat(3, "Aile", group: true, unread: 4)]),
                        "WhatsApp · 7 mesaj · 2 kişi, 1 grup\nAli, Ayşe, Aile")
-        XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Ali")]), "WhatsApp · 1 mesaj · 1 kişi\nAli")
+        XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Ali")]), "WhatsApp · Ali'den 1 mesaj")
+        XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Mehmet", unread: 3)]), "WhatsApp · Mehmet'ten 3 mesaj")
+        XCTAssertEqual(WhatsAppController.notice(for: [chat(3, "Aile", group: true, unread: 5)]), "WhatsApp · Aile grubunda 5 mesaj")
         XCTAssertEqual(WhatsAppController.notice(for: (1...6).map { chat(Int64($0), "K\($0)") }),
                        "WhatsApp · 6 mesaj · 6 kişi\nK1, K2, K3, K4 +2")
         XCTAssertNil(WhatsAppController.notice(for: []))
