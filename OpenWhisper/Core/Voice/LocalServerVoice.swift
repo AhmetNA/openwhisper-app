@@ -11,7 +11,7 @@ class LocalServerVoice: SpeechSynthesisProvider {
         let display: String
         /// "Pocket": "Pocket server …" log lines.
         let short: String
-        /// "tts_pocket_server": where setup.sh lives in the repo.
+        /// "servers/tts_pocket_server": where setup.sh lives in the repo.
         let setupFolder: String
     }
 

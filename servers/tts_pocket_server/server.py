@@ -1,6 +1,6 @@
 """Jarvis's default local voice: Pocket TTS Turkish (PyTorch, CPU) behind a tiny HTTP server.
 
-Same protocol as `tts_server/server.py`, so the app talks to both the same way
+Same protocol as `servers/tts_server/server.py`, so the app talks to both the same way
 (`LocalPocketTTSProvider.swift`):
   GET  /health  -> {"ready": bool, "error": str|null}   answers at once, also while loading
   POST /speak   {"text": "..."} -> audio/wav (16-bit mono, 24 kHz)
@@ -9,7 +9,7 @@ Pocket TTS Turkish (wite-tech, ~110M params, CC-BY-4.0) clones every reply from 
 `jarvis_ref.wav` OmniVoice uses; the package cuts it at the pause between two words ~4.9 s in.
 It spells out numbers itself and reads one sentence at a time. A fixed seed keeps a phrase
 sounding the same every time it is made. Turkish only: English replies are Piper Jarvis's job
-(`tts_piper_server`).
+(`servers/tts_piper_server`).
 
 The server exits on its own when the app that started it is gone (`--parent-pid`).
 """

@@ -50,9 +50,9 @@ Damga ayrı temizleme modeli olarak seçilmez; Ollama'dan bağımsız bir anahta
 Uygulama deposundan:
 
 ```bash
-bash damga_server/setup.sh
+bash servers/damga_server/setup.sh
 bash build.sh
-"$HOME/Library/Application Support/OpenWhisper/damga/.venv/bin/python" damga_server/evaluate.py --out /tmp/damga-results.json
+"$HOME/Library/Application Support/OpenWhisper/damga/.venv/bin/python" servers/damga_server/evaluate.py --out /tmp/damga-results.json
 DAMGA_TEST_INSTALL="$HOME/Library/Application Support/OpenWhisper/damga" swift test --filter DamgaNormalizerTests
 ```
 

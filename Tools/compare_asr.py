@@ -2,7 +2,7 @@
 
     "$HOME/Library/Application Support/OpenWhisper/asr/.venv/bin/python" Tools/compare_asr.py [OUT_TSV]
 
-Needs asr_server/setup.sh. For every recording in ~/Library/Application Support/OpenWhisper/Recordings
+Needs servers/asr_server/setup.sh. For every recording in ~/Library/Application Support/OpenWhisper/Recordings
 whose log has a `Raw:` line, transcribes the .caf with Qwen3-ASR (with and without the glossary
 as hotwords) and prints the three side by side with Qwen's speed. There is no reference text, so
 you judge which is right. Whisper heard the app's processed audio (noise filter, echo cancel),
@@ -18,7 +18,7 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 sys.path.insert(0, str(Path.home() / "Library/Application Support/OpenWhisper/asr"))
-import server  # noqa: E402  the installed asr_server/server.py
+import server  # noqa: E402  the installed servers/asr_server/server.py
 
 RECORDINGS = Path.home() / "Library/Application Support/OpenWhisper/Recordings"
 GLOSSARY = Path.home() / "Library/Application Support/OpenWhisper/glossary.txt"

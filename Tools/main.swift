@@ -24,12 +24,12 @@ import Foundation
 //       static func post(title: String, body: String, isError: Bool = false, identifierPrefix: String = "openwhisper") {}
 //   }
 //   EOF
-//   swiftc Tools/main.swift OpenWhisper/Core/CorrectionEngine.swift \
-//     OpenWhisper/Core/TurkishDateParser.swift OpenWhisper/Core/SpokenDuration.swift \
-//     OpenWhisper/Core/SpotifyManager.swift \
-//     OpenWhisper/Core/SpotifyController.swift OpenWhisper/Core/SpotifyWebAPI.swift \
-//     OpenWhisper/Core/SpotifyRequestParser.swift OpenWhisper/Core/LLMCleanup.swift \
-//     OpenWhisper/Core/GlossaryStore.swift \
+//   swiftc Tools/main.swift OpenWhisper/Core/Correction/CorrectionEngine.swift \
+//     OpenWhisper/Core/Commands/TurkishDateParser.swift OpenWhisper/Core/Commands/SpokenDuration.swift \
+//     OpenWhisper/Core/Integrations/Spotify/SpotifyManager.swift \
+//     OpenWhisper/Core/Integrations/Spotify/SpotifyController.swift OpenWhisper/Core/Integrations/Spotify/SpotifyWebAPI.swift \
+//     OpenWhisper/Core/Integrations/Spotify/SpotifyRequestParser.swift OpenWhisper/Core/Correction/LLMCleanup.swift \
+//     OpenWhisper/Core/Correction/GlossaryStore.swift \
 //     /tmp/owlog_stub.swift -o /tmp/ow_harness && /tmp/ow_harness
 
 var failures = 0

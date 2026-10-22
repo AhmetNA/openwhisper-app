@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// Jarvis's local voice: OmniVoice on MLX, served by `tts_server/server.py` on 127.0.0.1.
-/// `tts_server/setup.sh` installs it once into `~/Library/Application Support/OpenWhisper/tts`;
+/// Jarvis's local voice: OmniVoice on MLX, served by `servers/tts_server/server.py` on 127.0.0.1.
+/// `servers/tts_server/setup.sh` installs it once into `~/Library/Application Support/OpenWhisper/tts`;
 /// the app starts the server itself and the server quits when the app does. Until it is
 /// installed and warm Jarvis stays silent. One instance for the app, since it owns the server.
 @MainActor
@@ -12,7 +12,7 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "local",
         title: "Yerel — OmniVoice",
-        summary: "Bu Mac'te, internetsiz çalışır. Kurulum: app/tts_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Kurulum: app/servers/tts_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "OmniVoice", detail: "Jarvis referans sesinden klonlanır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalOmniVoiceProvider.shared }
@@ -57,7 +57,7 @@ final class LocalOmniVoiceProvider: SpeechSynthesisProvider {
 
         if await server.health() == nil {
             guard server.isInstalled else {
-                owLog("[Voice] Local voice not installed — run app/tts_server/setup.sh. Replies stay silent")
+                owLog("[Voice] Local voice not installed — run app/servers/tts_server/setup.sh. Replies stay silent")
                 return
             }
             do {

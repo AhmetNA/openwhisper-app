@@ -146,10 +146,10 @@ Damga converts spoken forms such as `yüz elli lira` to `150 TL` after recogniti
 From the application repository, install once:
 
 ```bash
-bash damga_server/setup.sh
+bash servers/damga_server/setup.sh
 ```
 
-Rebuild with `bash build.sh`, select **Turkish**, then enable **Türkçe sayı ve tarih biçimlendirme (Damga)** in Settings. The app starts the runtime when enabled and frees it when disabled. Existing installations need a rebuild after changes to `damga_server/server.py`.
+Rebuild with `bash build.sh`, select **Turkish**, then enable **Türkçe sayı ve tarih biçimlendirme (Damga)** in Settings. The app starts the runtime when enabled and frees it when disabled. Existing installations need a rebuild after changes to `servers/damga_server/server.py`.
 
 Final dictation, replayed recordings and system-audio clipboard output use ITN. URLs, written e-mails/IBANs, code spans and glossary terms are protected. Errors and timeouts keep the original text. The swap shortcut restores raw dictation after a paste. Auto-detect does not enable ITN; inputs over 4,000 characters pass through unchanged.
 
@@ -220,13 +220,13 @@ scripts up to date afterwards.
 
 | Voice | Language | Install |
 | --- | --- | --- |
-| Pocket TTS (default) | Turkish | `bash tts_pocket_server/setup.sh` (~440 MB) |
-| Piper Jarvis | English | `bash tts_piper_server/setup.sh` (~63 MB) |
-| OmniVoice (MLX) | Turkish | `bash tts_server/setup.sh` (~2 GB) |
-| EMA Lightning | Turkish (experimental) | `bash tts_ema_server/setup.sh` |
+| Pocket TTS (default) | Turkish | `bash servers/tts_pocket_server/setup.sh` (~440 MB) |
+| Piper Jarvis | English | `bash servers/tts_piper_server/setup.sh` (~63 MB) |
+| OmniVoice (MLX) | Turkish | `bash servers/tts_server/setup.sh` (~2 GB) |
+| EMA Lightning | Turkish (experimental) | `bash servers/tts_ema_server/setup.sh` |
 | Gemini | Cloud | API key in Settings; sends the reply text to Google |
 
-`tts_antalia_server/` is compare-only (`scripts/tts-compare/`); the app does not use it.
+`servers/tts_antalia_server/` is compare-only (`scripts/tts-compare/`); the app does not use it.
 
 ## Optional Spotify setup
 
@@ -266,6 +266,16 @@ swift run OpenWhisper
 ```
 
 Build artifacts, downloaded Whisper models, and local runtime data are intentionally ignored by Git.
+
+| Folder | Contents |
+|---|---|
+| `OpenWhisper/App` | App entry point and `AppState` |
+| `OpenWhisper/Core` | Features, grouped by topic: `Audio`, `Wake`, `Transcription`, `Correction`, `Commands`, `Jarvis`, `Voice`, `Integrations`, … |
+| `OpenWhisper/UI` | SwiftUI views and windows |
+| `Tests/` | Unit tests |
+| `servers/` | Optional local Python model servers (TTS voices, Qwen3-ASR, Damga), each with its own `setup.sh` |
+| `scripts/`, `Tools/` | Helper scripts and evaluation harnesses |
+| `Vendor/` | Prebuilt DeepFilterNet and WebRTC AEC libraries |
 
 Before opening a pull request, please check:
 
@@ -317,7 +327,7 @@ individual processes.
 
 ### Optional Phonon English voice
 
-Run `bash tts_phonon_server/setup.sh`, then rebuild with `bash build.sh`.
+Run `bash servers/tts_phonon_server/setup.sh`, then rebuild with `bash build.sh`.
 In voice settings select **Yerel — Phonon 31m (İngilizce)**. Pocket remains the
 Turkish default. Selecting Phonon makes replies English using the existing local
 translation path; dynamic Turkish replies require Ollama.
@@ -328,7 +338,7 @@ It loads only local files from `~/Library/Application Support/OpenWhisper/tts-ph
 No Gradium account or API key is needed. The model is Apache-2.0; runtime code is
 MIT/Apache-2.0. See [upstream](https://github.com/gradium-ai/xn-ptts).
 
-`python3 tts_phonon_server/verify.py` checks the installed model through HTTP and
+`python3 servers/tts_phonon_server/verify.py` checks the installed model through HTTP and
 writes `/tmp/jarvis-phonon-sample.wav`. A single warm Apple M5 run produced 5.68 s
 of 24 kHz mono audio in 0.131 s; this measures full WAV generation, not first-audio
 latency or an end-to-end microphone conversation. Playback uses the existing WAV

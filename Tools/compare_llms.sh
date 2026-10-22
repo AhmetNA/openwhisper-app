@@ -20,16 +20,16 @@ OUT="${TMPDIR:-/tmp}/openwhisper-evals"
 mkdir -p "$OUT"
 echo "==> Building eval tools"
 swiftc Tools/CleanupEval/main.swift Tools/SpotifyEval/Stubs.swift \
-    OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
-    OpenWhisper/Core/MisheardWordDetector.swift OpenWhisper/Core/TranscriptSanitizer.swift \
+    OpenWhisper/Core/Correction/LLMCleanup.swift OpenWhisper/Core/Correction/GlossaryStore.swift \
+    OpenWhisper/Core/Correction/MisheardWordDetector.swift OpenWhisper/Core/Transcription/TranscriptSanitizer.swift \
     -o "$OUT/cleanup_eval"
 swiftc Tools/SpotifyEval/main.swift Tools/SpotifyEval/Stubs.swift \
-    OpenWhisper/Core/SpotifyManager.swift OpenWhisper/Core/SpotifyController.swift \
-    OpenWhisper/Core/SpotifyWebAPI.swift OpenWhisper/Core/SpotifyRequestParser.swift \
-    OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
-    OpenWhisper/Core/SystemVolume.swift OpenWhisper/Core/AudioDucker.swift \
-    OpenWhisper/Core/MisheardWordDetector.swift OpenWhisper/Core/SetFitDecider.swift \
-    OpenWhisper/Core/TranscriptSanitizer.swift -o "$OUT/spotify_eval"
+    OpenWhisper/Core/Integrations/Spotify/SpotifyManager.swift OpenWhisper/Core/Integrations/Spotify/SpotifyController.swift \
+    OpenWhisper/Core/Integrations/Spotify/SpotifyWebAPI.swift OpenWhisper/Core/Integrations/Spotify/SpotifyRequestParser.swift \
+    OpenWhisper/Core/Correction/LLMCleanup.swift OpenWhisper/Core/Correction/GlossaryStore.swift \
+    OpenWhisper/Core/Media/SystemVolume.swift OpenWhisper/Core/Media/AudioDucker.swift \
+    OpenWhisper/Core/Correction/MisheardWordDetector.swift OpenWhisper/Core/LLM/SetFitDecider.swift \
+    OpenWhisper/Core/Transcription/TranscriptSanitizer.swift -o "$OUT/spotify_eval"
 
 SUMMARY="$OUT/summary-$(date +%Y%m%d-%H%M%S).txt"
 REAL="$OUT/real_transcripts.txt"

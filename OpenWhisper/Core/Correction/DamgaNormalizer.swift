@@ -34,7 +34,7 @@ final class DamgaNormalizer {
         let task = Task { @MainActor in
             guard !Task.isCancelled else { return false }
             guard server.isInstalled else {
-                status = "Kurulu değil — app/damga_server/setup.sh çalıştırın."
+                status = "Kurulu değil — app/servers/damga_server/setup.sh çalıştırın."
                 return false
             }
             status = "Başlatılıyor…"

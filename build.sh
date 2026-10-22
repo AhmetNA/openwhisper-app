@@ -82,61 +82,61 @@ codesign --force --deep --options runtime \
     --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
 
 # Local voice for spoken replies (OmniVoice): keep the installed server script and reference
-# voice in sync with the repo. The Python venv itself comes from tts_server/setup.sh (once).
+# voice in sync with the repo. The Python venv itself comes from servers/tts_server/setup.sh (once).
 TTS_DEST="$HOME/Library/Application Support/OpenWhisper/tts"
 if [ -x "$TTS_DEST/.venv/bin/python" ]; then
-    cp tts_server/server.py tts_server/jarvis_ref.wav "$TTS_DEST/"
+    cp servers/tts_server/server.py servers/tts_server/jarvis_ref.wav "$TTS_DEST/"
     echo "==> Updated local voice server in $TTS_DEST"
 else
-    echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run tts_server/setup.sh"
+    echo "NOTE: Local voice not installed; Jarvis's spoken replies stay silent until you run servers/tts_server/setup.sh"
 fi
 
 # Experimental local voice (Settings › Sesli cevap › EMA Lightning): keep the installed server
-# script in sync. The venv and the model come from tts_ema_server/setup.sh (once).
+# script in sync. The venv and the model come from servers/tts_ema_server/setup.sh (once).
 EMA_DEST="$HOME/Library/Application Support/OpenWhisper/tts-ema"
 if [ -x "$EMA_DEST/.venv/bin/python" ]; then
-    cp tts_ema_server/server.py "$EMA_DEST/"
+    cp servers/tts_ema_server/server.py "$EMA_DEST/"
     echo "==> Updated EMA Lightning server in $EMA_DEST"
 fi
 
 # Default local voice (Settings › Sesli cevap › Pocket TTS): keep the installed server
 # script and the Jarvis reference in sync. The venv and the model come from
-# tts_pocket_server/setup.sh (once).
+# servers/tts_pocket_server/setup.sh (once).
 POCKET_DEST="$HOME/Library/Application Support/OpenWhisper/tts-pocket"
 if [ -x "$POCKET_DEST/.venv/bin/python" ]; then
-    cp tts_pocket_server/server.py tts_server/jarvis_ref.wav "$POCKET_DEST/"
+    cp servers/tts_pocket_server/server.py servers/tts_server/jarvis_ref.wav "$POCKET_DEST/"
     echo "==> Updated Pocket TTS server in $POCKET_DEST"
 else
-    echo "NOTE: Default voice (Pocket TTS) not installed; spoken replies stay silent until you run tts_pocket_server/setup.sh"
+    echo "NOTE: Default voice (Pocket TTS) not installed; spoken replies stay silent until you run servers/tts_pocket_server/setup.sh"
 fi
 
 # English voice (Settings › Sesli cevap › Piper Jarvis): keep the installed server script in
-# sync. The venv and the model come from tts_piper_server/setup.sh (once).
+# sync. The venv and the model come from servers/tts_piper_server/setup.sh (once).
 PIPER_DEST="$HOME/Library/Application Support/OpenWhisper/tts-piper"
 if [ -x "$PIPER_DEST/.venv/bin/python" ]; then
-    cp tts_piper_server/server.py "$PIPER_DEST/"
+    cp servers/tts_piper_server/server.py "$PIPER_DEST/"
     echo "==> Updated Piper Jarvis server in $PIPER_DEST"
 fi
 
 # Optional offline English Phonon voice.
 PHONON_DEST="$HOME/Library/Application Support/OpenWhisper/tts-phonon"
 if [ -x "$PHONON_DEST/.venv/bin/python" ]; then
-    cp tts_phonon_server/server.py "$PHONON_DEST/"
+    cp servers/tts_phonon_server/server.py "$PHONON_DEST/"
     echo "==> Updated Phonon server in $PHONON_DEST"
 fi
 
 # Alternative speech model (Settings › Konuşma modeli › Qwen3-ASR): keep the installed server
-# script in sync. The venv and the model come from asr_server/setup.sh (once).
+# script in sync. The venv and the model come from servers/asr_server/setup.sh (once).
 ASR_DEST="$HOME/Library/Application Support/OpenWhisper/asr"
 if [ -x "$ASR_DEST/.venv/bin/python" ]; then
-    cp asr_server/server.py "$ASR_DEST/"
+    cp servers/asr_server/server.py "$ASR_DEST/"
     echo "==> Updated Qwen3-ASR server in $ASR_DEST"
 fi
 
 # Optional final-output Turkish ITN. setup.sh installs the pinned native runtime once.
 DAMGA_DEST="$HOME/Library/Application Support/OpenWhisper/damga"
 if [ -x "$DAMGA_DEST/.venv/bin/python" ]; then
-    cp damga_server/server.py "$DAMGA_DEST/"
+    cp servers/damga_server/server.py "$DAMGA_DEST/"
     echo "==> Updated Damga server in $DAMGA_DEST"
 fi
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Jarvis's English voice: Piper's Jarvis model (jgkawell/jarvis, medium, ONNX on the CPU),
-/// served by `tts_piper_server/server.py` on 127.0.0.1. `tts_piper_server/setup.sh` installs it
+/// served by `servers/tts_piper_server/server.py` on 127.0.0.1. `servers/tts_piper_server/setup.sh` installs it
 /// once into `~/Library/Application Support/OpenWhisper/tts-piper` (needs Homebrew's espeak-ng).
 /// Picking it makes Jarvis answer in English: `JarvisVoice` translates the Turkish replies and
 /// the chat answers in English. Measured on this Mac: ~2 s to load, ~70 ms for a short reply,
@@ -13,7 +13,7 @@ final class LocalPiperJarvisProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "piper",
         title: "Yerel — Piper Jarvis (İngilizce)",
-        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: brew install espeak-ng, sonra app/tts_piper_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: brew install espeak-ng, sonra app/servers/tts_piper_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "Piper Jarvis medium", detail: "İngilizce Jarvis sesi, CPU'da çalışır.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalPiperJarvisProvider.shared }
@@ -26,7 +26,7 @@ final class LocalPiperJarvisProvider: LocalServerVoice {
 
 
     private init() {
-        super.init(naming: .init(display: "Piper Jarvis", short: "Piper", setupFolder: "tts_piper_server"),
+        super.init(naming: .init(display: "Piper Jarvis", short: "Piper", setupFolder: "servers/tts_piper_server"),
                    port: Self.port, folder: "tts-piper", voiceModel: Self.voiceModel, speakTimeout: 30,
                    replyLanguage: .english)
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Optional offline English Phonon 31m voice, installed by tts_phonon_server/setup.sh.
+/// Optional offline English Phonon 31m voice, installed by servers/tts_phonon_server/setup.sh.
 @MainActor
 final class LocalPhononProvider: LocalServerVoice {
     static let shared = LocalPhononProvider()
@@ -8,7 +8,7 @@ final class LocalPhononProvider: LocalServerVoice {
     nonisolated static let descriptor = SpeechProviderDescriptor(
         id: "phonon",
         title: "Yerel — Phonon 31m (İngilizce)",
-        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: app/tts_phonon_server/setup.sh",
+        summary: "Bu Mac'te, internetsiz çalışır. Jarvis İngilizce cevap verir. Kurulum: app/servers/tts_phonon_server/setup.sh",
         models: [SpeechModelOption(id: voiceModel, title: "Phonon 31m Q8", detail: "İngilizce ses; yanıta göre hafif, otomatik tonlama.")],
         needsAPIKey: false,
         make: { _, _, _ in LocalPhononProvider.shared }
@@ -20,7 +20,7 @@ final class LocalPhononProvider: LocalServerVoice {
 
 
     private init() {
-        super.init(naming: .init(display: "Phonon 31m", short: "Phonon", setupFolder: "tts_phonon_server"),
+        super.init(naming: .init(display: "Phonon 31m", short: "Phonon", setupFolder: "servers/tts_phonon_server"),
                    port: Self.port, folder: "tts-phonon", voiceModel: Self.voiceModel, speakTimeout: 30,
                    replyLanguage: .english)
     }

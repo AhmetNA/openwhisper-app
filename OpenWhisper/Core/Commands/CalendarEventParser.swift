@@ -76,8 +76,11 @@ enum CalendarEventParser {
         var start = parsed.fireDate
         let allDay = clock == nil && !offset
         if allDay {
-            // The parser moves a time-less "bugün" to tomorrow once 09:00 has passed.
-            let day = matches(working, #"\bbug[üu]n\b"#) ? now : parsed.fireDate
+            // The parser moves a time-less "bugün" or "30 Eylül" to tomorrow once 09:00 has
+            // passed; read as of midnight, today stays today.
+            let midnight = calendar.startOfDay(for: now)
+            let day = TurkishDateParser.parse(namesDay ? working : "bugün " + working, now: midnight, calendar: calendar)?.fireDate
+                ?? parsed.fireDate
             start = calendar.startOfDay(for: day)
         } else if !offset {
             var parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: start)

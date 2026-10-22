@@ -5,8 +5,8 @@ import Foundation
 // check (read-only), so the numbers match what dictation would produce.
 //
 //   swiftc Tools/CleanupEval/main.swift Tools/SpotifyEval/Stubs.swift \
-//     OpenWhisper/Core/LLMCleanup.swift OpenWhisper/Core/GlossaryStore.swift \
-//     OpenWhisper/Core/MisheardWordDetector.swift OpenWhisper/Core/TranscriptSanitizer.swift \
+//     OpenWhisper/Core/Correction/LLMCleanup.swift OpenWhisper/Core/Correction/GlossaryStore.swift \
+//     OpenWhisper/Core/Correction/MisheardWordDetector.swift OpenWhisper/Core/Transcription/TranscriptSanitizer.swift \
 //     -o /tmp/cleanup_eval && /tmp/cleanup_eval [-v] model ...
 
 /// Raw transcript → expected words after cleanup (case and punctuation are scored separately).

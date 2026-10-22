@@ -1,7 +1,7 @@
 import Foundation
 
-/// Alternative speech model: Qwen3-ASR 1.7B on MLX, served by `asr_server/server.py` on
-/// 127.0.0.1. `asr_server/setup.sh` installs it once into
+/// Alternative speech model: Qwen3-ASR 1.7B on MLX, served by `servers/asr_server/server.py` on
+/// 127.0.0.1. `servers/asr_server/setup.sh` installs it once into
 /// `~/Library/Application Support/OpenWhisper/asr`; the app starts the server when a Qwen option
 /// is picked and the server quits when the app does. One server backs both Settings options.
 actor QwenASRServer {
@@ -20,7 +20,7 @@ actor QwenASRServer {
         var errorDescription: String? {
             switch self {
             case .notInstalled:
-                return "Qwen3-ASR kurulu değil — terminalde: app/asr_server/setup.sh"
+                return "Qwen3-ASR kurulu değil — terminalde: app/servers/asr_server/setup.sh"
             case .failed(let message):
                 return "Qwen3-ASR: \(message)"
             }

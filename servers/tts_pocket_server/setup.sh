@@ -2,7 +2,7 @@
 # One-time install of the default Pocket TTS Turkish voice (Settings › Sesli cevap). Run
 # again after editing requirements.txt. Creates its own Python 3.12 venv in
 # ~/Library/Application Support/OpenWhisper/tts-pocket and downloads the model (~440 MB) into the
-# Hugging Face cache. It clones Jarvis from tts_server/jarvis_ref.wav. build.sh keeps server.py
+# Hugging Face cache. It clones Jarvis from servers/tts_server/jarvis_ref.wav. build.sh keeps server.py
 # and the reference there up to date; it never touches the venv.
 # Remove everything with: rm -rf "$HOME/Library/Application Support/OpenWhisper/tts-pocket"
 set -e
