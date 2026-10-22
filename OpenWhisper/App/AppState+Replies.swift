@@ -34,6 +34,26 @@ extension AppState {
             Task { @MainActor in await self?.announceWhatsApp(announcement) }
         }
         if whatsAppAnnouncementsEnabled { whatsAppWatcher.start() }
+        // Messages that came while the screen was locked are said once it is unlocked.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.announceMissedWhatsApp() }
+        }
+    }
+
+    /// "Sen yokken Dilayım'dan mesaj var, okuyayım mı?" a moment after the unlock.
+    func announceMissedWhatsApp() async {
+        guard !missedWhatsAppChats.isEmpty else { return }
+        try? await Task.sleep(for: .seconds(2))
+        let missed = missedWhatsAppChats
+        missedWhatsAppChats = []
+        guard let chats = try? await Task.detached(priority: .utility, operation: { try WhatsAppStore.chats() }).value,
+              let announcement = WhatsAppWatcher.missedAnnouncement(missed, chats: chats) else {
+            owLog("[WhatsApp] messages missed while locked were read meanwhile")
+            return
+        }
+        await announceWhatsApp(announcement)
     }
 
     /// "Dilayım'dan mesaj var, okuyayım mı?", then a short window for "evet" / "hayır"
@@ -46,7 +66,9 @@ extension AppState {
             return
         }
         if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
-            owLog("[WhatsApp] announcement skipped: screen locked")
+            // Kept for "Sen yokken …" after the unlock; the newest chat goes first.
+            missedWhatsAppChats = announcement.chatIDs + missedWhatsAppChats.filter { !announcement.chatIDs.contains($0) }
+            owLog("[WhatsApp] screen locked: kept for after the unlock (\(missedWhatsAppChats.count) chat(s))")
             return
         }
         let deadline = Date().addingTimeInterval(30)

@@ -88,22 +88,38 @@ final class WhatsAppWatcher {
             if counts[arrival.chatID] == nil { order.append(arrival.chatID) }
             counts[arrival.chatID, default: 0] += 1
         }
-        let people = order.compactMap { id in chats.first { $0.id == id } }
+        let people = worthSaying(order, in: chats)
+        guard !people.isEmpty else { return nil }
+        return Announcement(chatIDs: people.prefix(chatsRead).map(\.id),
+                            text: text(for: people) { counts[$0.id] ?? 1 })
+    }
+
+    /// The chats that wrote while the screen was locked, said once it is unlocked: those still
+    /// unread now, with WhatsApp's own unread count.
+    static func missedAnnouncement(_ chatIDs: [Int64], chats: [WhatsAppStore.Chat]) -> Announcement? {
+        let people = worthSaying(chatIDs, in: chats)
+        guard !people.isEmpty else { return nil }
+        return Announcement(chatIDs: people.prefix(chatsRead).map(\.id),
+                            text: "Sen yokken " + text(for: people) { max($0.unread, 1) })
+    }
+
+    /// People only, not archived, still unread (a chat read on the phone is no news).
+    private static func worthSaying(_ ids: [Int64], in chats: [WhatsAppStore.Chat]) -> [WhatsAppStore.Chat] {
+        ids.compactMap { id in chats.first { $0.id == id } }
             .filter { !$0.isGroup && !$0.isArchived && $0.unread != 0 }
-        guard let first = people.first else { return nil }
+    }
+
+    private static func text(for people: [WhatsAppStore.Chat], count: (WhatsAppStore.Chat) -> Int) -> String {
         let names = people.map(WhatsAppController.spokenName)
-        let text: String
         switch people.count {
         case 1:
-            let count = counts[first.id] ?? 1
-            text = count == 1 ? "\(ablative(names[0])) mesaj var, okuyayım mı?"
-                : "\(ablative(names[0])) \(count) mesaj var, okuyayım mı?"
+            let n = count(people[0])
+            return n == 1 ? "\(ablative(names[0])) mesaj var, okuyayım mı?" : "\(ablative(names[0])) \(n) mesaj var, okuyayım mı?"
         case 2:
-            text = "\(names[0]) ve \(ablative(names[1])) mesaj var, okuyayım mı?"
+            return "\(names[0]) ve \(ablative(names[1])) mesaj var, okuyayım mı?"
         default:
-            text = "\(people.count) kişiden yeni mesaj var, okuyayım mı?"
+            return "\(people.count) kişiden yeni mesaj var, okuyayım mı?"
         }
-        return Announcement(chatIDs: people.prefix(chatsRead).map(\.id), text: text)
     }
 
     /// "Dilayım" → "Dilayım'dan", "Mehmet" → "Mehmet'ten", "Ayşe" → "Ayşe'den".

@@ -145,6 +145,8 @@ final class AppState {
     @ObservationIgnored var jarvisReply = JarvisReply()
     /// "Dilayım'a yaz: …": the draft waiting for "evet" / "hayır".
     @ObservationIgnored let whatsAppWatcher = WhatsAppWatcher()
+    /// Chats that wrote while the screen was locked (`announceMissedWhatsApp`).
+    @ObservationIgnored var missedWhatsAppChats: [Int64] = []
     @ObservationIgnored lazy var whatsAppSender = WhatsAppSender(pressReturn: { pid in TextInjector().pressReturn(inPID: pid) })
     /// "Test modunu başlat": the TODO.md item being tried now.
     @ObservationIgnored let voiceTest = VoiceTestSession()

@@ -34,6 +34,15 @@ final class WhatsAppWatcherTests: XCTestCase {
         XCTAssertNil(WhatsAppWatcher.announcement(for: [arrival(10, chat: 3), arrival(11, chat: 4), arrival(12, chat: 5)], chats: chats))
     }
 
+    func testMissedWhileLocked() {
+        let chats = [chat(1, "Dilayım", unread: 3), chat(2, "Ali", unread: 0), chat(3, "Aile", group: true), chat(6, "Mehmet")]
+        XCTAssertEqual(WhatsAppWatcher.missedAnnouncement([1, 2], chats: chats),
+                       .init(chatIDs: [1], text: "Sen yokken Dilayım'dan 3 mesaj var, okuyayım mı?"))
+        XCTAssertEqual(WhatsAppWatcher.missedAnnouncement([6, 1], chats: chats)?.text,
+                       "Sen yokken Mehmet ve Dilayım'dan mesaj var, okuyayım mı?")
+        XCTAssertNil(WhatsAppWatcher.missedAnnouncement([2, 3], chats: chats))
+    }
+
     func testReadAnswers() {
         XCTAssertEqual(WhatsAppSender.readDecision("Evet, oku."), .approve)
         XCTAssertEqual(WhatsAppSender.readDecision("Oku"), .approve)
