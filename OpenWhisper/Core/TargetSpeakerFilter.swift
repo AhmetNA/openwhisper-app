@@ -129,6 +129,16 @@ struct TargetSpeakerTuning: Sendable, Equatable {
         self.minCrossRecordingSimilarity = minCrossRecordingSimilarity
     }
 
+    /// The same tuning without the enrollment quality floors, for a profile the user accepts as is.
+    var withoutEnrollmentFloors: TargetSpeakerTuning {
+        TargetSpeakerTuning(
+            cosineThreshold: cosineThreshold, vadThreshold: vadThreshold,
+            uncertainSimilarityFloor: uncertainSimilarityFloor,
+            uncertainContinuityThreshold: uncertainContinuityThreshold,
+            shortUtteranceMaxSeconds: shortUtteranceMaxSeconds,
+            minRecordingCoherence: 0, minCrossRecordingSimilarity: 0)
+    }
+
     static let defaultValue = TargetSpeakerTuning(
         cosineThreshold: TargetSpeakerFilterConfiguration.cosineThreshold,
         vadThreshold: TargetSpeakerFilterConfiguration.vadThreshold

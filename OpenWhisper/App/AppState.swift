@@ -400,6 +400,15 @@ final class AppState {
     var targetSpeakerDiarizationReady = false
     var targetSpeakerEnrollmentGeneration: UInt64 = 0
     var targetSpeakerEnrollmentRecordings: [[Float]] = []
+    /// Both recordings of an enrollment the quality check turned down, and the score it measured,
+    /// so Settings can offer to accept the profile as is.
+    var targetSpeakerRejectedEnrollment: TargetSpeakerRejectedEnrollment?
+    /// Per mic (`TargetSpeakerMic.rawValue`), the score of a profile accepted below the quality
+    /// check; Settings warns that it may match poorly.
+    var targetSpeakerLowScores: [String: Double] =
+        UserDefaults.standard.dictionary(forKey: "targetSpeakerLowScores") as? [String: Double] ?? [:] {
+        didSet { UserDefaults.standard.set(targetSpeakerLowScores, forKey: "targetSpeakerLowScores") }
+    }
     var flowBarMessageTask: Task<Void, Never>?
     var targetSpeakerAppendOfferTask: Task<Void, Never>?
     /// The exact coherent candidate, transcript, and target captured for the 8-second explicit

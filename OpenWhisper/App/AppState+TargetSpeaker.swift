@@ -570,6 +570,7 @@ extension AppState {
         targetSpeakerPreparationMessage = ""
         targetSpeakerEnrollmentStep = 0
         targetSpeakerEnrollmentRecordings = []
+        targetSpeakerRejectedEnrollment = nil
         targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[0]
         targetSpeakerEnrollmentStatus = "İki farklı pozisyonda kayıt gerekli; ideal süre her kayıt için 10–15 saniye, maksimum 30 saniye."
     }
@@ -586,6 +587,7 @@ extension AppState {
 
         clearFlowBarMessage()
 
+        targetSpeakerRejectedEnrollment = nil
         targetSpeakerEnrollmentIsRecording = true
         recordingState = .recording
         recordingDuration = 0
@@ -694,46 +696,104 @@ extension AppState {
                 self.targetSpeakerEnrollmentStep = TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount
                 self.targetSpeakerEnrollmentStatus = "İki kayıt doğrulandı; profil çıkarılıyor…"
                 owLog("[TargetSpeaker] Both enrollment samples validated. Creating profile...")
-                let mic = self.targetSpeakerEnrollmentMic
-                do {
-                    let profile = try await self.targetSpeakerFilter.createProfile(
-                        from: self.targetSpeakerEnrollmentRecordings,
-                        store: self.targetSpeakerProfileStore(for: mic),
-                        progressHandler: progressHandler,
-                        audioProcessingMode: self.audioProcessingMode
-                    )
-                    guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
-                    self.adoptTargetSpeakerProfile(profile, for: mic)
-                    self.lastConfirmedAppendReceipt = nil
-                    // A buds profile alone filters nothing on the Mac mic: the switch stays the user's.
-                    if mic == .mac {
-                        self.targetSpeakerEnabled = true
-                        self.startTargetSpeakerDiarizationPreparation()
-                    }
-                    self.targetSpeakerEnrollmentStatus = "Profil hazır; farklı pozisyonlardaki sesin de işlenecek."
-                    self.targetSpeakerEnrollmentActive = false
-                    self.targetSpeakerPreparationProgress = nil
-                    owLog("[TargetSpeaker] Profile created and saved successfully (\(mic))! Total embeddings=\(profile.embeddings.count)")
-                } catch {
-                    guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
-                    let failedIndex: Int
-                    if case TargetSpeakerEnrollmentError.lowRecordingCoherence(let index, _, _) = error {
-                        failedIndex = index
-                    } else {
-                        failedIndex = sampleIndex
-                    }
-                    self.targetSpeakerEnrollmentStep = failedIndex
-                    self.targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[failedIndex]
-                    self.targetSpeakerEnrollmentRecordings.removeSubrange(failedIndex...)
-                    self.targetSpeakerEnrollmentStatus = error.localizedDescription
-                    self.lastError = error.localizedDescription
-                    owLog("[TargetSpeaker] Profile creation failed: \(error.localizedDescription) (failedIndex=\(failedIndex))")
-                }
+                await self.createTargetSpeakerEnrollmentProfile(
+                    generation: generation, progressHandler: progressHandler, fallbackFailedIndex: sampleIndex)
             } catch {
                 guard self.isCurrentTargetSpeakerEnrollment(generation) else { return }
                 self.targetSpeakerEnrollmentStatus = error.localizedDescription
                 owLog("[TargetSpeaker] Enrollment sample validation failed with error: \(error)")
             }
+        }
+    }
+
+    /// Builds the profile from both enrollment recordings. A quality-check rejection steps back to
+    /// the failed recording but keeps both, so the user can re-record it or accept the profile as
+    /// is (`acceptRejectedTargetSpeakerEnrollment`); `acceptedScore` marks such a profile.
+    func createTargetSpeakerEnrollmentProfile(
+        generation: UInt64, progressHandler: @escaping TargetSpeakerProgressHandler,
+        fallbackFailedIndex: Int, acceptedScore: Float? = nil
+    ) async {
+        let mic = targetSpeakerEnrollmentMic
+        let tuning = TargetSpeakerTuning.resolved()
+        do {
+            let profile = try await targetSpeakerFilter.createProfile(
+                from: targetSpeakerEnrollmentRecordings,
+                store: targetSpeakerProfileStore(for: mic),
+                progressHandler: progressHandler,
+                tuning: acceptedScore == nil ? tuning : tuning.withoutEnrollmentFloors,
+                audioProcessingMode: audioProcessingMode
+            )
+            guard isCurrentTargetSpeakerEnrollment(generation) else { return }
+            adoptTargetSpeakerProfile(profile, for: mic)
+            targetSpeakerLowScores[mic.rawValue] = acceptedScore.map(Double.init)
+            targetSpeakerRejectedEnrollment = nil
+            lastConfirmedAppendReceipt = nil
+            // A buds profile alone filters nothing on the Mac mic: the switch stays the user's.
+            if mic == .mac {
+                targetSpeakerEnabled = true
+                startTargetSpeakerDiarizationPreparation()
+            }
+            targetSpeakerEnrollmentStatus = "Profil hazır; farklı pozisyonlardaki sesin de işlenecek."
+            targetSpeakerEnrollmentActive = false
+            targetSpeakerPreparationProgress = nil
+            owLog("[TargetSpeaker] Profile created and saved successfully (\(mic))! Total embeddings=\(profile.embeddings.count)"
+                  + (acceptedScore.map { " — accepted below the quality check at \(String(format: "%.2f", $0))" } ?? ""))
+        } catch {
+            guard isCurrentTargetSpeakerEnrollment(generation) else { return }
+            var failedIndex = fallbackFailedIndex
+            var score: Float?
+            switch error {
+            case TargetSpeakerEnrollmentError.lowRecordingCoherence(let index, let measured, _):
+                failedIndex = index
+                score = measured
+            case TargetSpeakerEnrollmentError.crossRecordingMismatch(let measured, _):
+                score = measured
+            default:
+                break
+            }
+            targetSpeakerRejectedEnrollment = score.map {
+                TargetSpeakerRejectedEnrollment(recordings: targetSpeakerEnrollmentRecordings, score: $0)
+            }
+            targetSpeakerEnrollmentStep = failedIndex
+            targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentConditionPrompts[failedIndex]
+            targetSpeakerEnrollmentRecordings.removeSubrange(failedIndex...)
+            targetSpeakerEnrollmentStatus = error.localizedDescription
+            lastError = error.localizedDescription
+            owLog("[TargetSpeaker] Profile creation failed: \(error.localizedDescription) (failedIndex=\(failedIndex))")
+        }
+    }
+
+    /// Saves the profile the quality check turned down, as the user asked.
+    func acceptRejectedTargetSpeakerEnrollment() {
+        guard let rejected = targetSpeakerRejectedEnrollment, targetSpeakerEnrollmentActive,
+              !targetSpeakerEnrollmentIsProcessing, !targetSpeakerEnrollmentIsRecording else { return }
+        owLog("[TargetSpeaker] User accepted the enrollment as is (score \(String(format: "%.2f", rejected.score)), mic=\(targetSpeakerEnrollmentMic))")
+        targetSpeakerEnrollmentRecordings = rejected.recordings
+        targetSpeakerEnrollmentStep = TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount
+        targetSpeakerEnrollmentIsProcessing = true
+        targetSpeakerEnrollmentStatus = "Profil olduğu gibi kaydediliyor…"
+        lastError = nil
+        let generation = targetSpeakerEnrollmentGeneration
+        let progressHandler: TargetSpeakerProgressHandler = { [weak self] progress in
+            Task { @MainActor in
+                guard let self, self.isCurrentTargetSpeakerEnrollment(generation) else { return }
+                self.targetSpeakerPreparationProgress = progress.fractionCompleted
+                self.targetSpeakerPreparationMessage = progress.message
+            }
+        }
+        targetSpeakerEnrollmentTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.targetSpeakerEnrollmentGeneration == generation {
+                    self.targetSpeakerEnrollmentIsProcessing = false
+                    self.targetSpeakerPreparationProgress = nil
+                    self.targetSpeakerPreparationMessage = ""
+                    self.targetSpeakerEnrollmentTask = nil
+                }
+            }
+            await self.createTargetSpeakerEnrollmentProfile(
+                generation: generation, progressHandler: progressHandler,
+                fallbackFailedIndex: rejected.recordings.count - 1, acceptedScore: rejected.score)
         }
     }
 
@@ -745,6 +805,7 @@ extension AppState {
         targetSpeakerEnrollmentIsProcessing = false
         targetSpeakerEnrollmentStep = 0
         targetSpeakerEnrollmentRecordings = []
+        targetSpeakerRejectedEnrollment = nil
         targetSpeakerEnrollmentPrompt = Self.targetSpeakerEnrollmentPromptText
         targetSpeakerPreparationProgress = nil
         targetSpeakerPreparationMessage = ""
@@ -759,6 +820,7 @@ extension AppState {
         do {
             try targetSpeakerProfileStore(for: mic).delete()
             setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Henüz kayıt yok")
+            targetSpeakerLowScores[mic.rawValue] = nil
             if lastConfirmedAppendMic == mic { lastConfirmedAppendReceipt = nil }
             owLog("[TargetSpeaker] \(mic) profile deleted")
         } catch {
@@ -776,6 +838,7 @@ extension AppState {
             targetSpeakerProfile = nil
             refreshTargetSpeakerProfileCoherence()
             hasStoredTargetSpeakerProfile = false
+            targetSpeakerLowScores[TargetSpeakerMic.mac.rawValue] = nil
             if lastConfirmedAppendMic == .mac { lastConfirmedAppendReceipt = nil }
             targetSpeakerEnabled = false
             targetSpeakerProfileStatus = "Henüz kayıt yok"
@@ -821,4 +884,10 @@ extension AppState {
         }
         beginTargetSpeakerEnrollment(for: mic)
     }
+}
+
+/// An enrollment the quality check turned down: both recordings and the score it measured.
+struct TargetSpeakerRejectedEnrollment {
+    let recordings: [[Float]]
+    let score: Float
 }

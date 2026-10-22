@@ -529,6 +529,21 @@ final class TargetSpeakerFilterTests: XCTestCase {
         }
     }
 
+    /// "Olduğu gibi kabul et": the same incoherent recordings make a profile once the user accepts them.
+    func testAcceptingAsIsSkipsTheEnrollmentFloors() async throws {
+        let model = MockTargetSpeakerModel(
+            embeddings: Array(repeating: unitVector(), count: 7) + [vector(withCosine: 0)],
+            frameCount: 48
+        )
+        let filter = TargetSpeakerFilter(model: model)
+        let recording = Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+
+        let profile = try await filter.createProfile(
+            from: [recording, recording], store: InMemoryTargetSpeakerProfileStore(),
+            tuning: TargetSpeakerTuning.defaultValue.withoutEnrollmentFloors)
+        XCTAssertFalse(profile.embeddings.isEmpty)
+    }
+
     /// Case (b): the two enrollment recordings are deliberately captured in different postures, so
     /// their embeddings legitimately differ -- 0.5 similarity here is far below the 0.62 cosine
     /// gate threshold but must still clear the conservative 0.40 cross-recording default. This is
