@@ -34,7 +34,7 @@ final class SpotifyManager: @unchecked Sendable {
 
     // MARK: - Normalization
 
-    private static func normalize(_ text: String) -> String {
+    static func normalize(_ text: String) -> String {
         var lower = text.lowercased(with: Locale(identifier: "tr_TR"))
         lower = lower.trimmingCharacters(in: .whitespacesAndNewlines)
         while let last = lower.unicodeScalars.last, CharacterSet(charactersIn: ".!?,;:").contains(last) {
@@ -63,6 +63,63 @@ final class SpotifyManager: @unchecked Sendable {
         case likeCurrentTrack
         /// The user's own Liked Songs, shuffled, as a queue.
         case playLikedSongs
+        // Rule-only (`SpotifyExtendedCommands.swift`).
+        case setShuffle(Bool)
+        case setRepeat(SpotifyRepeatMode)
+        case seek(SpotifySeek)
+        /// Adds a song after the current one without interrupting it.
+        case queue(SpotifySearchRequest)
+        case unlikeCurrentTrack
+        /// Spotify's own volume slider, only when asked for by name.
+        case setSpotifyVolume(Int)
+        case playOwnPlaylist(String)
+        case addCurrentTrackToPlaylist(String)
+        case playSavedAlbum
+        case playFollowedArtist
+        case playRecentTrack
+        case transferPlayback(SpotifyDeviceKind)
+        case question(SpotifyQuestion)
+        /// Pauses Spotify after this many seconds.
+        case sleepTimer(Int)
+        case cancelSleepTimer
+
+        /// Decided by the rules alone: the models don't know these labels.
+        var isRuleOnly: Bool {
+            switch self {
+            case .pause, .play, .next, .previous, .setVolume, .adjustVolume, .currentTrack, .search, .likeCurrentTrack:
+                return false
+            default:
+                return true
+            }
+        }
+
+        /// What Jarvis says is the command's own result ("3 dakika 20 saniye kaldı"), not
+        /// a plain ack; and when it fails he says why instead of typing the words out.
+        var speaksResult: Bool {
+            switch self {
+            case .currentTrack, .question, .sleepTimer, .cancelSleepTimer, .queue, .addCurrentTrackToPlaylist,
+                 .unlikeCurrentTrack, .transferPlayback:
+                return true
+            default:
+                return false
+            }
+        }
+
+        /// Replaces what plays, so a correction can put the old song back.
+        var replacesPlayback: Bool {
+            switch self {
+            case .pause, .play, .next, .previous, .search, .playLikedSongs, .seek, .playOwnPlaylist,
+                 .playSavedAlbum, .playFollowedArtist, .playRecentTrack:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// No quoting or negation word ("… diye", "istemiyorum").
+    static func mentionVetoAllows(_ normalized: String) -> Bool {
+        mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
     }
 
     private static let musicContextWords: Set<String> = [
@@ -207,6 +264,10 @@ final class SpotifyManager: @unchecked Sendable {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return nil }
 
+        if mentionVetoAllows(normalized),
+           let extended = extendedIntent(normalized) ?? queueIntentFromRules(normalized) {
+            return extended
+        }
         let words = canonicalizeVerbs(intentWords(normalized))
         // Counted on whitespace, not on `words`: the apostrophe split turns "Spotify'da" and
         // "Manga'nın" into two tokens each, which pushed ordinary 7-word commands over.
@@ -465,8 +526,9 @@ final class SpotifyManager: @unchecked Sendable {
         spotifyPlaying: Bool = false,
         commandMode: Bool = false
     ) -> ExplicitSpotifyIntent? {
-        // The LLM would read it as a playlist search and play a stranger's list.
-        if rules == .playLikedSongs { return rules }
+        // The LLM would read Liked Songs as a playlist search and play a stranger's list,
+        // and it doesn't know the rule-only intents at all.
+        if let rules, rules == .playLikedSongs || rules.isRuleOnly { return rules }
         guard let parse else { return rules }
 
         guard let rules else {
@@ -780,7 +842,15 @@ final class SpotifyManager: @unchecked Sendable {
     static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false, commandMode: Bool = false) async -> Bool {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let text = commandMode ? commandModeText(heard) : heard
-        let rules = explicitIntent(in: text)
+        var rules = explicitIntent(in: text)
+        if rules == nil, let candidate = runtimeCandidate(text) {
+            rules = await confirm(candidate)
+        }
+        if let rules, rules.isRuleOnly || rules == .playLikedSongs {
+            owLog("[Spotify] Rules alone: '\(text)' → \(rules)")
+            decisionCache.store(rules, for: transcript)
+            return true
+        }
         // With Jarvis's chat on the cloud, the cloud model parses instead of Ollama, so Gemma
         // stays unloaded; if it fails, the rules and SetFit decide alone.
         let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
@@ -828,6 +898,23 @@ final class SpotifyManager: @unchecked Sendable {
         return decision != nil
     }
 
+    /// Whether `candidate` is a command right now (see `RuntimeCandidate`).
+    private static func confirm(_ candidate: RuntimeCandidate) async -> ExplicitSpotifyIntent? {
+        let controller = SpotifyController.shared
+        switch candidate {
+        case .queue(let request):
+            guard !request.searchQueries.isEmpty, await controller.isPlayingLocally() else { return nil }
+            return .queue(request)
+        case .ownPlaylist(let name):
+            guard await controller.ownPlaylist(named: name, writable: false) != nil else { return nil }
+            return .playOwnPlaylist(name)
+        case .addToPlaylist(let name):
+            guard await controller.isPlayingLocally(),
+                  await controller.ownPlaylist(named: name, writable: true) != nil else { return nil }
+            return .addCurrentTrackToPlaylist(name)
+        }
+    }
+
     /// SetFit's intent as an `OllamaParse`, so `decide` applies the same evidence rules to it as
     /// to Ollama's. Nil (→ ask Ollama) when SetFit is off, unsure, or says "search" while
     /// Ollama is up and the rules can't split it: SetFit only classifies, and a bare
@@ -864,12 +951,25 @@ final class SpotifyManager: @unchecked Sendable {
     /// something else); volume, track info and like leave the paused media as it was.
     /// Must be called before `handleCommand`, which consumes the cached decision.
     static func resumesPausedMedia(afterCommand text: String) -> Bool {
-        switch decisionCache.peek(for: text) ?? explicitIntent(in: text) {
-        case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack, nil:
-            return true
-        case .pause, .play, .next, .previous, .search, .playLikedSongs:
-            return false
+        guard let intent = decisionCache.peek(for: text) ?? explicitIntent(in: text) else { return true }
+        switch intent {
+        // Resuming here would pull the music back from the phone.
+        case .transferPlayback: return false
+        default: return !intent.replacesPlayback
         }
+    }
+
+    /// Whether Jarvis says the command's own result (see `ExplicitSpotifyIntent.speaksResult`).
+    /// Like `resumesPausedMedia`, call it before `handleCommand`.
+    static func speaksResult(afterCommand text: String) -> Bool {
+        (decisionCache.peek(for: text) ?? explicitIntent(in: text))?.speaksResult ?? false
+    }
+
+    /// Whether a failure is said aloud rather than the words typed out: these are commands
+    /// by their wording alone, so typing them would only hide that nothing happened.
+    static func speaksFailure(afterCommand text: String) -> Bool {
+        guard let intent = decisionCache.peek(for: text) ?? explicitIntent(in: text) else { return false }
+        return intent.speaksResult || intent.isRuleOnly || intent == .playLikedSongs
     }
 
     /// Whether `text` starts the user's Liked Songs, so Jarvis says so instead of a plain ack.
@@ -918,13 +1018,8 @@ final class SpotifyManager: @unchecked Sendable {
 
         let controller = SpotifyController.shared
         var playerBefore: SpotifyController.PlayerSnapshot?
-        if recordUndo {
-            switch intent {
-            case .pause, .play, .next, .previous, .search, .playLikedSongs:
-                playerBefore = controller.playerSnapshot()
-            case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack:
-                break
-            }
+        if recordUndo, intent.replacesPlayback {
+            playerBefore = controller.playerSnapshot()
         }
         let result: SpotifyActionResult
         switch intent {
@@ -949,7 +1044,38 @@ final class SpotifyManager: @unchecked Sendable {
             result = await controller.likeCurrentTrack()
         case .playLikedSongs:
             result = await controller.playLikedSongs()
+        case .setShuffle(let on):
+            result = await controller.setShuffle(on)
+        case .setRepeat(let mode):
+            result = await controller.setRepeat(mode)
+        case .seek(let seek):
+            result = await controller.seek(seek)
+        case .queue(let request):
+            result = await controller.queue(request)
+        case .unlikeCurrentTrack:
+            result = await controller.unlikeCurrentTrack()
+        case .setSpotifyVolume(let volume):
+            result = await controller.setVolume(volume)
+        case .playOwnPlaylist(let name):
+            result = await controller.playOwnPlaylist(named: name)
+        case .addCurrentTrackToPlaylist(let name):
+            result = await controller.addCurrentTrack(toPlaylistNamed: name)
+        case .playSavedAlbum:
+            result = await controller.playSavedAlbum()
+        case .playFollowedArtist:
+            result = await controller.playFollowedArtist()
+        case .playRecentTrack:
+            result = await controller.playRecentTrack()
+        case .transferPlayback(let device):
+            result = await controller.transferPlayback(to: device)
+        case .question(let question):
+            result = await controller.answer(question)
+        case .sleepTimer(let seconds):
+            result = startSleepTimer(seconds)
+        case .cancelSleepTimer:
+            result = cancelSleepTimer()
         }
+        lastResult.withLock { $0 = (text, result) }
 
         switch intent {
         case .setVolume, .adjustVolume:
@@ -966,12 +1092,13 @@ final class SpotifyManager: @unchecked Sendable {
             switch intent {
             case .setVolume, .adjustVolume:
                 undo = SystemVolume.lastChange.map { .volume(from: $0.from, to: $0.to) }
-            case .pause, .play, .next, .previous, .search, .playLikedSongs:
+            case _ where intent.replacesPlayback:
                 undo = playerBefore.map { .player($0) }
-            case .currentTrack:
+            case .currentTrack, .question:
                 undo = .nothing
-            case .likeCurrentTrack:
-                // Unliking could remove a song the user had liked long before.
+            default:
+                // Unliking could remove a song the user had liked long before; the other
+                // changes (shuffle, a playlist, another device) have no snapshot to restore.
                 undo = nil
             }
             lastCommand.withLock { $0 = result.succeeded ? LastCommand(text: text, intent: intent, undo: undo, date: Date()) : nil }
@@ -981,6 +1108,46 @@ final class SpotifyManager: @unchecked Sendable {
         // transcript through the normal dictation fallback instead of swallowing it as
         // though Spotify acted.
         return result.succeeded
+    }
+
+    /// The message of the last `handleCommand(text:)`, for Jarvis to say.
+    private let lastResult = OSAllocatedUnfairLock<(text: String, result: SpotifyActionResult)?>(initialState: nil)
+
+    func takeResultMessage(for text: String) -> String? {
+        lastResult.withLock { state in
+            defer { state = nil }
+            return state?.text == text ? state?.result.message : nil
+        }
+    }
+
+    // MARK: - Sleep timer
+
+    private let sleepTimer = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+
+    private func startSleepTimer(_ seconds: Int) -> SpotifyActionResult {
+        let task = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            let result = await SpotifyController.shared.pause()
+            owLog("[SpotifyManager] Sleep timer fired: \(result.message)")
+            self.sleepTimer.withLock { $0 = nil }
+        }
+        sleepTimer.withLock { old in
+            old?.cancel()
+            old = task
+        }
+        owLog("[SpotifyManager] Sleep timer: pause in \(seconds) s")
+        return .success("Müzik \(SpotifyController.spokenDuration(seconds)) sonra kapanacak")
+    }
+
+    private func cancelSleepTimer() -> SpotifyActionResult {
+        let task = sleepTimer.withLock { old -> Task<Void, Never>? in
+            defer { old = nil }
+            return old
+        }
+        guard let task else { return .failure("kurulu bir müzik zamanlayıcısı yok") }
+        task.cancel()
+        return .success("Müzik zamanlayıcısı iptal edildi")
     }
 
     // MARK: - Re-run after correction

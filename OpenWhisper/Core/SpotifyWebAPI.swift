@@ -221,6 +221,19 @@ actor SpotifyWebAPI {
         let isPlaying: Bool
         /// The album, playlist or collection playing, if any.
         var contextURI: String? = nil
+        var progressMs: Int? = nil
+        var durationMs: Int? = nil
+        var deviceName: String? = nil
+        var shuffle: Bool? = nil
+    }
+
+    /// One of the user's playlists (`GET /me/playlists`).
+    struct Playlist {
+        let id: String
+        let uri: String
+        let name: String
+        let ownerID: String
+        let collaborative: Bool
     }
 
     /// One entry from `/v1/me/player/devices`.
@@ -259,8 +272,11 @@ actor SpotifyWebAPI {
     // connected before any of these scopes were added only hold a refresh token scoped to
     // the earlier set and will get a 403 from the corresponding endpoint until the user
     // reconnects via Ayarlar > Spotify (new consent grants all current scopes at once).
+    // The playlist, follow and recently-played scopes (22 Oct 2026) back "Spor listemi aç",
+    // "bunu Spor listeme ekle", "takip ettiğim sanatçılardan birini aç" and "son dinlediğim
+    // şarkıyı aç".
     //
-    private static let userScope = "user-library-read user-library-modify user-modify-playback-state user-read-playback-state"
+    private static let userScope = "user-library-read user-library-modify user-modify-playback-state user-read-playback-state playlist-read-private playlist-modify-private playlist-modify-public user-follow-read user-read-recently-played"
     /// 5 minutes: a user who doesn't already have a Spotify session in their default
     /// browser needs time to log in (plus 2FA) before consenting. The original 2-minute
     /// window was routinely too short for that and indistinguishable from every other
@@ -447,8 +463,159 @@ actor SpotifyWebAPI {
             track: TrackResult(uri: uri, name: name, artist: artists.joined(separator: ", ")),
             album: album,
             isPlaying: (json["is_playing"] as? Bool) ?? false,
-            contextURI: (json["context"] as? [String: Any])?["uri"] as? String
+            contextURI: (json["context"] as? [String: Any])?["uri"] as? String,
+            progressMs: json["progress_ms"] as? Int,
+            durationMs: item["duration_ms"] as? Int,
+            deviceName: (json["device"] as? [String: Any])?["name"] as? String,
+            shuffle: json["shuffle_state"] as? Bool
         )
+    }
+
+    /// `PUT /v1/me/player/repeat`.
+    func setRepeat(_ mode: SpotifyRepeatMode) async throws {
+        _ = try await sendPlayerRequest(
+            method: "PUT", path: "repeat",
+            extraQueryItems: [URLQueryItem(name: "state", value: mode.rawValue)]
+        )
+    }
+
+    /// `PUT /v1/me/player/seek`.
+    func seek(toMs position: Int) async throws {
+        _ = try await sendPlayerRequest(
+            method: "PUT", path: "seek",
+            extraQueryItems: [URLQueryItem(name: "position_ms", value: String(max(0, position)))]
+        )
+    }
+
+    /// `PUT /v1/me/player` with `device_ids`: moves playback there and keeps it playing.
+    func transferPlayback(toDevice deviceID: String) async throws {
+        _ = try await sendPlayerRequest(method: "PUT", path: "", jsonBody: ["device_ids": [deviceID], "play": true])
+    }
+
+    /// What plays next (`GET /v1/me/player/queue`), with names.
+    func fetchQueue() async throws -> [TrackResult] {
+        let data = try await sendPlayerRequest(method: "GET", path: "queue")
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let queue = json["queue"] as? [[String: Any]] else { return [] }
+        return queue.compactMap(Self.track(from:))
+    }
+
+    /// The user's last played tracks, newest first (`GET /me/player/recently-played`,
+    /// needs `user-read-recently-played`).
+    func fetchRecentTracks(limit: Int = 10) async throws -> [TrackResult] {
+        let json = try await userGET("me/player/recently-played", query: ["limit": String(limit)])
+        return ((json["items"] as? [[String: Any]]) ?? []).compactMap { ($0["track"] as? [String: Any]).flatMap(Self.track(from:)) }
+    }
+
+    /// Up to 200 of the user's own and followed playlists (`GET /me/playlists`, needs
+    /// `playlist-read-private` for private ones).
+    func fetchPlaylists() async throws -> [Playlist] {
+        var playlists: [Playlist] = []
+        var offset = 0
+        while playlists.count < 200 {
+            let json = try await userGET("me/playlists", query: ["limit": "50", "offset": String(offset)])
+            let items = (json["items"] as? [[String: Any]]) ?? []
+            playlists += items.compactMap { item in
+                guard let id = item["id"] as? String, let uri = item["uri"] as? String,
+                      let name = item["name"] as? String else { return nil }
+                let owner = (item["owner"] as? [String: Any])?["id"] as? String ?? ""
+                return Playlist(id: id, uri: uri, name: name, ownerID: owner,
+                                collaborative: (item["collaborative"] as? Bool) ?? false)
+            }
+            guard items.count == 50 else { break }
+            offset += 50
+        }
+        return playlists
+    }
+
+    /// `POST /playlists/{id}/items` (was `/tracks` before February 2026). Needs
+    /// `playlist-modify-private` / `playlist-modify-public`.
+    func addToPlaylist(id: String, uri: String) async throws {
+        _ = try await userSend("POST", path: "playlists/\(id)/items", jsonBody: ["uris": [uri]])
+    }
+
+    /// Removes an item (here: the current track) from the user's library, `DELETE /me/library`.
+    func removeFromLibrary(uri: String) async throws {
+        _ = try await userSend("DELETE", path: "me/library", query: ["uris": uri])
+    }
+
+    /// The user's saved albums (`GET /me/albums`, `user-library-read`).
+    func fetchSavedAlbums(limit: Int = 50) async throws -> [TrackResult] {
+        let json = try await userGET("me/albums", query: ["limit": String(limit)])
+        return ((json["items"] as? [[String: Any]]) ?? []).compactMap { entry in
+            guard let album = entry["album"] as? [String: Any], let uri = album["uri"] as? String,
+                  let name = album["name"] as? String else { return nil }
+            let artists = (album["artists"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+            return TrackResult(uri: uri, name: name, artist: artists.joined(separator: ", "))
+        }
+    }
+
+    /// Artists the user follows (`GET /me/following?type=artist`, `user-follow-read`).
+    func fetchFollowedArtists(limit: Int = 50) async throws -> [TrackResult] {
+        let json = try await userGET("me/following", query: ["type": "artist", "limit": String(limit)])
+        let items = ((json["artists"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { artist in
+            guard let uri = artist["uri"] as? String, let name = artist["name"] as? String else { return nil }
+            return TrackResult(uri: uri, name: name, artist: "")
+        }
+    }
+
+    private static func track(from item: [String: Any]) -> TrackResult? {
+        guard let uri = item["uri"] as? String, let name = item["name"] as? String else { return nil }
+        let artists = (item["artists"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+        let album = (item["album"] as? [String: Any])?["uri"] as? String
+        return TrackResult(uri: uri, name: name, artist: artists.joined(separator: ", "), albumURI: album)
+    }
+
+    private func userGET(_ path: String, query: [String: String] = [:]) async throws -> [String: Any] {
+        let data = try await userSend("GET", path: path, query: query)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SpotifyAPIError.unexpected("\(path) not JSON")
+        }
+        return json
+    }
+
+    /// A user-token call outside `/me/player`. Refusals are logged with their body.
+    private func userSend(_ method: String, path: String, query: [String: String] = [:], jsonBody: [String: Any]? = nil) async throws -> Data {
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+        var components = URLComponents(string: "https://api.spotify.com/v1/\(path)")!
+        if !query.isEmpty {
+            components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        guard let url = components.url else { throw SpotifyAPIError.unexpected("invalid \(path) URL") }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = requestTimeout
+        if let jsonBody {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: jsonBody)
+        } else if method != "GET" {
+            request.httpBody = Data()
+        }
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyAPIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw SpotifyAPIError.unexpected("no HTTP response") }
+        switch http.statusCode {
+        case 200...299:
+            return data
+        default:
+            owLog("[Spotify] \(method) \(path) HTTP \(http.statusCode), body: \(String(data: data, encoding: .utf8) ?? "<empty>")")
+            switch http.statusCode {
+            case 401: throw SpotifyAPIError.invalidCredentials
+            case 403: throw SpotifyAPIError.scopeInsufficient
+            case 404: throw SpotifyAPIError.noResults
+            case 429: throw SpotifyAPIError.rateLimited
+            default: throw SpotifyAPIError.unexpected("\(path) HTTP \(http.statusCode)")
+            }
+        }
     }
 
     /// `PUT /v1/me/player/shuffle`.

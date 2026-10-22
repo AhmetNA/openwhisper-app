@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AppKit
 
 struct SpotifyActionResult: Sendable, Equatable {
@@ -133,10 +134,13 @@ final class SpotifyController: @unchecked Sendable {
                 let deviceID = try await waitForDevice(timeout: wasRunning ? 2 : 8)
                 let shuffle = Self.likedSongsShuffle
                 let before = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying()
-                do {
-                    try await SpotifyWebAPI.shared.setShuffle(shuffle, deviceID: deviceID)
-                } catch {
-                    owLog("[SpotifyController] Liked songs shuffle \(shuffle) not set: \(error)")
+                // Setting it again could drop the user's Smart Shuffle.
+                if before?.shuffle != shuffle {
+                    do {
+                        try await SpotifyWebAPI.shared.setShuffle(shuffle, deviceID: deviceID)
+                    } catch {
+                        owLog("[SpotifyController] Liked songs shuffle \(shuffle) not set: \(error)")
+                    }
                 }
                 // A shuffled context still opens on its first track; start somewhere random.
                 let start = shuffle ? (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement() : nil
@@ -687,5 +691,292 @@ final class SpotifyController: @unchecked Sendable {
             }
         }
         return .success(output.stringValue)
+    }
+}
+
+// MARK: - Playback modes, library, devices and questions
+
+extension SpotifyController {
+    /// "1 dakika 30 saniye", "45 saniye", "2 saat".
+    static func spokenDuration(_ seconds: Int) -> String {
+        let h = seconds / 3600, m = seconds % 3600 / 60, s = seconds % 60
+        var parts: [String] = []
+        if h > 0 { parts.append("\(h) saat") }
+        if m > 0 { parts.append("\(m) dakika") }
+        if s > 0 || parts.isEmpty { parts.append("\(s) saniye") }
+        return parts.joined(separator: " ")
+    }
+
+    func setShuffle(_ on: Bool) async -> SpotifyActionResult {
+        let message = on ? "Karışık çalma açıldı" : "Karışık çalma kapatıldı"
+        return await perform(
+            "Karışık çalma",
+            web: {
+                // Setting it again could drop the user's Smart Shuffle.
+                if let state = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(), state.shuffle == on {
+                    return on ? "Karışık çalma zaten açık" : "Karışık çalma zaten kapalı"
+                }
+                try await SpotifyWebAPI.shared.setShuffle(on, deviceID: nil)
+                return message
+            },
+            appleScript: { self.runSpotifyCommand("set shuffling to \(on)").map { _ in message } }
+        )
+    }
+
+    func setRepeat(_ mode: SpotifyRepeatMode) async -> SpotifyActionResult {
+        let message: String
+        switch mode {
+        case .track: message = "Bu şarkı tekrar edecek"
+        case .context: message = "Liste tekrar edecek"
+        case .off: message = "Tekrar kapatıldı"
+        }
+        return await perform(
+            "Tekrar",
+            web: {
+                try await SpotifyWebAPI.shared.setRepeat(mode)
+                return message
+            },
+            appleScript: {
+                // AppleScript has one on/off switch; it can't repeat a single song.
+                guard mode != .track else {
+                    return .failure(.other(errorNumber: 0, message: "Tek şarkıyı tekrar için Spotify hesabını bağlaman gerekiyor"))
+                }
+                return self.runSpotifyCommand("set repeating to \(mode == .context)").map { _ in message }
+            }
+        )
+    }
+
+    func seek(_ seek: SpotifySeek) async -> SpotifyActionResult {
+        let message: String
+        switch seek {
+        case .to(0): message = "Başa sarıldı"
+        case .to(let s): message = "\(Self.spokenDuration(s)) noktasına gidildi"
+        case .by(let d): message = "\(Self.spokenDuration(abs(d))) \(d > 0 ? "ileri" : "geri") sarıldı"
+        }
+        return await perform(
+            "Sarma",
+            web: {
+                var target: Int
+                switch seek {
+                case .to(let s):
+                    target = s * 1000
+                case .by(let d):
+                    guard let state = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying(),
+                          let progress = state.progressMs else { throw SpotifyWebAPI.SpotifyAPIError.noActiveDevice }
+                    target = progress + d * 1000
+                }
+                if case .by = seek, let state = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(),
+                   let duration = state.durationMs {
+                    target = min(target, max(0, duration - 1000))
+                }
+                try await SpotifyWebAPI.shared.seek(toMs: max(0, target))
+                return message
+            },
+            appleScript: {
+                let command: String
+                switch seek {
+                case .to(let s): command = "set player position to \(s)"
+                case .by(let d): command = "set player position to (player position + \(d))"
+                }
+                return self.runSpotifyCommand(command).map { _ in message }
+            }
+        )
+    }
+
+    /// Finds the song and adds it to the queue; what plays now keeps playing.
+    func queue(_ request: SpotifySearchRequest) async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        let queries = request.kind == .track || request.kind == .freeText ? request.searchQueries : [request.freeText]
+        guard let track = await firstSearchHit(queries: queries.filter { !$0.isEmpty }, type: .track) else {
+            return .failure("\(request.displayText) bulunamadı")
+        }
+        do {
+            try await SpotifyWebAPI.shared.addToQueue(uri: track.uri)
+            return .success("Sıraya eklendi: \(Self.label(for: track))")
+        } catch {
+            return .failure("Sıraya eklenemedi: \(Self.reason(for: error))")
+        }
+    }
+
+    func unlikeCurrentTrack() async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            guard let current = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
+                return .failure("Şu an çalan bir şarkı yok")
+            }
+            try await SpotifyWebAPI.shared.removeFromLibrary(uri: current.track.uri)
+            return .success("\(current.track.name) beğenilenlerden çıkarıldı")
+        } catch {
+            return .failure("Beğenilenlerden çıkarılamadı: \(Self.reason(for: error))")
+        }
+    }
+
+    // MARK: Playlists
+
+    private static let playlistCache = OSAllocatedUnfairLock<(date: Date, items: [SpotifyWebAPI.Playlist])?>(initialState: nil)
+
+    /// The user's playlist named `name` (folded words equal, else one name containing the
+    /// other). `writable`: only playlists the user owns or that are collaborative.
+    func findPlaylist(named name: String, writable: Bool) async throws -> SpotifyWebAPI.Playlist? {
+        let playlists: [SpotifyWebAPI.Playlist]
+        if let cached = Self.playlistCache.withLock({ $0 }), Date().timeIntervalSince(cached.date) < 300 {
+            playlists = cached.items
+        } else {
+            playlists = try await SpotifyWebAPI.shared.fetchPlaylists()
+            Self.playlistCache.withLock { $0 = (Date(), playlists) }
+        }
+        let userID = writable ? try await SpotifyWebAPI.shared.fetchUserID() : ""
+        let candidates = playlists.filter { !writable || $0.ownerID == userID || $0.collaborative }
+        let wanted = SpotifyRequestParser.foldedWords(name)
+        guard !wanted.isEmpty else { return nil }
+        if let exact = candidates.first(where: { SpotifyRequestParser.foldedWords($0.name) == wanted }) { return exact }
+        let joined = wanted.joined(separator: " ")
+        return candidates.first { playlist in
+            let words = SpotifyRequestParser.foldedWords(playlist.name).joined(separator: " ")
+            return !words.isEmpty && (words.contains(joined) || joined.contains(words))
+        }
+    }
+
+    func ownPlaylist(named name: String, writable: Bool) async -> SpotifyWebAPI.Playlist? {
+        guard webAPIConnected else { return nil }
+        do {
+            return try await findPlaylist(named: name, writable: writable)
+        } catch {
+            owLog("[SpotifyController] Playlists not readable: \(error)")
+            return nil
+        }
+    }
+
+    func playOwnPlaylist(named name: String) async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            guard let playlist = try await findPlaylist(named: name, writable: false) else {
+                return .failure("\(name) adında bir listen bulunamadı")
+            }
+            return await playContext(SpotifyWebAPI.TrackResult(uri: playlist.uri, name: playlist.name, artist: ""), type: .playlist)
+        } catch {
+            return .failure("Listelerin okunamadı: \(Self.reason(for: error))")
+        }
+    }
+
+    func addCurrentTrack(toPlaylistNamed name: String) async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            guard let current = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
+                return .failure("Şu an çalan bir şarkı yok")
+            }
+            guard let playlist = try await findPlaylist(named: name, writable: true) else {
+                return .failure("\(name) adında sana ait bir liste bulunamadı")
+            }
+            try await SpotifyWebAPI.shared.addToPlaylist(id: playlist.id, uri: current.track.uri)
+            return .success("\(current.track.name), \(playlist.name) listesine eklendi")
+        } catch {
+            return .failure("Listeye eklenemedi: \(Self.reason(for: error))")
+        }
+    }
+
+    // MARK: Library
+
+    func playSavedAlbum() async -> SpotifyActionResult {
+        await playRandom(from: { try await SpotifyWebAPI.shared.fetchSavedAlbums() }, type: .album, empty: "Kaydedilmiş albümün yok")
+    }
+
+    func playFollowedArtist() async -> SpotifyActionResult {
+        await playRandom(from: { try await SpotifyWebAPI.shared.fetchFollowedArtists() }, type: .artist, empty: "Takip ettiğin sanatçı yok")
+    }
+
+    private func playRandom(
+        from fetch: () async throws -> [SpotifyWebAPI.TrackResult],
+        type: SpotifyWebAPI.SearchType,
+        empty: String
+    ) async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            guard let item = try await fetch().randomElement() else { return .failure(empty) }
+            return await playContext(item, type: type)
+        } catch {
+            return .failure(Self.reason(for: error))
+        }
+    }
+
+    /// The most recently played song that isn't the one playing now.
+    func playRecentTrack() async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            let current = (try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying())?.track.uri
+            guard let track = try await SpotifyWebAPI.shared.fetchRecentTracks().first(where: { $0.uri != current }) else {
+                return .failure("Son dinlenen bir şarkı bulunamadı")
+            }
+            return await playTrack(track)
+        } catch {
+            return .failure(Self.reason(for: error))
+        }
+    }
+
+    // MARK: Devices
+
+    func transferPlayback(to kind: SpotifyDeviceKind) async -> SpotifyActionResult {
+        guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
+        do {
+            let devices = try await SpotifyWebAPI.shared.fetchAvailableDevices()
+            let matching = devices.filter { kind.connectTypes.contains($0.type.lowercased()) }
+            guard let device = matching.first(where: { !$0.isActive }) ?? matching.first else {
+                return .failure("Spotify'da bir \(kind.spokenName) görünmüyor; o cihazda Spotify'ı açıp tekrar dene")
+            }
+            if device.isActive { return .success("Müzik zaten \(device.name) cihazında çalıyor") }
+            try await SpotifyWebAPI.shared.transferPlayback(toDevice: device.id)
+            owLog("[SpotifyController] Playback moved to \(device.name) (\(device.type))")
+            return .success("Müzik \(device.name) cihazına geçti")
+        } catch {
+            return .failure("Müzik taşınamadı: \(Self.reason(for: error))")
+        }
+    }
+
+    // MARK: Questions
+
+    func answer(_ question: SpotifyQuestion) async -> SpotifyActionResult {
+        await perform(
+            "Spotify bilgisi",
+            readOnly: true,
+            web: {
+                if question == .nextUp {
+                    guard let next = try await SpotifyWebAPI.shared.fetchQueue().first else {
+                        return "Sırada şarkı görünmüyor"
+                    }
+                    return "Sıradaki şarkı: \(Self.label(for: next))"
+                }
+                guard let state = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
+                    return "Şu an Spotify'da bir şey çalmıyor"
+                }
+                switch question {
+                case .device:
+                    guard state.isPlaying else { return "Şu an Spotify'da bir şey çalmıyor" }
+                    return "Şu an \(state.deviceName ?? "bilinmeyen bir cihaz") cihazında çalıyor"
+                case .album:
+                    guard let album = state.album, !album.isEmpty else { return "Bu şarkının albüm bilgisi yok" }
+                    return "Bu şarkı \(album) albümünden"
+                case .timeLeft:
+                    guard let duration = state.durationMs, let progress = state.progressMs else {
+                        return "Kalan süreyi bilemiyorum"
+                    }
+                    return "Şarkının bitmesine \(Self.spokenDuration(max(0, duration - progress) / 1000)) var"
+                case .nextUp:
+                    return ""
+                }
+            },
+            appleScript: {
+                guard self.isSpotifyRunning else { return .failure(.appNotRunning) }
+                switch question {
+                case .album:
+                    return self.runAppleScript("tell application \"Spotify\" to return album of current track")
+                        .map { "Bu şarkı \($0 ?? "") albümünden" }
+                case .timeLeft:
+                    return self.runAppleScript("tell application \"Spotify\" to return ((duration of current track) / 1000 - player position) as integer")
+                        .map { "Şarkının bitmesine \(Self.spokenDuration(Int($0 ?? "") ?? 0)) var" }
+                case .device, .nextUp:
+                    return .failure(.other(errorNumber: 0, message: SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage))
+                }
+            }
+        )
     }
 }

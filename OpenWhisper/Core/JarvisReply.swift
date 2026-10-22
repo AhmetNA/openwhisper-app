@@ -75,6 +75,12 @@ struct JarvisReply {
         return likedSongs ? addressing("Beğenilen şarkılar açılıyor.") : ack()
     }
 
+    /// A Spotify answer or result said as is: "Sıradaki şarkı: …", "Müzik 30 dakika sonra kapanacak".
+    mutating func spotifyResult(_ message: String) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return addressing(trimmed.hasSuffix(".") ? trimmed : trimmed + ".")
+    }
+
     /// "Claude Code'a şunu yaz … gönder": the text went in, and was sent if asked.
     mutating func agent(sent: Bool) -> String {
         addressing(sent ? "Gönderdim." : "Yazdım.")

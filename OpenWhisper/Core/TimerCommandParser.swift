@@ -41,6 +41,8 @@ enum TimerCommandParser {
         guard !t.isEmpty, t.split(separator: " ").count <= maxWords else { return nil }
 
         if ringing, let command = parseWhileRinging(t) { return command }
+        // "Uyku zamanlayıcısını iptal et" is the music's sleep timer (`SpotifyManager`).
+        if matches(t, #"\b(?:uyku|müzik) zamanlayıcı"#) { return nil }
 
         let asksRemaining = matches(t, #"\b(?:ne kadar|kaç dakika|kaç saniye|kaç saat) (?:süre )?kaldı\b|\bkalan süre"#)
         if asksRemaining, matches(t, #"\b(?:\#(timerNoun)|süre\p{L}*)"#)
