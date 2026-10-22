@@ -89,6 +89,7 @@ struct SettingsView: View {
     @AppStorage("wakeWordConfirmedScore") private var wakeWordConfirmedScore: Double = 0.5
     @AppStorage("targetSpeakerWakeThreshold") private var targetSpeakerWakeThreshold: Double = 0.40
     @AppStorage(DefaultInputGuard.defaultsKey) private var keepBuiltInMicAsDefault = true
+    @AppStorage(SpotifyController.likedSongsShuffleKey) private var likedSongsShuffle = true
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1147,6 +1148,11 @@ struct SettingsView: View {
 
             Text("Beğenilen Şarkılar")
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Toggle("Karışık çal", isOn: $likedSongsShuffle)
+            Text("“Şarkı aç” ya da “beğendiğim şarkıları çal” deyince Beğenilen Şarkılar karışık sırayla çalar. Kapalıyken en son beğendiğin şarkıdan başlar.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
 
             HStack {

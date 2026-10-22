@@ -112,7 +112,14 @@ final class SpotifyController: @unchecked Sendable {
         )
     }
 
-    /// Developer mode: Liked Songs (up to 100, shuffled) as a real queue, with Spotify
+    /// "Karışık çal" in Settings › Spotify; on unless turned off.
+    static let likedSongsShuffleKey = "spotifyLikedSongsShuffle"
+    static var likedSongsShuffle: Bool {
+        UserDefaults.standard.object(forKey: likedSongsShuffleKey) as? Bool ?? true
+    }
+
+    /// "Şarkı aç", "beğendiğim şarkıları çal" and developer mode: Liked Songs (up to 100,
+    /// shuffled unless "Karışık çal" is off, else newest first) as a real queue, with Spotify
     /// launched in the background if it was closed. A freshly launched client takes a few
     /// seconds to appear as a Connect device, so the device list is polled. If playback
     /// can't start (not connected, no Premium, endpoint refused), the Liked Songs page is
@@ -124,8 +131,9 @@ final class SpotifyController: @unchecked Sendable {
             do {
                 let uris = try await SpotifyWebAPI.shared.fetchLikedTrackURIs()
                 let deviceID = try await waitForDevice(timeout: wasRunning ? 2 : 8)
-                try await SpotifyWebAPI.shared.startPlayback(uris: uris.shuffled(), deviceID: deviceID)
-                owLog("[SpotifyController] Playing \(uris.count) liked songs")
+                let shuffle = Self.likedSongsShuffle
+                try await SpotifyWebAPI.shared.startPlayback(uris: shuffle ? uris.shuffled() : uris, deviceID: deviceID)
+                owLog("[SpotifyController] Playing \(uris.count) liked songs\(shuffle ? ", shuffled" : "")")
                 return .success("beğenilen şarkılar çalıyor")
             } catch {
                 owLog("[SpotifyController] Liked songs playback failed: \(error)")
@@ -277,6 +285,11 @@ final class SpotifyController: @unchecked Sendable {
         guard !queries.isEmpty else {
             return .failure("Arama sorgusu boş olamaz")
         }
+        if request.kind == .playlist || request.kind == .freeText,
+           SpotifyRequestParser.namesLikedSongs("\(request.title) \(request.freeText)") {
+            owLog("[SpotifyController] '\(request.displayText)' means Liked Songs → own collection")
+            return await playLikedSongs()
+        }
 
         // "Spotify'da Tarkan çal": the words alone can't say whether "Tarkan" is an artist
         // or a song. If Spotify has an artist with exactly that name, play the artist.
@@ -301,6 +314,11 @@ final class SpotifyController: @unchecked Sendable {
                 "spotify:search:\(shown)",
                 message: "Otomatik çalma yapılamadı. \"\(shown)\" için arama ekranı açıldı."
             )
+        }
+
+        if type == .playlist, SpotifyRequestParser.namesLikedSongs(item.name) {
+            owLog("[SpotifyController] Found playlist '\(item.name)' is a Liked Songs copy → own collection")
+            return await playLikedSongs()
         }
 
         let result = type == .track ? await playTrack(item) : await playContext(item, type: type)

@@ -25,6 +25,36 @@ final class SpotifyDecisionTests: XCTestCase {
         XCTAssertEqual(decide("Çalan şarkıyı beğenilerime ekle", none), .likeCurrentTrack)
     }
 
+    func testLikedSongsPlayTheUsersOwnCollection() {
+        let strangersPlaylist = Parse(intent: .search, kind: .playlist, title: "beğendiğim şarkılar", artist: "")
+        for text in ["Spotify'da beğendiğim şarkıları aç", "Beğendiğim şarkıları çal", "Beğenilen şarkıları çal",
+                     "Sevdiğim şarkıları çal", "Beğendiklerimi çal", "beğenilerimin listesini aç",
+                     "Beğendiğim şarkıları çalar mısın"] {
+            XCTAssertEqual(decide(text, nil), .playLikedSongs, text)
+            // The LLM's playlist search never wins: it found a stranger's "Beğenilen Şarkılarım".
+            XCTAssertEqual(decide(text, strangersPlaylist), .playLikedSongs, text)
+            XCTAssertEqual(decide(text, Parse(intent: .none)), .playLikedSongs, text)
+        }
+        XCTAssertEqual(decide("Çalan şarkıyı beğenilerime ekle", nil), .likeCurrentTrack)
+        // Nothing named: Liked Songs. Only "devam et" resumes what was paused.
+        for text in ["Şarkı aç", "Müzik çal", "Spotify'da müzik aç"] {
+            XCTAssertEqual(decide(text, nil), .playLikedSongs, text)
+            XCTAssertEqual(decide(text, Parse(intent: .play)), .playLikedSongs, text)
+        }
+        XCTAssertEqual(decide("Müziğe devam et", nil), .play)
+        XCTAssertEqual(decide("Müziğe devam et", Parse(intent: .play)), .play)
+        XCTAssertNil(SpotifyManager.explicitIntent(in: "Beğendiğim şarkıları arkadaşıma çaldım"))
+        XCTAssertNotEqual(SpotifyManager.explicitIntent(in: "Tarkan'ın beğendiğim şarkısını çal"), .playLikedSongs)
+    }
+
+    func testLikedSongsNamesAreRecognizedInSearches() {
+        XCTAssertTrue(SpotifyRequestParser.namesLikedSongs("Beğenilen Şarkılarım"))
+        XCTAssertTrue(SpotifyRequestParser.namesLikedSongs("beğendiğim"  + " şarkılar"))
+        XCTAssertTrue(SpotifyRequestParser.namesLikedSongs("Liked Songs"))
+        XCTAssertFalse(SpotifyRequestParser.namesLikedSongs("sakin"))
+        XCTAssertFalse(SpotifyRequestParser.namesLikedSongs("Türkçe Pop Hits"))
+    }
+
     func testAgreementKeepsRulesIntent() {
         XCTAssertEqual(decide("Sonraki şarkıya geç", Parse(intent: .next)), .next)
         XCTAssertEqual(decide("Spotify'da sesi 30 yap", Parse(intent: .volume)), .setVolume(30))

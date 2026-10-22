@@ -68,9 +68,11 @@ struct JarvisReply {
     }
 
     /// Spotify: a short ack, never a description of what plays. The caller holds the music
-    /// back until the ack is spoken, so it doesn't talk over it.
-    mutating func spotify(handled: Bool) -> String? {
-        handled ? ack() : nil
+    /// back until the ack is spoken, so it doesn't talk over it. The one exception is Liked
+    /// Songs started from a bare "şarkı aç": nothing was named, so he says what he put on.
+    mutating func spotify(handled: Bool, likedSongs: Bool = false) -> String? {
+        guard handled else { return nil }
+        return likedSongs ? addressing("Beğenilen şarkılar açılıyor.") : ack()
     }
 
     /// "Claude Code'a şunu yaz … gönder": the text went in, and was sent if asked.

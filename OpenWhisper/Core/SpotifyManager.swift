@@ -9,27 +9,25 @@ final class SpotifyManager: @unchecked Sendable {
 
     private init() {}
 
-    /// Content-based (not prefix-based) matching for "play my Liked Songs" used by
-    /// `handleCommand` step 3a. A word-boundary prefix like "beğenilen şarkılar" would never
-    /// match "beğenilen şarkıları aç" (next char is "ı", not a space); a noun (what) + verb
-    /// (do) combination checked with plain `.contains` against `Self.normalize`d text
-    /// sidesteps that entirely.
+    /// Content-based (not prefix-based) matching for "play my Liked Songs". A word-boundary
+    /// prefix like "beğenilen şarkılar" would never match "beğenilen şarkıları aç" (next char
+    /// is "ı", not a space), so the nouns are checked with plain `.contains` against
+    /// `Self.normalize`d text. "beğendiğim" / "sevdiğim" only count with plural "şarkılar":
+    /// "beğendiğim şarkıyı çal" names one song.
     private static let likedSongsNouns: Set<String> = [
-        "beğenilen", "beğenilenler", "beğendiklerim", "beğenilerim", "liked songs"
+        "beğenilen", "beğendiklerim", "beğenilerim", "beğendiğim şarkılar", "sevdiğim şarkılar",
+        "favori şarkılar", "favorilerim", "liked songs"
     ]
-    private static let likedSongsVerbs: Set<String> = ["çal", "aç", "oynat", "liste"]
+    private static let likedSongsVerbs: Set<String> = ["çal", "aç", "oynat", "başlat", "dinlet"]
 
-    /// True for "beğenilen şarkıları aç", "beğenilerimin listesini çal", "liked songs çal",
-    /// etc. Excludes anything containing "ekle" ("beğenilerime ekle" = add current track to
-    /// Liked Songs, not play Liked Songs) so this can't shadow the Like branch (step 3) —
-    /// e.g. "çalan şarkıyı beğenilerime ekle" contains both a liked-noun ("beğenilerim") and,
-    /// incidentally, the "çal" verb substring (from "çalan"), but is clearly an add-to-liked
-    /// command, not a play-liked-songs command.
-    private static func isLikedSongsPlaybackCommand(_ normalized: String) -> Bool {
-        guard !normalized.contains("ekle") else { return false }
-        let hasNoun = likedSongsNouns.contains { normalized.contains($0) }
-        let hasVerb = likedSongsVerbs.contains { normalized.contains($0) }
-        return hasNoun && hasVerb
+    /// True for "beğendiğim şarkıları çal", "beğenilerimin listesini aç", "Spotify'da
+    /// beğenilenleri oynat", etc. The verb must close the command (or Spotify be named), so
+    /// "beğendiğim şarkıları arkadaşıma çaldım" stays dictation. Anything containing "ekle"
+    /// ("çalan şarkıyı beğenilerime ekle") is the Like command instead.
+    private static func isLikedSongsPlaybackCommand(_ normalized: String, words: [String]) -> Bool {
+        guard !normalized.contains("ekle"), likedSongsNouns.contains(where: normalized.contains),
+              !likedSongsVerbs.isDisjoint(with: words) else { return false }
+        return words.contains(where: isSpotifyWord) || hasCommandPositionVerb(likedSongsVerbs, in: words)
     }
 
     private static let maxCommandWordCount = 8
@@ -63,6 +61,8 @@ final class SpotifyManager: @unchecked Sendable {
         case currentTrack
         case search(SpotifySearchRequest)
         case likeCurrentTrack
+        /// The user's own Liked Songs, shuffled, as a queue.
+        case playLikedSongs
     }
 
     private static let musicContextWords: Set<String> = [
@@ -249,11 +249,11 @@ final class SpotifyManager: @unchecked Sendable {
             return .setVolume(volume)
         }
 
-        guard hasExplicitTarget else { return nil }
+        // Before the target check: "beğendiklerimi çal" names the music by itself. Never a
+        // text search, which found someone else's "Beğenilen Şarkılarım" playlist.
+        if isLikedSongsPlaybackCommand(normalized, words: words) { return .playLikedSongs }
 
-        // Playing the whole Liked Songs collection has no controller operation yet. Do not
-        // silently reinterpret it as a text search.
-        guard !isLikedSongsPlaybackCommand(normalized) else { return nil }
+        guard hasExplicitTarget else { return nil }
 
         let likeVerbs: Set<String> = ["ekle", "beğen", "begen", "like"]
         if !likeVerbs.isDisjoint(with: wordSet),
@@ -288,8 +288,10 @@ final class SpotifyManager: @unchecked Sendable {
            (hasSpotifyContext
             || hasCommandPositionVerb(playVerbs, in: words)
             || hasLeadingVerb(playVerbs, in: words)) {
+            // "Şarkı aç", "müzik çal": nothing named, so the user's Liked Songs. Only "devam et"
+            // (above) resumes what was paused.
             let query = shared.extractSearchQuery(normalized)
-            return query.isEmpty ? .play : .search(SpotifyRequestParser.requestFromRules(normalized))
+            return query.isEmpty ? .playLikedSongs : .search(SpotifyRequestParser.requestFromRules(normalized))
         }
 
         let searchVerbs: Set<String> = ["ara", "bul", "search"]
@@ -414,7 +416,7 @@ final class SpotifyManager: @unchecked Sendable {
     private static func intent(from parse: SpotifyRequestParser.OllamaParse, text: String) -> ExplicitSpotifyIntent? {
         switch parse.intent {
         case .pause: return .pause
-        case .play: return .play
+        case .play: return isResume(text) ? .play : .playLikedSongs
         case .next: return .next
         case .previous: return .previous
         case .volume: return volumeTarget(in: text).map { .setVolume($0) }
@@ -424,6 +426,11 @@ final class SpotifyManager: @unchecked Sendable {
         case .like: return .likeCurrentTrack
         case .search, .none: return .search(searchRequest(for: text, parse: parse))
         }
+    }
+
+    /// "Müziğe devam et", "sürdür": go on with what was paused, not start Liked Songs.
+    private static func isResume(_ text: String) -> Bool {
+        canonicalizeVerbs(intentWords(normalize(text))).contains(resumeVerb)
     }
 
     private static func sameKind(_ a: ExplicitSpotifyIntent, _ b: ExplicitSpotifyIntent) -> Bool {
@@ -458,6 +465,8 @@ final class SpotifyManager: @unchecked Sendable {
         spotifyPlaying: Bool = false,
         commandMode: Bool = false
     ) -> ExplicitSpotifyIntent? {
+        // The LLM would read it as a playlist search and play a stranger's list.
+        if rules == .playLikedSongs { return rules }
         guard let parse else { return rules }
 
         guard let rules else {
@@ -858,9 +867,15 @@ final class SpotifyManager: @unchecked Sendable {
         switch decisionCache.peek(for: text) ?? explicitIntent(in: text) {
         case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack, nil:
             return true
-        case .pause, .play, .next, .previous, .search:
+        case .pause, .play, .next, .previous, .search, .playLikedSongs:
             return false
         }
+    }
+
+    /// Whether `text` starts the user's Liked Songs, so Jarvis says so instead of a plain ack.
+    /// Like `resumesPausedMedia`, call it before `handleCommand`.
+    static func playsLikedSongs(afterCommand text: String) -> Bool {
+        (decisionCache.peek(for: text) ?? explicitIntent(in: text)) == .playLikedSongs
     }
 
     /// Holds the decision for the most recent transcript between `isSpotifyCommand` and
@@ -905,7 +920,7 @@ final class SpotifyManager: @unchecked Sendable {
         var playerBefore: SpotifyController.PlayerSnapshot?
         if recordUndo {
             switch intent {
-            case .pause, .play, .next, .previous, .search:
+            case .pause, .play, .next, .previous, .search, .playLikedSongs:
                 playerBefore = controller.playerSnapshot()
             case .setVolume, .adjustVolume, .currentTrack, .likeCurrentTrack:
                 break
@@ -932,6 +947,8 @@ final class SpotifyManager: @unchecked Sendable {
             result = await controller.searchAndPlay(request)
         case .likeCurrentTrack:
             result = await controller.likeCurrentTrack()
+        case .playLikedSongs:
+            result = await controller.playLikedSongs()
         }
 
         switch intent {
@@ -949,7 +966,7 @@ final class SpotifyManager: @unchecked Sendable {
             switch intent {
             case .setVolume, .adjustVolume:
                 undo = SystemVolume.lastChange.map { .volume(from: $0.from, to: $0.to) }
-            case .pause, .play, .next, .previous, .search:
+            case .pause, .play, .next, .previous, .search, .playLikedSongs:
                 undo = playerBefore.map { .player($0) }
             case .currentTrack:
                 undo = .nothing

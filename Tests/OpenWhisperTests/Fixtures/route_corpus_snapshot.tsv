@@ -124,7 +124,7 @@ voice	Var annemlere babamlara hatırlatıcısını siler misin?	reminder-deletio
 voice	Yarınki var annemlere babamlara bilet bakacağız hatırlatıcısını sil.	reminder-deletion
 voice	bir çarvis 1.6 saniye yaklaşık 8 saniye diye bir hatırlatıcı var onu sil	reminder-deletion
 voice	%30'a indir sesi	none
-voice	Beğendiğim şarkıları aç.	spotify:search(beğendiğim)
+voice	Beğendiğim şarkıları aç.	spotify:playLikedSongs
 voice	Bir şeyler çalsana Spotify'dan.	spotify:search(bir şeyler)
 voice	Eğlenceli bir şeyler çal Spotify'da.	spotify:search(eğlenceli)
 voice	Müzeyi durdur.	none
@@ -141,16 +141,16 @@ voice	Sonraki şarkı	none
 voice	Spotify kapat.	spotify:pause
 voice	Spotify'da Tarkan zilli düdük çalabilir misin?	spotify:search(tarkan zilli düdük)
 voice	Spotify'da aşkımız eski bir roman aç.	spotify:search(aşkımız eski bir roman)
-voice	Spotify'da beğendiğim şarkıları aç.	spotify:search(beğendiğim)
-voice	Spotify'da beğenilen şarkıları aç.	none
+voice	Spotify'da beğendiğim şarkıları aç.	spotify:playLikedSongs
+voice	Spotify'da beğenilen şarkıları aç.	spotify:playLikedSongs
 voice	Spotify'da bir sonraki şarkıya aç.	spotify:next
 voice	Spotify'da bir şeyler çalsana.	spotify:search(bir şeyler)
 voice	Spotify'da bir şeyler çeğe sun.	none
 voice	Spotify'da daha eğlenceli şeyler açsana.	spotify:search(daha eğlenceli)
 voice	Spotify'da eğlenceli bir şeyler çal.	spotify:search(eğlenceli)
 voice	Spotify'da müzik çal, piyanolu.	spotify:search(piyanolu)
-voice	Spotify'da şarkı aç	spotify:play
-voice	Spotify'da şarkı aç.	spotify:play
+voice	Spotify'da şarkı aç	spotify:playLikedSongs
+voice	Spotify'da şarkı aç.	spotify:playLikedSongs
 voice	Spotify'da şarkıyı durdur.	spotify:pause
 voice	Spotify'daki şarkıyı durdurur musun?	none
 voice	Spotify'daki şarkıyı son ses alabilir misin?	none
@@ -161,9 +161,9 @@ voice	İyi durdur.	none
 voice	İyilenceli bir şeyler açar mısın?	none
 voice	Şarkı aç bir şeyler.	spotify:search(bir şeyler)
 voice	Şarkı etsana Spotify'dan.	none
-voice	Şarkıya başlat.	spotify:play
-voice	Şarkıyı başlat	spotify:play
-voice	Şarkıyı başlat.	spotify:play
+voice	Şarkıya başlat.	spotify:playLikedSongs
+voice	Şarkıyı başlat	spotify:playLikedSongs
+voice	Şarkıyı başlat.	spotify:playLikedSongs
 voice	Şarkıyı durdur.	spotify:pause
 voice	Şarkıyı durdurur musun?	none
 voice	Şu anda ne çalıyor?	none

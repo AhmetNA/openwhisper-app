@@ -530,12 +530,13 @@ extension AppState {
                         if !step.command.endsSession { replies.append(self.jarvisReply.system(command, status: status)) }
                     case .spotify(let request):
                         let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
+                        let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: request)
                         let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
                         if handled, !resumes { resumeMediaAfterCommand = false }
                         if handled { ran.append(step.command) }
                         statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")
-                        replies.append(handled ? self.jarvisReply.spotify(handled: true) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
+                        replies.append(handled ? self.jarvisReply.spotify(handled: true, likedSongs: likedSongs) : self.jarvisReply.failure("Spotify komutunu uygulayamadım"))
                     case .agent:
                         // Never a step: `CommandRegistry` keeps agent dictation on its own route.
                         owLog("[Route] agent dictation reached the command runner; skipped")
@@ -965,6 +966,7 @@ extension AppState {
                 session.latency.finishDecision(route: "Spotify")
                 owLog("[OpenWhisper] Spotify command detected: \(commandText)")
                 let resumesMedia = SpotifyManager.resumesPausedMedia(afterCommand: commandText)
+                let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: commandText)
                 let misheard = self.cleanupAvailable ? self.misheardWords(in: commandText) : []
                 let actionStartedAt = session.latency.timestamp()
                 let handled = await SpotifyManager.shared.handleCommand(
@@ -983,7 +985,7 @@ extension AppState {
                 self.lastTranscription = text
                 // Never "şarkı çalınıyor": only a short ack, spoken before the music resumes.
                 if session.isVoiceCommand {
-                    await speakAfterCommand(self.jarvisReply.spotify(handled: true))
+                    await speakAfterCommand(self.jarvisReply.spotify(handled: true, likedSongs: likedSongs))
                 }
                 if !misheard.isEmpty {
                     owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text)); checking the command again")

@@ -331,6 +331,15 @@ enum SpotifyRequestParser {
         }
     }
 
+    /// Whether a requested or found playlist name means Liked Songs ("Beğenilen Şarkılarım",
+    /// "beğendiğim şarkılar", "Liked Songs"). Search would otherwise play a stranger's
+    /// public playlist of that name instead of the user's own collection.
+    static func namesLikedSongs(_ text: String) -> Bool {
+        let folded = foldedWords(text).joined(separator: " ")
+        return ["begenilen sark", "begendigim sark", "sevdigim sark", "favori sark", "liked songs",
+                "begenilenler", "begendiklerim", "begenilerim"].contains(where: folded.contains)
+    }
+
     static func foldedWords(_ text: String) -> [String] {
         text
             .lowercased(with: Locale(identifier: "tr_TR"))

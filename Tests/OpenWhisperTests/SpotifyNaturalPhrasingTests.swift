@@ -135,10 +135,10 @@ final class SpotifyNaturalPhrasingTests: XCTestCase {
     }
 
     /// Ollama may rescue "müziği biraz aç" from the rules' resume/search reading, but a
-    /// plain "müziği aç" stays resume even if the model says louder.
+    /// plain "müziği aç" stays Liked Songs even if the model says louder.
     func testOverrideOfRuleResult() {
         XCTAssertEqual(decide("Müziği biraz aç", Parse(intent: .volumeUp), playing: false), .adjustVolume(10))
-        XCTAssertEqual(decide("Müziği aç", Parse(intent: .volumeUp)), .play)
+        XCTAssertEqual(decide("Müziği aç", Parse(intent: .volumeUp)), .playLikedSongs)
         // Broad natural cues never override a rules search: "geç" in a title stays a search.
         guard case .search? = decide("Spotify'da Geç Olmadan çal", Parse(intent: .next)) else {
             return XCTFail("expected the rules search to stand")
