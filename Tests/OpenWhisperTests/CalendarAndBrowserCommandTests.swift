@@ -66,6 +66,8 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertEqual(event("Yeni toplantı ekle 15 Ekim saat 10'da bütçe")?.title, "Toplantı bütçe")
         XCTAssertEqual(event("Yeni toplantı ekle 15 Ekim saat 10'da bütçe")?.start, date(day: 15, hour: 10, month: 10))
         XCTAssertEqual(event("3 Aralık'ta Ayşe'nin doğum günü etkinliği oluştur")?.start, date(day: 3, month: 12))
+        // Today's date by name, after 09:00, is still today.
+        XCTAssertEqual(event("30 Eylül'de takvime tatil ekle")?.start, date(day: 30))
     }
 
     func testMonthNeedsADayNumber() {
@@ -75,6 +77,17 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertNil(event("Kasım'la toplantı ekle"))
         XCTAssertNil(event("Yeni etkinlik ekle uçuş Gaziantep"))
         XCTAssertNil(event("Toplantı ekle demişti ama 7 Kasım'da gelemem"))
+    }
+
+    func testTimeSaidAfterTheVerb() {
+        // As transcribed on 22 October: "ekle" in the middle, the time after it.
+        let e = event("Yarına takvim etkinliği ekle saat 13 'e.")
+        XCTAssertEqual(e?.start, date(day: 1, hour: 13, month: 10))
+        XCTAssertEqual(e?.title, "Etkinlik")
+        XCTAssertEqual(event("Toplantı ekle yarın öğleden sonra 3'te")?.start, date(day: 1, hour: 15, month: 10))
+        XCTAssertEqual(event("Takvime Mehmet'le toplantı ekle cuma saat 10'da")?.start, date(day: 2, hour: 10, month: 10))
+        // Anything but a time after the verb is still not a command.
+        XCTAssertNil(event("Toplantı ekle dedi ama yarın gelemem"))
     }
 
     @MainActor

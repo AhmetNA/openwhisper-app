@@ -220,10 +220,10 @@ enum TurkishDateParser {
                     dayLevelDate = cal.date(byAdding: .day, value: diff, to: now)
                     working.removeSubrange(m.range)
                 }
-            } else if let m = firstMatch("\\byar[ıi]n\\b", in: working) {
+            } else if let m = firstMatch("\\byar[ıi]n(?:a|da)?\\b", in: working) {  // "yarına", "yarında"
                 dayLevelDate = cal.date(byAdding: .day, value: 1, to: now)
                 working.removeSubrange(m.range)
-            } else if let m = firstMatch("\\bbug[üu]n\\b", in: working) {
+            } else if let m = firstMatch("\\bbug[üu]n(?:e|de)?\\b", in: working) {
                 dayLevelDate = now
                 working.removeSubrange(m.range)
             }

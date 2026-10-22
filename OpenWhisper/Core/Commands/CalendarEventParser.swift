@@ -26,6 +26,9 @@ enum CalendarEventParser {
     /// demişti ama …" stays dictation.
     private static let leadingCommand = #"^(?:takvim\p{L}*\s+(?:yeni\s+)?(?:bir\s+)?(?:etkinlik\s+)?|(?:yeni\s+)?(?:bir\s+)?etkinlik\s+(?:takvim\p{L}*\s+)?|yeni\s+(?:bir\s+)?(?:toplantı|randevu|görüşme)\s+(?:takvim\p{L}*\s+)?)(?:ekle|oluştur)\b"#
 
+    /// A word that only says when: "saat", "13'e", "yarın", "öğleden sonra", "cuma", "kasım'da".
+    private static let whenWord = #"(?:saat|\d{1,2}(?:[:.]\d{2})?(?:'\p{L}{1,3})?|(?:bir|iki|üç|dört|beş|altı|yedi|sekiz|dokuz|on)(?:'?\p{L}{1,3})?|(?:yarın|bugün|gün|sabah|öğle|akşam|gece|buçu|pazartesi|salı|çarşamba|perşembe|cuma|cumartesi|pazar|ocak|şubat|mart|nisan|mayıs|haziran|temmuz|ağustos|eylül|ekim|kasım|aralık)\p{L}*|öbür|ertesi|haftaya|öğleden|sonra|yarım|saatlik)"#
+
     static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Event? {
         var working = text.lowercased(with: locale)
             .replacingOccurrences(of: "’", with: "'")
@@ -36,6 +39,11 @@ enum CalendarEventParser {
             .replacingOccurrences(of: #"\s+'"#, with: "'", options: .regularExpression)
             .replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)\s+)?(?:lütfen\s+)?"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        // "Yarına takvim etkinliği ekle saat 13'e": the verb with only the time after it.
+        // Moved to the end, it reads like "yarına takvim etkinliği saat 13'e ekle".
+        working = working.replacingOccurrences(
+            of: #"\b(ekle|oluştur)\s+((?:\#(whenWord)\s*)+)$"#, with: "$2 $1", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         let leading = matches(working, leadingCommand)
         guard working.split(separator: " ").count <= maxWords,
