@@ -141,7 +141,7 @@ final class SpotifyController: @unchecked Sendable {
                 // A shuffled context still opens on its first track; start somewhere random.
                 let start = shuffle ? (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement() : nil
                 try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
-                if await waitForLikedSongs(context: context, before: before) {
+                if await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
                     owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "")")
                     return .success("beğenilen şarkılar çalıyor")
                 }
