@@ -41,6 +41,8 @@
 	<string>Jarvis "bugün ne var" dediğinizde günün takvim etkinliklerini özetlemek için takviminizi okur.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Jarvis "bugün ne var" dediğinizde günün takvim etkinliklerini özetlemek için takviminizi okur.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Jarvis "Ali ne yazdı" dediğinizde söylediğiniz ismin WhatsApp sohbetini bulmak için kişilerinize bakar. Kişiler bilgisayardan çıkmaz.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Jarvis needs microphone access to transcribe your speech to text.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

@@ -10,6 +10,9 @@
          appeared under Privacy › Calendars. Calendars also covers Reminders. -->
     <key>com.apple.security.personal-information.calendars</key>
     <true/>
+    <!-- "Ali ne yazdı": a spoken name is looked up in Contacts to find the WhatsApp chat. -->
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
     <key>com.apple.security.device.bluetooth</key>
     <true/>
     <!-- The app bundles DeepFilterNet's vendored libdf.dylib. Local ad-hoc builds have no

@@ -43,6 +43,11 @@ enum SystemCommand: Equatable, Sendable {
     /// "Son maile cevap yaz: yarın uygunum": a reply to the newest mail, opened in Mail but
     /// never sent; the user sends it there. An empty text opens an empty reply.
     case mailReplyDraft(String)
+    /// WhatsApp Desktop's chats, read-only (`WhatsAppController`). "WhatsApp'ta okunmamış var
+    /// mı", "okunmamış mesajları oku": the chats with unread messages and what they say.
+    case whatsAppUnread
+    /// "Ali ne yazdı", "Annemden mesaj var mı": the newest messages of the chat the name means.
+    case whatsAppFrom(String)
     /// "Bugün ne var?": calendar, reminders and mail for today (0) or tomorrow (1).
     case briefing(dayOffset: Int)
     /// A Shortcuts.app shortcut by its exact name.
@@ -152,6 +157,7 @@ enum SystemCommandParser {
         if let briefing = parseBriefing(cleaned) { return briefing }
 
         if let mail = parseMail(cleaned) { return mail }
+        if let whatsApp = parseWhatsApp(cleaned) { return whatsApp }
         if let query = parseQuery(cleaned) { return query }
         if let action = parseAction(cleaned) { return action }
         if let tab = parseBrowserTab(cleaned) { return .browser(tab) }
@@ -241,6 +247,51 @@ enum SystemCommandParser {
         return name.split(separator: " ").map { word in
             word.prefix(1).uppercased(with: locale) + word.dropFirst()
         }.joined(separator: " ")
+    }
+
+    // "WhatsApp'ta", "vatsaptan", "watsapp'a" …
+    private static let whatsApp = #"(?:whats ?app|vats ?app?|watsap|wotsap|wasap|vatsab)\S*"#
+    private static let message = #"(?:mesaj|msj)\S*"#
+
+    /// After mail: "Ahmet'ten mail var mı" is mail, "Ahmet'ten mesaj var mı" WhatsApp.
+    /// "WhatsApp'ı aç" is none of these and stays the app command.
+    static func parseWhatsApp(_ text: String) -> SystemCommand? {
+        let mentionsApp = matches(text, whatsApp)
+        if let name = parseWhatsAppSender(text) { return .whatsAppFrom(name) }
+        if matches(text, #"okunmamış"#), mentionsApp || matches(text, message) { return .whatsAppUnread }
+        if mentionsApp, matches(text, #"\byeni\b|var mı|kim yazdı|ne var|kimden|\boku"#) { return .whatsAppUnread }
+        if matches(text, #"^(?:bana )?(?:kim yazdı|kimden mesaj var|kimlerden mesaj var|yeni mesaj(?:ım)? var mı|mesaj(?:ım)? var mı)$"#) {
+            return .whatsAppUnread
+        }
+        return nil
+    }
+
+    /// "Ali ne yazdı", "WhatsApp'ta Ayşe ne demiş", "Mehmet'ten mesaj var mı", "Metin'in
+    /// mesajını oku" → the name as heard, without the case ending ("Ali", "Mehmet", "Metin").
+    static func parseWhatsAppSender(_ text: String) -> String? {
+        let bare = text.replacingOccurrences(of: whatsApp, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let patterns = [
+            #"^(.+?) (?:bana |en son |son )*(?:ne|neler) (?:yazdı|yazmış|demiş|dedi|göndermiş|gönderdi|atmış|attı|diyor)(?: bana)?$"#,
+            #"^(.+?)['’]?(?:den|dan|ten|tan) (?:gelen |yeni |bir |hiç |son )*\#(message) (?:var mı|geldi mi|gelmiş mi|var|oku|ne diyor)$"#,
+            #"^(.+?)['’]?(?:nin|nın|nun|nün|in|ın|un|ün) (?:son |gelen |yeni )*\#(message) (?:oku|okur musun|ne diyor|neydi|ne)$"#,
+        ]
+        // Pronouns, the agents ("Claude ne yazdı" is about the agent app) and time words.
+        let notNames: Set<String> = ["kim", "o", "bu", "şu", "sen", "siz", "ben", "biz", "onlar", "kimse", "herkes",
+                                     "biri", "birisi", "bugün", "dün", "yeni", "son", "claude", "cloud", "codex",
+                                     "chatgpt", "jarvis", "claude code", "cloud code"]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: bare, range: NSRange(bare.startIndex..., in: bare)),
+                  let range = Range(match.range(at: 1), in: bare) else { continue }
+            let name = bare[range].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, name.split(separator: " ").count <= 3, !notNames.contains(name) else { return nil }
+            return name.split(separator: " ").map { word in
+                word.prefix(1).uppercased(with: locale) + word.dropFirst()
+            }.joined(separator: " ")
+        }
+        return nil
     }
 
     /// "Son maile cevap yaz: yarın uygunum.", "maile yanıt olarak şunu yaz …", "Yarın gelirim

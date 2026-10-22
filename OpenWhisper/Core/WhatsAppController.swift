@@ -1,0 +1,138 @@
+import AppKit
+import Contacts
+import Foundation
+
+/// WhatsApp by voice, read-only: who wrote, and what. The chats come from `WhatsAppStore`;
+/// the Mac's Contacts only help to find the chat a spoken name means. Nothing is sent.
+enum WhatsAppController {
+    /// How much of one message the flow bar shows and Jarvis says.
+    private static let messageLimit = 160
+    /// Chats read out for "okunmamışlar"; the rest are only counted.
+    private static let unreadChatsRead = 3
+
+    /// "WhatsApp'ta okunmamış var mı": the chats with unread messages, newest first, each with
+    /// its newest unread messages.
+    static func unreadSummary() async -> String {
+        await read { url in
+            let unread = try WhatsAppStore.chats(at: url).filter { $0.unread > 0 }
+            guard !unread.isEmpty else { return "Okunmamış WhatsApp mesajı yok" }
+            var items: [String] = []
+            for chat in unread.prefix(unreadChatsRead) {
+                let incoming = try WhatsAppStore.messages(in: chat.id, limit: 8, at: url).filter { !$0.fromMe }
+                let newest = Array(incoming.prefix(min(chat.unread, 2)).reversed())
+                guard !newest.isEmpty else { items.append(chat.name); continue }
+                items.append(line(for: chat, newest))
+            }
+            let rest = unread.count - items.count
+            let head = unread.count == 1 ? "1 sohbette okunmamış mesaj" : "\(unread.count) sohbette okunmamış mesaj"
+            let tail = rest > 0 ? " · ve \(rest) sohbet daha" : ""
+            return "\(head) — \(items.joined(separator: " · "))\(tail)"
+        }
+    }
+
+    /// "Ali ne yazdı": the newest messages from the chat `name` means, with when they came.
+    static func latest(from name: String) async -> String {
+        let contacts = await matchingContacts(name)
+        return await read { url in
+            guard let (chat, _) = WhatsAppStore.bestChat(for: name, in: try WhatsAppStore.chats(at: url), contacts: contacts)
+            else { return "WhatsApp'ta \(name) adında sohbet bulunamadı" }
+            let recent = try WhatsAppStore.messages(in: chat.id, limit: 12, at: url)
+            guard let newestIncoming = recent.first(where: { !$0.fromMe }) else {
+                return "\(chat.name) sohbetinde ondan gelen mesaj yok"
+            }
+            // The last burst: up to three of their messages from the same hour.
+            let burst = recent.filter { !$0.fromMe && newestIncoming.date.timeIntervalSince($0.date) < 3600 }
+            var text = line(for: chat, Array(burst.prefix(3).reversed()), when: true)
+            if recent.first?.fromMe == true { text += " · Son mesaj senden" }
+            return text
+        }
+    }
+
+    /// "Ali, bugün 14:05 — selam. Akşam geliyor musun" or, in a group, "Aile — Annem: …".
+    private static func line(for chat: WhatsAppStore.Chat, _ messages: [WhatsAppStore.Message], when: Bool = false) -> String {
+        let body = messages.map { message -> String in
+            let text = shortened(message.text)
+            guard chat.isGroup, let sender = message.sender else { return text }
+            return "\(sender): \(text)"
+        }.joined(separator: chat.isGroup ? " · " : ". ")
+        guard when, let date = messages.last?.date else { return "\(chat.name): \(body)" }
+        return "\(chat.name), \(spokenTime(date)) — \(body)"
+    }
+
+    private static func shortened(_ text: String) -> String {
+        let flat = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return flat.count > messageLimit ? String(flat.prefix(messageLimit)) + "…" : flat
+    }
+
+    /// "bugün 14:05", "dün 21:40", "salı 09:15", "12 Ekim".
+    static func spokenTime(_ date: Date, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.dateFormat = "HH:mm"
+        let time = formatter.string(from: date)
+        if calendar.isDate(date, inSameDayAs: now) { return "bugün \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return "dün \(time)"
+        }
+        if let days = calendar.dateComponents([.day], from: date, to: now).day, days < 6 {
+            formatter.dateFormat = "EEEE HH:mm"
+            return formatter.string(from: date).lowercased(with: Locale(identifier: "tr_TR"))
+        }
+        formatter.dateFormat = "d MMMM"
+        return formatter.string(from: date)
+    }
+
+    /// Runs `body` off the main thread and turns the store's failures into statuses.
+    private static func read(_ body: @escaping @Sendable (URL) throws -> String) async -> String {
+        let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
+            Result { try body(WhatsAppStore.defaultURL) }
+        }.value
+        switch result {
+        case .success(let status): return status
+        case .failure(WhatsAppStore.Failure.notInstalled):
+            return "Bu Mac'te WhatsApp verisi yok"
+        case .failure(WhatsAppStore.Failure.noAccess):
+            await openFullDiskAccessSettings()
+            return "WhatsApp okunamadı: Jarvis'e Tam Disk Erişimi ver, ayarları açtım"
+        case .failure(let error):
+            owLog("[WhatsApp] read failed: \(error)")
+            return "WhatsApp verisi okunamadı"
+        }
+    }
+
+    @MainActor
+    private static func openFullDiskAccessSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Contacts
+
+    /// Contacts cards whose name or nickname has every spoken word at the start of one of its
+    /// words. Asks for Contacts access the first time; without it the chat names alone are used.
+    static func matchingContacts(_ name: String) async -> [WhatsAppStore.Contact] {
+        let store = CNContactStore()
+        switch CNContactStore.authorizationStatus(for: .contacts) {
+        case .authorized: break
+        case .notDetermined:
+            guard (try? await store.requestAccess(for: .contacts)) == true else { return [] }
+        default:
+            return []
+        }
+        return await Task.detached(priority: .userInitiated) {
+            let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactNicknameKey,
+                        CNContactOrganizationNameKey, CNContactPhoneNumbersKey] as [CNKeyDescriptor]
+            let request = CNContactFetchRequest(keysToFetch: keys)
+            var found: [WhatsAppStore.Contact] = []
+            try? store.enumerateContacts(with: request) { contact, _ in
+                let fullName = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+                let names = [fullName, contact.nickname, contact.organizationName].filter { !$0.isEmpty }
+                guard names.contains(where: { MailController.senderMatches($0, name: name) }) else { return }
+                let phones = contact.phoneNumbers.map { $0.value.stringValue.filter(\.isNumber) }
+                found.append(WhatsAppStore.Contact(fullName: fullName.isEmpty ? names[0] : fullName, phones: phones))
+            }
+            return found
+        }.value
+    }
+}
