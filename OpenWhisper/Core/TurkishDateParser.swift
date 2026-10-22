@@ -105,6 +105,33 @@ enum TurkishDateParser {
         "perşembe": 5, "persembe": 5, "cuma": 6, "cumartesi": 7, "pazar": 1
     ]
 
+    // MARK: - Months
+
+    private static let months: [String: Int] = [
+        "ocak": 1, "şubat": 2, "subat": 2, "mart": 3, "nisan": 4, "mayıs": 5, "mayis": 5,
+        "haziran": 6, "temmuz": 7, "ağustos": 8, "agustos": 8, "eylül": 9, "eylul": 9,
+        "ekim": 10, "kasım": 11, "kasim": 11, "aralık": 12, "aralik": 12
+    ]
+
+    /// "7 kasım", "7 kasım'a", "7 kasımda", and Whisper's split "7 kasım 'a". Only after a day
+    /// number: "Kasım" alone is a name ("Kasım'la toplantı"), "ekim" and "ocak" are words.
+    private static let monthDayPattern = "\\b(\\d{1,2})\\s+(ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik)(?:\\s*'\\s*\\p{L}+|\\p{L}*)"
+
+    /// This year's date, or next year's once it has passed. Nil for "31 şubat".
+    private static func monthDay(day: Int?, month: Int?, now: Date, calendar cal: Calendar) -> Date? {
+        guard let day, let month, (1...31).contains(day) else { return nil }
+        var comps = cal.dateComponents([.year], from: now)
+        comps.month = month
+        comps.day = day
+        comps.hour = defaultHour
+        comps.minute = defaultMinute
+        guard var date = cal.date(from: comps), cal.component(.day, from: date) == day else { return nil }
+        if date < cal.startOfDay(for: now) {
+            date = cal.date(byAdding: .year, value: 1, to: date) ?? date
+        }
+        return date
+    }
+
     // MARK: - Match helper
 
     private struct Match {
@@ -179,6 +206,10 @@ enum TurkishDateParser {
                     candidate = cal.date(byAdding: .month, value: 1, to: candidate) ?? candidate
                 }
                 dayLevelDate = candidate
+                working.removeSubrange(m.range)
+            } else if let m = firstMatch(monthDayPattern, in: working),
+                      let date = monthDay(day: Int(m.groups[0] ?? ""), month: months[m.groups[1] ?? ""], now: now, calendar: cal) {
+                dayLevelDate = date
                 working.removeSubrange(m.range)
             } else if let m = firstMatch("\\b(?:önümüzdeki\\s+|gelecek\\s+)?(pazartesi|sal[ıi]|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar)(?:\\s+günü)?\\b", in: working) {
                 let key = m.groups[0] ?? ""

@@ -11,8 +11,8 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         return event
     }
 
-    private func date(day: Int, hour: Int = 0, minute: Int = 0, month: Int = 9) -> Date {
-        calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+    private func date(day: Int, hour: Int = 0, minute: Int = 0, month: Int = 9, year: Int = 2026) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
     }
 
     // MARK: - Calendar
@@ -52,6 +52,40 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertEqual(event("Yarın 2'de yarım saatlik görüşme ekle")?.minutes, 30)
         XCTAssertEqual(event("Yarın 2'de yarım saatlik görüşme ekle")?.title, "Görüşme")
         XCTAssertEqual(event("Yarın 3'te toplantıyı takvime koy")?.title, "Toplantı")
+    }
+
+    func testCommandSaidFirstWithMonthDate() {
+        // As transcribed on 22 October: the verb first, and the diarizer split "Kasım'a".
+        let flight = event("Yeni etkinlik ekle tarih 7 Kasım 'a Gaziantep uçuş gidiş geliş")
+        XCTAssertEqual(flight?.title, "Gaziantep uçuş gidiş geliş")
+        XCTAssertEqual(flight?.start, date(day: 7, month: 11))
+        XCTAssertEqual(flight?.allDay, true)
+        XCTAssertEqual(event("Yeni etkinlik ekle. Takvime 7 Kasım uçuş Gaziantep'e.")?.title, "Uçuş Gaziantep'e")
+        // 12 September has passed on 30 September: next year's.
+        XCTAssertEqual(event("Takvime ekle 12 Eylül'de saat 3'te dişçi")?.start, date(day: 12, hour: 15, year: 2027))
+        XCTAssertEqual(event("Yeni toplantı ekle 15 Ekim saat 10'da bütçe")?.title, "Toplantı bütçe")
+        XCTAssertEqual(event("Yeni toplantı ekle 15 Ekim saat 10'da bütçe")?.start, date(day: 15, hour: 10, month: 10))
+        XCTAssertEqual(event("3 Aralık'ta Ayşe'nin doğum günü etkinliği oluştur")?.start, date(day: 3, month: 12))
+    }
+
+    func testMonthNeedsADayNumber() {
+        // "Kasım" is also a name; "ekim" and "ocak" are words.
+        XCTAssertEqual(event("Yarın saat 3'te Kasım'la toplantı ekle")?.title, "Kasım'la toplantı")
+        XCTAssertEqual(event("Yarın saat 3'te Kasım'la toplantı ekle")?.start, date(day: 1, hour: 15, month: 10))
+        XCTAssertNil(event("Kasım'la toplantı ekle"))
+        XCTAssertNil(event("Yeni etkinlik ekle uçuş Gaziantep"))
+        XCTAssertNil(event("Toplantı ekle demişti ama 7 Kasım'da gelemem"))
+    }
+
+    @MainActor
+    func testVoiceRouteRunsTheFlight() {
+        let facts = VoiceRouter.Facts(isVoiceCommand: true, acceptsCommands: true, focus: .notEditable,
+                                      hasTargetApp: true, targetBundleID: "com.apple.Safari")
+        guard case .command(.system(.calendarEvent(let e))) = VoiceRouter.route(
+            "Yeni etkinlik ekle tarih 7 Kasım 'a Gaziantep uçuş gidiş geliş", facts: facts) else {
+            return XCTFail("the spoken event reaches the calendar")
+        }
+        XCTAssertEqual(e.title, "Gaziantep uçuş gidiş geliş")
     }
 
     func testNotEvents() {

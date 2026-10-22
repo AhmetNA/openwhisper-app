@@ -21,19 +21,35 @@ enum CalendarEventParser {
     private static let addVerb = #"\b(?:ekle|ekler misin|ekleyebilir misin|ekleyiver|oluştur|oluşturur musun|koy|koyar mısın|kaydet|ayarla|planla|gir)(?: lütfen)?$"#
     /// Verbs that only make an event when the calendar itself is named ("takvime koy").
     private static let calendarOnlyVerb = #"\b(?:koy|koyar mısın|kaydet|gir)(?: lütfen)?$"#
+    /// The command said first: "Yeni etkinlik ekle, 7 Kasım Gaziantep uçuşu", "Takvime ekle …".
+    /// Only right at the start and only with "takvim", "etkinlik" or "yeni", so "toplantı ekle
+    /// demişti ama …" stays dictation.
+    private static let leadingCommand = #"^(?:takvim\p{L}*\s+(?:yeni\s+)?(?:bir\s+)?(?:etkinlik\s+)?|(?:yeni\s+)?(?:bir\s+)?etkinlik\s+(?:takvim\p{L}*\s+)?|yeni\s+(?:bir\s+)?(?:toplantı|randevu|görüşme)\s+(?:takvim\p{L}*\s+)?)(?:ekle|oluştur)\b"#
 
     static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> Event? {
         var working = text.lowercased(with: locale)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: #"[,!?;"“”]"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\.\s*$"#, with: "", options: .regularExpression)
+            // Whisper's "Yeni etkinlik ekle. Uçuş." and the diarizer's "Kasım 'a"; "15.30" stays.
+            .replacingOccurrences(of: #"\.(?=\s)"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+'"#, with: "'", options: .regularExpression)
             .replacingOccurrences(of: #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)\s+)?(?:lütfen\s+)?"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+        let leading = matches(working, leadingCommand)
         guard working.split(separator: " ").count <= maxWords,
-              matches(working, addVerb), matches(working, eventNoun),
+              leading || matches(working, addVerb), matches(working, eventNoun),
               !matches(working, #"hatırlat|unutturma|remind"#) else { return nil }
-        if matches(working, calendarOnlyVerb), !matches(working, #"\b(?:takvim|ajanda)"#) { return nil }
+        if !leading, matches(working, calendarOnlyVerb), !matches(working, #"\b(?:takvim|ajanda)"#) { return nil }
+        // The leading verb would otherwise stay in the title ("Ekle Gaziantep uçuş"), and so
+        // would "tarih" before the date ("tarih 7 Kasım", not "tarih sınavı").
+        if leading {
+            working = working.replacingOccurrences(of: #"\b(?:ekle|oluştur)\b"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: #"\btarih(?:i|inde)?\s+(?=\d)"#, with: " ", options: .regularExpression)
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
 
         // Spoken hours: "saat üçte" → "saat 3'te", "3 buçukta" → "3:30'da".
         working = spelledHours(working)
