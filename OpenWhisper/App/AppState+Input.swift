@@ -15,12 +15,24 @@ extension AppState {
     }
 
     func refreshInputDevices() {
+        let previous = availableInputDevices
         availableInputDevices = AudioEngine.availableInputDevices()
         systemDefaultInputIsBluetooth = AudioEngine.systemDefaultInputIsBluetooth()
-        // If the previously selected device is no longer present, automatic mode resolves the
-        // next recording to a connected headset or the built-in Mac microphone.
-        if let uid = inputDeviceUID, !availableInputDevices.contains(where: { $0.uid == uid }) {
-            inputDeviceUID = nil
+        if let uid = inputDeviceUID, let name = availableInputDevices.first(where: { $0.uid == uid })?.name {
+            UserDefaults.standard.set(name, forKey: "inputDeviceName")
+        }
+        let added = availableInputDevices.filter { device in !previous.contains { $0.uid == device.uid } }
+        let removed = previous.filter { device in !availableInputDevices.contains { $0.uid == device.uid } }
+        guard !previous.isEmpty, !(added.isEmpty && removed.isEmpty) else { return }
+        owLog("[Input] Devices changed: +[\(added.map(\.name).joined(separator: ", "))] -[\(removed.map(\.name).joined(separator: ", "))]")
+        // The picked mic stays picked while unplugged; recordings fall back until it returns.
+        guard let uid = inputDeviceUID else { return }
+        if added.contains(where: { $0.uid == uid }) {
+            owLog("[Input] Picked mic \(inputDeviceName ?? uid) is back; next recording uses it")
+        } else if removed.contains(where: { $0.uid == uid }) {
+            let fallback = resolvedInputDeviceUID(for: nil)
+            let name = availableInputDevices.first { $0.uid == fallback }?.name ?? "system default"
+            owLog("[Input] Picked mic \(inputDeviceName ?? uid) disconnected; next recording falls back to \(name)")
         }
     }
 
@@ -32,23 +44,39 @@ extension AppState {
     /// that led to it. Voice-started sessions keep the default input, which lets them continue
     /// the wake listener's stream.
     func resolvedInputDeviceUID(for trigger: RecordingTrigger?) -> String? {
-        guard let inputDeviceUID else {
-            if let uid = AudioEngine.systemDefaultBluetoothInput()?.uid { return uid }
-            guard let trigger else { return nil }
-            if Self.keyStartedTriggers.contains(trigger) {
-                return AudioEngine.connectedBluetoothInput()?.uid
+        Self.inputDeviceUID(
+            picked: inputDeviceUID,
+            trigger: trigger,
+            devices: AudioEngine.availableInputDevices(),
+            defaultInputID: AudioEngine.defaultInputDeviceID(),
+            chainedBluetoothUID: chainedBluetoothInputUID
+        )
+    }
+
+    /// A picked mic that is connected always wins. Without one, the automatic rules above
+    /// apply; a picked mic that is unplugged falls back to them too, and to the Mac mic when
+    /// they would leave the choice to the system default.
+    static func inputDeviceUID(
+        picked: String?, trigger: RecordingTrigger?, devices: [AudioInputDevice],
+        defaultInputID: AudioDeviceID?, chainedBluetoothUID: String?
+    ) -> String? {
+        if let picked, devices.contains(where: { $0.uid == picked }) { return picked }
+        let automatic: String? = {
+            if let device = devices.first(where: { $0.id == defaultInputID && $0.isBluetooth }) {
+                return device.uid
             }
-            if [.confirmation, .followUp].contains(trigger), let uid = chainedBluetoothInputUID,
-               AudioEngine.audioDeviceID(forUID: uid) != nil {
+            guard let trigger else { return nil }
+            if keyStartedTriggers.contains(trigger) {
+                return devices.first { $0.isBluetooth }?.uid
+            }
+            if [.confirmation, .followUp].contains(trigger), let uid = chainedBluetoothUID,
+               devices.contains(where: { $0.uid == uid }) {
                 return uid
             }
             return nil
-        }
-        let devices = AudioEngine.availableInputDevices()
-        if devices.contains(where: { $0.uid == inputDeviceUID }) {
-            return inputDeviceUID
-        }
-        return AudioEngine.automaticInputDeviceUID()
+        }()
+        guard picked != nil else { return automatic }
+        return automatic ?? devices.first { $0.isBuiltIn }?.uid
     }
 
     /// The profile a recording is filtered against: buds recordings only ever use the buds

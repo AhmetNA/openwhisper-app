@@ -235,15 +235,26 @@ final class AppState {
             }
         }
     }
-    /// Persistent UID of the chosen input device. `nil` means "follow system default".
+    /// Persistent UID of the picked input device, kept while it is unplugged. `nil` means
+    /// automatic (headset → Mac mic).
     var inputDeviceUID: String? {
         didSet {
             if let uid = inputDeviceUID {
                 UserDefaults.standard.set(uid, forKey: "inputDeviceUID")
+                if let name = availableInputDevices.first(where: { $0.uid == uid })?.name {
+                    UserDefaults.standard.set(name, forKey: "inputDeviceName")
+                }
             } else {
                 UserDefaults.standard.removeObject(forKey: "inputDeviceUID")
+                UserDefaults.standard.removeObject(forKey: "inputDeviceName")
             }
+            guard oldValue != inputDeviceUID else { return }
+            owLog("[Input] Picked mic: \(inputDeviceName ?? inputDeviceUID ?? "automatic")")
         }
+    }
+    /// Name of the picked mic, so Settings can show it while it is unplugged.
+    var inputDeviceName: String? {
+        inputDeviceUID == nil ? nil : UserDefaults.standard.string(forKey: "inputDeviceName")
     }
     var audioDuckingEnabled: Bool {
         didSet {
@@ -258,10 +269,6 @@ final class AppState {
 
     var builtInInputDevice: AudioInputDevice? {
         availableInputDevices.first(where: { $0.isBuiltIn })
-    }
-
-    var externalHeadsetDevice: AudioInputDevice? {
-        AudioEngine.connectedExternalHeadsetDevice()
     }
 
     var audioLevel: Float = 0.0

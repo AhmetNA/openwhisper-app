@@ -1048,10 +1048,12 @@ final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Device enumeration
 
-    /// All system input devices (those exposing at least one input stream).
+    /// All system input devices (those exposing at least one input stream), except virtual
+    /// and aggregate ones: a loopback driver such as Background Music feeds Mac playback into
+    /// its "input", and with an output stream it also looked like a headset to automatic mode.
     static func availableInputDevices() -> [AudioInputDevice] {
         return allAudioDeviceIDs().compactMap { id in
-            guard hasInputStream(deviceID: id) else { return nil }
+            guard hasInputStream(deviceID: id), !isVirtualTransport(deviceID: id) else { return nil }
             guard let uid = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceUID) else { return nil }
             let name = stringProperty(deviceID: id, selector: kAudioDevicePropertyDeviceNameCFString) ?? "Unknown"
             return AudioInputDevice(
@@ -1111,28 +1113,6 @@ final class AudioEngine: @unchecked Sendable {
     /// Look up an AudioDeviceID by its persistent UID.
     static func audioDeviceID(forUID uid: String) -> AudioDeviceID? {
         return availableInputDevices().first(where: { $0.uid == uid })?.id
-    }
-
-    /// Returns the currently connected headset-like external input device, if any.
-    static func connectedExternalHeadsetDevice() -> AudioInputDevice? {
-        return availableInputDevices()
-            .filter { !$0.isBuiltIn && ($0.hasOutputStream || $0.isBluetooth) }
-            .sorted { lhs, rhs in
-                if lhs.isBluetooth != rhs.isBluetooth {
-                    return lhs.isBluetooth
-                }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
-            .first
-    }
-
-    /// Select a headset-like input when automatic routing is enabled. A non-built-in
-    /// duplex device is preferred because it represents a headset or USB audio device;
-    /// Bluetooth input is also accepted when the device exposes no output stream. If no
-    /// external headset is present, fall back to the Mac's built-in microphone.
-    static func automaticInputDeviceUID() -> String? {
-        let devices = availableInputDevices()
-        return connectedExternalHeadsetDevice()?.uid ?? devices.first(where: { $0.isBuiltIn })?.uid
     }
 
     // MARK: - Core Audio property helpers
@@ -1211,7 +1191,7 @@ final class AudioEngine: @unchecked Sendable {
         return value as String
     }
 
-    private static func isBluetoothTransport(deviceID: AudioDeviceID) -> Bool {
+    private static func transportType(deviceID: AudioDeviceID) -> UInt32? {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -1220,23 +1200,25 @@ final class AudioEngine: @unchecked Sendable {
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
         guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &transport) == noErr else {
-            return false
+            return nil
         }
+        return transport
+    }
+
+    private static func isBluetoothTransport(deviceID: AudioDeviceID) -> Bool {
+        let transport = transportType(deviceID: deviceID)
         return transport == kAudioDeviceTransportTypeBluetooth
             || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
     private static func isBuiltInTransport(deviceID: AudioDeviceID) -> Bool {
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &transport) == noErr else {
-            return false
-        }
-        return transport == kAudioDeviceTransportTypeBuiltIn
+        transportType(deviceID: deviceID) == kAudioDeviceTransportTypeBuiltIn
+    }
+
+    private static func isVirtualTransport(deviceID: AudioDeviceID) -> Bool {
+        let transport = transportType(deviceID: deviceID)
+        return transport == kAudioDeviceTransportTypeVirtual
+            || transport == kAudioDeviceTransportTypeAggregate
+            || transport == kAudioDeviceTransportTypeAutoAggregate
     }
 }

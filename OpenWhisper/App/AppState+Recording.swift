@@ -183,7 +183,10 @@ extension AppState {
         let endpointSampleCallback: (([Float]) -> Void)? = smartEndpoint.map { endpoint in
             { samples in endpoint.feed(samples) }
         }
-        owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")")
+        let pickedNote = inputDeviceUID.map { uid in
+            uid == recordingInputDeviceUID ? " (picked mic)" : " (picked mic \(inputDeviceName ?? uid) not connected; fallback)"
+        } ?? " (automatic)"
+        owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")\(pickedNote)")
         // Voice sessions continue the wake listener's running mic stream (same device only)
         // instead of restarting the hardware; after "Hey Jarvis" the audio since the wake comes
         // along, so a command said without a pause keeps its first words. Taken here, before

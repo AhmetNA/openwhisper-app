@@ -62,7 +62,8 @@ extension AppState {
 
         // Enumerate input devices for the picker + BT detection
         refreshInputDevices()
-        owLog("[OpenWhisper] Input devices: \(availableInputDevices.count), default-is-BT: \(systemDefaultInputIsBluetooth)")
+        owLog("[OpenWhisper] Input devices: \(availableInputDevices.map(\.name).joined(separator: ", ")), default-is-BT: \(systemDefaultInputIsBluetooth), picked: \(inputDeviceName ?? inputDeviceUID ?? "automatic")")
+        InputDeviceWatcher.shared.start { [weak self] in self?.refreshInputDevices() }
 
         // Check accessibility
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)

@@ -504,15 +504,23 @@ struct SettingsView: View {
                     set: { appState.inputDeviceUID = $0.isEmpty ? nil : $0 }
                 )) {
                     Text("Otomatik (Kulaklık → Mac)").tag("")
-                    if let builtIn = appState.builtInInputDevice {
-                        Text("Mac Mikrofonu").tag(builtIn.uid)
+                    ForEach(pickableInputDevices) { device in
+                        Text(device.isBuiltIn ? "Mac Mikrofonu" : device.isBluetooth ? "🔵 \(device.name)" : device.name)
+                            .tag(device.uid)
                     }
-                    if let headset = appState.externalHeadsetDevice {
-                        Text(headset.isBluetooth ? "🔵 \(headset.name)" : headset.name).tag(headset.uid)
+                    if let uid = appState.inputDeviceUID, !pickedInputConnected {
+                        Text("\(appState.inputDeviceName ?? uid) (bağlı değil)").tag(uid)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 170)
+                .frame(width: 220)
+            }
+            if appState.inputDeviceUID != nil, !pickedInputConnected {
+                Text("Bu mikrofon takılınca yeniden kullanılır; o zamana kadar kulaklık ya da Mac mikrofonu kaydeder.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 22)
             }
 
             Toggle("Sistem girişini Mac mikrofonunda tut", isOn: $keepBuiltInMicAsDefault)
@@ -544,6 +552,18 @@ struct SettingsView: View {
         .onAppear {
             appState.refreshInputDevices()
         }
+    }
+
+    /// Mac mic first, then the rest by name.
+    private var pickableInputDevices: [AudioInputDevice] {
+        appState.availableInputDevices.sorted { lhs, rhs in
+            if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private var pickedInputConnected: Bool {
+        appState.availableInputDevices.contains { $0.uid == appState.inputDeviceUID }
     }
 
     // MARK: - Audio Ducking Section
