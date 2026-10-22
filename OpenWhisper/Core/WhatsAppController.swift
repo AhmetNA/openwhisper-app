@@ -25,7 +25,7 @@ enum WhatsAppController {
                 let newest = Array(incoming.prefix(min(chat.unread, 2)).reversed())
                 if newest.isEmpty {
                     owLog("[WhatsApp] nothing readable in an unread chat; newest kinds: \(try WhatsAppStore.messageKinds(in: chat.id, limit: 12, at: url))")
-                    items.append(chat.name)
+                    items.append(spokenName(chat))
                 } else {
                     items.append(line(for: chat, newest))
                 }
@@ -44,7 +44,8 @@ enum WhatsAppController {
             else { return "WhatsApp'ta \(name) adında sohbet bulunamadı" }
             let recent = try WhatsAppStore.messages(in: chat.id, limit: 12, at: url)
             guard let newestIncoming = recent.first(where: { !$0.fromMe }) else {
-                return "\(chat.name) sohbetinde ondan gelen mesaj yok"
+                owLog("[WhatsApp] no readable message from them; newest kinds: \(try WhatsAppStore.messageKinds(in: chat.id, limit: 20, at: url))")
+                return "\(spokenName(chat)) sohbetinde ondan gelen mesaj yok"
             }
             // The last burst: up to three of their messages from the same hour.
             let burst = recent.filter { !$0.fromMe && newestIncoming.date.timeIntervalSince($0.date) < 3600 }
@@ -61,8 +62,18 @@ enum WhatsAppController {
             guard chat.isGroup, let sender = message.sender else { return text }
             return "\(sender): \(text)"
         }.joined(separator: chat.isGroup ? " · " : ". ")
-        guard when, let date = messages.last?.date else { return "\(chat.name): \(body)" }
-        return "\(chat.name), \(spokenTime(date)) — \(body)"
+        guard when, let date = messages.last?.date else { return "\(spokenName(chat)): \(body)" }
+        return "\(spokenName(chat)), \(spokenTime(date)) — \(body)"
+    }
+
+    /// The chat name without emoji, which the voice would spell out ("Dilayimmm❤️❤️" → "Dilayimmm").
+    static func spokenName(_ chat: WhatsAppStore.Chat) -> String {
+        let kept = chat.name.unicodeScalars.filter { scalar in
+            !(scalar.properties.isEmojiPresentation || scalar.properties.isEmojiModifier
+              || (scalar.properties.isEmoji && scalar.value > 0x238C) || scalar.value == 0xFE0F || scalar.value == 0x200D)
+        }
+        let name = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? chat.name : name
     }
 
     private static func shortened(_ text: String) -> String {

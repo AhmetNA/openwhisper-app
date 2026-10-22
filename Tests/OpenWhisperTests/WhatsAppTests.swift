@@ -112,6 +112,13 @@ final class WhatsAppTests: XCTestCase {
         XCTAssertNil(WhatsAppStore.readableText("", type: 0))
     }
 
+    func testSpokenNameDropsEmoji() {
+        XCTAssertEqual(WhatsAppController.spokenName(chat(1, "Dilayimmm❤️❤️")), "Dilayimmm")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(2, "Aile 👨‍👩‍👧")), "Aile")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(3, "Ali 2")), "Ali 2")
+        XCTAssertEqual(WhatsAppController.spokenName(chat(4, "🎉")), "🎉")
+    }
+
     func testMissingFolderIsNotInstalled() {
         let url = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)/ChatStorage.sqlite")
         XCTAssertThrowsError(try WhatsAppStore.chats(at: url)) { error in
