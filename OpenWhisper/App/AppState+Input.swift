@@ -18,9 +18,7 @@ extension AppState {
         let previous = availableInputDevices
         availableInputDevices = AudioEngine.availableInputDevices()
         systemDefaultInputIsBluetooth = AudioEngine.systemDefaultInputIsBluetooth()
-        if let uid = inputDeviceUID, let name = availableInputDevices.first(where: { $0.uid == uid })?.name {
-            UserDefaults.standard.set(name, forKey: "inputDeviceName")
-        }
+        updateInputPriority(wasConnected: previous)
         let added = availableInputDevices.filter { device in !previous.contains { $0.uid == device.uid } }
         let removed = previous.filter { device in !availableInputDevices.contains { $0.uid == device.uid } }
         guard !previous.isEmpty, !(added.isEmpty && removed.isEmpty) else { return }
@@ -37,66 +35,68 @@ extension AppState {
             stopRecording()
         }
         syncWakeWordInput()
-        // The picked mic stays picked while unplugged; recordings fall back until it returns.
-        guard let uid = inputDeviceUID else { return }
-        if added.contains(where: { $0.uid == uid }) {
-            owLog("[Input] Picked mic \(inputDeviceName ?? uid) is back; next recording uses it")
-        } else if removed.contains(where: { $0.uid == uid }) {
-            let fallback = resolvedInputDeviceUID(for: nil)
-            let name = availableInputDevices.first { $0.uid == fallback }?.name ?? "system default"
-            owLog("[Input] Picked mic \(inputDeviceName ?? uid) disconnected; next recording falls back to \(name)")
-        }
+        let next = resolvedInputDeviceUID(for: nil)
+        owLog("[Input] Next recording uses \(availableInputDevices.first { $0.uid == next }?.name ?? "system default")")
     }
 
-    /// Points the wake listener at the picked mic and, between recordings, moves it there (or
-    /// back to the Mac mic when it was unplugged). A recording's mic is never switched.
+    /// Stamps the mics connected until now, forgets the ones unseen for three days and puts newly
+    /// connected ones on top. The first run builds the list from the old single pick.
+    func updateInputPriority(wasConnected previous: [AudioInputDevice]) {
+        let seeding = UserDefaults.standard.data(forKey: MicPriority.defaultsKey) == nil
+        inputPriority = MicPriority.updated(
+            inputPriority, wasConnected: Set(previous.map(\.uid)), connected: availableInputDevices,
+            now: Date(), seeding: seeding)
+    }
+
+    /// Saved list, or for the first run the mic picked before the list existed.
+    static func loadInputPriority(_ defaults: UserDefaults) -> [MicPriorityEntry] {
+        if let data = defaults.data(forKey: MicPriority.defaultsKey),
+           let list = try? JSONDecoder().decode([MicPriorityEntry].self, from: data) {
+            return list
+        }
+        guard let uid = defaults.string(forKey: "inputDeviceUID") else { return [] }
+        let name = defaults.string(forKey: "inputDeviceName") ?? uid
+        return [MicPriorityEntry(uid: uid, name: name, isBluetooth: false, lastSeen: Date())]
+    }
+
+    /// Moves a mic `offset` places in the list (negative is up).
+    func moveInputPriority(uid: String, by offset: Int) {
+        guard let index = inputPriority.firstIndex(where: { $0.uid == uid }) else { return }
+        let target = index + offset
+        guard inputPriority.indices.contains(target) else { return }
+        inputPriority.swapAt(index, target)
+    }
+
+    /// Points the wake listener at the priority list and, between recordings, moves it to the
+    /// mic it should now use. A recording's mic is never switched.
     func syncWakeWordInput() {
-        wakeWordListener?.pickedInputUID = inputDeviceUID
+        wakeWordListener?.priorityUIDs = inputPriorityUIDs
         guard recordingState != .recording else { return }
         wakeWordListener?.inputDevicesChanged()
     }
 
-    /// The input for a recording started by `trigger`. In automatic mode a key-started
-    /// recording (Fn, Fn+Space, the shortcut, the Jarvis key) records from connected Bluetooth
-    /// buds by UID even while `DefaultInputGuard` keeps the Mac mic as the default. The buds
-    /// enter call mode only while that recording runs; stopping it releases their mic, so music
-    /// goes back to full quality. A confirmation or follow-up stays on the mic of the session
-    /// that led to it. Voice-started sessions keep the default input, which lets them continue
-    /// the wake listener's stream.
+    /// The input for a recording started by `trigger`: the highest-ranked connected mic in the
+    /// user's list, for every trigger. A confirmation or follow-up stays on the mic of the
+    /// session that led to it, so one conversation never changes mic.
     func resolvedInputDeviceUID(for trigger: RecordingTrigger?) -> String? {
         Self.inputDeviceUID(
-            picked: inputDeviceUID,
+            priority: inputPriorityUIDs,
             trigger: trigger,
             devices: AudioEngine.availableInputDevices(),
-            defaultInputID: AudioEngine.defaultInputDeviceID(),
-            chainedBluetoothUID: chainedBluetoothInputUID
+            chainedUID: chainedInputUID
         )
     }
 
-    /// A picked mic that is connected always wins. Without one, the automatic rules above
-    /// apply; a picked mic that is unplugged falls back to them too, and to the Mac mic when
-    /// they would leave the choice to the system default.
+    /// The Mac mic when none of the list is connected (a mic the list hasn't been told about
+    /// yet); nil, the system default, only when there's no Mac mic either.
     static func inputDeviceUID(
-        picked: String?, trigger: RecordingTrigger?, devices: [AudioInputDevice],
-        defaultInputID: AudioDeviceID?, chainedBluetoothUID: String?
+        priority: [String], trigger: RecordingTrigger?, devices: [AudioInputDevice], chainedUID: String?
     ) -> String? {
-        if let picked, devices.contains(where: { $0.uid == picked }) { return picked }
-        let automatic: String? = {
-            if let device = devices.first(where: { $0.id == defaultInputID && $0.isBluetooth }) {
-                return device.uid
-            }
-            guard let trigger else { return nil }
-            if keyStartedTriggers.contains(trigger) {
-                return devices.first { $0.isBluetooth }?.uid
-            }
-            if [.confirmation, .followUp].contains(trigger), let uid = chainedBluetoothUID,
-               devices.contains(where: { $0.uid == uid }) {
-                return uid
-            }
-            return nil
-        }()
-        guard picked != nil else { return automatic }
-        return automatic ?? devices.first { $0.isBuiltIn }?.uid
+        if let trigger, [.confirmation, .followUp].contains(trigger), let chainedUID,
+           devices.contains(where: { $0.uid == chainedUID }) {
+            return chainedUID
+        }
+        return MicPriority.top(priority, devices: devices)?.uid ?? devices.first { $0.isBuiltIn }?.uid
     }
 
     /// The profile a recording is filtered against: buds and external-mic recordings only ever

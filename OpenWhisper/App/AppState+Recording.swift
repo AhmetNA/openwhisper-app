@@ -66,7 +66,7 @@ extension AppState {
         let recordingInputIsBluetooth = Self.inputIsBluetooth(uid: recordingInputDeviceUID)
         let recordingMic = TargetSpeakerMic(device: AudioEngine.availableInputDevices().first { $0.uid == recordingInputDeviceUID })
         if ![.confirmation, .followUp].contains(recordingTrigger) {
-            chainedBluetoothInputUID = recordingInputIsBluetooth ? recordingInputDeviceUID : nil
+            chainedInputUID = recordingInputDeviceUID
         }
         // A handed-over wake stream is already live; a fresh Bluetooth capture is not.
         let waitsForLinkAudio = recordingInputIsBluetooth
@@ -186,9 +186,8 @@ extension AppState {
         let endpointSampleCallback: (([Float]) -> Void)? = smartEndpoint.map { endpoint in
             { samples in endpoint.feed(samples) }
         }
-        let pickedNote = inputDeviceUID.map { uid in
-            uid == recordingInputDeviceUID ? " (picked mic)" : " (picked mic \(inputDeviceName ?? uid) not connected; fallback)"
-        } ?? " (automatic)"
+        let rank = recordingInputDeviceUID.flatMap { uid in inputPriorityUIDs.firstIndex(of: uid) }
+        let pickedNote = rank.map { " (#\($0 + 1) in mic priority)" } ?? " (not in mic priority)"
         owLog("[OpenWhisper] Resolved recording input: \(recordingInputDeviceUID ?? "system default")\(pickedNote)")
         activeRecordingInputUID = recordingInputDeviceUID ?? AudioEngine.defaultInputDeviceUID()
         // Voice sessions continue the wake listener's running mic stream (same device only)

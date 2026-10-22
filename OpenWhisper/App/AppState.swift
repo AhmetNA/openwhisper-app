@@ -236,28 +236,19 @@ final class AppState {
             }
         }
     }
-    /// Persistent UID of the picked input device, kept while it is unplugged. `nil` means
-    /// automatic (headset → Mac mic).
-    var inputDeviceUID: String? {
+    /// The user's mic order (see `MicPriority`); every recording uses the highest-ranked
+    /// connected mic. Unplugged mics keep their place for three days.
+    var inputPriority: [MicPriorityEntry] = [] {
         didSet {
-            if let uid = inputDeviceUID {
-                UserDefaults.standard.set(uid, forKey: "inputDeviceUID")
-                if let name = availableInputDevices.first(where: { $0.uid == uid })?.name {
-                    UserDefaults.standard.set(name, forKey: "inputDeviceName")
-                }
-            } else {
-                UserDefaults.standard.removeObject(forKey: "inputDeviceUID")
-                UserDefaults.standard.removeObject(forKey: "inputDeviceName")
+            if let data = try? JSONEncoder().encode(inputPriority) {
+                UserDefaults.standard.set(data, forKey: MicPriority.defaultsKey)
             }
-            guard oldValue != inputDeviceUID else { return }
-            owLog("[Input] Picked mic: \(inputDeviceName ?? inputDeviceUID ?? "automatic")")
+            guard oldValue.map(\.uid) != inputPriority.map(\.uid) else { return }
+            owLog("[Input] Mic priority: \(inputPriority.map(\.name).joined(separator: " > "))")
             syncWakeWordInput()
         }
     }
-    /// Name of the picked mic, so Settings can show it while it is unplugged.
-    var inputDeviceName: String? {
-        inputDeviceUID == nil ? nil : UserDefaults.standard.string(forKey: "inputDeviceName")
-    }
+    var inputPriorityUIDs: [String] { inputPriority.map(\.uid) }
     var audioDuckingEnabled: Bool {
         didSet {
             UserDefaults.standard.set(audioDuckingEnabled, forKey: "audioDuckingEnabled")
@@ -277,9 +268,9 @@ final class AppState {
     /// False from the start of a Bluetooth recording until the buds' mic delivers real audio
     /// (their call-mode link takes ~0.25–0.75 s). The flow bar says "connecting" until then.
     var recordingInputReady = true
-    /// The Bluetooth input of the last key-started session, so a confirmation or follow-up it
-    /// leads to keeps recording from the buds. Nil when that session used the Mac mic.
-    var chainedBluetoothInputUID: String?
+    /// The input of the last session that was not itself a confirmation or follow-up, so the
+    /// confirmation or follow-up it leads to records from the same mic.
+    var chainedInputUID: String?
     var recordingIgnoredLeadingSeconds: TimeInterval = 0
     /// True while a hands-free recording (⌘⌥⌃D, Fn+Space, openwhisper://) is running; the
     /// FlowBar shows a stop button then, since there is no held key to release.
@@ -667,7 +658,7 @@ final class AppState {
         autoPasteEnabled = defaults.object(forKey: "autoPasteEnabled") as? Bool ?? true
         targetSpeakerEnabled = defaults.object(forKey: "targetSpeakerEnabled") as? Bool ?? false
         launchAtLogin = defaults.object(forKey: "launchAtLogin") as? Bool ?? true
-        inputDeviceUID = defaults.string(forKey: "inputDeviceUID")
+        inputPriority = Self.loadInputPriority(defaults)
         audioDuckingEnabled = defaults.object(forKey: "audioDuckingEnabled") as? Bool ?? true
         targetSpeakerProfileStore = profileStore
         // Tests pass an in-memory Mac store; never let them reach the real Keychain buds item.
@@ -707,12 +698,7 @@ final class AppState {
 
     // MARK: - Wake word
 
-    /// Automatic mode prefers a connected headset and falls back to the built-in Mac
-    /// microphone. An explicit picker selection still wins, and a temporarily unavailable
-    /// explicit device falls back to the same automatic policy for the next recording.
-    /// With Bluetooth buds as the default input, automatic mode records from the buds' own mic
-    /// by UID (close to the mouth, see `VoiceEndpointDetector.Config.closeTalk`); the wake word
-    /// listener stays on the built-in mic so the buds only enter call mode while recording.
+    /// The mic the next recording uses, see `resolvedInputDeviceUID(for:)`.
     var resolvedInputDeviceUID: String? {
         resolvedInputDeviceUID(for: nil)
     }
@@ -720,7 +706,5 @@ final class AppState {
     var resolvedInputIsBluetooth: Bool {
         Self.inputIsBluetooth(uid: resolvedInputDeviceUID)
     }
-
-    static let keyStartedTriggers: Set<RecordingTrigger> = [.fnHold, .fnSpace, .keyboardShortcut, .jarvisKey]
 
 }

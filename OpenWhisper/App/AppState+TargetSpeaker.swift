@@ -122,21 +122,21 @@ extension AppState {
     /// The mic the wake listener hears through, so the wake clip is scored against its profile.
     var wakeTargetSpeakerMic: TargetSpeakerMic {
         TargetSpeakerMic(device: WakeWordListener.listeningDevice(
-            pickedUID: inputDeviceUID, devices: AudioEngine.availableInputDevices()))
+            priority: inputPriorityUIDs, devices: AudioEngine.availableInputDevices()))
     }
 
     var wakeTargetSpeakerProfile: TargetSpeakerProfile? {
         targetSpeakerProfile(for: wakeTargetSpeakerMic)
     }
 
-    /// The connected external mic: the picked one, else the first one plugged in.
-    static func connectedExternalInput(picked: String?, devices: [AudioInputDevice]) -> AudioInputDevice? {
-        let external = devices.filter { TargetSpeakerMic(device: $0) == .external }
-        return external.first { $0.uid == picked } ?? external.first
+    /// The connected external mic: the highest-ranked one, else the first one plugged in.
+    static func connectedExternalInput(priority: [String], devices: [AudioInputDevice]) -> AudioInputDevice? {
+        let isExternal = { (device: AudioInputDevice) in TargetSpeakerMic(device: device) == .external }
+        return MicPriority.top(priority, devices: devices, where: isExternal) ?? devices.first(where: isExternal)
     }
 
     /// The input an enrollment or sample for `mic` records from: the connected buds, the
-    /// external mic, or the Mac's own mic even while another one is picked or the default (that
+    /// external mic, or the Mac's own mic even while another one ranks higher or is the default (that
     /// would put another mic's audio into the Mac profile).
     func targetSpeakerEnrollmentInputUID(for mic: TargetSpeakerMic) -> String? {
         let devices = AudioEngine.availableInputDevices()
@@ -144,7 +144,7 @@ extension AppState {
         case .buds:
             return AudioEngine.connectedBluetoothInput()?.uid
         case .external:
-            return Self.connectedExternalInput(picked: inputDeviceUID, devices: devices)?.uid
+            return Self.connectedExternalInput(priority: inputPriorityUIDs, devices: devices)?.uid
         case .mac:
             return devices.first { $0.isBuiltIn }?.uid
         }

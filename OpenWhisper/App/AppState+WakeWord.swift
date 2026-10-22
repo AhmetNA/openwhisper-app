@@ -17,7 +17,7 @@ extension AppState {
         }
         listener.onProblemChange = { [weak self] in self?.updateWakeWordListener() }
         listener.prepare()
-        listener.pickedInputUID = inputDeviceUID
+        listener.priorityUIDs = inputPriorityUIDs
         wakeWordListener = listener
         let mediaMonitor = SystemMediaActivityMonitor { [weak self] playing in
             guard let self else { return }

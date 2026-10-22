@@ -357,25 +357,22 @@ final class WakeWordListener {
         if problem != .modelMissing && problem != .modelLoadFailed { problem = nil }
     }
 
-    /// Main thread. The mic picked in Settings; `startEngine` listens on it while it is connected
-    /// and not Bluetooth (see `listeningDevice`).
-    var pickedInputUID: String?
+    /// Main thread. The user's mic order from Settings (see `listeningDevice`).
+    var priorityUIDs: [String] = []
 
-    /// The mic to listen on: the picked one while it is connected and not Bluetooth (holding buds'
+    /// The mic to listen on: the highest-ranked connected mic that is not Bluetooth (holding buds'
     /// mic open would switch them to call-quality audio), else the built-in mic. The list holds
-    /// no virtual devices. A voice session resolves the same picked mic, so the handoff matches.
-    static func listeningDevice(pickedUID: String?, devices: [AudioInputDevice]) -> AudioInputDevice? {
-        if let pickedUID, let picked = devices.first(where: { $0.uid == pickedUID && !$0.isBluetooth }) {
-            return picked
-        }
-        return devices.first(where: \.isBuiltIn)
+    /// no virtual devices. A voice session resolves the same mic unless buds rank above it, so the
+    /// handoff matches.
+    static func listeningDevice(priority: [String], devices: [AudioInputDevice]) -> AudioInputDevice? {
+        MicPriority.top(priority, devices: devices, where: { !$0.isBluetooth }) ?? devices.first(where: \.isBuiltIn)
     }
 
     /// Main thread. After a device change or a new pick: moves a running listener to the mic it
     /// should now use. Never called while a recording runs (the listener is stopped then anyway).
     func inputDevicesChanged() {
         guard isRunning else { return }
-        let target = Self.listeningDevice(pickedUID: pickedInputUID, devices: AudioEngine.availableInputDevices())
+        let target = Self.listeningDevice(priority: priorityUIDs, devices: AudioEngine.availableInputDevices())
         guard target?.id != capture?.deviceID else { return }
         owLog("[WakeWord] Input changed — moving to \(target?.name ?? "default input")")
         stopEngine()
@@ -383,7 +380,7 @@ final class WakeWordListener {
     }
 
     private func startEngine() {
-        let device = Self.listeningDevice(pickedUID: pickedInputUID, devices: AudioEngine.availableInputDevices())
+        let device = Self.listeningDevice(priority: priorityUIDs, devices: AudioEngine.availableInputDevices())
         if device == nil && AudioEngine.systemDefaultInputIsBluetooth() {
             owLog("[WakeWord] Only a Bluetooth mic available — not listening (would force call-quality audio)")
             problem = .bluetoothOnly

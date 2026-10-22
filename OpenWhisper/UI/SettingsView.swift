@@ -496,32 +496,20 @@ struct SettingsView: View {
     private var inputDeviceSection: some View {
         @Bindable var appState = appState
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Label("Mikrofon", systemImage: "mic.and.signal.meter")
-                Spacer()
-                Picker("", selection: Binding(
-                    get: { appState.inputDeviceUID ?? "" },
-                    set: { appState.inputDeviceUID = $0.isEmpty ? nil : $0 }
-                )) {
-                    Text("Otomatik (Kulaklık → Mac)").tag("")
-                    ForEach(pickableInputDevices) { device in
-                        Text(device.isBuiltIn ? "Mac Mikrofonu" : device.isBluetooth ? "🔵 \(device.name)" : device.name)
-                            .tag(device.uid)
-                    }
-                    if let uid = appState.inputDeviceUID, !pickedInputConnected {
-                        Text("\(appState.inputDeviceName ?? uid) (bağlı değil)").tag(uid)
-                    }
+            Label("Mikrofon sırası", systemImage: "mic.and.signal.meter")
+            VStack(spacing: 0) {
+                ForEach(Array(appState.inputPriority.enumerated()), id: \.element.uid) { index, entry in
+                    inputPriorityRow(index: index, entry: entry)
+                    if index < appState.inputPriority.count - 1 { Divider() }
                 }
-                .labelsHidden()
-                .frame(width: 220)
             }
-            if appState.inputDeviceUID != nil, !pickedInputConnected {
-                Text("Bu mikrofon takılınca yeniden kullanılır; o zamana kadar kulaklık ya da Mac mikrofonu kaydeder.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 22)
-            }
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+            .padding(.leading, 22)
+            Text("Bağlı olan en üstteki mikrofon kaydeder. Yeni takılan mikrofon en üste gelir; 3 gün bağlanmayan mikrofon listeden çıkar.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 22)
 
             Toggle("Sistem girişini Mac mikrofonunda tut", isOn: $keepBuiltInMicAsDefault)
                 .font(.caption)
@@ -554,16 +542,49 @@ struct SettingsView: View {
         }
     }
 
-    /// Mac mic first, then the rest by name.
-    private var pickableInputDevices: [AudioInputDevice] {
-        appState.availableInputDevices.sorted { lhs, rhs in
-            if lhs.isBuiltIn != rhs.isBuiltIn { return lhs.isBuiltIn }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    private func inputPriorityRow(index: Int, entry: MicPriorityEntry) -> some View {
+        let connected = appState.availableInputDevices.contains { $0.uid == entry.uid }
+        let inUse = connected && appState.resolvedInputDeviceUID == entry.uid
+        let isBuiltIn = appState.builtInInputDevice?.uid == entry.uid
+        return HStack(spacing: 8) {
+            Text("\(index + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Image(systemName: isBuiltIn ? "laptopcomputer" : entry.isBluetooth ? "headphones" : "mic")
+                .frame(width: 16)
+            Text(isBuiltIn ? "Mac Mikrofonu" : entry.name)
+                .lineLimit(1)
+            if inUse {
+                Text("kullanılıyor")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            } else if !connected {
+                Text("bağlı değil")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                appState.moveInputPriority(uid: entry.uid, by: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .disabled(index == 0)
+            .help("Yukarı taşı")
+            Button {
+                appState.moveInputPriority(uid: entry.uid, by: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .disabled(index == appState.inputPriority.count - 1)
+            .help("Aşağı taşı")
         }
-    }
-
-    private var pickedInputConnected: Bool {
-        appState.availableInputDevices.contains { $0.uid == appState.inputDeviceUID }
+        .buttonStyle(.borderless)
+        .font(.callout)
+        .opacity(connected ? 1 : 0.5)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
     }
 
     // MARK: - Audio Ducking Section
