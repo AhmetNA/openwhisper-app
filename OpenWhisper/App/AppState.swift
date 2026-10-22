@@ -96,6 +96,13 @@ final class AppState {
             if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
         }
     }
+    /// "Dilayım'dan mesaj var, okuyayım mı?" when someone writes on WhatsApp (`WhatsAppWatcher`).
+    var whatsAppAnnouncementsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(whatsAppAnnouncementsEnabled, forKey: "whatsAppAnnouncementsEnabled")
+            if whatsAppAnnouncementsEnabled { whatsAppWatcher.start() } else { whatsAppWatcher.stop() }
+        }
+    }
     /// Who makes the voice (`SpeechProviders.all`): only how a reply sounds, never what it says.
     var voiceProviderID: String {
         didSet {
@@ -137,6 +144,7 @@ final class AppState {
 
     @ObservationIgnored var jarvisReply = JarvisReply()
     /// "Dilayım'a yaz: …": the draft waiting for "evet" / "hayır".
+    @ObservationIgnored let whatsAppWatcher = WhatsAppWatcher()
     @ObservationIgnored lazy var whatsAppSender = WhatsAppSender(pressReturn: { pid in TextInjector().pressReturn(inPID: pid) })
     /// "Test modunu başlat": the TODO.md item being tried now.
     @ObservationIgnored let voiceTest = VoiceTestSession()
@@ -609,6 +617,7 @@ final class AppState {
         damgaEnabled = defaults.object(forKey: "damgaEnabled") as? Bool ?? false
         laughterToRandomEnabled = defaults.object(forKey: "laughterToRandomEnabled") as? Bool ?? false
         voiceRepliesEnabled = defaults.object(forKey: "voiceRepliesEnabled") as? Bool ?? true
+        whatsAppAnnouncementsEnabled = defaults.object(forKey: "whatsAppAnnouncementsEnabled") as? Bool ?? true
         voiceProviderID = SpeechSettingsStore.standard.providerID
         voiceModelID = SpeechSettingsStore.standard.modelID(for: SpeechSettingsStore.standard.providerID)
         voiceID = SpeechSettingsStore.standard.voiceID(for: SpeechSettingsStore.standard.providerID)

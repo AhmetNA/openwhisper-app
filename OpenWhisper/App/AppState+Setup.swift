@@ -159,6 +159,7 @@ extension AppState {
         let notifGranted = await reminderManager?.requestPermission() ?? false
         owLog("[OpenWhisper] Notification permission: \(notifGranted)")
         setupTimers()
+        setupWhatsAppAnnouncements()
         owLog("[OpenWhisper] Ready!")
     }
 

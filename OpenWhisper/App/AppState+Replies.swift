@@ -29,6 +29,44 @@ extension AppState {
         }
     }
 
+    func setupWhatsAppAnnouncements() {
+        whatsAppWatcher.onAnnounce = { [weak self] announcement in
+            Task { @MainActor in await self?.announceWhatsApp(announcement) }
+        }
+        if whatsAppAnnouncementsEnabled { whatsAppWatcher.start() }
+    }
+
+    /// "Dilayım'dan mesaj var, okuyayım mı?", then a short window for "evet" / "hayır"
+    /// (`WhatsAppSender.handleConfirmation`). Not while WhatsApp is in front (the user sees
+    /// it) or the screen is locked; after a command in progress has finished.
+    func announceWhatsApp(_ announcement: WhatsAppWatcher.Announcement) async {
+        guard whatsAppAnnouncementsEnabled, voiceRepliesEnabled else { return }
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == WhatsAppSender.bundleIdentifier {
+            owLog("[WhatsApp] announcement skipped: WhatsApp is in front")
+            return
+        }
+        if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
+            owLog("[WhatsApp] announcement skipped: screen locked")
+            return
+        }
+        let deadline = Date().addingTimeInterval(30)
+        while recordingState == .recording || isTranscribing || jarvisActivity != .none, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        guard recordingState != .recording, !whatsAppSender.hasPending, !(reminderManager?.hasPendingDeletion ?? false) else {
+            owLog("[WhatsApp] announcement skipped: Jarvis is busy")
+            return
+        }
+        showFlowBarMessage(announcement.text, durationMs: 8000)
+        whatsAppSender.offerRead(announcement.chatIDs)
+        guard await speakReply(announcement.text), hotkey?.isIdle == true, microphoneGranted else {
+            whatsAppSender.cancel()
+            return
+        }
+        owLog("[WhatsApp] Listening for the answer to the announcement")
+        startVoiceSession(trigger: .confirmation)
+    }
+
     /// The first chimes are already playing: say what it was for, then listen briefly for
     /// "tamam" / "5 dakika ertele" without the wake word. The chimes keep coming back until
     /// someone stops them.

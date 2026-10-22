@@ -97,6 +97,37 @@ enum WhatsAppStore {
         return Array(messages.compactMap { $0 }.prefix(limit))
     }
 
+    /// A message that arrived, without its text: enough to say who wrote.
+    struct Arrival: Equatable {
+        let messageID: Int64
+        let chatID: Int64
+        let date: Date
+        /// Text or media, not a group event or a call.
+        let readable: Bool
+    }
+
+    /// The newest message row, to start watching from.
+    static func newestMessageID(at url: URL = defaultURL) throws -> Int64 {
+        try Connection(url).rows("SELECT IFNULL(MAX(Z_PK), 0) FROM ZWAMESSAGE") { $0.int(0) }.first ?? 0
+    }
+
+    /// Messages from others whose row is newer than `messageID`, oldest first.
+    static func arrivals(after messageID: Int64, at url: URL = defaultURL) throws -> [Arrival] {
+        let db = try Connection(url)
+        let type = db.columns(of: "ZWAMESSAGE").contains("ZMESSAGETYPE") ? "IFNULL(ZMESSAGETYPE, 0)" : "0"
+        let sql = """
+            SELECT Z_PK, ZCHATSESSION, ZMESSAGEDATE, \(type), IFNULL(ZTEXT, '')
+            FROM ZWAMESSAGE
+            WHERE Z_PK > \(messageID) AND IFNULL(ZISFROMME, 0) = 0
+            ORDER BY Z_PK LIMIT 200
+            """
+        return try db.rows(sql) { row in
+            Arrival(messageID: row.int(0), chatID: row.int(1),
+                    date: Date(timeIntervalSinceReferenceDate: row.double(2)),
+                    readable: readableText(row.text(4).trimmingCharacters(in: .whitespacesAndNewlines), type: Int(row.int(3))) != nil)
+        }
+    }
+
     /// The kinds of the newest rows of a chat ("0<", "3>", "46<·": type, < theirs, > mine, · no
     /// text), without any message text, for the log when nothing readable was found.
     static func messageKinds(in chatID: Int64, limit: Int, at url: URL = defaultURL) throws -> String {

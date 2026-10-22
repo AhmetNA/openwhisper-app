@@ -42,17 +42,31 @@ enum WhatsAppController {
         return await read { url in
             guard let (chat, _) = WhatsAppStore.bestChat(for: name, in: try WhatsAppStore.chats(at: url), contacts: contacts)
             else { return "WhatsApp'ta \(name) adında sohbet bulunamadı" }
-            let recent = try WhatsAppStore.messages(in: chat.id, limit: 12, at: url)
-            guard let newestIncoming = recent.first(where: { !$0.fromMe }) else {
-                owLog("[WhatsApp] no readable message from them; newest kinds: \(try WhatsAppStore.messageKinds(in: chat.id, limit: 20, at: url))")
-                return "\(spokenName(chat)) sohbetinde ondan gelen mesaj yok"
-            }
-            // The last burst: up to three of their messages from the same hour.
-            let burst = recent.filter { !$0.fromMe && newestIncoming.date.timeIntervalSince($0.date) < 3600 }
-            var text = line(for: chat, Array(burst.prefix(3).reversed()), when: true)
-            if recent.first?.fromMe == true { text += " · Son mesaj senden" }
-            return text
+            return try latest(in: chat, at: url)
         }
+    }
+
+    /// The newest messages of these chats, one line each: after "Dilayım'dan mesaj var,
+    /// okuyayım mı?" is answered yes.
+    static func latest(inChats ids: [Int64]) async -> String {
+        await read { url in
+            let chats = try WhatsAppStore.chats(at: url)
+            return try ids.compactMap { id in try chats.first { $0.id == id }.map { try latest(in: $0, at: url) } }
+                .joined(separator: " · ")
+        }
+    }
+
+    private static func latest(in chat: WhatsAppStore.Chat, at url: URL) throws -> String {
+        let recent = try WhatsAppStore.messages(in: chat.id, limit: 12, at: url)
+        guard let newestIncoming = recent.first(where: { !$0.fromMe }) else {
+            owLog("[WhatsApp] no readable message from them; newest kinds: \(try WhatsAppStore.messageKinds(in: chat.id, limit: 20, at: url))")
+            return "\(spokenName(chat)) sohbetinde ondan gelen mesaj yok"
+        }
+        // The last burst: up to three of their messages from the same hour.
+        let burst = recent.filter { !$0.fromMe && newestIncoming.date.timeIntervalSince($0.date) < 3600 }
+        var text = line(for: chat, Array(burst.prefix(3).reversed()), when: true)
+        if recent.first?.fromMe == true { text += " · Son mesaj senden" }
+        return text
     }
 
     /// "Ali, bugün 14:05 — selam. Akşam geliyor musun" or, in a group, "Aile — Annem: …".

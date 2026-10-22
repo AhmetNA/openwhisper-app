@@ -723,6 +723,19 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
+                Label("WhatsApp mesajlarını haber ver", systemImage: "message")
+                Spacer()
+                Toggle("", isOn: Binding(get: { appState.whatsAppAnnouncementsEnabled },
+                                         set: { appState.whatsAppAnnouncementsEnabled = $0 }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            Text("Biri WhatsApp'tan yazınca “Dilayım'dan mesaj var, okuyayım mı?” der; “evet” dersen okur. Gruplar haber verilmez.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
                 Text("Ses sağlayıcı")
                 Spacer()
                 Picker("", selection: Binding(get: { appState.voiceProviderID },

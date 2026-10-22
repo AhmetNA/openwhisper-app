@@ -94,7 +94,9 @@ final class WhatsAppSender {
     }
 
     private(set) var pending: Draft?
-    var hasPending: Bool { pending != nil }
+    /// "Dilayım'dan mesaj var, okuyayım mı?" waits for its answer (`WhatsAppWatcher`).
+    private(set) var readOffer: (chatIDs: [Int64], expiresAt: Date)?
+    var hasPending: Bool { pending != nil || readOffer != nil }
     private static let confirmationTimeout: TimeInterval = 45
     static let bundleIdentifier = "net.whatsapp.WhatsApp"
 
@@ -108,6 +110,13 @@ final class WhatsAppSender {
     func cancel() {
         if pending != nil { owLog("[WhatsApp] pending message dropped") }
         pending = nil
+        readOffer = nil
+    }
+
+    /// Jarvis asked whether to read new messages; the next answer decides.
+    func offerRead(_ chatIDs: [Int64]) {
+        pending = nil
+        readOffer = (chatIDs, Date().addingTimeInterval(Self.confirmationTimeout))
     }
 
     func prepare(_ outgoing: WhatsAppOutgoing) async -> Prepared {
@@ -140,6 +149,16 @@ final class WhatsAppSender {
     /// The answer to the pending draft, or nil when `text` is no answer (a new message
     /// request, or nothing pending) and should be routed as usual.
     func handleConfirmation(_ text: String) async -> Prepared? {
+        if let offer = readOffer {
+            readOffer = nil
+            guard offer.expiresAt > Date() else { return nil }
+            switch Self.readDecision(text) {
+            case .approve: return .done(await WhatsAppController.latest(inChats: offer.chatIDs))
+            case .reject: return .done("Tamam")
+            // Anything else is a new request ("Dilayım'a yaz: …"), routed as usual.
+            case .unclear: return nil
+            }
+        }
         guard var draft = pending else { return nil }
         if WhatsAppSendParser.parse(text) != nil {
             pending = nil
@@ -270,14 +289,7 @@ final class WhatsAppSender {
 
     /// Only a short, plain answer counts; anything else is asked once more.
     static func decision(_ text: String) -> Decision {
-        var answer = WhatsAppStore.fold(text)
-            .replacingOccurrences(of: #"[^a-z0-9 ]"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        if answer.hasPrefix("jarvis ") { answer.removeFirst("jarvis ".count) }
-        for ending in [" efendim", " jarvis", " lutfen", " patron"] where answer.hasSuffix(ending) {
-            answer.removeLast(ending.count)
-        }
+        let answer = normalizedAnswer(text)
         let rejections: Set<String> = [
             "hayir", "hayir gonderme", "gonderme", "yollama", "iptal", "iptal et", "vazgec", "vazgectim",
             "dur", "bekle", "yok", "olmaz", "istemiyorum",
@@ -289,5 +301,32 @@ final class WhatsAppSender {
             "aynen", "aynen gonder", "devam et",
         ]
         return approvals.contains(answer) ? .approve : .unclear
+    }
+
+    /// The answer to "okuyayım mı?".
+    static func readDecision(_ text: String) -> Decision {
+        let answer = normalizedAnswer(text)
+        let rejections: Set<String> = [
+            "hayir", "okuma", "sonra", "sonra oku", "simdi degil", "gerek yok", "bosver", "bos ver", "istemiyorum",
+            "yok", "kalsin", "dur", "sus", "sonra bakarim",
+        ]
+        if rejections.contains(answer) { return .reject }
+        let approvals: Set<String> = [
+            "evet", "oku", "evet oku", "okuyabilirsin", "evet okuyabilirsin", "oku bakalim", "tamam", "tamam oku",
+            "olur", "evet olur", "tabii", "tabii oku", "aynen", "hadi oku", "ne yazmis", "ne demis", "ne yazdi",
+        ]
+        return approvals.contains(answer) ? .approve : .unclear
+    }
+
+    private static func normalizedAnswer(_ text: String) -> String {
+        var answer = WhatsAppStore.fold(text)
+            .replacingOccurrences(of: #"[^a-z0-9 ]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if answer.hasPrefix("jarvis ") { answer.removeFirst("jarvis ".count) }
+        for ending in [" efendim", " jarvis", " lutfen", " patron"] where answer.hasSuffix(ending) {
+            answer.removeLast(ending.count)
+        }
+        return answer
     }
 }
