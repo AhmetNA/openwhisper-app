@@ -50,6 +50,9 @@ enum SystemCommand: Equatable, Sendable {
     case whatsAppFrom(String)
     /// "Dilay'la en son ne konuştuk": the last exchange of that chat, both sides.
     case whatsAppConversation(String)
+    /// "En son ne zaman kombi hakkında konuştuk", "Dilay'la kombi hakkında ne konuştuk",
+    /// "kombi geçen mesajları bul": messages about a topic, summed up.
+    case whatsAppSearch(topic: String, person: String?)
     /// "Bugün ne var?": calendar, reminders and mail for today (0) or tomorrow (1).
     case briefing(dayOffset: Int)
     /// A Shortcuts.app shortcut by its exact name.
@@ -155,6 +158,8 @@ enum SystemCommandParser {
         // First, and with a longer limit: shortcut names are free text ("Wi-Fi ile Sabah Özeti")
         // that would otherwise read as a Wi-Fi or app command.
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
+        // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
+        if cleaned.split(separator: " ").count <= 12, let search = parseWhatsAppSearch(cleaned) { return search }
         guard cleaned.split(separator: " ").count <= maxWords else { return nil }
         if let briefing = parseBriefing(cleaned) { return briefing }
 
@@ -265,6 +270,37 @@ enum SystemCommandParser {
         if mentionsApp, matches(text, #"\byeni\b|var mı|kim yazdı|ne var|kimden|\boku"#) { return .whatsAppUnread }
         if matches(text, #"^(?:bana )?(?:kim yazdı|kimden mesaj var|kimlerden mesaj var|yeni mesaj(?:ım)? var mı|mesaj(?:ım)? var mı)$"#) {
             return .whatsAppUnread
+        }
+        return nil
+    }
+
+    /// "En son ne zaman kombi hakkında konuştuk", "Dilay'la kombi ile ilgili ne konuşmuştuk",
+    /// "kombi geçen mesajları bul", "mesajlarda kombi ara".
+    static func parseWhatsAppSearch(_ text: String) -> SystemCommand? {
+        let bare = text.replacingOccurrences(of: whatsApp, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let person = #"(?:(.+?)(?: ile|['’]y?la|['’]y?le|la|le) )?"#
+        let about = #"(?:hakkında|ile ilgili|konusunda|hakkındaki)"#
+        let talked = #"(?:konuştuk|konuşmuştuk|konuştum|konuşmuştum|konuşmuşuz|yazıştık|yazışmıştık|mesajlaştık|bahsettik|bahsetmiştik|bahsettim|konuşuldu|ne dedik|ne demiştik|ne dedi|ne demişti|ne yazdı|ne yazmıştı)"#
+        let patterns = [
+            #"^\#(person)(?:en son |son )?(?:ne zaman )?(.+?) \#(about) (?:en son |son )?(?:ne zaman |ne |neler )?\#(talked)(?: en son)?$"#,
+            #"^\#(person)(.+?) (?:kelimesi geçen|geçen|diye yazan|yazan|ile ilgili|hakkındaki) \#(message) (?:bul|ara|göster|var mı|oku|özetle)$"#,
+            #"^()(?:mesajlarda|mesajlarımda) (.+?) (?:ara|bul)$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: bare, range: NSRange(bare.startIndex..., in: bare)),
+                  let topicRange = Range(match.range(at: 2), in: bare) else { continue }
+            let topic = bare[topicRange].trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\"'“”")))
+                .replacingOccurrences(of: #"\s*kelimesi$"#, with: "", options: .regularExpression)
+            guard !topic.isEmpty, topic.split(separator: " ").count <= 4 else { return nil }
+            let name = Range(match.range(at: 1), in: bare).map { String(bare[$0]).trimmingCharacters(in: .whitespaces) }
+                .flatMap { $0.isEmpty ? nil : $0 }
+            if let name, name.split(separator: " ").count > 3 { return nil }
+            return .whatsAppSearch(topic: topic, person: name.map { name in
+                name.split(separator: " ").map { $0.prefix(1).uppercased(with: locale) + $0.dropFirst() }.joined(separator: " ")
+            })
         }
         return nil
     }

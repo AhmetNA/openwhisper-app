@@ -27,6 +27,7 @@ enum WhatsAppStore {
         /// Who wrote it in a group; nil in a one-to-one chat or when WhatsApp doesn't know.
         let sender: String?
         let date: Date
+        var chatID: Int64 = 0
     }
 
     enum Failure: Error, Equatable {
@@ -68,9 +69,65 @@ enum WhatsAppStore {
     }
 
     /// The newest `limit` readable messages of the chat, newest first. Group events ("X
-    /// joined") are skipped; photos, voice notes and the like are named instead of read.
+    /// joined") are skipped; photos, voice notes and the like are named instead of read, a
+    /// document by its file name only.
     static func messages(in chatID: Int64, limit: Int, at url: URL = defaultURL) throws -> [Message] {
+        // Extra rows so skipped events still leave `limit` messages.
+        Array(try readMessages(try Connection(url), where: "m.ZCHATSESSION = \(chatID)", limit: limit * 4).prefix(limit))
+    }
+
+    /// The chat's messages between two moments, newest first: the talk around a search hit.
+    static func messages(in chatID: Int64, from start: Date, to end: Date, limit: Int, at url: URL = defaultURL) throws -> [Message] {
+        let range = "m.ZMESSAGEDATE BETWEEN \(start.timeIntervalSinceReferenceDate) AND \(end.timeIntervalSinceReferenceDate)"
+        return Array(try readMessages(try Connection(url), where: "m.ZCHATSESSION = \(chatID) AND \(range)", limit: limit * 2).prefix(limit))
+    }
+
+    /// Messages whose text (or document name) has a word starting with one of `stems`
+    /// ("kombi" finds "Kombiyi", "kombinin"), newest first; in one chat when `chatID` is set.
+    static func search(_ stems: [String], chatID: Int64? = nil, limit: Int, at url: URL = defaultURL) throws -> [Message] {
+        let stems = stems.map(fold).filter { $0.count >= 3 && $0.allSatisfy { $0.isLetter || $0.isNumber } }
+        guard !stems.isEmpty else { return [] }
         let db = try Connection(url)
+        let media = mediaColumns(db)
+        // LIKE ignores case for ASCII only, so the Turkish spellings are listed too.
+        let fields = ["m.ZTEXT"] + (media.title.map { [$0] } ?? [])
+        let tr = Locale(identifier: "tr_TR")
+        let likes = stems.flatMap { stem in
+            let forms = turkishSpellings(stem)
+            let variants = Set(forms + forms.map { $0.capitalized(with: tr) } + forms.map { $0.uppercased(with: tr) })
+            return variants.flatMap { variant in fields.map { "\($0) LIKE '%\(variant)%'" } }
+        }
+        let chat = chatID.map { "m.ZCHATSESSION = \($0) AND " } ?? ""
+        let found = try readMessages(db, where: "\(chat)(\(likes.joined(separator: " OR ")))", limit: limit * 3)
+        // The LIKE above also finds the stem inside a word ("ekombi"); keep word starts only.
+        return Array(found.filter { message in
+            let words = fold(message.text).split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            return words.contains { word in stems.contains { word.hasPrefix($0) } }
+        }.prefix(limit))
+    }
+
+    /// The forms a folded stem may be written in: "isitma" is "ısıtma" in the messages.
+    private static func turkishSpellings(_ stem: String) -> [String] {
+        let pairs: [(Character, [Character])] = [("i", ["ı"]), ("s", ["ş"]), ("c", ["ç"]), ("g", ["ğ"]), ("o", ["ö"]), ("u", ["ü"])]
+        var forms: Set<String> = [stem]
+        for (plain, accented) in pairs where stem.contains(plain) {
+            for form in forms {
+                for letter in accented { forms.insert(String(form.map { $0 == plain ? letter : $0 })) }
+            }
+        }
+        return Array(forms.prefix(16))
+    }
+
+    private static func mediaColumns(_ db: Connection) -> (join: String, title: String?) {
+        guard db.columns(of: "ZWAMESSAGE").contains("ZMEDIAITEM") else { return ("", nil) }
+        let item = db.columns(of: "ZWAMEDIAITEM")
+        let name = ["ZTITLE", "ZMEDIALOCALPATH"].filter(item.contains).map { "NULLIF(mi.\($0), '')" }
+        guard !name.isEmpty else { return ("", nil) }
+        let title = name.count == 1 ? name[0] : "COALESCE(\(name.joined(separator: ", ")))"
+        return ("LEFT JOIN ZWAMEDIAITEM mi ON mi.Z_PK = m.ZMEDIAITEM", title)
+    }
+
+    private static func readMessages(_ db: Connection, where condition: String, limit: Int) throws -> [Message] {
         let columns = db.columns(of: "ZWAMESSAGE")
         let type = columns.contains("ZMESSAGETYPE") ? "IFNULL(m.ZMESSAGETYPE, 0)" : "0"
         let members = db.columns(of: "ZWAGROUPMEMBER")
@@ -79,22 +136,23 @@ enum WhatsAppStore {
             ? (members.contains("ZFIRSTNAME") ? "COALESCE(NULLIF(g.ZCONTACTNAME, ''), g.ZFIRSTNAME)" : "g.ZCONTACTNAME")
             : "NULL"
         let join = joinsMember ? "LEFT JOIN ZWAGROUPMEMBER g ON g.Z_PK = m.ZGROUPMEMBER" : ""
-        // Extra rows so skipped events still leave `limit` messages.
+        let media = mediaColumns(db)
         let sql = """
-            SELECT m.ZTEXT, IFNULL(m.ZISFROMME, 0), m.ZMESSAGEDATE, \(type), \(sender)
-            FROM ZWAMESSAGE m \(join)
-            WHERE m.ZCHATSESSION = \(chatID)
+            SELECT m.ZTEXT, IFNULL(m.ZISFROMME, 0), m.ZMESSAGEDATE, \(type), \(sender), m.ZCHATSESSION, \(media.title ?? "NULL")
+            FROM ZWAMESSAGE m \(join) \(media.join)
+            WHERE \(condition)
             ORDER BY m.ZMESSAGEDATE DESC
-            LIMIT \(limit * 4)
+            LIMIT \(limit)
             """
         let messages: [Message?] = try db.rows(sql) { row in
             let raw = row.isNull(0) ? "" : row.text(0).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let text = readableText(raw, type: Int(row.int(3))) else { return nil }
+            let file = row.isNull(6) ? nil : (row.text(6) as NSString).lastPathComponent
+            guard let text = readableText(raw, type: Int(row.int(3)), fileName: file) else { return nil }
             let name = row.isNull(4) ? "" : row.text(4)
             return Message(text: text, fromMe: row.int(1) != 0, sender: name.isEmpty ? nil : name,
-                           date: Date(timeIntervalSinceReferenceDate: row.double(2)))
+                           date: Date(timeIntervalSinceReferenceDate: row.double(2)), chatID: row.int(5))
         }
-        return Array(messages.compactMap { $0 }.prefix(limit))
+        return messages.compactMap { $0 }
     }
 
     /// A message that arrived, without its text: enough to say who wrote.
@@ -144,12 +202,15 @@ enum WhatsAppStore {
 
     /// The text to read for a message of `type`. Only plain text (0) and links (7) are read as
     /// they are: other types carry WhatsApp's own data in `ZTEXT` (a group's settings as JSON,
-    /// event descriptions), so media are named and everything else is skipped.
-    static func readableText(_ raw: String, type: Int) -> String? {
+    /// event descriptions), so media are named, documents by file name, and everything else
+    /// is skipped.
+    static func readableText(_ raw: String, type: Int, fileName: String? = nil) -> String? {
         if type == 0 || type == 7 {
             guard !raw.isEmpty, !(raw.hasPrefix("{") && raw.hasSuffix("}")) else { return nil }
             return raw
         }
+        // A document goes by its name only; no media content is ever read.
+        if type == 8, let fileName, !fileName.isEmpty { return "Belge: \(fileName)" }
         return mediaLabel(type)
     }
 

@@ -42,6 +42,7 @@ enum SystemController {
         case .whatsAppUnread: return await WhatsAppController.unreadSummary()
         case .whatsAppFrom(let name): return await WhatsAppController.latest(from: name)
         case .whatsAppConversation(let name): return await WhatsAppController.conversation(with: name)
+        case .whatsAppSearch(let topic, let person): return await WhatsAppController.search(topic: topic, person: person)
         case .runShortcut(let name): return runShortcut(name)
         case .briefing(let dayOffset):
             let summary = await DailyBriefing.build(dayOffset: dayOffset)
