@@ -37,8 +37,9 @@ extension AppState {
         let recordingTrigger = hotkey?.trigger ?? .fnHold
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
-        let claudeMessage = recordingTrigger == .followUp && pendingClaudeMessage
-        pendingClaudeMessage = false
+        let claudeRecap = recordingTrigger == .followUp ? pendingClaudeMessage : nil
+        let claudeMessage = claudeRecap != nil
+        pendingClaudeMessage = nil
         let overReply = commandFollowUp != nil && commandFollowUpOverReply
         commandFollowUpOverReply = false
         commandFollowUpAwaitingReplyEnd = overReply
@@ -47,6 +48,8 @@ extension AppState {
         // session blocks a new recording.
         guard recordingState != .recording else { return }
         clearFlowBarMessage()
+        // The recap stays readable while the user words the message.
+        if let claudeRecap { showFlowBarMessage(claudeRecap, durationMs: Self.flowBarDuration(ofRecap: claudeRecap)) }
         guard modelLoaded else {
             owLog("[OpenWhisper] Cannot record — model not loaded yet")
             return

@@ -501,8 +501,9 @@ final class AppState {
     /// Leading part of that window ignored as Jarvis's own voice tail.
     nonisolated static let replyFollowUpEchoGuard: TimeInterval = 0.4
     nonisolated static let maxReplyFollowUps = 2
-    /// The next `.followUp` recording is the message for the Claude session just recapped.
-    @ObservationIgnored var pendingClaudeMessage = false
+    /// The next `.followUp` recording is the message for the Claude session just recapped;
+    /// the recap, shown again once the recording cleared the bar.
+    @ObservationIgnored var pendingClaudeMessage: String?
     /// After a Claude session recap, how long the mic waits for the first word of the message.
     nonisolated static let claudeMessageWindow: TimeInterval = 6
     /// The next `.followUp` recording comes after a command (`listenAfterCommand`): the

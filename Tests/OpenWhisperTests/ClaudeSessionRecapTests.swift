@@ -100,4 +100,9 @@ final class ClaudeSessionRecapTests: XCTestCase {
             "Takvim düzeldi. Testler geçti.")
         XCTAssertNil(ClaudeSessionRecap.fallbackSummary(storedRecap: nil, lastMessage: nil))
     }
+
+    func testModelAnswerCutToTwoSentences() {
+        XCTAssertEqual(ClaudeSessionRecap.twoSentences("Bir bitti. İki kaldı. Üç de"), "Bir bitti. İki kaldı.")
+        XCTAssertEqual(ClaudeSessionRecap.twoSentences("Takvim düzeldi"), "Takvim düzeldi")
+    }
 }

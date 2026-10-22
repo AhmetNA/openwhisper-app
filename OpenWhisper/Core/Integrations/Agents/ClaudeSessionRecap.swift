@@ -42,7 +42,7 @@ enum ClaudeSessionRecap {
         var last: String?
         for line in text.split(separator: "\n") where line.contains("\"assistant\"") {
             guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  json["type"] as? String == "assistant",
+                  json["type"] as? String == "assistant", json["isSidechain"] as? Bool != true,
                   let content = (json["message"] as? [String: Any])?["content"] as? [[String: Any]] else { continue }
             let texts = content.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }
             if let text = texts.last?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty { last = text }
@@ -63,15 +63,20 @@ enum ClaudeSessionRecap {
         """
     }
 
+    /// Speakable text cut to its first two sentences; a sentence the model left unfinished
+    /// (its token budget ran out) is dropped when a whole one comes before it.
+    static func twoSentences(_ text: String) -> String? {
+        var buffer = JarvisChat.speakable(text) + " "
+        let sentences = JarvisChat.takeSentences(from: &buffer).prefix(2)
+        let result = sentences.isEmpty ? buffer.trimmingCharacters(in: .whitespaces) : sentences.joined(separator: " ")
+        return result.isEmpty ? nil : result
+    }
+
     /// Without a model: the app's recap, or the first two sentences of the last message.
     static func fallbackSummary(storedRecap: String?, lastMessage: String?) -> String? {
-        if let storedRecap { return JarvisChat.speakable(storedRecap) }
+        if let storedRecap { return twoSentences(storedRecap) }
         guard let lastMessage else { return nil }
-        let firstParagraph = lastMessage.components(separatedBy: "\n\n").first ?? lastMessage
-        var buffer = JarvisChat.speakable(firstParagraph) + " "
-        let sentences = JarvisChat.takeSentences(from: &buffer).prefix(2)
-        let text = sentences.isEmpty ? buffer.trimmingCharacters(in: .whitespaces) : sentences.joined(separator: " ")
-        return text.isEmpty ? nil : text
+        return twoSentences(lastMessage.components(separatedBy: "\n\n").first ?? lastMessage)
     }
 
     // MARK: - Files and model
@@ -123,9 +128,8 @@ enum ClaudeSessionRecap {
             var text = ""
             for try await piece in chat.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 15,
                                                                   temperature: 0.3, maxTokens: 160)) { text += piece }
-            let spoken = JarvisChat.speakable(text)
-            owLog("[Agent] Claude recap (\(model), \(Int(Date().timeIntervalSince(start) * 1000)) ms): \(spoken)")
-            return spoken.isEmpty ? fallback : spoken
+            owLog("[Agent] Claude recap (\(model), \(Int(Date().timeIntervalSince(start) * 1000)) ms): \(text)")
+            return twoSentences(text) ?? fallback
         } catch {
             owLog("[Agent] Claude recap model failed: \(ChatFallback.describe(error)); using the stored text")
             return fallback

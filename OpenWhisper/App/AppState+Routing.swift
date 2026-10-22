@@ -1004,9 +1004,9 @@ extension AppState {
                     return
                 }
                 ClaudeSessionNavigator.rememberSession(id: recapped.id, title: recapped.title)
-                self.showFlowBarMessage(summary, durationMs: min(max(summary.count * 70, 5000), 15000))
+                self.showFlowBarMessage(summary, durationMs: Self.flowBarDuration(ofRecap: summary))
                 await self.speakReply(summary)
-                if self.listenForClaudeMessage(after: session) { holdMediaForReplyAnswer = true }
+                if self.listenForClaudeMessage(summary, after: session) { holdMediaForReplyAnswer = true }
 
             case .deletionConfirmation, .whatsAppConfirmation:
                 // Answered above; a non-answer was routed again without it.

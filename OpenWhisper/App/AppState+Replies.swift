@@ -193,7 +193,7 @@ extension AppState {
     /// A Claude session was just recapped: listen `claudeMessageWindow` without the wake word;
     /// what the user says then is sent to that session. Returns true when the mic opened, so the
     /// caller keeps paused media paused for the message.
-    func listenForClaudeMessage(after session: RecordingTranscriptionSession) -> Bool {
+    func listenForClaudeMessage(_ recap: String, after session: RecordingTranscriptionSession) -> Bool {
         guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled,
               recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
         pendingWakeSpeakerVerified = session.wakeSpeakerVerified
@@ -206,11 +206,16 @@ extension AppState {
         owLog("[FollowUp] Claude recap done; listening for the message to that session")
         pendingCommandFollowUp = nil
         commandFollowUpOverReply = false
-        pendingClaudeMessage = true
+        pendingClaudeMessage = recap
         startVoiceSession(trigger: .followUp)
         // Never started: a later follow-up must not be taken for the message.
-        if hotkey?.isIdle == true { pendingClaudeMessage = false }
+        if hotkey?.isIdle == true { pendingClaudeMessage = nil }
         return hotkey?.isIdle == false
+    }
+
+    /// Long enough to read the recap once, and to see it while the message is spoken.
+    nonisolated static func flowBarDuration(ofRecap recap: String) -> Int {
+        min(max(recap.count * 70, 6000), 15000)
     }
 
     /// A command just ran: listen `commandFollowUpWindow` more without the wake word, so the
