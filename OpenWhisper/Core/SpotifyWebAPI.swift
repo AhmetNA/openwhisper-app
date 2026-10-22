@@ -219,6 +219,8 @@ actor SpotifyWebAPI {
         let track: TrackResult
         let album: String?
         let isPlaying: Bool
+        /// The album, playlist or collection playing, if any.
+        var contextURI: String? = nil
     }
 
     /// One entry from `/v1/me/player/devices`.
@@ -444,8 +446,63 @@ actor SpotifyWebAPI {
         return CurrentlyPlaying(
             track: TrackResult(uri: uri, name: name, artist: artists.joined(separator: ", ")),
             album: album,
-            isPlaying: (json["is_playing"] as? Bool) ?? false
+            isPlaying: (json["is_playing"] as? Bool) ?? false,
+            contextURI: (json["context"] as? [String: Any])?["uri"] as? String
         )
+    }
+
+    /// `PUT /v1/me/player/shuffle`.
+    func setShuffle(_ on: Bool, deviceID: String?) async throws {
+        _ = try await sendPlayerRequest(
+            method: "PUT",
+            path: "shuffle",
+            deviceID: deviceID,
+            extraQueryItems: [URLQueryItem(name: "state", value: on ? "true" : "false")]
+        )
+    }
+
+    /// The user's Liked Songs as a playable context. `PUT /me/player/play` with a list of
+    /// track `uris` answers 204 yet leaves the desktop client stopped (22 Oct 2026, even
+    /// for one track); this context starts.
+    static func likedSongsContextURI(userID: String) -> String {
+        "spotify:user:\(userID):collection"
+    }
+
+    private var cachedUserID: String?
+
+    /// The account's Spotify user ID (`GET /v1/me`), kept for the session.
+    func fetchUserID() async throws -> String {
+        if let cachedUserID { return cachedUserID }
+        guard let token = await validUserAccessToken() else {
+            throw SpotifyAPIError.notConnected
+        }
+        var request = URLRequest(url: URL(string: "https://api.spotify.com/v1/me")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = requestTimeout
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw SpotifyAPIError.network(error)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw SpotifyAPIError.unexpected("no HTTP response")
+        }
+        guard http.statusCode == 200 else {
+            owLog("[Spotify] me HTTP \(http.statusCode), body: \(String(data: data, encoding: .utf8) ?? "<empty>")")
+            switch http.statusCode {
+            case 401: throw SpotifyAPIError.invalidCredentials
+            case 429: throw SpotifyAPIError.rateLimited
+            default: throw SpotifyAPIError.unexpected("me HTTP \(http.statusCode)")
+            }
+        }
+        guard let id = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["id"] as? String,
+              !id.isEmpty else {
+            throw SpotifyAPIError.unexpected("me without id")
+        }
+        cachedUserID = id
+        return id
     }
 
     /// Shared transport for every `/v1/me/player/*` call. Every non-2xx response is logged
@@ -703,6 +760,7 @@ actor SpotifyWebAPI {
         cachedUserToken = nil
         inFlightUserTokenTask?.cancel()
         inFlightUserTokenTask = nil
+        cachedUserID = nil
     }
 
     // MARK: - Public API — Account connection (Authorization Code flow)
@@ -784,6 +842,7 @@ actor SpotifyWebAPI {
         cachedUserToken = nil
         inFlightUserTokenTask?.cancel()
         inFlightUserTokenTask = nil
+        cachedUserID = nil
         SpotifyCredentialsStore.clearRefreshToken()
     }
 

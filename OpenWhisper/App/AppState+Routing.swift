@@ -987,6 +987,14 @@ extension AppState {
                 if handled { session.latency.markOutput("Spotify komutu tamamlandı") }
                 owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
                 guard handled else {
+                    // Clearly a command, so typing it out would only hide that nothing plays.
+                    if likedSongs {
+                        owLog("[OpenWhisper] Liked Songs did not start")
+                        if session.isVoiceCommand {
+                            await speakAfterCommand(self.jarvisReply.failure("Beğenilen şarkıları başlatamadım"))
+                        }
+                        return
+                    }
                     owLog("[OpenWhisper] Spotify command not applied, falling back to dictation")
                     await dictateOrChat()
                     return

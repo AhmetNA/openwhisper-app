@@ -118,29 +118,68 @@ final class SpotifyController: @unchecked Sendable {
         UserDefaults.standard.object(forKey: likedSongsShuffleKey) as? Bool ?? true
     }
 
-    /// "Şarkı aç", "beğendiğim şarkıları çal" and developer mode: Liked Songs (up to 100,
-    /// shuffled unless "Karışık çal" is off, else newest first) as a real queue, with Spotify
-    /// launched in the background if it was closed. A freshly launched client takes a few
-    /// seconds to appear as a Connect device, so the device list is polled. If playback
-    /// can't start (not connected, no Premium, endpoint refused), the Liked Songs page is
-    /// at least opened in the background.
+    /// "Şarkı aç", "beğendiğim şarkıları çal" and developer mode: the Liked Songs context,
+    /// shuffled from a random liked track unless "Karışık çal" is off (then newest first),
+    /// with Spotify launched in the background if it was closed. A freshly launched client
+    /// takes a few seconds to appear as a Connect device, so the device list is polled.
+    /// Spotify answers 204 even when nothing starts, so success means the player state
+    /// shows it playing. Otherwise the Liked Songs page is at least opened in the background.
     func playLikedSongs() async -> SpotifyActionResult {
         let wasRunning = isSpotifyRunning
         if !wasRunning { await launchInBackground() }
         if webAPIConnected {
             do {
-                let uris = try await SpotifyWebAPI.shared.fetchLikedTrackURIs()
+                let context = SpotifyWebAPI.likedSongsContextURI(userID: try await SpotifyWebAPI.shared.fetchUserID())
                 let deviceID = try await waitForDevice(timeout: wasRunning ? 2 : 8)
                 let shuffle = Self.likedSongsShuffle
-                try await SpotifyWebAPI.shared.startPlayback(uris: shuffle ? uris.shuffled() : uris, deviceID: deviceID)
-                owLog("[SpotifyController] Playing \(uris.count) liked songs\(shuffle ? ", shuffled" : "")")
-                return .success("beğenilen şarkılar çalıyor")
+                let before = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying()
+                do {
+                    try await SpotifyWebAPI.shared.setShuffle(shuffle, deviceID: deviceID)
+                } catch {
+                    owLog("[SpotifyController] Liked songs shuffle \(shuffle) not set: \(error)")
+                }
+                // A shuffled context still opens on its first track; start somewhere random.
+                let start = shuffle ? (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement() : nil
+                try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
+                if await waitForLikedSongs(context: context, before: before) {
+                    owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "")")
+                    return .success("beğenilen şarkılar çalıyor")
+                }
+                owLog("[SpotifyController] Liked songs accepted but Spotify is not playing them")
             } catch {
                 owLog("[SpotifyController] Liked songs playback failed: \(error)")
             }
         }
         openLikedSongsPage()
         return .failure("beğenilen şarkılar açıldı ama çalınamadı")
+    }
+
+    /// Polls the player for up to `timeout` seconds until `likedSongsStarted` holds.
+    private func waitForLikedSongs(context: String, before: SpotifyWebAPI.CurrentlyPlaying?, timeout: TimeInterval = 4) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            try? await Task.sleep(for: .milliseconds(500))
+            if let after = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(),
+               Self.likedSongsStarted(context: context, before: before, after: after) {
+                return true
+            }
+        } while Date() < deadline
+        return false
+    }
+
+    /// Whether the player moved to Liked Songs. With Smart Shuffle on, Spotify swaps the
+    /// collection for a generated `spotify:playlist:37i9…` context, so any change from
+    /// what played before counts; music that was already playing and didn't change doesn't.
+    static func likedSongsStarted(
+        context: String,
+        before: SpotifyWebAPI.CurrentlyPlaying?,
+        after: SpotifyWebAPI.CurrentlyPlaying
+    ) -> Bool {
+        guard after.isPlaying else { return false }
+        guard let before, before.isPlaying else { return true }
+        return after.contextURI == context
+            || after.contextURI != before.contextURI
+            || after.track.uri != before.track.uri
     }
 
     private func launchInBackground() async {

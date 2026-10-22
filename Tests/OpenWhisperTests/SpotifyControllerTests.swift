@@ -44,4 +44,35 @@ final class SpotifyControllerTests: XCTestCase {
         let result = await SpotifyController.shared.searchAndPlay(.freeText("   "))
         XCTAssertFalse(result.succeeded)
     }
+
+    // MARK: - Liked Songs
+
+    private func state(_ track: String, context: String?, playing: Bool) -> SpotifyWebAPI.CurrentlyPlaying {
+        SpotifyWebAPI.CurrentlyPlaying(
+            track: .init(uri: "spotify:track:\(track)", name: track, artist: ""),
+            album: nil, isPlaying: playing, contextURI: context
+        )
+    }
+
+    func testLikedSongsPlayAsTheCollectionContext() {
+        XCTAssertEqual(SpotifyWebAPI.likedSongsContextURI(userID: "316ulr"), "spotify:user:316ulr:collection")
+    }
+
+    func testLikedSongsCountOnlyOncePlaying() {
+        let context = SpotifyWebAPI.likedSongsContextURI(userID: "u")
+        // Spotify said 204 but stayed stopped: the reported bug.
+        XCTAssertFalse(SpotifyController.likedSongsStarted(context: context, before: nil, after: state("a", context: nil, playing: false)))
+        XCTAssertTrue(SpotifyController.likedSongsStarted(context: context, before: nil, after: state("a", context: context, playing: true)))
+        // Smart Shuffle swaps the collection for a generated playlist.
+        XCTAssertTrue(SpotifyController.likedSongsStarted(
+            context: context, before: state("a", context: nil, playing: false),
+            after: state("b", context: "spotify:playlist:37i9dQZF1F5p3rmiWPIYgZ", playing: true)))
+    }
+
+    func testMusicAlreadyPlayingIsNotMistakenForLikedSongs() {
+        let context = SpotifyWebAPI.likedSongsContextURI(userID: "u")
+        let album = state("a", context: "spotify:album:x", playing: true)
+        XCTAssertFalse(SpotifyController.likedSongsStarted(context: context, before: album, after: album))
+        XCTAssertTrue(SpotifyController.likedSongsStarted(context: context, before: album, after: state("b", context: context, playing: true)))
+    }
 }
