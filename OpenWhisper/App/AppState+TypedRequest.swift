@@ -10,21 +10,26 @@ extension AppState {
         }
     }
 
-    /// Shows the "write to Jarvis" panel; `prompt` is a question Jarvis asked back. Not while a
-    /// recording runs: hands-free mode takes Enter and Space for itself.
-    func openTypedRequestPanel(prompt: String?) {
+    /// Shows the "write to Jarvis" panel; `prompt` is a question Jarvis asked back, and
+    /// `onDismiss` runs if the panel closes unanswered. Not while a recording runs: hands-free
+    /// mode takes Enter and Space for itself.
+    func openTypedRequestPanel(prompt: String?, onDismiss: (() -> Void)? = nil) {
         guard recordingState != .recording, hotkey?.isIdle != false else {
             owLog("[TypedRequest] Recording in progress; panel not opened")
             return
         }
         // The panel never activates OpenWhisper, so the app behind it is still frontmost; its
-        // focus is read before the panel takes the keyboard.
+        // focus is read before the panel takes the keyboard (AX asks for the focused app).
         let app = NSWorkspace.shared.frontmostApplication
         typedRequestTargetApp = app
-        typedRequestPasteContext = Task.detached(priority: .userInitiated) {
+        let capture = Task.detached(priority: .userInitiated) {
             PasteContext.capture(targetApp: app)
         }
-        typedRequestPanel?.show(prompt: prompt)
+        typedRequestPasteContext = capture
+        Task { @MainActor [weak self] in
+            _ = await capture.value
+            self?.typedRequestPanel?.show(prompt: prompt, onDismiss: onDismiss)
+        }
         if ollamaAvailable && !JarvisChat.cloudReady {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }

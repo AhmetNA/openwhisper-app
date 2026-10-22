@@ -18,15 +18,19 @@ final class TypedRequestPanelController {
     private var panel: TypedRequestNSPanel?
     private var resignObserver: NSObjectProtocol?
     private(set) var isShown = false
+    /// Runs when the panel closes without a submit (a question left unanswered).
+    private var onDismiss: (() -> Void)?
 
     init(appState: AppState) {
         self.appState = appState
     }
 
-    func show(prompt: String?) {
+    func show(prompt: String?, onDismiss: (() -> Void)? = nil) {
         let panel = panel ?? makePanel()
+        self.onDismiss = onDismiss
         // A fresh view each time: empty field, focus set again.
         let view = TypedRequestView(prompt: prompt) { [weak self] text in
+            self?.onDismiss = nil
             self?.hide()
             self?.appState?.submitTypedRequest(text)
         } onCancel: { [weak self] in
@@ -44,6 +48,9 @@ final class TypedRequestPanelController {
         guard isShown else { return }
         isShown = false
         panel?.orderOut(nil)
+        let dismissed = onDismiss
+        onDismiss = nil
+        dismissed?()
     }
 
     private func makePanel() -> TypedRequestNSPanel {

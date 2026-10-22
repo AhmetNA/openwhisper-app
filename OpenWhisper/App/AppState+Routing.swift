@@ -591,9 +591,12 @@ extension AppState {
             /// Keeps the paused media paused while a follow-up question waits for its answer,
             /// with a safety net if the answer's recording never starts.
             @MainActor func askFollowUp(_ prompt: String, heard: Bool) {
-                // Typed: the answer is typed too.
+                // Typed: the answer is typed too; closing the panel unanswered drops the plan,
+                // as a silent confirmation window does.
                 if session.trigger == .typed {
-                    self.openTypedRequestPanel(prompt: prompt)
+                    self.openTypedRequestPanel(prompt: prompt) { [weak self] in
+                        self?.reminderManager?.cancelPendingDeletion()
+                    }
                     return
                 }
                 holdMediaForFollowUp = true
