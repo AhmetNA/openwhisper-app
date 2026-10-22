@@ -26,8 +26,9 @@ struct FlowBarView: View {
                     Text(message)
                         .font(.custom("Bradley Hand", size: 16).weight(.medium))
                         .foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
-                        .frame(height: 26)
+                        .frame(minHeight: 26)
                 }
             } else {
                 switch appState.recordingState {

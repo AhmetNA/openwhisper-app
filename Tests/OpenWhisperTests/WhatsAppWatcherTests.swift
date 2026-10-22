@@ -31,7 +31,8 @@ final class WhatsAppWatcherTests: XCTestCase {
                        .init(chatIDs: [2, 1], text: "Ali ve Dilayım'dan mesaj var, okuyayım mı?"))
         XCTAssertEqual(WhatsAppWatcher.announcement(for: [arrival(10, chat: 1), arrival(11, chat: 2), arrival(12, chat: 6)], chats: chats)?.text,
                        "3 kişiden yeni mesaj var, okuyayım mı?")
-        XCTAssertNil(WhatsAppWatcher.announcement(for: [arrival(10, chat: 3), arrival(11, chat: 4), arrival(12, chat: 5)], chats: chats))
+        XCTAssertEqual(WhatsAppWatcher.announcement(for: [arrival(10, chat: 3), arrival(11, chat: 4), arrival(12, chat: 5)], chats: chats)?.chatIDs, [3])
+        XCTAssertNil(WhatsAppWatcher.announcement(for: [arrival(11, chat: 4), arrival(12, chat: 5)], chats: chats))
     }
 
     func testMissedWhileLocked() {
@@ -40,7 +41,17 @@ final class WhatsAppWatcherTests: XCTestCase {
                        .init(chatIDs: [1], text: "Sen yokken Dilayım'dan 3 mesaj var, okuyayım mı?"))
         XCTAssertEqual(WhatsAppWatcher.missedAnnouncement([6, 1], chats: chats)?.text,
                        "Sen yokken Mehmet ve Dilayım'dan mesaj var, okuyayım mı?")
-        XCTAssertNil(WhatsAppWatcher.missedAnnouncement([2, 3], chats: chats))
+        XCTAssertNil(WhatsAppWatcher.missedAnnouncement([2], chats: chats))
+        XCTAssertEqual(WhatsAppWatcher.missedAnnouncement([2, 3], chats: chats)?.chatIDs, [3])
+    }
+
+    func testNotice() {
+        XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Ali", unread: 2), chat(2, "Ayşe"), chat(3, "Aile", group: true, unread: 4)]),
+                       "WhatsApp · 7 mesaj · 2 kişi, 1 grup\nAli, Ayşe, Aile")
+        XCTAssertEqual(WhatsAppController.notice(for: [chat(1, "Ali")]), "WhatsApp · 1 mesaj · 1 kişi\nAli")
+        XCTAssertEqual(WhatsAppController.notice(for: (1...6).map { chat(Int64($0), "K\($0)") }),
+                       "WhatsApp · 6 mesaj · 6 kişi\nK1, K2, K3, K4 +2")
+        XCTAssertNil(WhatsAppController.notice(for: []))
     }
 
     func testAnnouncementVolume() {

@@ -1,8 +1,8 @@
 import Foundation
 
-/// Watches WhatsApp Desktop's database for messages from people, so Jarvis can say
-/// "Dilayım'dan mesaj var, okuyayım mı?". Read-only and local like `WhatsAppStore`; groups,
-/// archived chats and chats already read elsewhere are left out.
+/// Watches WhatsApp Desktop's database for new messages, so Jarvis can show who wrote
+/// (`WhatsAppController.notice`). Read-only and local like `WhatsAppStore`; archived chats and
+/// chats already read elsewhere are left out.
 @MainActor
 final class WhatsAppWatcher {
     struct Announcement: Equatable {
@@ -18,8 +18,6 @@ final class WhatsAppWatcher {
     static let burstWait: TimeInterval = 4
     /// Older messages showing up now are history WhatsApp is syncing, not news.
     static let maxAge: TimeInterval = 120
-    /// Chats read out at most; the rest are only counted.
-    static let chatsRead = 3
 
     private var timer: Timer?
     private var lastSeen: Int64?
@@ -90,7 +88,7 @@ final class WhatsAppWatcher {
         }
         let people = worthSaying(order, in: chats)
         guard !people.isEmpty else { return nil }
-        return Announcement(chatIDs: people.prefix(chatsRead).map(\.id),
+        return Announcement(chatIDs: people.map(\.id),
                             text: text(for: people) { counts[$0.id] ?? 1 })
     }
 
@@ -99,14 +97,14 @@ final class WhatsAppWatcher {
     static func missedAnnouncement(_ chatIDs: [Int64], chats: [WhatsAppStore.Chat]) -> Announcement? {
         let people = worthSaying(chatIDs, in: chats)
         guard !people.isEmpty else { return nil }
-        return Announcement(chatIDs: people.prefix(chatsRead).map(\.id),
+        return Announcement(chatIDs: people.map(\.id),
                             text: "Sen yokken " + text(for: people) { max($0.unread, 1) })
     }
 
-    /// People only, not archived, still unread (a chat read on the phone is no news).
+    /// Not archived, still unread (a chat read on the phone is no news). Groups count too.
     private static func worthSaying(_ ids: [Int64], in chats: [WhatsAppStore.Chat]) -> [WhatsAppStore.Chat] {
         ids.compactMap { id in chats.first { $0.id == id } }
-            .filter { !$0.isGroup && !$0.isArchived && $0.unread != 0 }
+            .filter { !$0.isArchived && $0.unread != 0 }
     }
 
     private static func text(for people: [WhatsAppStore.Chat], count: (WhatsAppStore.Chat) -> Int) -> String {

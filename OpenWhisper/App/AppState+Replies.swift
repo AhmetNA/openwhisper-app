@@ -56,7 +56,7 @@ extension AppState {
         await announceWhatsApp(announcement)
     }
 
-    /// "Dilayım · 2 mesaj · uçak bileti hakkında" under the screen. Silent on purpose: no voice,
+    /// "WhatsApp · 3 mesaj · 2 kişi" and the names under the screen. Silent on purpose: no voice,
     /// no listening, so music keeps playing and the mic is left alone. Not while WhatsApp is in
     /// front (the user sees it); kept for after the unlock while the screen is locked.
     func announceWhatsApp(_ announcement: WhatsAppWatcher.Announcement) async {
