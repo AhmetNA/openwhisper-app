@@ -606,6 +606,8 @@ struct SettingsView: View {
 
             JarvisHotkeyRecorder()
 
+            JarvisHotkeyRecorder(slot: .typedRequest)
+
             HStack(spacing: 6) {
                 Image(systemName: jarvisSpeakerCheckOn ? "checkmark.circle.fill" : "person.wave.2")
                     .foregroundStyle(jarvisSpeakerCheckOn ? .green : .secondary)

@@ -145,6 +145,8 @@ enum RecordingTrigger: String, Codable, Sendable {
     case fnSpace
     case keyboardShortcut
     case external
+    /// Written in the Jarvis panel (⌃M): routed like a Jarvis session, with no audio.
+    case typed
 
     var title: String {
         switch self {
@@ -156,6 +158,7 @@ enum RecordingTrigger: String, Codable, Sendable {
         case .fnSpace: "Fn + Space"
         case .keyboardShortcut: "⌘⌥⌃D"
         case .external: "Kısayol / URL"
+        case .typed: "Yazıyla (Jarvis paneli)"
         }
     }
 }

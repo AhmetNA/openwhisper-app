@@ -43,6 +43,7 @@ extension AppState {
         if damgaEnabled && language == "tr" { Task { await DamgaNormalizer.shared.prepare() } }
         textInjector = TextInjector()
         flowBarController = FlowBarController(appState: self)
+        typedRequestPanel = TypedRequestPanelController(appState: self)
         syncFlowBarVisibility()
 
         loadTargetSpeakerProfile()
@@ -113,6 +114,10 @@ extension AppState {
             }
         }
         hotkey?.jarvisKey = jarvisHotkey
+        hotkey?.typedRequestKey = typedRequestHotkey
+        hotkey?.onTypedRequestKey = { [weak self] in
+            DispatchQueue.main.async { self?.toggleTypedRequestPanel() }
+        }
         hotkey?.onSystemKeyDuringCapture = { [weak self] nxKeyType in
             DispatchQueue.main.async {
                 guard let self else { return }

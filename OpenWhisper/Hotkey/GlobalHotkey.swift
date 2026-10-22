@@ -42,6 +42,14 @@ final class GlobalHotkey {
     var onSystemKeyDuringCapture: ((Int) -> Void)?
     /// A bound lone modifier key is down and no other key has been pressed since.
     private var jarvisModifierArmed = false
+    /// Settings › Jarvis shortcut for the "write to Jarvis" panel (default ⌃M); nil while unset
+    /// or while Settings records a shortcut.
+    var typedRequestKey: JarvisHotkey? {
+        didSet { typedRequestModifierArmed = false }
+    }
+    /// Fired when the typed request shortcut is pressed; AppState opens or closes the panel.
+    var onTypedRequestKey: (() -> Void)?
+    private var typedRequestModifierArmed = false
 
     /// NX_SYSDEFINED — has no case in Swift's CGEventType.
     fileprivate static let systemDefinedEventType: UInt32 = 14
@@ -322,36 +330,49 @@ final class GlobalHotkey {
     /// nothing else was pressed meanwhile; its events always pass through.
     fileprivate func handleJarvisKey(type: CGEventType, keyCode: Int64, event: CGEvent) -> Bool {
         guard let key = jarvisKey else { return false }
+        return handleBoundKey(key, armed: &jarvisModifierArmed, type: type, keyCode: keyCode, event: event) { [self] in
+            let cancelledFnHold = mode == .holding
+            if cancelledFnHold { mode = .idle }
+            owLog("[GlobalHotkey] Jarvis key (\(key.label)) pressed\(cancelledFnHold ? " during Fn hold" : "")")
+            onJarvisKey?(cancelledFnHold)
+        }
+    }
+
+    /// The typed request shortcut; same matching as the Jarvis key.
+    fileprivate func handleTypedRequestKey(type: CGEventType, keyCode: Int64, event: CGEvent) -> Bool {
+        guard let key = typedRequestKey else { return false }
+        return handleBoundKey(key, armed: &typedRequestModifierArmed, type: type, keyCode: keyCode, event: event) { [self] in
+            owLog("[GlobalHotkey] Typed request shortcut (\(key.label)) pressed")
+            onTypedRequestKey?()
+        }
+    }
+
+    private func handleBoundKey(_ key: JarvisHotkey, armed: inout Bool, type: CGEventType, keyCode: Int64,
+                                event: CGEvent, fire: () -> Void) -> Bool {
         if key.isModifierKey {
             if type != .flagsChanged {
                 // A key or ⌘/⌥-click while the modifier is down: it's a chord.
-                jarvisModifierArmed = false
+                armed = false
             } else {
                 let flags = event.flags
                 if keyCode == Int64(key.keyCode), let flag = JarvisHotkey.flag(forModifierKey: key.keyCode) {
                     if flags.contains(flag) {
                         // Only a clean press: no other modifier already held.
                         let others = flags.intersection(JarvisHotkey.relevantModifiers).subtracting(flag)
-                        jarvisModifierArmed = others.isEmpty && !flags.contains(.maskSecondaryFn)
-                    } else if jarvisModifierArmed {
-                        jarvisModifierArmed = false
-                        owLog("[GlobalHotkey] Jarvis key (\(key.label)) tapped")
-                        onJarvisKey?(false)
+                        armed = others.isEmpty && !flags.contains(.maskSecondaryFn)
+                    } else if armed {
+                        armed = false
+                        fire()
                     }
                 } else {
                     // Another modifier changed while ours is down: it's a chord.
-                    jarvisModifierArmed = false
+                    armed = false
                 }
             }
             return false
         }
         guard type == .keyDown, key.matchesKeyDown(keyCode: keyCode, flags: event.flags) else { return false }
-        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
-            let cancelledFnHold = mode == .holding
-            if cancelledFnHold { mode = .idle }
-            owLog("[GlobalHotkey] Jarvis key (\(key.label)) pressed\(cancelledFnHold ? " during Fn hold" : "")")
-            onJarvisKey?(cancelledFnHold)
-        }
+        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 { fire() }
         return true
     }
 
@@ -381,6 +402,7 @@ final class GlobalHotkey {
 
             if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown {
                 _ = me.handleJarvisKey(type: type, keyCode: 0, event: event)
+                _ = me.handleTypedRequestKey(type: type, keyCode: 0, event: event)
                 return Unmanaged.passUnretained(event)
             }
 
@@ -391,6 +413,9 @@ final class GlobalHotkey {
 
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if me.handleJarvisKey(type: type, keyCode: keyCode, event: event) {
+                return nil
+            }
+            if me.handleTypedRequestKey(type: type, keyCode: keyCode, event: event) {
                 return nil
             }
             if type == .flagsChanged {

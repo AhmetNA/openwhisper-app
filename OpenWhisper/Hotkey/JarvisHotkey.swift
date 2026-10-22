@@ -35,6 +35,34 @@ struct JarvisHotkey: Codable, Equatable, Sendable {
         }
     }
 
+    // MARK: - Typed request shortcut
+
+    /// Settings › Jarvis: the shortcut that opens the "write to Jarvis" panel. Unlike the Jarvis
+    /// key it has a default (⌃M); removing it stores an explicit nil so the default stays off.
+    static let typedRequestDefaultsKey = "typedRequestHotkey"
+
+    static let typedRequestDefault = JarvisHotkey(
+        keyCode: UInt16(kVK_ANSI_M), modifiers: CGEventFlags.maskControl.rawValue,
+        isModifierKey: false, label: "⌃M"
+    )
+
+    static func loadTypedRequest(from defaults: UserDefaults = .standard) -> JarvisHotkey? {
+        guard let data = defaults.data(forKey: typedRequestDefaultsKey) else { return typedRequestDefault }
+        // `try?` would flatten a stored nil (removed) into a decoding failure (default).
+        do { return try JSONDecoder().decode(JarvisHotkey?.self, from: data) } catch { return typedRequestDefault }
+    }
+
+    static func saveTypedRequest(_ hotkey: JarvisHotkey?, to defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(hotkey) {
+            defaults.set(data, forKey: typedRequestDefaultsKey)
+        }
+    }
+
+    /// Same physical key and modifiers; the label may differ by keyboard layout.
+    func sameKey(as other: JarvisHotkey) -> Bool {
+        keyCode == other.keyCode && modifiers == other.modifiers && isModifierKey == other.isModifierKey
+    }
+
     /// Whether a keyDown with these flags is this hotkey. Fn is ignored: Mac keyboards set it on
     /// every F-key and arrow press.
     func matchesKeyDown(keyCode: Int64, flags: CGEventFlags) -> Bool {

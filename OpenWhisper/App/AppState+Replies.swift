@@ -109,6 +109,11 @@ extension AppState {
     /// keeps it open like a "Hey Jarvis" session. Returns true when the window opened, so the
     /// caller keeps paused media paused for the answer.
     func listenForReplyAnswer(_ reply: String?, heard: Bool, after session: RecordingTranscriptionSession) -> Bool {
+        // A typed request is answered by typing: the panel opens again with the question.
+        if session.trigger == .typed {
+            if !session.isCancelled, let reply, JarvisChat.awaitsAnswer(reply) { openTypedRequestPanel(prompt: reply) }
+            return false
+        }
         guard session.isVoiceCommand, !session.isCancelled, let reply, JarvisChat.awaitsAnswer(reply),
               recordingState != .recording, hotkey?.isIdle == true else { return false }
         let chain = session.trigger == .followUp ? replyFollowUpChain + 1 : 1
@@ -142,7 +147,7 @@ extension AppState {
     @discardableResult
     func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession,
                             overReply: Bool = false) -> Bool {
-        guard session.isVoiceCommand, !session.isCancelled, recordingState != .recording,
+        guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled, recordingState != .recording,
               hotkey?.isIdle == true, microphoneGranted else { return false }
         // Opening the buds' mic puts them in call mode, which would break the reply playing in
         // them: there the window opens after the reply (the caller's fallback).

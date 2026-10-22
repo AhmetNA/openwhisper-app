@@ -69,6 +69,21 @@ final class RecordingTranscriptionSession {
     var acceptsCommands: Bool {
         isVoiceCommand || [.fnHold, .fnSpace, .keyboardShortcut].contains(trigger)
     }
+    /// The speech fixes and checks (length, sound-alikes, repetition, foreign words) are for
+    /// transcripts; typed text is taken as written.
+    var appliesSpeechChecks: Bool { trigger != .typed }
+
+    /// Keyboard focus the router decides by. A typed request was written to Jarvis, so a
+    /// non-command is answered, never pasted into the field behind the panel.
+    static func routingFocus(trigger: RecordingTrigger, captured: TextFocusStatus,
+                             simulated: TextFocusStatus?) -> TextFocusStatus {
+        trigger == .typed ? .notEditable : simulated ?? captured
+    }
+
+    var routingFocus: TextFocusStatus {
+        Self.routingFocus(trigger: trigger, captured: pasteContext.focusStatus,
+                          simulated: VoiceTestInjector.shared.simulatedFocus)
+    }
 
     var task: Task<Void, Never>?
     var segmentTexts: [String] = []

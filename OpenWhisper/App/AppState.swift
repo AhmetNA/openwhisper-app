@@ -419,14 +419,26 @@ final class AppState {
             if !jarvisHotkeyCapturing { hotkey?.jarvisKey = jarvisHotkey }
         }
     }
-    /// While Settings records a new Jarvis key the old one is unbound, so pressing it there
-    /// doesn't start a session.
+    /// Settings › Jarvis: the shortcut that opens the "write to Jarvis" panel (default ⌃M).
+    var typedRequestHotkey: JarvisHotkey? = JarvisHotkey.loadTypedRequest() {
+        didSet {
+            JarvisHotkey.saveTypedRequest(typedRequestHotkey)
+            if !jarvisHotkeyCapturing { hotkey?.typedRequestKey = typedRequestHotkey }
+        }
+    }
+    /// While Settings records a new Jarvis key or typed request shortcut both are unbound, so
+    /// pressing one there doesn't start a session or open the panel.
     var jarvisHotkeyCapturing = false {
         didSet {
             hotkey?.jarvisKey = jarvisHotkeyCapturing ? nil : jarvisHotkey
+            hotkey?.typedRequestKey = jarvisHotkeyCapturing ? nil : typedRequestHotkey
             hotkey?.fnSuppressed = jarvisHotkeyCapturing
         }
     }
+    @ObservationIgnored var typedRequestPanel: TypedRequestPanelController?
+    /// The app frontmost when the panel opened, and its focus read in the background.
+    @ObservationIgnored var typedRequestTargetApp: NSRunningApplication?
+    @ObservationIgnored var typedRequestPasteContext: Task<PasteContext, Never>?
     /// A media/brightness key pressed while Settings records the Jarvis key: macOS keeps it
     /// for itself (no keyDown), so the recorder explains why it can't be bound.
     var jarvisCaptureSystemKey: JarvisHotkey.SystemKeyPress?

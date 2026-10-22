@@ -60,4 +60,49 @@ final class JarvisHotkeyTests: XCTestCase {
         let decoded = try JSONDecoder().decode(JarvisHotkey.self, from: JSONEncoder().encode(key))
         XCTAssertEqual(decoded, key)
     }
+
+    // MARK: Typed request shortcut
+
+    private func scratchDefaults() -> UserDefaults {
+        let name = "JarvisHotkeyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+
+    func testTypedRequestShortcutDefaultsToControlM() {
+        let key = JarvisHotkey.loadTypedRequest(from: scratchDefaults())
+        XCTAssertEqual(key, JarvisHotkey.typedRequestDefault)
+        XCTAssertEqual(key?.label, "⌃M")
+        XCTAssertEqual(key?.matchesKeyDown(keyCode: Int64(kVK_ANSI_M), flags: .maskControl), true)
+        // Fn is ignored; another modifier is a different shortcut.
+        XCTAssertEqual(key?.matchesKeyDown(keyCode: Int64(kVK_ANSI_M), flags: [.maskControl, .maskSecondaryFn]), true)
+        XCTAssertEqual(key?.matchesKeyDown(keyCode: Int64(kVK_ANSI_M), flags: [.maskControl, .maskShift]), false)
+        XCTAssertEqual(key?.matchesKeyDown(keyCode: Int64(kVK_ANSI_M), flags: []), false)
+    }
+
+    func testRemovedTypedRequestShortcutStaysRemoved() {
+        let defaults = scratchDefaults()
+        JarvisHotkey.saveTypedRequest(nil, to: defaults)
+        XCTAssertNil(JarvisHotkey.loadTypedRequest(from: defaults))
+    }
+
+    func testChosenTypedRequestShortcutIsLoaded() throws {
+        let defaults = scratchDefaults()
+        let key = try XCTUnwrap(accepted(JarvisHotkey.capture(
+            keyCode: UInt16(kVK_ANSI_J), flags: [.maskAlternate, .maskShift], characters: "j"
+        )))
+        JarvisHotkey.saveTypedRequest(key, to: defaults)
+        XCTAssertEqual(JarvisHotkey.loadTypedRequest(from: defaults), key)
+    }
+
+    func testSameKeyIgnoresTheLabel() {
+        let a = JarvisHotkey(keyCode: UInt16(kVK_ANSI_M), modifiers: CGEventFlags.maskControl.rawValue,
+                             isModifierKey: false, label: "⌃M")
+        var b = a
+        b.label = "⌃Ö"
+        XCTAssertTrue(a.sameKey(as: b))
+        b.modifiers = CGEventFlags.maskAlternate.rawValue
+        XCTAssertFalse(a.sameKey(as: b))
+    }
 }

@@ -85,7 +85,7 @@ final class LogFixRegressionTests: XCTestCase {
         for trigger: RecordingTrigger in [.fnHold, .fnSpace, .keyboardShortcut] {
             XCTAssertTrue(TargetSpeakerOutputGate.keepsUnidentifiedSpeech(trigger: trigger, error: notIdentified))
         }
-        for trigger: RecordingTrigger in [.wakeWord, .followUp, .jarvisKey, .confirmation, .external] {
+        for trigger: RecordingTrigger in [.wakeWord, .followUp, .jarvisKey, .confirmation, .external, .typed] {
             XCTAssertFalse(TargetSpeakerOutputGate.keepsUnidentifiedSpeech(trigger: trigger, error: notIdentified))
         }
         // Any other diarization error keeps the masked-audio safety path.

@@ -159,7 +159,7 @@ extension AppState {
                 }
                 return
             }
-            guard session.queuedSampleCount >= 6400 else {
+            guard !session.appliesSpeechChecks || session.queuedSampleCount >= 6400 else {
                 owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)")
                 return
             }
@@ -173,7 +173,9 @@ extension AppState {
                 : session.precedingReply != nil ? CommandFollowUp.removingEcho(of: session.precedingReply, from: joined)
                 : joined
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
-            let (text, soundAlikes) = SoundAlikeCorrector.correct(spoken, entries: SoundAlikeCorrector.loadEntries())
+            let (text, soundAlikes) = session.appliesSpeechChecks
+                ? SoundAlikeCorrector.correct(spoken, entries: SoundAlikeCorrector.loadEntries())
+                : (spoken, [])
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
@@ -182,11 +184,12 @@ extension AppState {
                 owLog("[OpenWhisper] Empty/blank transcription, skipping")
                 return
             }
-            guard !AudioSegmentation.isRepetitionHallucination(trimmed) else {
+            guard !session.appliesSpeechChecks || !AudioSegmentation.isRepetitionHallucination(trimmed) else {
                 owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
                 return
             }
-            guard !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
+            guard !session.appliesSpeechChecks
+                    || !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
                 owLog("[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)")
                 if session.followsCommand {
                     dismissFlowBarMessage()
@@ -588,6 +591,11 @@ extension AppState {
             /// Keeps the paused media paused while a follow-up question waits for its answer,
             /// with a safety net if the answer's recording never starts.
             @MainActor func askFollowUp(_ prompt: String, heard: Bool) {
+                // Typed: the answer is typed too.
+                if session.trigger == .typed {
+                    self.openTypedRequestPanel(prompt: prompt)
+                    return
+                }
                 holdMediaForFollowUp = true
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(20))
@@ -615,7 +623,7 @@ extension AppState {
                 }
                 let front = session.targetApp?.bundleIdentifier
                 if session.isVoiceCommand {
-                    let focusStatus = VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus
+                    let focusStatus = session.routingFocus
                     let needsScore = focusStatus == .unknown
                     let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
@@ -663,7 +671,7 @@ extension AppState {
             var facts = VoiceRouter.Facts(
                 isVoiceCommand: session.isVoiceCommand,
                 acceptsCommands: session.acceptsCommands,
-                focus: VoiceTestInjector.shared.simulatedFocus ?? session.pasteContext.focusStatus,
+                focus: session.routingFocus,
                 hasTargetApp: session.targetApp != nil,
                 targetBundleID: session.targetApp?.bundleIdentifier,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,

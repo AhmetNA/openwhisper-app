@@ -1,9 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// Settings › Jarvis row for choosing the key that starts a "Hey Jarvis" session.
+/// Settings › Jarvis row for choosing a shortcut: the key that starts a "Hey Jarvis" session,
+/// or the one that opens the typed request panel.
 struct JarvisHotkeyRecorder: View {
+    enum Slot { case jarvisKey, typedRequest }
+
     @Environment(AppState.self) var appState
+    var slot: Slot = .jarvisKey
 
     @State private var monitor: Any?
     @State private var message: String?
@@ -12,10 +16,34 @@ struct JarvisHotkeyRecorder: View {
 
     private var capturing: Bool { monitor != nil }
 
+    private var hotkey: JarvisHotkey? {
+        get { slot == .jarvisKey ? appState.jarvisHotkey : appState.typedRequestHotkey }
+        nonmutating set {
+            if slot == .jarvisKey { appState.jarvisHotkey = newValue } else { appState.typedRequestHotkey = newValue }
+        }
+    }
+
+    /// The other slot's shortcut; one key can't do both.
+    private var otherHotkey: (key: JarvisHotkey?, name: String) {
+        slot == .jarvisKey ? (appState.typedRequestHotkey, "Jarvis'e yazma kısayolu")
+            : (appState.jarvisHotkey, "Jarvis tuşu")
+    }
+
+    private var title: String { slot == .jarvisKey ? "Jarvis tuşu" : "Jarvis'e yaz" }
+
+    private var help: String {
+        switch slot {
+        case .jarvisKey:
+            "Basınca Jarvis dinlemeye başlar, susunca durur; tekrar basarsanız hemen biter. Tek bir tuş (F tuşu, sağ Option) ya da ⌥J gibi bir kombinasyon olabilir."
+        case .typedRequest:
+            "Basınca bir yazı alanı açılır; yazdığınız istek Enter ile Jarvis'e gider, Esc kapatır."
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label("Jarvis tuşu", systemImage: "keyboard")
+                Label(title, systemImage: slot == .jarvisKey ? "keyboard" : "text.bubble")
                 Spacer()
                 if capturing {
                     Text("Bir tuşa basın… (Esc: iptal)")
@@ -24,16 +52,16 @@ struct JarvisHotkeyRecorder: View {
                     Button("İptal") { stopCapture() }
                         .controlSize(.small)
                 } else {
-                    Text(appState.jarvisHotkey?.label ?? "Atanmadı")
+                    Text(hotkey?.label ?? "Atanmadı")
                         .font(.system(.body, design: .rounded).weight(.medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
                         .background(RoundedRectangle(cornerRadius: 5).fill(Color.secondary.opacity(0.15)))
-                    Button(appState.jarvisHotkey == nil ? "Tuş ata" : "Değiştir") { startCapture() }
+                    Button(hotkey == nil ? "Tuş ata" : "Değiştir") { startCapture() }
                         .controlSize(.small)
-                    if appState.jarvisHotkey != nil {
+                    if hotkey != nil {
                         Button("Kaldır") {
-                            appState.jarvisHotkey = nil
+                            hotkey = nil
                             message = nil
                         }
                         .controlSize(.small)
@@ -52,7 +80,7 @@ struct JarvisHotkeyRecorder: View {
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Basınca Jarvis dinlemeye başlar, susunca durur; tekrar basarsanız hemen biter. Tek bir tuş (F tuşu, sağ Option) ya da ⌥J gibi bir kombinasyon olabilir.")
+            Text(help)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -113,8 +141,12 @@ struct JarvisHotkeyRecorder: View {
     private func finish(_ result: JarvisHotkey.CaptureResult) {
         switch result {
         case .accepted(let key):
+            if let other = otherHotkey.key, other.sameKey(as: key) {
+                message = "\(key.label) zaten \(otherHotkey.name) — başka bir tuş seçin."
+                return
+            }
             stopCapture()
-            appState.jarvisHotkey = key
+            hotkey = key
             message = nil
         case .rejected(let why):
             message = why
