@@ -265,6 +265,7 @@ extension AppState {
         // Save the currently focused app (instant NSWorkspace query)
         targetApp = NSWorkspace.shared.frontmostApplication
         owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
+        AppFocus.current = AppFocus(app: targetApp, entries: SoundAlikeCorrector.loadEntries())
 
         // 3. Create session immediately with non-blocking initial context (AX details captured in background)
         nextTranscriptionID &+= 1

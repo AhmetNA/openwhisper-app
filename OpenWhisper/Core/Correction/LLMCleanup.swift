@@ -120,9 +120,18 @@ final class LLMCleanup: Sendable {
     private static func cleanupPrompt(
         glossaryTerms: [String]?,
         corrections: [LearnedCorrection],
-        misheard: [MisheardWordDetector.Word] = []
+        misheard: [MisheardWordDetector.Word] = [],
+        focus: AppFocus? = nil
     ) -> String {
         var prompt = basePrompt
+
+        if let focus {
+            prompt += """
+
+
+                ACTIVE APP: the speaker is dictating in \(focus.appName). A word that sounds like one of these names is that name: \(focus.terms.joined(separator: ", "))
+                """
+        }
 
         if let terms = glossaryTerms, !terms.isEmpty {
             let joined = terms.joined(separator: ", ")
@@ -428,18 +437,19 @@ final class LLMCleanup: Sendable {
 
     /// Clean up transcribed text using local Ollama LLM. `misheard` are the words
     /// `MisheardWordDetector` found in `text`; only these may be replaced by other words.
-    func cleanup(text: String, misheard: [MisheardWordDetector.Word] = []) async -> String {
+    /// `focus`: the app in front; its names lead the glossary.
+    func cleanup(text: String, misheard: [MisheardWordDetector.Word] = [], focus: AppFocus? = nil) async -> String {
         let text = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
 
         // Read glossary + learned corrections once per cleanup call (fresh from disk each
         // time, not cached across calls) and thread them through to both the prompt builder
         // and the faithfulness check below, instead of each re-reading the files itself.
-        let glossaryTerms = GlossaryStore.terms()
+        let glossaryTerms = focus.map { $0.prioritized(GlossaryStore.terms() ?? []) } ?? GlossaryStore.terms()
         let corrections = Self.loadLearnedCorrections()
 
         let request = LLMRequest(
             model: model,
-            prompt: "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections, misheard: misheard))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
+            prompt: "\(Self.cleanupPrompt(glossaryTerms: glossaryTerms, corrections: corrections, misheard: misheard, focus: focus))\n\nBEGIN TRANSCRIPT\n\(text)\nEND TRANSCRIPT\n\nCLEANED TRANSCRIPT:",
             timeout: 60,
             temperature: 0.0,
             // Turkish runs to ~1 token per 2-3 characters; a lower cap cut long dictations

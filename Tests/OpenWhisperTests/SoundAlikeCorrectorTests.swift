@@ -38,4 +38,30 @@ final class SoundAlikeCorrectorTests: XCTestCase {
             .init(canonical: "Baz", spoken: "bas", variants: []),
         ])
     }
+
+    func testAppSectionOnlyInThatApp() {
+        let claude = AppFocus(appName: "Claude", entries: entries)
+        let inClaude = AppFocus.soundAlikeEntries(entries, focus: claude)
+        let keep = ["Google Cloud"]
+        XCTAssertEqual(SoundAlikeCorrector.correct("Cloud'a sor, cloudda dene", entries: inClaude, keeping: keep).0, "Claude'a sor, Claude'da dene")
+        XCTAssertEqual(SoundAlikeCorrector.correct("Google Cloud'da iCloud ve Cloudflare", entries: inClaude, keeping: keep).0,
+                       "Google Cloud'da iCloud ve Cloudflare")
+        // Global lines still apply in Claude.
+        XCTAssertEqual(SoundAlikeCorrector.correct("vatsapı aç", entries: inClaude).0, "WhatsApp'ı aç")
+
+        let inSafari = AppFocus.soundAlikeEntries(entries, focus: AppFocus(appName: "Safari", entries: entries))
+        XCTAssertEqual(SoundAlikeCorrector.correct("cloud'a yükle", entries: inSafari).0, "cloud'a yükle")
+        XCTAssertEqual(SoundAlikeCorrector.correct("cloud'a yükle", entries: AppFocus.soundAlikeEntries(entries, focus: nil)).0, "cloud'a yükle")
+    }
+
+    func testFrontAppFirstKeepsEveryApp() {
+        let focus = AppFocus(appName: "Claude", entries: [])!
+        XCTAssertEqual(focus.frontFirst(["Safari", "Claude", "Notes"]), ["Claude", "Safari", "Notes"])
+        XCTAssertEqual(focus.prioritized(["GitHub", "claude"]), ["Claude", "GitHub"])
+    }
+
+    func testAppHeaderParsing() {
+        let parsed = SoundAlikeCorrector.parse("A = a1\n@Claude\nClaude = cloud\n@\nB = b1\n")
+        XCTAssertEqual(parsed.map(\.app), [nil, "Claude", nil])
+    }
 }

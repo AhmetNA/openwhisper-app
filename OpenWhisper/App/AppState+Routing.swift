@@ -194,8 +194,13 @@ extension AppState {
                     ? WakeWordVerifier.strippingLeadingWakeWord(CommandFollowUp.removingEcho(of: session.precedingReply, from: joined))
                 : joined
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
+            // The app in front comes first: its ses-benzerleri.txt section ("cloud" → Claude in
+            // Claude), its name in app matching and in the cleanup model's terms.
+            let soundAlikeEntries = SoundAlikeCorrector.loadEntries()
+            let focus = AppFocus(app: session.targetApp, entries: soundAlikeEntries)
             let (text, soundAlikes) = session.appliesSpeechChecks
-                ? SoundAlikeCorrector.correct(spoken, entries: SoundAlikeCorrector.loadEntries())
+                ? SoundAlikeCorrector.correct(spoken, entries: AppFocus.soundAlikeEntries(soundAlikeEntries, focus: focus),
+                                              keeping: GlossaryStore.multiWordTerms())
                 : (spoken, [])
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -462,7 +467,7 @@ extension AppState {
                                     Task { @MainActor [weak self] in
                                         guard let self else { return }
                                         let cleanupStartedAt = session.latency.timestamp()
-                                        let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard) ?? initialText
+                                        let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard, focus: focus) ?? initialText
                                         session.latency.record(.cleanup, since: cleanupStartedAt)
                                         let formatted = await self.formatTurkishDictation(cleaned)
                                         let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -556,7 +561,8 @@ extension AppState {
             @MainActor func commandContext() -> CommandRegistry.Context {
                 CommandRegistry.Context(
                     ringing: timers.ringing != nil, timerActive: !timers.timers.isEmpty,
-                    installedApps: SystemController.installedApps(), shortcuts: SystemController.shortcutNames)
+                    installedApps: focus.map { $0.frontFirst(SystemController.installedApps()) } ?? SystemController.installedApps(),
+                    shortcuts: SystemController.shortcutNames)
             }
 
             /// Runs the steps in order and answers once for all of them.

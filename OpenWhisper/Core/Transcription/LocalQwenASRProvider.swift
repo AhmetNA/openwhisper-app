@@ -138,7 +138,8 @@ extension LocalQwenASRProvider: TranscriptionModelProvider {
         try await QwenASRServer.shared.transcribe(
             audioData,
             language: language,
-            hotwords: useGlossary ? GlossaryStore.terms() : nil
+            // The app in front leads the list (`AppFocus`).
+            hotwords: useGlossary ? AppFocus.current.map { $0.prioritized(GlossaryStore.terms() ?? []) } ?? GlossaryStore.terms() : nil
         )
     }
 }

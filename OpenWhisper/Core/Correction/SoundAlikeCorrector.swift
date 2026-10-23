@@ -8,12 +8,17 @@ import Foundation
 /// variants always match; a single-word name with a spoken form in brackets also catches new
 /// variants that sound close to it, so the list does not have to grow one mishearing at a time.
 /// A Turkish suffix is kept: "Sputfayda" → "Spotify'da".
+///
+/// Lines under an `@Claude` header apply only while that app is in front (`AppFocus`), so
+/// "cloud" becomes Claude in Claude and stays "cloud" everywhere else.
 enum SoundAlikeCorrector {
     struct Entry: Equatable {
         let canonical: String
         /// How it sounds in Turkish, for the fuzzy match; nil = listed variants only.
         let spoken: String?
         let variants: [String]
+        /// The app this line belongs to (its `@Name` header); nil = every app.
+        var app: String? = nil
     }
 
     static var fileURL: URL {
@@ -26,11 +31,15 @@ enum SoundAlikeCorrector {
         # Her satır: Doğru yazım [Türkçe okunuşu] = bozuk hali, bozuk hali, ...
         # Köşeli parantezli okunuş verilirse listede olmayan benzer bozulmalar da düzelir.
         # Türkçe ekler korunur: "Sputfayda" → "Spotify'da". Değişiklik bir sonraki kayıtta geçerli olur.
+        # "@Uygulama" başlığının altındaki satırlar yalnızca o uygulama öndeyken uygulanır.
 
         Spotify [spotifay] = supotufy, spatfa, sputfay, pöt fay, pot fay, kutfai, kutfay, spotfader, spotfay, spot fay, spatfay
         WhatsApp [vatsap] = vatsap, vatsab, whatsap, vots app
         YouTube [yutub] = yutub, yutup, you tube
         Bluetooth [blutut] = blutut, bulutut, blu tut
+
+        @Claude
+        Claude [klod] = cloud, klod, klot
         """
 
     /// Read once per recording; the file is tiny.
@@ -44,8 +53,14 @@ enum SoundAlikeCorrector {
     }
 
     static func parse(_ contents: String) -> [Entry] {
-        contents.split(whereSeparator: \.isNewline).compactMap { rawLine in
+        var app: String?
+        return contents.split(whereSeparator: \.isNewline).compactMap { rawLine in
             let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("@") {
+                let name = line.dropFirst().trimmingCharacters(in: .whitespaces)
+                app = name.isEmpty ? nil : name
+                return nil
+            }
             guard !line.isEmpty, !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { return nil }
             var head = line[..<eq].trimmingCharacters(in: .whitespaces)
             var spoken: String?
@@ -56,20 +71,34 @@ enum SoundAlikeCorrector {
             let variants = line[line.index(after: eq)...].split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             guard !head.isEmpty else { return nil }
-            return Entry(canonical: head, spoken: spoken?.isEmpty == false ? spoken : nil, variants: variants)
+            return Entry(canonical: head, spoken: spoken?.isEmpty == false ? spoken : nil, variants: variants, app: app)
         }
     }
 
-    /// Returns the corrected text and the (heard, written) pairs that changed.
-    static func correct(_ text: String, entries: [Entry]) -> (String, [(String, String)]) {
+    /// Returns the corrected text and the (heard, written) pairs that changed. Two-word
+    /// `keeping` names ("Google Cloud") are left whole, also with a suffix ("Google Cloud'da").
+    static func correct(_ text: String, entries: [Entry], keeping: [String] = []) -> (String, [(String, String)]) {
         guard !entries.isEmpty else { return (text, []) }
         let words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         var output: [String] = []
         var applied: [(String, String)] = []
         var index = 0
+        let kept = keeping.compactMap { name -> (String, String)? in
+            let parts = name.split(separator: " ").map { fold(String($0)) }
+            return parts.count == 2 ? (parts[0], parts[1]) : nil
+        }
         while index < words.count {
-            // Two words first: Whisper often splits the name ("pöt fayda").
-            if index + 1 < words.count,
+            if index + 1 < words.count {
+                let first = fold(words[index]), second = fold(words[index + 1])
+                if kept.contains(where: { first == $0.0 && second.hasPrefix($0.1) }) {
+                    output += [words[index], words[index + 1]]
+                    index += 2
+                    continue
+                }
+            }
+            // Two words first: Whisper often splits the name ("pöt fayda"). Not when the first
+            // word already ends the name ("Cloud'a sor", "Spotify, aç").
+            if index + 1 < words.count, !words[index].contains(where: { $0 == "'" || $0 == "’" || ($0.isPunctuation) }),
                let fixed = replacement(for: words[index] + words[index + 1], entries: entries) {
                 applied.append((words[index] + " " + words[index + 1], fixed))
                 output.append(fixed)

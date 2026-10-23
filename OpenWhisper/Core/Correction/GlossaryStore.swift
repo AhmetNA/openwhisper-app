@@ -106,4 +106,11 @@ enum GlossaryStore {
         defer { lock.unlock() }
         return linesLocked().filter { !$0.contains(" ") }
     }
+
+    /// Multi-word glossary terms ("Google Cloud"), which a one-word correction must not split.
+    static func multiWordTerms() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return linesLocked().filter { $0.contains(" ") }
+    }
 }
