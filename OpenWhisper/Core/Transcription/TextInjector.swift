@@ -290,14 +290,20 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     @MainActor
     func pressReturnBringingToFront(pid: pid_t, context: PasteContext? = nil) async -> Bool {
         let front = NSWorkspace.shared.frontmostApplication
-        guard let front, front.processIdentifier != pid else { return (context?.conversationIsCurrent ?? true) && pressReturn(inPID: pid) }
+        guard let front, front.processIdentifier != pid else {
+            guard context?.conversationIsShown ?? true else {
+                owLog("[TextInjector] Return skipped: the recorded conversation is no longer shown")
+                return false
+            }
+            return pressReturn(inPID: pid)
+        }
         guard let target = NSRunningApplication(processIdentifier: pid), !target.isTerminated,
               await AgentAppActivator.bringToFront(target) else {
             owLog("[TextInjector] Return skipped: could not bring the target forward")
             return false
         }
         owLog("[TextInjector] Brought \(target.localizedName ?? "?") forward to press Return; back to \(front.localizedName ?? "?") after")
-        let sent = (context?.conversationIsCurrent ?? true) && pressReturn(inPID: pid)
+        let sent = (context?.conversationIsShown ?? true) && pressReturn(inPID: pid)
         // Let the app take the Return before it loses focus.
         try? await Task.sleep(nanoseconds: 150_000_000)
         if !front.isTerminated { _ = await AgentAppActivator.bringToFront(front) }

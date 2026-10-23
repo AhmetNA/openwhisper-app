@@ -73,6 +73,17 @@ struct RecordedConversation: @unchecked Sendable {
         return Self.uniqueSessionID(title: current, sessions: sessions) == sessionID
     }
 
+    /// For the Return after a verified paste. Electron replaces a new session's composer
+    /// once text lands in it, which ends the draft lease; the window and its still
+    /// untitled page are what keep the Return in the chat that was just pasted into.
+    func isShown(in app: NSRunningApplication) -> Bool {
+        guard draft != nil else { return isCurrent(in: app) }
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard let focusedWindow = Self.element(root, kAXFocusedWindowAttribute),
+              CFEqual(focusedWindow, window) else { return false }
+        return Self.currentTitle(window: window, agent: agent) == title
+    }
+
     @MainActor
     func restore(in app: NSRunningApplication) async -> Bool {
         guard !app.isTerminated, await AgentAppActivator.bringToFront(app) else { return false }
@@ -190,6 +201,13 @@ extension PasteContext {
         guard RecordedConversation.requiresBinding(bundleIdentifier) else { return true }
         guard let conversation, let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) else { return false }
         return conversation.isCurrent(in: app)
+    }
+
+    /// `conversationIsCurrent` for the Return that follows a verified paste.
+    var conversationIsShown: Bool {
+        guard RecordedConversation.requiresBinding(bundleIdentifier) else { return true }
+        guard let conversation, let targetPID, let app = NSRunningApplication(processIdentifier: targetPID) else { return false }
+        return conversation.isShown(in: app)
     }
 }
 
