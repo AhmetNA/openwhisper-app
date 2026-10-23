@@ -100,7 +100,7 @@ final class JarvisReplyTests: XCTestCase {
         var reply = JarvisReply(rng: SeededRNG(state: 7))
         reply.addressChance = 1
         let spoken = reply.answer("Saat 14:05")
-        XCTAssertTrue(spoken == "Saat 14:05, patron." || spoken == "Saat 14:05, efendim.", spoken)
+        XCTAssertTrue(JarvisReply.addresses.contains { spoken == "Saat 14:05, \($0)." }, spoken)
     }
 }
 

@@ -3,7 +3,7 @@ import Foundation
 /// What Jarvis says back after a voice command: short and butler-like. Questions ("saat kaç?")
 /// get their answer; every action he takes on the computer gets a one-word ack; failures say
 /// why. Plain dictation gets nothing. Nothing narrates what Spotify is doing, the ack is enough.
-/// Now and then the user is addressed as "patron" / "efendim", never twice in a row.
+/// Now and then the user is addressed as "patron" / "efendim" / "sör", never twice in a row.
 struct JarvisReply {
     private var rng: any RandomNumberGenerator
     private var addressedLastTime = false
@@ -16,8 +16,9 @@ struct JarvisReply {
         self.rng = rng
     }
 
-    static let acks = ["Tamamdır.", "Hallettim.", "Hemen.", "Oldu.", "Anlaşıldı.", "Tamam."]
-    static let addresses = ["patron", "efendim"]
+    static let acks = ["Tamamdır.", "Hallettim.", "Hemen.", "Oldu.", "Anlaşıldı.", "Tamam.",
+                       "Derhal.", "Emredersiniz.", "Başüstüne.", "Elbette.", "Hemen hallediyorum."]
+    static let addresses = ["patron", "efendim", "sör"]
     /// Replies that aren't in `acks` but repeat word for word, so they're worth pre-synthesizing.
     static let fixedPhrases = ["Not ettim.", "Gönderdim.", "Yazdım."]
 

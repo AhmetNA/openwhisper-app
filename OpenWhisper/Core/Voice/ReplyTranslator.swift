@@ -15,12 +15,17 @@ enum ReplyTranslator {
         "Oldu": "All set",
         "Anlaşıldı": "Understood",
         "Tamam": "Very well",
+        "Derhal": "Immediately",
+        "Emredersiniz": "As you wish",
+        "Başüstüne": "With pleasure",
+        "Elbette": "Of course",
+        "Hemen hallediyorum": "On it",
         "Not ettim": "Noted",
         "Gönderdim": "Sent",
         "Yazdım": "Written",
     ]
 
-    /// The ack or fixed phrase in English, with "patron"/"efendim" as "sir"; nil for any other
+    /// The ack or fixed phrase in English, with "patron"/"efendim"/"sör" as "sir"; nil for any other
     /// text. "Tamamdır, patron." → "Right away, sir."
     static func fixedEnglish(_ text: String) -> String? {
         var body = text.trimmingCharacters(in: .whitespaces)
@@ -69,7 +74,7 @@ enum ReplyTranslator {
     static let prompt = """
         Translate this Turkish sentence, spoken by a butler-like voice assistant, into natural English. \
         Reply with the English sentence only. Keep names of people, apps, songs and artists as they are. \
-        Translate 'patron' and 'efendim' as 'sir'; do not add 'sir' otherwise. Keep numbers and clock \
+        Translate 'patron', 'efendim' and 'sör' as 'sir'; do not add 'sir' otherwise. Keep numbers and clock \
         times as digits; write a Turkish percentage like %87 as 87%.
         """
 
