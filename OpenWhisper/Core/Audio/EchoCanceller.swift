@@ -402,8 +402,8 @@ final class EchoCanceller {
     private var micPower: Float = 0
     private var errorPower: Float = 0
     private var divergentBlocks = 0
-    /// Per-block ERLE while the reference plays, for the periodic log.
-    private(set) var erleSamples: [Float] = []
+    /// Per-block ERLE and levels while the reference plays, for the periodic log.
+    private(set) var blockStats: [EchoBlockStats] = []
     var log: (String) -> Void = { _ in }
     /// Recordings only (`EchoCancelledStream`): mutes what the linear filter leaves of the
     /// speakers, see `ResidualEchoGate`. The wake listener keeps it off (it lowers wake scores).
@@ -432,7 +432,7 @@ final class EchoCanceller {
         estimatorMic.removeAll(); estimatorRef.removeAll()
         samplesSinceEstimate = 0
         micPower = 0; errorPower = 0; divergentBlocks = 0
-        erleSamples.removeAll()
+        blockStats.removeAll()
     }
 
     /// Same-length chunks; returns the cleaned samples available so far (whole blocks only,
@@ -466,9 +466,9 @@ final class EchoCanceller {
         return micPending
     }
 
-    func takeERLESamples() -> [Float] {
-        defer { erleSamples.removeAll(keepingCapacity: true) }
-        return erleSamples
+    func takeBlockStats() -> [EchoBlockStats] {
+        defer { blockStats.removeAll(keepingCapacity: true) }
+        return blockStats
     }
 
     private func processBlock(mic: [Float], reference: [Float]) -> [Float] {
@@ -501,7 +501,10 @@ final class EchoCanceller {
         errorPower = a * errorPower + (1 - a) * errorEnergy
 
         if referenceActive, micEnergy > 1e-9 {
-            erleSamples.append(10 * log10(micEnergy / max(errorEnergy, 1e-12)))
+            let size = Float(blockSize)
+            blockStats.append(EchoBlockStats(erle: 10 * log10(micEnergy / max(errorEnergy, 1e-12)),
+                                             micDBFS: 10 * log10(micEnergy / size),
+                                             referenceDBFS: 10 * log10(refEnergy / size)))
         }
         // Never make the mic worse: a filter that adds energy for ~0.5 s has diverged.
         if errorPower > 2 * micPower, micPower > 1e-9 {
@@ -555,6 +558,25 @@ final class EchoCanceller {
             filter.reset()
             errorPower = micPower
         }
+    }
+}
+
+/// One block the reference played in. ERLE alone reads as "the canceller is broken" when the mic
+/// barely hears the speakers (a close external mic: music ~35 dB under the voice, near the noise
+/// floor, nothing left to remove), so the log carries the mic and reference levels beside it.
+struct EchoBlockStats {
+    let erle: Float
+    let micDBFS: Float
+    let referenceDBFS: Float
+
+    /// "ERLE median … over … blocks, mic median … dBFS, reference median … dBFS".
+    static func summary(_ blocks: [EchoBlockStats]) -> String {
+        func median(_ values: [Float]) -> Float {
+            values.isEmpty ? .nan : values.sorted()[values.count / 2]
+        }
+        return String(format: "ERLE median %.1f dB over %d blocks, mic median %.1f dBFS, reference median %.1f dBFS",
+                      median(blocks.map(\.erle)), blocks.count,
+                      median(blocks.map(\.micDBFS)), median(blocks.map(\.referenceDBFS)))
     }
 }
 

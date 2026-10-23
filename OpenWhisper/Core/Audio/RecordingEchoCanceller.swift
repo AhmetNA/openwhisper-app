@@ -15,9 +15,9 @@ final class EchoCancelledStream {
     private(set) var untimedSamples = 0
     /// Mic samples passed through because no reference was arriving.
     private(set) var idleSamples = 0
-    private var erle: [Float] = []
+    private var blockStats: [EchoBlockStats] = []
     /// The speakers played something audible that the filter worked on.
-    var heardPlayback: Bool { !erle.isEmpty }
+    var heardPlayback: Bool { !blockStats.isEmpty }
 
     init(engine: EchoCancellationEngineKind = EchoCancellationSettings.engine, log: @escaping (String) -> Void = { _ in }) {
         canceller = EchoCanceller(engine: engine)
@@ -37,7 +37,7 @@ final class EchoCancelledStream {
     /// wake preroll through the filter instead stepped it back in time and undid its convergence.
     func adopt(_ state: EchoStateHandoff.State) {
         aligner = state.aligner
-        _ = state.canceller.takeERLESamples()
+        _ = state.canceller.takeBlockStats()
         state.canceller.residualGate = canceller.residualGate
         state.canceller.log = canceller.log
         canceller = state.canceller
@@ -81,7 +81,7 @@ final class EchoCancelledStream {
         }
         guard let pair = aligner.appendMic(mic, startIndex: hostIndex) else { return [] }
         let cleaned = canceller.process(mic: pair.mic, reference: pair.reference)
-        erle += canceller.takeERLESamples()
+        blockStats += canceller.takeBlockStats()
         return emit(cleaned)
     }
 
@@ -103,11 +103,9 @@ final class EchoCancelledStream {
     /// One line for the log: how much was paired and removed.
     func summary() -> String {
         let paired = aligner.takePairedPercent() ?? .nan
-        let sorted = erle.sorted()
-        let median = sorted.isEmpty ? Float.nan : sorted[sorted.count / 2]
         let gate = canceller.residualGate.map { String(format: ", residual gate muted %d/%d echo blocks", $0.mutedBlocks, $0.activeBlocks) } ?? ""
-        return String(format: "%@engine %@, paired with reference %.0f%%, ERLE median %.1f dB over %d blocks, resyncs %d, untimed %d, no reference %.1f s, in %d / out %d samples",
-                      warm ? "warm start from the wake listener, " : "", canceller.activeEngine.rawValue, paired, median, erle.count, resyncs,
+        return String(format: "%@engine %@, paired with reference %.0f%%, %@, resyncs %d, untimed %d, no reference %.1f s, in %d / out %d samples",
+                      warm ? "warm start from the wake listener, " : "", canceller.activeEngine.rawValue, paired, EchoBlockStats.summary(blockStats), resyncs,
                       untimedSamples, Double(idleSamples) / Double(EchoCanceller.sampleRate),
                       inputSamples, outputSamples) + gate
     }

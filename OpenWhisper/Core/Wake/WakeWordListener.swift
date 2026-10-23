@@ -559,14 +559,13 @@ final class WakeWordListener {
         aecDump?.write([pair.mic, pair.reference])
         if Date().timeIntervalSince(lastAECLog) >= 10 {
             lastAECLog = Date()
-            let erle = echoCanceller.takeERLESamples().sorted()
-            let median = erle.isEmpty ? Float.nan : erle[erle.count / 2]
+            let levels = EchoBlockStats.summary(echoCanceller.takeBlockStats())
             let paired = aecAligner.takePairedPercent() ?? .nan
             let delay = echoCanceller.activeEngine == .aec3
                 ? "AEC3 internal"
                 : String(format: "%.1f ms", Double(echoCanceller.filterDelay - EchoCanceller.lookahead) / 16)
-            owLog(String(format: "[AEC] engine %@, ERLE median %.1f dB over %d blocks, paired with reference %.0f%%, delay %@, mic resyncs %d",
-                         echoCanceller.activeEngine.rawValue, median, erle.count, paired,
+            owLog(String(format: "[AEC] engine %@, %@, paired with reference %.0f%%, delay %@, mic resyncs %d",
+                         echoCanceller.activeEngine.rawValue, levels, paired,
                          delay, aecAligner.resyncs))
         }
         if !cleaned.isEmpty { score(cleaned) }
