@@ -92,7 +92,7 @@ enum WhatsAppController {
         let when = today.isEmpty ? "son konuşmanız (\(spokenTime(newest.date)))" : "bugün \(today.count) mesaj"
         let transcript = exchange.reversed().map { message -> String in
             let author = message.fromMe ? "Sen" : (chat.isGroup ? (message.sender ?? "Biri") : who)
-            return "\(author): \(message.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))"
+            return "\(author): \(spokenLinks(message.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)))"
         }
         if let summary = await summarize(transcript, with: who, isGroup: chat.isGroup) {
             return "\(who) ile \(when): \(summary)"
@@ -139,7 +139,7 @@ enum WhatsAppController {
         guard let date = result.around.first?.date else { return "WhatsApp'ta \(topic) hakkında mesaj bulunamadı" }
         let transcript = result.around.reversed().map { message -> String in
             let author = message.fromMe ? "Sen" : (result.chat.isGroup ? (message.sender ?? "Biri") : who)
-            return "\(author): \(message.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))"
+            return "\(author): \(spokenLinks(message.text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)))"
         }
         let head = "En son \(spokenTime(date)), \(result.chat.isGroup ? "\(who) grubunda" : "\(who) ile")"
         let more = result.hits > 1 ? " Toplam \(result.hits) mesajda\(result.chats > 1 ? ", \(result.chats) sohbette" : "") geçiyor." : ""
@@ -310,8 +310,18 @@ enum WhatsAppController {
     }
 
     private static func shortened(_ text: String) -> String {
-        let flat = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        let flat = spokenLinks(text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))
         return flat.count > messageLimit ? String(flat.prefix(messageLimit)) + "…" : flat
+    }
+
+    /// A link is not spelled out: a message that is only a link becomes "yeni bir link yolladı",
+    /// one inside text becomes "bir link" ("bak buna https://…" → "bak buna bir link").
+    static func spokenLinks(_ text: String) -> String {
+        let pattern = #"(https?://|www\.)\S+"#
+        let replaced = text.replacingOccurrences(of: pattern, with: "bir link", options: [.regularExpression, .caseInsensitive])
+        guard replaced != text else { return text }
+        let rest = text.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+        return rest.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).isEmpty ? "yeni bir link yolladı" : replaced
     }
 
     /// "bugün 14:05", "dün 21:40", "salı 09:15", "12 Ekim".
