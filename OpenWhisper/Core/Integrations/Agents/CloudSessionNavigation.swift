@@ -3,6 +3,8 @@ import SQLite3
 
 /// Cloud selects an action; only locally enumerated destinations can be opened.
 enum CloudSessionNavigation {
+    /// `handle`'s reply when a new chat opened; the mic then stays open for its first message.
+    static let newChatOpened = "Yeni sohbet açıldı."
 
     struct Candidate: Codable, Equatable, Sendable {
         let id: String
@@ -166,7 +168,7 @@ enum CloudSessionNavigation {
                     : await CodexSessionNavigator.openThread(app, id: item.id, title: item.title)
                 opened = navigated && RecordedConversation.capture(app: app)?.sessionID == item.id
             }
-            return opened ? (chosen.action == "new" ? "Yeni sohbet açıldı." : "İstediğin sohbete geçtim.") : "Sohbetin açıldığını doğrulayamadım."
+            return opened ? (chosen.action == "new" ? newChatOpened : "İstediğin sohbete geçtim.") : "Sohbetin açıldığını doğrulayamadım."
         } catch {
             return "Bulut modeline ulaşamadım; sohbet geçişi yapılmadı."
         }

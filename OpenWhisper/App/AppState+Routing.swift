@@ -14,6 +14,7 @@ extension AppState {
         // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
         // first so it runs last, once the media and recording state below are settled.
         var commandFollowUp: CommandFollowUp.Domain?? = nil
+        // A new, empty Claude Code / Codex chat was opened: keep listening for its first message.
         var developerSessionApp: NSRunningApplication?
         // Opened already as Jarvis's reply started (`speakAfterCommand`).
         var followUpOpenedOverReply = false
@@ -808,6 +809,9 @@ extension AppState {
                let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
                 session.latency.finishDecision(route: "bulut sohbet geçişi")
                 self.lastTranscription = text
+                if reply == CloudSessionNavigation.newChatOpened, session.isVoiceCommand {
+                    developerSessionApp = NSWorkspace.shared.frontmostApplication
+                }
                 await say(reply, durationMs: 5000)
                 return
             }
@@ -910,6 +914,7 @@ extension AppState {
                         await fail(status, spoken: spoken)
                     case .opened(let app, let projectAgent, let found, let isNew):
                         guard !agent.body.isEmpty else {
+                            if isNew, session.isVoiceCommand { developerSessionApp = app }
                             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agentProject(found.name, isNew: isNew)) }
                             return
                         }
@@ -970,6 +975,7 @@ extension AppState {
                     }
                     pasteContext = PasteContext.capture(targetApp: app)
                     if agent.body.isEmpty {
+                        if agent.session == .new, session.isVoiceCommand { developerSessionApp = app }
                         if session.isVoiceCommand { await self.speakReply(self.jarvisReply.newAgentSession()) }
                         return
                     }
