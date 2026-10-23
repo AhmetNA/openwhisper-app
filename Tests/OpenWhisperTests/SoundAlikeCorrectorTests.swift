@@ -46,6 +46,10 @@ final class SoundAlikeCorrectorTests: XCTestCase {
         XCTAssertEqual(SoundAlikeCorrector.correct("Cloud'a sor, cloudda dene", entries: inClaude, keeping: keep).0, "Claude'a sor, Claude'da dene")
         XCTAssertEqual(SoundAlikeCorrector.correct("Google Cloud'da iCloud ve Cloudflare", entries: inClaude, keeping: keep).0,
                        "Google Cloud'da iCloud ve Cloudflare")
+        // Heard in Claude, 24 Oct 2026.
+        XCTAssertEqual(SoundAlikeCorrector.correct("CloudCode'da aç, CloudMD dosyasına yaz, Cloud 'u", entries: inClaude).0,
+                       "Claude Code'da aç, Claude.md dosyasına yaz, Claude'u")
+        XCTAssertEqual(SoundAlikeCorrector.correct("Cloud Code'u kapat", entries: inClaude).0, "Claude Code'u kapat")
         // Global lines still apply in Claude.
         XCTAssertEqual(SoundAlikeCorrector.correct("vatsapı aç", entries: inClaude).0, "WhatsApp'ı aç")
 

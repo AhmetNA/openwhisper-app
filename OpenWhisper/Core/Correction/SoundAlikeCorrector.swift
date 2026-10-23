@@ -39,7 +39,9 @@ enum SoundAlikeCorrector {
         Bluetooth [blutut] = blutut, bulutut, blu tut
 
         @Claude
-        Claude [klod] = cloud, klod, klot
+        Claude [klod] = cloud, klod, klot, clod, clode, claud, klaud
+        Claude Code = cloudcode, cloud code, klod kod
+        Claude.md = cloudmd, cloud md, cloud.md
         """
 
     /// Read once per recording; the file is tiny.
