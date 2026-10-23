@@ -176,7 +176,7 @@ extension AppState {
         if processingMode != audioProcessingMode {
             owLog("[AudioEngine] Bluetooth input: recording without Apple voice processing")
         }
-        let echoCancellation = recordingEchoCancellationWanted(inputIsBluetooth: recordingInputIsBluetooth)
+        let echoCancellation = recordingEchoCancellationWanted(mic: recordingMic)
         // Decided once here for the whole recording, never switched while it runs.
         if processingMode != .appleVoiceProcessing {
             processingMode = decideDeepFilter(
@@ -1055,11 +1055,15 @@ extension AppState {
 
     /// Returns true when the resolved dictation input is a Bluetooth device.
     /// Echo-cancel this recording against what the Mac plays (`RecordingEchoCanceller`): only
-    /// when opted in, something is playing, and there is a way to get the reference. Bluetooth
-    /// mics sit in the ear (no speaker echo); voice processing already cancels echo itself.
-    func recordingEchoCancellationWanted(inputIsBluetooth: Bool) -> Bool {
+    /// when opted in, something is playing, and there is a way to get the reference. Only the
+    /// Mac mic: buds sit in the ear (no speaker echo), an external mic sits close to the mouth and
+    /// its recordings pause the music at once; voice processing already cancels echo itself.
+    func recordingEchoCancellationWanted(mic: TargetSpeakerMic) -> Bool {
         guard EchoCancellationSettings.recordingIsEnabled else { return false }
-        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && !inputIsBluetooth
+        if mic == .external, mediaPlaying {
+            owLog("[AEC] External mic — recording without echo cancellation")
+        }
+        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && mic == .mac
         guard wanted else { return false }
         guard SystemOutputReference.hasPermission else {
             owLog("[AEC] No Screen Recording permission — recording without echo cancellation")

@@ -58,6 +58,9 @@ final class WakeWordListener {
     private let queue = DispatchQueue(label: "com.openwhisper.wakeword", qos: .utility)
     private var engine: AVAudioEngine?
     private var capture: HALInputCapture?
+    /// The listened mic is wired, USB or a wireless receiver: it sits close to the mouth and hears
+    /// the speakers ~35 dB under the voice (measured 24 Oct 2026), so no echo reference is taken.
+    private var captureIsExternal = false
     private var detector: WakeWordDetector?
     /// Scores what the Mac itself played (`recentReference`) when a wake fires on the
     /// echo-cancelled path: if the speakers alone say "Jarvis", the wake is theirs, not the
@@ -182,10 +185,14 @@ final class WakeWordListener {
         updateEchoReference(playing: playing && isRunning)
     }
 
-    /// Main thread. Starts the reference when music plays and a picked or built-in mic is in use;
+    /// Main thread. Starts the reference when music plays and the built-in mic is in use;
     /// otherwise stops it and returns the mic to the plain path.
     private func updateEchoReference(playing: Bool) {
-        let wanted = playing && capture != nil && EchoCancellationSettings.isEnabled
+        let possible = playing && capture != nil && EchoCancellationSettings.isEnabled
+        if possible, captureIsExternal, echoReference == nil {
+            owLog("[AEC] External mic — no echo cancellation")
+        }
+        let wanted = possible && !captureIsExternal
         if wanted, echoReference == nil {
             guard SystemOutputReference.hasPermission else {
                 owLog("[AEC] No Screen Recording permission — running without echo cancellation")
@@ -415,6 +422,7 @@ final class WakeWordListener {
                     self?.handle(buffer, monoFormat: monoFormat, time: time)
                 }
                 self.capture = capture
+                captureIsExternal = TargetSpeakerMic(device: device) == .external
                 updateEchoReference(playing: mediaPlayingOnMain)
                 peakSinceLog = 0
                 lastPeakLog = Date()
