@@ -505,7 +505,7 @@ struct SettingsView: View {
             }
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
             .padding(.leading, 22)
-            Text("Bağlı olan en üstteki mikrofon kaydeder. Yeni takılan mikrofon en üste gelir; 3 gün bağlanmayan mikrofon listeden çıkar.")
+            Text("Bağlı olan en üstteki mikrofon kaydeder. Sıra siz değiştirene kadar korunur. Listede olmayan mikrofon ilk sıraya eklenir; kayıtlı mikrofon eski yerinde kalır. 3 gün bağlı olmayan mikrofon listeden çıkar.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

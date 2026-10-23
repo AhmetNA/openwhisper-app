@@ -40,12 +40,29 @@ extension AppState {
     }
 
     /// Stamps the mics connected until now, forgets the ones unseen for three days and puts newly
-    /// connected ones on top. The first run builds the list from the old single pick.
+    /// discovered ones on top; known mics retain their position. The first run builds the list from the old single pick.
     func updateInputPriority(wasConnected previous: [AudioInputDevice]) {
         let seeding = UserDefaults.standard.data(forKey: MicPriority.defaultsKey) == nil
         inputPriority = MicPriority.updated(
             inputPriority, wasConnected: Set(previous.map(\.uid)), connected: availableInputDevices,
             now: Date(), seeding: seeding)
+        scheduleInputPriorityExpiry()
+    }
+
+    /// Prune absent mics at their deadline even if Core Audio emits no further device events.
+    private func scheduleInputPriorityExpiry() {
+        inputPriorityExpiryTask?.cancel()
+        let connected = Set(availableInputDevices.map(\.uid))
+        guard let oldest = inputPriority.filter({ !connected.contains($0.uid) })
+            .map(\.lastSeen).min() else {
+            inputPriorityExpiryTask = nil
+            return
+        }
+        let delay = max(0.1, oldest.addingTimeInterval(MicPriority.forgetAfter).timeIntervalSinceNow)
+        inputPriorityExpiryTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            self?.refreshInputDevices()
+        }
     }
 
     /// Saved list, or for the first run the mic picked before the list existed.

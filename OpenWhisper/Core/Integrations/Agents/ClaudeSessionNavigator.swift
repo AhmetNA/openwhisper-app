@@ -132,6 +132,22 @@ enum ClaudeSessionNavigator {
         return false
     }
 
+    /// Before Return: waits until the composer shows the pasted `text`. Electron can take a
+    /// long paste after its AX value is first read, and an early Return sends nothing.
+    /// True when the composer cannot be read, so a missing AX tree never blocks the send.
+    static func waitForComposerText(_ app: NSRunningApplication, text: String, timeout: TimeInterval = 1.5) async -> Bool {
+        let needle = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        guard !needle.isEmpty else { return true }
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            guard let prompt = promptField(app), let current = value(prompt) else { return true }
+            if current.contains(needle) { return true }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        } while Date() < deadline
+        owLog("[Agent] Claude: the pasted text did not appear in the composer within \(timeout)s")
+        return false
+    }
+
     /// After Return: whether the composer still holds `text`, i.e. the message never left.
     /// False when the composer cannot be read, so a missing AX tree never fakes a failure.
     static func composerStillHolds(_ app: NSRunningApplication, text: String) async -> Bool {
@@ -245,7 +261,9 @@ enum ClaudeSessionNavigator {
             let root = appElement(app)
             if let sidebar = find(in: root, maxDepth: 22, where: { description($0) == "Sidebar" }) {
                 if wantSidebar { return sidebar }
-                if let match = find(in: sidebar, maxDepth: 14, where: predicate) { return match }
+                // The Chat tab also has a New button. Only accept Code sidebar controls.
+                if currentSessionTitle(app) != nil,
+                   let match = find(in: sidebar, maxDepth: 14, where: predicate) { return match }
                 if !triedCodeTab, let code = find(in: sidebar, maxDepth: 6, where: {
                     role($0) == kAXRadioButtonRole && description($0) == "Code"
                 }) {

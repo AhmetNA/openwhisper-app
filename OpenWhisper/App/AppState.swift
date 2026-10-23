@@ -248,6 +248,8 @@ final class AppState {
             syncWakeWordInput()
         }
     }
+    @ObservationIgnored var inputPriorityExpiryTask: Task<Void, Never>?
+
     var inputPriorityUIDs: [String] { inputPriority.map(\.uid) }
     var audioDuckingEnabled: Bool {
         didSet {

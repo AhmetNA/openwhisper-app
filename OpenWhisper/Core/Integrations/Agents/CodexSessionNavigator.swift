@@ -39,15 +39,32 @@ enum CodexSessionNavigator {
         return false
     }
 
-    private static func focusComposer(_ app: NSRunningApplication, timeout: TimeInterval) async -> Bool {
+    static func focusComposer(_ app: NSRunningApplication, timeout: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
+            guard !app.isTerminated, !Task.isCancelled,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
             let root = appElement(app)
             let window = attribute(root, kAXFocusedWindowAttribute).map { $0 as! AXUIElement } ?? root
-            if let composer = find(in: window, maxDepth: 40, where: { attribute($0, kAXRoleAttribute) as? String == kAXTextAreaRole }) {
-                AXUIElementSetAttributeValue(composer, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                return true
+            // Deep links already focus the composer. Its editable AX element need not
+            // be an AXTextArea or appear in the window's enumerated children. Use the
+            // same focused-element lookup as the working ordinary dictation path.
+            let focused = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier)
+            let composer = focused ?? find(in: window, maxDepth: 40, where: {
+                attribute($0, kAXRoleAttribute) as? String == kAXTextAreaRole
+                    && AXTextAccess.isSafeEditableElement($0, matchingPID: app.processIdentifier)
+            })
+            if let composer {
+                if focused != nil || AXTextAccess.focus(composer, matchingPID: app.processIdentifier) {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    if !Task.isCancelled,
+                       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                       let current = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier),
+                       CFEqual(current, composer) {
+                        owLog("[Agent] Codex: editable composer focus verified")
+                        return true
+                    }
+                }
             }
             try? await Task.sleep(nanoseconds: 150_000_000)
         } while Date() < deadline

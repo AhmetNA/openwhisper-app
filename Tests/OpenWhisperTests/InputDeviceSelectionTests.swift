@@ -85,7 +85,7 @@ final class InputDeviceSelectionTests: XCTestCase {
         let later = start + 3 * day + 60
         let pruned = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac], now: later)
         XCTAssertEqual(pruned.map(\.uid), ["mac"])
-        let back = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac, buds], now: later)
+        let back = MicPriority.updated(pruned, wasConnected: ["mac"], connected: [mac, buds], now: later)
         XCTAssertEqual(back.map(\.uid), ["buds", "mac"])
     }
 
@@ -93,6 +93,31 @@ final class InputDeviceSelectionTests: XCTestCase {
         let list = [entry(usb, seen: start), entry(mac, seen: start)]
         let updated = MicPriority.updated(list, wasConnected: ["usb", "mac"], connected: [mac], now: start + 5 * day)
         XCTAssertEqual(updated.map(\.uid), ["usb", "mac"])
+    }
+
+    func testRestartWithStaleTimestampsPreservesConnectedMicOrder() {
+        let list = [entry(usb, seen: start), entry(mac, seen: start), entry(buds, seen: start)]
+        let updated = MicPriority.updated(list, wasConnected: [], connected: [buds, mac, usb],
+                                          now: start + 5 * day)
+        XCTAssertEqual(updated.map(\.uid), ["usb", "mac", "buds"])
+        XCTAssertTrue(updated.allSatisfy { $0.lastSeen == start + 5 * day })
+    }
+
+    func testAbsentMicExpiresAtExactlyThreeDays() {
+        let list = [entry(mac, seen: start), entry(buds, seen: start)]
+        let updated = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac],
+                                          now: start + 3 * day)
+        XCTAssertEqual(updated.map(\.uid), ["mac"])
+    }
+
+    func testManualOrderSurvivesDisconnectReconnectAndEnumerationChanges() {
+        let list = [entry(mac, seen: start), entry(buds, seen: start), entry(usb, seen: start)]
+        let disconnected = MicPriority.updated(list, wasConnected: ["mac", "buds", "usb"],
+                                               connected: [usb, mac], now: start + 60)
+        XCTAssertEqual(disconnected.map(\.uid), ["mac", "buds", "usb"])
+        let returned = MicPriority.updated(disconnected, wasConnected: ["mac", "usb"],
+                                           connected: [usb, buds, mac], now: start + day)
+        XCTAssertEqual(returned.map(\.uid), ["mac", "buds", "usb"])
     }
 
     func testExternalMicFollowsPriority() {

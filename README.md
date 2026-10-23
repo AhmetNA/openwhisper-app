@@ -15,7 +15,7 @@
 
 Jarvis is a menu-bar dictation app for Apple Silicon Macs. It uses [WhisperKit](https://github.com/argmaxinc/WhisperKit) and Core ML for local transcription, then optionally uses [Ollama](https://ollama.com/) on `localhost` to remove filler words and improve punctuation.
 
-Your microphone audio and transcript stay on your Mac during normal dictation. Spotify integration and the Gemini voice are optional and are the only features that communicate with external services.
+Your microphone audio and transcript stay on your Mac during normal dictation. Optional cloud features send their requests to the configured services. Cloud chat navigation sends the spoken navigation request, titles, and bounded conversation excerpts from up to 40 recent Claude Code or Codex chats to the selected cloud model.
 
 ## Highlights
 
@@ -352,3 +352,11 @@ words are never rewritten. These are delivery cues, not guaranteed emotion recog
 Selection happens after English translation. The prosody version is part of the cache
 identity so old neutral clips are regenerated. Tone selection and synthesis share a
 lock, and each request resets the speed condition. Other voices are unchanged.
+
+## Cloud chat navigation
+
+Cloud-assisted chat navigation is always enabled and has no separate settings toggle. It uses the configured cloud chat model.
+
+Examples: “Bir önceki chat’e geç”, “Yeni chat aç”, or “Claude Code’da ses modeliyle ilgili konuştuğumuz sohbeti aç”. An explicitly named app takes priority; otherwise the app focused when recording started is used. “Previous” means the most recently active conversation other than the current one. Searches cover the latest 40 non-archived conversations, using bounded user/assistant excerpts rather than full transcripts. Claude sessions without completed turns are excluded.
+
+The model selects only new-chat or existing-chat navigation. Unknown IDs and duplicate titles are rejected; an existing-chat success reply requires the destination ID to be verified locally. Model failures do not trigger a guessed navigation. Existing explicit new-session dictation commands remain available.

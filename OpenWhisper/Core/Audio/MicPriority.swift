@@ -10,7 +10,7 @@ struct MicPriorityEntry: Codable, Equatable, Sendable {
 
 /// The user's ordered mic list: every recording uses the highest-ranked connected mic. A mic
 /// that was not connected for three days drops off the list; when it (or any mic the list has
-/// not seen) connects, it goes on top, since a mic just plugged in is the one meant to be used.
+/// not seen) connects, it goes on top. Known mics always retain their saved position.
 enum MicPriority {
     static let defaultsKey = "inputPriority"
     static let forgetAfter: TimeInterval = 3 * 24 * 60 * 60
@@ -18,18 +18,20 @@ enum MicPriority {
     /// The list after a device change. `wasConnected` are the mics connected up to now (including
     /// the ones that just went away): they are stamped first, so a mic that stayed connected for
     /// days without a device event is not forgotten the moment it is unplugged. Then mics unseen
-    /// for three days are forgotten, and connected mics the list doesn't hold are added: on top,
+    /// for three days and still absent are forgotten. Currently connected known mics are refreshed
+    /// before pruning, including after an app restart. Connected mics the list doesn't hold are added: on top,
     /// or at the end in `seedRank` order when the list is first built.
     static func updated(
         _ list: [MicPriorityEntry], wasConnected: Set<String>, connected: [AudioInputDevice],
         now: Date, seeding: Bool = false
     ) -> [MicPriorityEntry] {
+        let connectedUIDs = Set(connected.map(\.uid))
         var result = list.map { entry -> MicPriorityEntry in
             var entry = entry
-            if wasConnected.contains(entry.uid) { entry.lastSeen = now }
+            if wasConnected.contains(entry.uid) || connectedUIDs.contains(entry.uid) { entry.lastSeen = now }
             return entry
         }
-        result.removeAll { now.timeIntervalSince($0.lastSeen) > forgetAfter }
+        result.removeAll { now.timeIntervalSince($0.lastSeen) >= forgetAfter }
         for device in connected {
             guard let index = result.firstIndex(where: { $0.uid == device.uid }) else { continue }
             result[index].name = device.name

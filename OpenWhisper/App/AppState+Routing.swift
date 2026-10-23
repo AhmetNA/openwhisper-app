@@ -14,10 +14,20 @@ extension AppState {
         // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
         // first so it runs last, once the media and recording state below are settled.
         var commandFollowUp: CommandFollowUp.Domain?? = nil
+        var developerSessionApp: NSRunningApplication?
         // Opened already as Jarvis's reply started (`speakAfterCommand`).
         var followUpOpenedOverReply = false
         defer {
-            if let commandFollowUp, !followUpOpenedOverReply { listenAfterCommand(domain: commandFollowUp, after: session) }
+            if let app = developerSessionApp, !session.isCancelled,
+               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+               recordingState != .recording, hotkey?.isIdle == true, microphoneGranted {
+                pendingCommandFollowUp = nil
+                pendingClaudeMessage = nil
+                pendingWakeSpeakerVerified = session.wakeSpeakerVerified
+                startVoiceSession(trigger: .jarvisKey)
+            } else if let commandFollowUp, !followUpOpenedOverReply {
+                listenAfterCommand(domain: commandFollowUp, after: session)
+            }
         }
         // Media paused when a voice session started plays again only after its command
         // (or dictation) is done, on every exit path below. A recording started meanwhile
@@ -155,6 +165,13 @@ extension AppState {
                     textInjector?.copyToClipboard(rawCandidateText)
                     showTargetSpeakerAppendOffer(message: "")
                     owLog("[OpenWhisper] Near-threshold candidate retained for 'Bu benim sesimdi' confirmation without showing error warning")
+                } else if session.hadDiarizationFailure && !session.followsCommand {
+                    let status = "Sesini doğrulayamadım; mesaj gönderilmedi. Fn tuşuyla tekrar deneyebilirsin."
+                    lastError = status
+                    session.latency.markOutput("konuşmacı doğrulanamadı; gönderilmedi")
+                    owLog("[TargetSpeaker] No output after diarization failure; notifying the user")
+                    showFlowBarMessage(status, durationMs: 6000)
+                    if session.isVoiceCommand { await speakReply(status) }
                 } else {
                     dismissFlowBarMessage()
                 }
@@ -213,6 +230,8 @@ extension AppState {
             correctionGeneration &+= 1
             let generation = correctionGeneration
 
+            var agentDeliveryFailure: String?
+
             /// Pastes `rawText` (after learned/phonetic corrections) into `targetApp`. With
             /// `send`, presses Return once the paste landed, for coding agents: the text is
             /// then gone from the field, so the swap, snapshot and LLM cleanup steps are skipped.
@@ -225,6 +244,8 @@ extension AppState {
                 pasteContext: PasteContext,
                 send: Bool
             ) async -> Bool {
+                var pasteContext = pasteContext
+                agentDeliveryFailure = nil
                 // Never type into the lock screen.
                 guard !RemoteControl.screenIsLocked else {
                     owLog("[Result] Screen locked; nothing pasted")
@@ -299,10 +320,52 @@ extension AppState {
                         hopFrom = front
                     }
                 }
+                // Remember the conversation visible immediately before the delivery hop,
+                // independently of the conversation captured when recording started.
+                let deliveryConversation = pasteContext.conversation
+                let previousConversation: RecordedConversation?
+                if self.autoPasteEnabled, send, let app = targetApp,
+                   let destination = deliveryConversation,
+                   let visible = RecordedConversation.capture(app: app),
+                   visible.sessionID != destination.sessionID {
+                    previousConversation = visible
+                } else {
+                    previousConversation = nil
+                }
                 let returnToApp = hopFrom
                 @MainActor func goBack() {
-                    guard let app = returnToApp else { return }
-                    Task { @MainActor in _ = await AgentAppActivator.bringToFront(app) }
+                    Task { @MainActor in
+                        // Do not overwrite a new navigation the user made during delivery.
+                        if let app = targetApp, let previous = previousConversation,
+                           NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                           deliveryConversation?.isCurrent(in: app) == true {
+                            let restored = await previous.restore(in: app)
+                            owLog("[Agent] Returned to pre-delivery conversation: \(restored)")
+                        }
+                        if let app = returnToApp {
+                            _ = await AgentAppActivator.bringToFront(app)
+                        }
+                    }
+                }
+
+                if self.autoPasteEnabled, RecordedConversation.requiresBinding(pasteContext.bundleIdentifier) {
+                    guard let app = targetApp, let conversation = pasteContext.conversation,
+                          await conversation.restore(in: app) else {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(initialText, forType: .string)
+                        let reason = pasteContext.conversation == nil
+                            ? "Kayıt başında sohbet kimliği alınamadı"
+                            : "Kaydın başladığı sohbete dönülemedi"
+                        agentDeliveryFailure = reason
+                        self.lastError = "\(reason). Metin panoya kopyalandı."
+                        session.latency.markOutput(reason)
+                        owLog("[Agent] Delivery blocked: \(reason)")
+                        goBack()
+                        return false
+                    }
+                    // The old composer may have been destroyed while another chat was open.
+                    pasteContext = PasteContext.capture(targetApp: app)
+                    pasteContext.conversation = conversation
                 }
 
                 if self.autoPasteEnabled {
@@ -347,8 +410,13 @@ extension AppState {
                                         // A background paste (the hop above failed or the user moved
                                         // on) still gets sent: hop there for the Return and back.
                                         var sent = false
+                                        if let app = targetApp, !app.isTerminated,
+                                           app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
+                                           NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                                            _ = await ClaudeSessionNavigator.waitForComposerText(app, text: initialText)
+                                        }
                                         if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
-                                            sent = await injector.pressReturnBringingToFront(pid: pid)
+                                            sent = await injector.pressReturnBringingToFront(pid: pid, context: pasteContext)
                                         }
                                         // A posted Return proves nothing if Claude was not ready:
                                         // a sent message leaves the composer.
@@ -526,7 +594,16 @@ extension AppState {
                         }
                         // The local model takes several seconds on a long page.
                         if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
-                        let status = await SystemController.perform(command)
+                        var status = await SystemController.perform(command)
+                        if command == .developerMode {
+                            if let app = await AgentAppActivator.activate(.claudeCode),
+                               await ClaudeSessionNavigator.openNewSession(app) {
+                                developerSessionApp = app
+                                status += " · Claude Code’da yeni sohbet hazır"
+                            } else {
+                                status += " · Claude Code’da yeni sohbet açılamadı"
+                            }
+                        }
                         // Liked Songs now play; don't resume what the session paused over them.
                         if command == .developerMode { resumeMediaAfterCommand = false }
                         // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
@@ -726,6 +803,14 @@ extension AppState {
                 await say("Tamam, göndermedim.", durationMs: 3000)
                 return
             }
+            if session.acceptsCommands, !session.sendsToRecappedClaudeSession,
+               !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
+               let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
+                session.latency.finishDecision(route: "bulut sohbet geçişi")
+                self.lastTranscription = text
+                await say(reply, durationMs: 5000)
+                return
+            }
             var route = session.sendsToRecappedClaudeSession
                 ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
                 : VoiceRouter.route(text, facts: facts)
@@ -892,8 +977,8 @@ extension AppState {
                 let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
                 guard delivered else {
                     owLog("[Agent] Not delivered to \(targetApp?.localizedName ?? "?"); not reporting success")
-                    await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
-                               spoken: agent.send ? "mesajı gönderemedim" : "mesajı yazamadım")
+                    await fail(agentDeliveryFailure ?? (agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı"),
+                               spoken: agentDeliveryFailure ?? (agent.send ? "mesajı gönderemedim" : "mesajı yazamadım"))
                     return
                 }
                 if agent.send, let app = targetApp,

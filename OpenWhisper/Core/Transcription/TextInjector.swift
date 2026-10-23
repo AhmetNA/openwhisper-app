@@ -288,16 +288,16 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     /// after a background paste) it is brought forward for the Return and the app that was
     /// in front gets the focus back. Return is still only posted once `pid` is frontmost.
     @MainActor
-    func pressReturnBringingToFront(pid: pid_t) async -> Bool {
+    func pressReturnBringingToFront(pid: pid_t, context: PasteContext? = nil) async -> Bool {
         let front = NSWorkspace.shared.frontmostApplication
-        guard let front, front.processIdentifier != pid else { return pressReturn(inPID: pid) }
+        guard let front, front.processIdentifier != pid else { return (context?.conversationIsCurrent ?? true) && pressReturn(inPID: pid) }
         guard let target = NSRunningApplication(processIdentifier: pid), !target.isTerminated,
               await AgentAppActivator.bringToFront(target) else {
             owLog("[TextInjector] Return skipped: could not bring the target forward")
             return false
         }
         owLog("[TextInjector] Brought \(target.localizedName ?? "?") forward to press Return; back to \(front.localizedName ?? "?") after")
-        let sent = pressReturn(inPID: pid)
+        let sent = (context?.conversationIsCurrent ?? true) && pressReturn(inPID: pid)
         // Let the app take the Return before it loses focus.
         try? await Task.sleep(nanoseconds: 150_000_000)
         if !front.isTerminated { _ = await AgentAppActivator.bringToFront(front) }
@@ -359,6 +359,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             return
         }
 
+        guard context.conversationIsCurrent else {
+            completion(.failed(.clipboardOnly(.noSafeEditableDestination)))
+            return
+        }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if frontmostPID != pid {
             // Do not steal focus from the app the user chose after starting dictation. A
@@ -446,6 +450,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
             complete(.clipboardOnly(.activationTimedOut), onOutcome: onOutcome)
             return
         }
+        guard context.conversationIsCurrent else {
+            complete(.clipboardOnly(.noSafeEditableDestination), onOutcome: onOutcome)
+            return
+        }
         guard simulateCmdV() else {
             complete(.clipboardOnly(.pasteEventUnavailable), onOutcome: onOutcome)
             return
@@ -478,6 +486,10 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         destination: PasteDestination,
         onOutcome: ((PasteOutcome) -> Void)?
     ) {
+        guard context.conversationIsCurrent else {
+            complete(.clipboardOnly(.noSafeEditableDestination), onOutcome: onOutcome)
+            return
+        }
         guard let beforeValue = context.valueAtCapture,
               let selectedRange = context.selectedRangeAtCapture,
               let afterValue = replacingUTF16Range(

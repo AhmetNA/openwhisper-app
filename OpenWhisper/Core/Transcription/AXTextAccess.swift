@@ -13,6 +13,7 @@ struct PasteContext: @unchecked Sendable {
     let valueAtCapture: String?
     let selectedRangeAtCapture: CFRange?
     let selectedTextAtCapture: String?
+    var conversation: RecordedConversation? = nil
 
     /// Fast, non-blocking initial context that captures app identity without IPC AX calls.
     static func initial(targetApp: NSRunningApplication? = nil) -> PasteContext {
@@ -53,7 +54,8 @@ struct PasteContext: @unchecked Sendable {
             focusStatus: focusStatus,
             valueAtCapture: afterValue,
             selectedRangeAtCapture: insertedRange,
-            selectedTextAtCapture: text
+            selectedTextAtCapture: text,
+            conversation: conversation
         )
     }
 
@@ -73,7 +75,8 @@ struct PasteContext: @unchecked Sendable {
             focusStatus: focusStatus,
             valueAtCapture: afterValue,
             selectedRangeAtCapture: replacementRange,
-            selectedTextAtCapture: text
+            selectedTextAtCapture: text,
+            conversation: conversation
         )
     }
 
@@ -119,6 +122,7 @@ enum AXTextAccess {
     static func capturePasteContext(targetApp: NSRunningApplication? = nil) -> PasteContext {
         let app = targetApp ?? NSWorkspace.shared.frontmostApplication
         let pid = app?.processIdentifier
+        let conversation = app.flatMap { RecordedConversation.capture(app: $0) }
 
         var element: AXUIElement?
         var value: String?
@@ -157,7 +161,8 @@ enum AXTextAccess {
             focusStatus: focusStatus,
             valueAtCapture: value,
             selectedRangeAtCapture: selectedRange,
-            selectedTextAtCapture: selectedText
+            selectedTextAtCapture: selectedText,
+            conversation: conversation
         )
     }
 

@@ -276,6 +276,15 @@ extension AppState {
             targetSpeakerProfile: sessionProfile,
             pasteContext: initialContext
         )
+        // Start destination capture before the remaining microphone/UI setup.
+        // Keep AX IPC off the hotkey callback thread.
+        let currentTargetApp = targetApp
+        Task.detached(priority: .userInitiated) {
+            let capturedContext = PasteContext.capture(targetApp: currentTargetApp)
+            await MainActor.run { [weak session] in
+                session?.pasteContext = capturedContext
+            }
+        }
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
@@ -344,15 +353,7 @@ extension AppState {
         // Dictation snapshot reset (instant if no active snapshot)
         DictationSnapshot.shared.handleNewDictationStarting()
 
-        // 5. Perform non-essential background tasks asynchronously:
-        // Async paste context capture off main thread
-        let currentTargetApp = targetApp
-        Task.detached(priority: .userInitiated) {
-            let capturedContext = PasteContext.capture(targetApp: currentTargetApp)
-            await MainActor.run { [weak session] in
-                session?.pasteContext = capturedContext
-            }
-        }
+
     }
 
     /// Schedules stopRecording() after a short tail delay (default 0.40s / 400ms) so that speech spoken
