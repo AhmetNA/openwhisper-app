@@ -72,6 +72,30 @@ final class JarvisAddresseeTests: XCTestCase {
         )
     }
 
+    func testQuestionInEditableFieldChatsOnlyAboveThreshold() {
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(focusStatus: .editable, score: 85, minScore: 70, isQuestion: true),
+            .chat
+        )
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(focusStatus: .editable, score: 30, minScore: 70, isQuestion: true),
+            .type
+        )
+        XCTAssertEqual(
+            JarvisAddressee.defaultRoute(focusStatus: .editable, score: nil, minScore: 70, isQuestion: true),
+            .type
+        )
+    }
+
+    func testLooksLikeQuestion() {
+        XCTAssertTrue(JarvisAddressee.looksLikeQuestion("Talon 'a karşı en iyi jungle pick 'i hangisi? Lold'da"))
+        XCTAssertTrue(JarvisAddressee.looksLikeQuestion("akşam geliyor musun"))
+        XCTAssertTrue(JarvisAddressee.looksLikeQuestion("bunu nasıl yaparım"))
+        XCTAssertTrue(JarvisAddressee.looksLikeQuestion("Türkiye'nin başkenti neresi"))
+        XCTAssertFalse(JarvisAddressee.looksLikeQuestion("toplantı yarın saat üçte başlıyor"))
+        XCTAssertFalse(JarvisAddressee.looksLikeQuestion("mimari değişikliği sonra yaparız"))
+    }
+
     func testKnownNonEditableFocusAlwaysChatsWithoutSemanticGuessing() {
         XCTAssertEqual(
             JarvisAddressee.defaultRoute(

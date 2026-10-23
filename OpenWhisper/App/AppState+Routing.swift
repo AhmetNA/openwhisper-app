@@ -646,8 +646,9 @@ extension AppState {
             }
 
             // For a Jarvis session that is not a command, keyboard focus is the primary signal:
-            // editable means dictation, known non-editable means chat. The LLM is only a fallback
-            // when Accessibility could not determine the focus. Fn dictation is always typed.
+            // editable means dictation (unless the model says a question is for Jarvis), known
+            // non-editable means chat. The LLM is otherwise only a fallback when Accessibility
+            // could not determine the focus. Fn dictation is always typed.
             @MainActor func dictateOrChat() async {
                 // After a command only a command is taken (see the follow-up check below).
                 if session.takesOnlyCommands {
@@ -660,7 +661,8 @@ extension AppState {
                 if session.isVoiceCommand {
                     // The lock screen's password field has focus, but nobody dictates into it.
                     let focusStatus = RemoteControl.screenIsLocked ? .notEditable : session.routingFocus
-                    let needsScore = focusStatus == .unknown
+                    let isQuestion = JarvisAddressee.looksLikeQuestion(trimmed)
+                    let needsScore = focusStatus == .unknown || (focusStatus == .editable && isQuestion)
                     let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
                             text: trimmed,
@@ -672,9 +674,10 @@ extension AppState {
                     let route = JarvisAddressee.defaultRoute(
                         focusStatus: focusStatus,
                         score: score,
-                        minScore: minScore
+                        minScore: minScore,
+                        isQuestion: isQuestion
                     )
-                    owLog("[Addressee] focus \(focusStatus.rawValue), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
+                    owLog("[Addressee] focus \(focusStatus.rawValue), question \(isQuestion), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
                     if route == .chat,
                        JarvisAddressee.skipsChat(frontBundleID: front, misheardWordCount: self.misheardWords(in: trimmed).count) {
                         owLog("[Addressee] Lock screen and the text has non-words; not answering: '\(trimmed)'")

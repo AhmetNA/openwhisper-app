@@ -31,21 +31,33 @@ enum JarvisAddressee {
         return score >= minScore
     }
 
-    /// Context is the primary signal. The language model is consulted only when Accessibility
-    /// could not determine whether the recording began in an editable field.
+    /// Context is the primary signal. The language model is consulted when Accessibility could
+    /// not determine the focus, and for a question in an editable field: "Talon'a karşı en iyi
+    /// jungle pick'i hangisi?" with the Claude box focused was typed, not answered (24 Oct 2026).
     static func defaultRoute(
         focusStatus: TextFocusStatus,
         score: Int?,
-        minScore: Int
+        minScore: Int,
+        isQuestion: Bool = false
     ) -> DefaultRoute {
         switch focusStatus {
         case .editable:
-            return .type
+            return isQuestion && isForJarvis(score: score, minScore: minScore) ? .chat : .type
         case .notEditable:
             return .chat
         case .unknown:
             return isForJarvis(score: score, minScore: minScore) ? .chat : .type
         }
+    }
+
+    private static let questionRegex = try! NSRegularExpression(
+        pattern: #"\?|\b(?:m[ıiuü](?:y[ıiuü]m|s[ıiuü]n|y[ıiuü]z|s[ıiuü]n[ıiuü]z|d[ıiuü]r|yd[ıiuü]|ym[ıiuü][sş])?|ne(?:den|ler|yi|ye)?|nas[ıi]l|hangi\w*|kim\w*|nere\w*|ka[çc]\w*|niye|ni[çc]in)\b"#,
+        options: [.caseInsensitive])
+
+    /// A question mark, a Turkish question particle ("mı", "musun") or a question word.
+    static func looksLikeQuestion(_ text: String) -> Bool {
+        let lowered = text.lowercased(with: locale)
+        return questionRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
     }
 
     /// On the lock screen (loginwindow in front) nobody can be dictating, so anything reaches the
