@@ -201,6 +201,9 @@ final class AgentCommandParserTests: XCTestCase {
                        AgentDictation(target: .claudeCode, body: "", send: false, session: .new, project: "Bitirme", targetAssumed: true))
         XCTAssertEqual(AgentCommandParser.parse("Codex'te Bitirme projesinde yeni sohbet aç"),
                        AgentDictation(target: .codex, body: "", send: false, session: .new, project: "Bitirme"))
+        // Voice test 2026-10-24: went to cloud chat navigation and opened an unrelated chat.
+        XCTAssertEqual(AgentCommandParser.parse("bitirme projesinde yeni çet aç"),
+                       AgentDictation(target: .claudeCode, body: "", send: false, session: .new, project: "bitirme", targetAssumed: true))
         XCTAssertEqual(AgentCommandParser.parse("Cloud Code'da Voice2TextLocal projesinde yeni session'a şunu gönder merhaba"),
                        AgentDictation(target: .claudeCode, body: "merhaba", send: true, session: .new, project: "Voice2TextLocal"))
     }

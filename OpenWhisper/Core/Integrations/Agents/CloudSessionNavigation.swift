@@ -116,7 +116,8 @@ enum CloudSessionNavigation {
     static func handle(_ text: String, front: NSRunningApplication?) async -> String? {
         guard isRequest(text) else { return nil }
         // Explicit dictation must retain its body, even when that body describes navigation.
-        if let dictation = AgentCommandParser.parse(text), !dictation.body.isEmpty { return nil }
+        // A named project ("Bitirme projesinde yeni çet aç") goes to that project's folder instead.
+        if let dictation = AgentCommandParser.parse(text), !dictation.body.isEmpty || dictation.project != nil { return nil }
         let lower = text.lowercased()
         let agent: AgentApp
         if ["claude", "cloud", "klod"].contains(where: lower.contains) { agent = .claudeCode }
