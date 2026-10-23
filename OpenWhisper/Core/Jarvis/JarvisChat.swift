@@ -155,12 +155,12 @@ final class JarvisChat {
         """
     }
 
-    /// With live context the calendar, timers and the playing song are known; the rest
-    /// (internet, weather, news, mail) never is.
+    /// With live context the calendar, timers, the playing song and what the front app shows
+    /// (page, selected mail, chat) are known; internet, weather and news never are.
     nonisolated private static func accessRule(_ context: [String]) -> String {
         context.isEmpty
             ? "- Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle."
-            : "- İnternete, hava durumuna, haberlere ve e-postaya erişimin yok; güncel bilgi uydurma. Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
+            : "- İnternete, hava durumuna ve haberlere erişimin yok; güncel bilgi uydurma. Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama, ekrandaki sayfa, mail, sohbet ya da seçili metin) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
     }
 
     /// The user said these themself; the model may use them but must not recite them unasked.

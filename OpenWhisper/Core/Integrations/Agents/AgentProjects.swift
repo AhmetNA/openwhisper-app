@@ -182,7 +182,7 @@ enum CodexProjectStore {
         return projects
     }
 
-    private static func rows(_ db: OpaquePointer, _ sql: String) -> [[String]] {
+    static func rows(_ db: OpaquePointer, _ sql: String) -> [[String]] {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             owLog("[Agent] Codex: query failed: \(String(cString: sqlite3_errmsg(db)))")

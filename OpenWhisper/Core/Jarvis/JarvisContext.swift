@@ -7,20 +7,34 @@ import Foundation
 /// Everything is read locally; a source that is slow or not allowed is simply left out.
 struct JarvisContext: Equatable, Sendable {
     var frontApp: String?
-    /// "Çalıyor: ♪ Tarkan — Kuzu Kuzu" / "Duraklatıldı: …".
+    /// The front app's window title and selected text (`JarvisAppContext`).
+    var windowTitle: String?
+    var selectedText: String?
+    /// The front app's own lines: Safari tab, selected mail, Claude/Codex chat.
+    var appDetails: [String] = []
+    /// "Çalıyor: Tarkan — Kuzu Kuzu, albüm Karma, 1:23 / 3:45, …" / "Duraklatıldı: …".
     var nowPlaying: String?
+    /// Spotify's next tracks, "Tarkan — Şımarık"; only with the Web API connected.
+    var upNext: [String] = []
     /// "14:05 alarm", "3 dakika sonra: çay".
     var timers: [String] = []
     /// Today's remaining events, "15:30 Toplantı"; nil when the calendar can't be read.
     var upcomingEvents: [String]?
 
-    var isEmpty: Bool { frontApp == nil && nowPlaying == nil && timers.isEmpty && upcomingEvents == nil }
+    var isEmpty: Bool {
+        frontApp == nil && windowTitle == nil && selectedText == nil && appDetails.isEmpty
+            && nowPlaying == nil && upNext.isEmpty && timers.isEmpty && upcomingEvents == nil
+    }
 
     /// Lines for the system prompt, one per source.
     var promptLines: [String] {
         var lines: [String] = []
         if let frontApp { lines.append("Ön plandaki uygulama: \(frontApp)") }
+        if let windowTitle { lines.append("Pencere başlığı: \(windowTitle)") }
+        if let selectedText { lines.append("Seçili metin: \(selectedText)") }
+        lines += appDetails
         if let nowPlaying { lines.append("Spotify: \(nowPlaying)") }
+        if !upNext.isEmpty { lines.append("Spotify'da sıradaki: \(upNext.joined(separator: "; "))") }
         if !timers.isEmpty { lines.append("Kurulu alarm / zamanlayıcı: \(timers.joined(separator: "; "))") }
         if let upcomingEvents {
             lines.append(upcomingEvents.isEmpty ? "Bugün kalan takvim etkinliği yok"
@@ -32,12 +46,18 @@ struct JarvisContext: Equatable, Sendable {
     /// Longest the chat waits for the slow sources (Spotify's AppleScript), so the first
     /// spoken sentence isn't held back.
     static let timeout: Duration = .milliseconds(350)
+    /// The front app's reader may read a page, a mail or a transcript tail, so it gets longer.
+    static let appTimeout: Duration = .milliseconds(600)
 
     @MainActor
     static func gather(now: Date = Date()) async -> JarvisContext {
         var context = JarvisContext()
-        context.frontApp = NSWorkspace.shared.frontmostApplication.flatMap { app in
-            app.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app.localizedName
+        let front = NSWorkspace.shared.frontmostApplication.flatMap { app in
+            app.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : app
+        }
+        context.frontApp = front?.localizedName
+        if let front {
+            (context.windowTitle, context.selectedText) = JarvisAppContext.windowAndSelection(front)
         }
         context.timers = TimerManager.shared.timers.prefix(3).map { timer in
             let clock = Self.clock(timer.fireDate)
@@ -49,7 +69,16 @@ struct JarvisContext: Equatable, Sendable {
             return "\(clock) alarm" + (timer.label.map { ": \($0)" } ?? "")
         }
         context.upcomingEvents = remainingEvents(now: now)
-        context.nowPlaying = await withTimeout(timeout) { await spotifyTrack() } ?? nil
+        let (pid, bundleID, windowTitle) = (front?.processIdentifier, front?.bundleIdentifier, context.windowTitle)
+        async let details = withTimeout(appTimeout) { () async -> [String] in
+            guard let pid else { return [] }
+            return await JarvisAppContext.details(pid: pid, bundleID: bundleID, windowTitle: windowTitle)
+        }
+        async let track = withTimeout(timeout) { await spotifyTrack() }
+        async let queue = withTimeout(timeout) { await spotifyQueue() }
+        context.appDetails = await details ?? []
+        context.nowPlaying = await track ?? nil
+        context.upNext = context.nowPlaying == nil ? [] : (await queue ?? nil) ?? []
         return context
     }
 
@@ -68,14 +97,44 @@ struct JarvisContext: Equatable, Sendable {
             .map { "\(clock($0.startDate)) \($0.title ?? "Etkinlik")" }
     }
 
+    private static var spotifyRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.spotify.client" }
+    }
+
     /// nil when Spotify isn't running (asking would cold-launch it) or has no track.
     private static func spotifyTrack() async -> String? {
-        guard NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == "com.spotify.client" }) else { return nil }
+        guard spotifyRunning else { return nil }
         let script = """
-            tell application "Spotify" to return (player state as text) & linefeed & \
-            (name of current track) & linefeed & (artist of current track)
+            tell application "Spotify"
+                set sep to character id 31
+                set t to current track
+                return (player state as text) & sep & (name of t) & sep & (artist of t) & sep & (album of t) & sep & \
+                    ((player position as integer) as text) & sep & (((duration of t) / 1000) as integer as text) & sep & \
+                    (sound volume as text) & sep & (shuffling as text) & sep & (repeating as text)
+            end tell
             """
-        return await Task.detached {
+        guard let reply = await osascript(script) else { return nil }
+        let fields = reply.components(separatedBy: "\u{1F}")
+        guard fields.count >= 9, !fields[1].isEmpty else { return nil }
+        var label = fields[2].isEmpty ? fields[1] : "\(fields[2]) — \(fields[1])"
+        if !fields[3].isEmpty { label += ", albüm \(fields[3])" }
+        if let position = Int(fields[4]), let duration = Int(fields[5]), duration > 0 {
+            label += ", \(VideoController.clock(position)) / \(VideoController.clock(duration))"
+        }
+        label += ", ses %\(fields[6]), karışık çalma \(fields[7] == "true" ? "açık" : "kapalı"), tekrar \(fields[8] == "true" ? "açık" : "kapalı")"
+        return "\(fields[0] == "playing" ? "Çalıyor" : "Duraklatıldı"): \(label)"
+    }
+
+    /// The next three tracks; empty without a connected Web API.
+    private static func spotifyQueue() async -> [String] {
+        guard spotifyRunning, SpotifyCredentialsStore.hasRefreshToken(),
+              let queue = try? await SpotifyWebAPI.shared.fetchQueue() else { return [] }
+        return queue.prefix(3).map { $0.artist.isEmpty ? $0.name : "\($0.artist) — \($0.name)" }
+    }
+
+    /// Runs an AppleScript off the main thread; nil when it fails.
+    static func osascript(_ script: String) async -> String? {
+        await Task.detached {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-e", script]
@@ -83,12 +142,10 @@ struct JarvisContext: Equatable, Sendable {
             process.standardOutput = pipe
             process.standardError = Pipe()
             guard (try? process.run()) != nil else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let lines = output.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
-            guard lines.count >= 3, !lines[1].isEmpty else { return nil }
-            let label = lines[2].isEmpty ? lines[1] : "\(lines[2]) — \(lines[1])"
-            return "\(lines[0] == "playing" ? "Çalıyor" : "Duraklatıldı"): \(label)"
+            guard process.terminationStatus == 0 else { return nil }
+            return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .newlines)
         }.value
     }
 

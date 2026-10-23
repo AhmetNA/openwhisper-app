@@ -11,6 +11,40 @@ final class JarvisContextTests: XCTestCase {
         XCTAssertEqual(context.promptLines, ["Spotify: Çalıyor: Tarkan — Kuzu Kuzu", "Bugün kalan takvim etkinliği yok"])
     }
 
+    func testPromptLinesPutFrontAppDetailsFirst() {
+        var context = JarvisContext()
+        context.frontApp = "Safari"
+        context.windowTitle = "Haberler"
+        context.selectedText = "seçili"
+        context.appDetails = ["Safari sekmesi: Haberler — https://ornek.com (2 sekme açık)"]
+        context.nowPlaying = "Çalıyor: Tarkan — Kuzu Kuzu"
+        context.upNext = ["Tarkan — Şımarık"]
+        XCTAssertEqual(context.promptLines, [
+            "Ön plandaki uygulama: Safari", "Pencere başlığı: Haberler", "Seçili metin: seçili",
+            "Safari sekmesi: Haberler — https://ornek.com (2 sekme açık)",
+            "Spotify: Çalıyor: Tarkan — Kuzu Kuzu", "Spotify'da sıradaki: Tarkan — Şımarık",
+        ])
+    }
+
+    func testExcerptFlattensAndCuts() {
+        XCTAssertNil(JarvisAppContext.excerpt(" \n\t "))
+        XCTAssertEqual(JarvisAppContext.excerpt("a\n\n  b"), "a b")
+        let long = JarvisAppContext.excerpt(String(repeating: "x", count: 700))
+        XCTAssertEqual(long?.count, JarvisAppContext.excerptLimit + 1)
+        XCTAssertEqual(long?.last, "…")
+    }
+
+    func testLastCodexAnswerTakesNewestFinishedTurn() {
+        let rollout = """
+            {"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"ilk"}}
+            {"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"son"}}
+            {"type":"event_msg","payload":{"type":"task_complete","last_agent_message":null}}
+            {"type":"event_msg","payload":{"type":"token_count"}}
+            """
+        XCTAssertEqual(JarvisAppContext.lastCodexAnswer(inRollout: rollout), "son")
+        XCTAssertNil(JarvisAppContext.lastCodexAnswer(inRollout: "kesik satır"))
+    }
+
     func testSystemPromptUsesContextOnlyWhenGiven() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let plain = JarvisChat.systemPrompt(now: now)
