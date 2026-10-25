@@ -26,6 +26,8 @@ enum PasteOutcome: Equatable {
 /// to be frontmost in the test runner. Not `Sendable`: every call in this app happens on the
 /// main actor (from `AppState`), so there's no need to widen the contract.
 protocol TextInjecting: AnyObject {
+    @MainActor func sendExistingMessage(context: PasteContext) -> Bool
+    @MainActor func pressReturnBringingToFront(pid: pid_t, context: PasteContext?) async -> Bool
     func copyToClipboard(_ text: String)
     func pasteText(_ text: String, targetApp: NSRunningApplication?, onPasted: (() -> Void)?)
     func replaceInjectedText(
@@ -53,6 +55,9 @@ protocol TextInjecting: AnyObject {
 }
 
 extension TextInjecting {
+    @MainActor func sendExistingMessage(context: PasteContext) -> Bool { false }
+    @MainActor func pressReturnBringingToFront(pid: pid_t, context: PasteContext?) async -> Bool { false }
+
     func pasteTextResult(
         _ text: String,
         targetApp: NSRunningApplication? = nil,

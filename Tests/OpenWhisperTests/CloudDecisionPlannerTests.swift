@@ -13,8 +13,8 @@ final class CloudDecisionPlannerTests: XCTestCase {
         .init(isVoiceCommand: true, acceptsCommands: true, focus: focus, hasTargetApp: true,
               hasWorkRecap: true, commandContext: { .init(installedApps: ["Safari", "Spotify"]) })
     }
-    func json(_ steps: [CloudDecisionPlanner.Step], id: String = "session-42", version: Int = 1) throws -> String {
-        String(decoding: try JSONEncoder().encode(CloudDecisionPlanner.Plan(version: version, requestID: id, steps: steps)), as: UTF8.self)
+    func json(_ steps: [CloudDecisionPlanner.Step], id: String = "session-42", version: Int = 2) throws -> String {
+        String(decoding: try JSONEncoder().encode(CloudDecisionPlanner.Plan(version: version, mode: steps.allSatisfy { $0.kind == .dictation } ? .dictation : .command, requestID: id, steps: steps)), as: UTF8.self)
     }
     func resolve(_ text: String, _ steps: [CloudDecisionPlanner.Step], focus: TextFocusStatus = .notEditable,
                  commandsOnly: Bool = false) throws -> CloudDecisionPlanner.Result {
@@ -57,7 +57,7 @@ final class CloudDecisionPlannerTests: XCTestCase {
     }
     func testWrongVersionAndSessionRejected() throws {
         let steps: [CloudDecisionPlanner.Step] = [.init(kind: .cancel, source: "iptal", text: "")]
-        for answer in [try json(steps, id: "old-session"), try json(steps, version: 2)] {
+        for answer in [try json(steps, id: "old-session"), try json(steps, version: 1)] {
             XCTAssertThrowsError(try CloudDecisionPlanner.resolve(answer, context: context("iptal"), facts: facts()))
         }
     }
@@ -130,38 +130,111 @@ final class CloudDecisionPlannerTests: XCTestCase {
     func testCloudCannotInventExactVolumeLevel() {
         XCTAssertThrowsError(try resolve("ses çok yüksek", [.init(kind: .command, source: "ses çok yüksek", text: "sesi yüzde 70 yap")]))
     }
-    func testLiveCloudPlansWhenExplicitlyProvided() throws {
-        guard let path = ProcessInfo.processInfo.environment["JARVIS_CLOUD_PLAN_FIXTURES"] else {
-            throw XCTSkip("Live fixtures require explicitly approved synthetic cloud probe")
-        }
+    func testApprovedLiveCloudPlanCorpus() throws {
+        let bundled = try XCTUnwrap(Bundle.module.url(forResource: "cloud-routing-v2", withExtension: "json", subdirectory: "Fixtures"))
+        let path = ProcessInfo.processInfo.environment["JARVIS_CLOUD_PLAN_FIXTURES"] ?? bundled.path
         let cases = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as! [[String: Any]]
-        XCTAssertEqual(cases.count, 8)
+        XCTAssertGreaterThanOrEqual(cases.count, 20)
         for item in cases {
             let label = item["label"] as! String
             let raw = item["context"] as! [String: Any]
             let text = raw["transcript"] as! String
             let focus: TextFocusStatus = raw["focus"] as? String == "editable" ? .editable : .notEditable
-            let result = try CloudDecisionPlanner.resolve(item["answer"] as! String,
+            let answer = item["answer"] as! String
+            let decoded = try JSONDecoder().decode(CloudDecisionPlanner.Plan.self, from: Data(answer.utf8))
+            XCTAssertEqual(decoded.mode.rawValue, item["mode"] as? String, label)
+            if let body = item["body"] as? String {
+                XCTAssertEqual(decoded.steps.first?.text, body, label)
+                XCTAssertEqual(decoded.steps.first?.send, item["send"] as? Bool, label)
+            }
+            let resolved = try CloudDecisionPlanner.resolve(answer,
                 context: context(text, focus: focus, commandsOnly: raw["commandsOnly"] as! Bool), facts: facts(focus))
-            switch (label, result) {
-            case ("volume", .routes(let routes)), ("negation", .routes(let routes)):
-                XCTAssertEqual(routes.count, 1)
-                guard case .command = routes[0].route else { return XCTFail(label) }
+            switch (label, resolved) {
             case ("multi", .routes(let routes)):
                 guard case .commands(let steps) = routes[0].route else { return XCTFail(label) }
                 XCTAssertEqual(steps.count, 2)
-            case ("dictation", .routes(let routes)):
-                guard case .typed(let body) = routes[0].route else { return XCTFail(label) }
-                XCTAssertEqual(body, "Wi-Fi'yi aç ve Bluetooth'u kapat")
+                XCTAssertEqual(steps[1].command, .system(.bluetooth(on: true)))
+            case ("calendar", .routes(let routes)):
+                guard case .command(.system(.calendarEvent)) = routes[0].route else { return XCTFail(label) }
+            case ("music", .routes(let routes)):
+                guard case .command(.spotify) = routes[0].route else { return XCTFail(label) }
             case ("greeting", .routes(let routes)):
                 guard case .greeting(.goodMorning) = routes[0].route else { return XCTFail(label) }
             case ("chat", .routes(let routes)):
                 guard case .chat = routes[0].route else { return XCTFail(label) }
+            case ("existing_send", .routes(let routes)):
+                guard case .sendExistingMessage = routes[0].route else { return XCTFail(label) }
+            case ("volume", .routes(let routes)), ("negation", .routes(let routes)):
+                guard case .command(let command) = routes[0].route else { return XCTFail(label) }
+                XCTAssertEqual(command, CommandRewriter.safeCommand("sesi kıs", context: facts(focus).commandContext()))
             case ("cancel", .cancel), ("ambiguous", .clarify): break
-            default: XCTFail("Unexpected live result for \(label)")
+            case (_, .routes(let routes)) where item["mode"] as? String == "dictation":
+                if item["send"] as? Bool == true {
+                    guard case .agent(let delivery) = routes[0].route else { return XCTFail(label) }
+                    XCTAssertTrue(delivery.send)
+                    XCTAssertEqual(delivery.body, item["body"] as? String)
+                } else {
+                    guard case .typed(let body) = routes[0].route else { return XCTFail(label) }
+                    XCTAssertEqual(body, item["body"] as? String)
+                }
+            default: XCTFail(label)
             }
         }
     }
+
+    func testDictationSendFlagMapsToPasteAndSend() throws {
+        let text = "Bu fonksiyonu düzelt ve testleri çalıştır sonra gönder"
+        let body = "Bu fonksiyonu düzelt ve testleri çalıştır"
+        guard case .routes(let routes) = try resolve(text, [.init(kind: .dictation, source: text, text: body, send: true)], focus: .editable),
+              case .agent(let delivery) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(delivery.body, body)
+        XCTAssertTrue(delivery.send)
+        XCTAssertNil(delivery.target)
+    }
+    func testImplicitCodingRequestStaysDictation() throws {
+        let text = "Bu fonksiyonu düzelt ve testleri çalıştır"
+        guard case .routes(let routes) = try resolve(text, [.init(kind: .dictation, source: text, text: text)], focus: .editable),
+              case .typed(let body) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(body, text)
+    }
+    func testSendRequiresExplicitDirectiveOutsideBody() {
+        for (source, body) in [("merhaba", "merhaba"), ("Buraya yaz: gönder", "gönder"),
+                               ("Merhaba ama gönderme", "Merhaba"),
+                               ("Gönder butonunu düzelt", "Gönder butonunu düzelt"),
+                               ("Buraya yaz: merhaba gönder", "merhaba gönder")] {
+            XCTAssertThrowsError(try resolve(source, [.init(kind: .dictation, source: source, text: body, send: true)], focus: .editable), source)
+        }
+    }
+    func testBinaryModeCannotMixCommandAndDictation() throws {
+        let steps: [CloudDecisionPlanner.Step] = [.init(kind: .dictation, source: "merhaba", text: "merhaba")]
+        let invalid = CloudDecisionPlanner.Plan(version: 2, mode: .command, requestID: "session-42", steps: steps)
+        XCTAssertThrowsError(try CloudDecisionPlanner.resolve(String(decoding: JSONEncoder().encode(invalid), as: UTF8.self), context: context("merhaba", focus: .editable), facts: facts(.editable)))
+    }
+    func testStandaloneSendUsesExistingDraft() throws {
+        guard case .routes(let routes) = try resolve("gönder", [.init(kind: .request, source: "gönder", text: "gönder")], focus: .editable),
+              case .sendExistingMessage = routes[0].route else { return XCTFail() }
+    }
+    func testExplicitWriteFromTypedPanelUsesCapturedEditableTarget() throws {
+        let source = "Buraya yaz: merhaba"
+        var captured = context(source)
+        captured.targetFocus = "editable"
+        let answer = try json([.init(kind: .dictation, source: source, text: "merhaba")])
+        guard case .routes(let routes) = try CloudDecisionPlanner.resolve(answer, context: captured, facts: facts()),
+              case .typed("merhaba") = routes[0].route else { return XCTFail() }
+        let implicit = try json([.init(kind: .dictation, source: "merhaba", text: "merhaba")])
+        captured = context("merhaba")
+        captured.targetFocus = "editable"
+        XCTAssertThrowsError(try CloudDecisionPlanner.resolve(implicit, context: captured, facts: facts()))
+    }
+    func testNamedDictationRetainsExplicitTarget() throws {
+        let source = "Codex'e gönder: merhaba"
+        guard case .routes(let routes) = try resolve(source, [.init(kind: .dictation, source: source, text: "merhaba", send: true)]),
+              case .agent(let agent) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(agent.target, .codex)
+        XCTAssertEqual(agent.body, "merhaba")
+        XCTAssertTrue(agent.send)
+    }
+
     func testStructuredCloudBodyIsNotStreamed() {
         let body = CloudReasoningClient.body(.init(model: "test", messages: [], timeout: 25, temperature: 0, maxTokens: 1800),
                                              schema: CloudDecisionPlanner.schema, thinkingOff: false)

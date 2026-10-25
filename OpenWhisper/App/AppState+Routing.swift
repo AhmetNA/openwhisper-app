@@ -283,7 +283,8 @@ extension AppState {
                 _ rawText: String,
                 targetApp: NSRunningApplication?,
                 pasteContext: PasteContext,
-                send: Bool
+                send: Bool,
+                cloudLiteral: Bool = false
             ) async -> Bool {
                 var pasteContext = pasteContext
                 agentDeliveryFailure = nil
@@ -482,7 +483,7 @@ extension AppState {
                                            NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
                                             _ = await ClaudeSessionNavigator.waitForComposerText(app, text: initialText)
                                         }
-                                        if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
+                                        if let pid = pasteContext.targetPID, let injector = self.textInjector {
                                             sent = await injector.pressReturnBringingToFront(pid: pid, context: pasteContext)
                                         }
                                         // A posted Return proves nothing if Claude was not ready:
@@ -526,7 +527,7 @@ extension AppState {
                                 // Once Ollama finishes, replace the initially pasted text in-place.
                                 // Keep the generated keyboard random exact. LLM cleanup can rewrite
                                 // or remove a random-looking token, which would defeat this setting.
-                                if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
+                                if !cloudLiteral && self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
                                     Task { @MainActor [weak self] in
                                         guard let self else { return }
                                         let cleanupStartedAt = session.latency.timestamp()
@@ -1100,6 +1101,7 @@ extension AppState {
                     lastReply: String((session.precedingReply ?? JarvisChat.shared.recentReply ?? "").suffix(600)),
                     hasWorkRecap: facts.hasWorkRecap, installedApps: commandContext().installedApps,
                     localTime: ISO8601DateFormatter().string(from: Date()),
+                    targetFocus: session.pasteContext.focusStatus.rawValue,
                     previousRequest: continuesCloud ? pendingCloud?.request : nil,
                     clarificationQuestion: continuesCloud ? pendingCloud?.question : nil)
                 do {
@@ -1110,7 +1112,7 @@ extension AppState {
                     case .routes(let planned):
                         cloudRoutes = planned
                         route = planned[0].route
-                        SpeechDiagnostics.event("cloud.plan", ["version": "1", "steps": String(planned.count)])
+                        SpeechDiagnostics.event("cloud.plan", ["version": "2", "steps": String(planned.count)])
                     case .clarify(let question):
                         self.pendingCloudClarification = .init(request: continuesCloud ? pendingCloud!.request : trimmed,
                             question: question, createdAt: Date())
@@ -1215,7 +1217,7 @@ extension AppState {
                 }
 
             case .sendExistingMessage:
-                let sent = TextInjector().sendExistingMessage(context: session.pasteContext)
+                let sent = self.textInjector?.sendExistingMessage(context: session.pasteContext) ?? false
                 let status = sent ? "Gönderme komutu uygulandı" : "Mesaj alanına odaklanıp tekrar gönder diyebilirsin"
                 self.showFlowBarMessage(status, durationMs: 3500)
                 if !sent { await self.speakReply(status) }
@@ -1251,7 +1253,7 @@ extension AppState {
                             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agentProject(found.name, isNew: isNew)) }
                             return
                         }
-                        let delivered = await pasteAsDictation(agent.body, targetApp: app, pasteContext: PasteContext.capture(targetApp: app), send: agent.send)
+                        let delivered = await pasteAsDictation(agent.body, targetApp: app, pasteContext: PasteContext.capture(targetApp: app), send: agent.send, cloudLiteral: cloudRoutes != nil)
                         guard delivered else {
                             owLog("[Agent] Not delivered to \(found.name) in \(projectAgent.displayName); not reporting success")
                             await fail(agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı",
@@ -1313,7 +1315,7 @@ extension AppState {
                         return
                     }
                 }
-                let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send)
+                let delivered = await pasteAsDictation(agent.body, targetApp: targetApp, pasteContext: pasteContext, send: agent.send, cloudLiteral: cloudRoutes != nil)
                 guard delivered else {
                     owLog("[Agent] Not delivered to \(targetApp?.localizedName ?? "?"); not reporting success")
                     await fail(agentDeliveryFailure ?? (agent.send ? "Mesaj gönderilemedi" : "Mesaj yazılamadı"),
@@ -1328,7 +1330,7 @@ extension AppState {
 
             case .typed(let typed):
                 owLog("[Route] explicit dictation override: '\(typed)'")
-                let delivered = await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                let delivered = await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false, cloudLiteral: cloudRoutes != nil)
                 if delivered, session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
 
             case .chat(let chatText):

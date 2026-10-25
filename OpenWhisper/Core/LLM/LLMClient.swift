@@ -12,6 +12,8 @@ struct LLMRequest: @unchecked Sendable {
     var stop: [String]?
     /// A JSON schema for Ollama's `format`: the answer then follows it.
     var schema: [String: Any]?
+    /// Trusted application instructions, separate from user/context data.
+    var systemPrompt: String? = nil
 }
 
 /// A conversation turn list for `/api/chat`.
@@ -76,6 +78,7 @@ struct OllamaClient: LLMClient {
             "options": options,
         ]
         if let schema = request.schema { body["format"] = schema }
+        if let system = request.systemPrompt { body["system"] = system }
         return body
     }
 

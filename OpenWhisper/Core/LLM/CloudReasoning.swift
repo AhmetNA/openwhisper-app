@@ -46,13 +46,16 @@ struct CloudReasoningClient: LLMClient {
         return content
     }
 
-    func generate(_ request: LLMRequest) async throws -> String {
+    static func generationMessages(_ request: LLMRequest) throws -> [[String: String]] {
         let schemaHint = try request.schema.map { schema in
             "\nReturn only JSON matching this schema: " + String(decoding: try JSONSerialization.data(withJSONObject: schema), as: UTF8.self)
         } ?? ""
-        return try await complete(.init(model: request.model,
-            messages: [["role": "system", "content": "Follow the requested output format exactly.\(schemaHint)"],
-                       ["role": "user", "content": request.prompt]],
+        return [["role": "system", "content": (request.systemPrompt ?? "Follow the requested output format exactly.") + schemaHint],
+                ["role": "user", "content": request.prompt]]
+    }
+
+    func generate(_ request: LLMRequest) async throws -> String {
+        try await complete(.init(model: request.model, messages: Self.generationMessages(request),
             timeout: request.timeout, temperature: request.temperature, maxTokens: request.maxTokens), schema: request.schema)
     }
 

@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import OpenWhisper
 
@@ -40,7 +41,7 @@ final class CloudRoutingIntegrationTests: XCTestCase {
             let state = AppState()
             state.nextTranscriptionID = 77
             state.voiceRepliesEnabled = false
-            state.cloudPlanningClient = PlanClient(answer: #"{"version":1,"requestID":"77","steps":[{"kind":"command","source":"saat kaç","text":"saat kaç"}]}"#)
+            state.cloudPlanningClient = PlanClient(answer: #"{"version":2,"mode":"command","requestID":"77","steps":[{"kind":"command","source":"saat kaç","text":"saat kaç","send":false}]}"#)
             await state.finishTranscription(session())
             XCTAssertEqual(state.lastTranscription, "saat kaç")
             XCTAssertTrue(state.flowBarMessage?.contains(":") == true)
@@ -62,13 +63,63 @@ final class CloudRoutingIntegrationTests: XCTestCase {
             let state = AppState()
             state.nextTranscriptionID = 77
             state.voiceRepliesEnabled = false
-            state.cloudPlanningClient = PlanClient(answer: #"{"version":1,"requestID":"77","steps":[{"kind":"command","source":"saat kaç","text":"saat kaç"}]}"#, delay: .milliseconds(80))
+            state.cloudPlanningClient = PlanClient(answer: #"{"version":2,"mode":"command","requestID":"77","steps":[{"kind":"command","source":"saat kaç","text":"saat kaç","send":false}]}"#, delay: .milliseconds(80))
             let old = session()
             let work = Task { await state.finishTranscription(old) }
             try await Task.sleep(for: .milliseconds(15))
             state.nextTranscriptionID = 78
             await work.value
             XCTAssertTrue(state.lastTranscription.isEmpty)
+        }
+    }
+}
+
+private final class CloudDeliveryRecorder: TextInjecting {
+    var pasted: [String] = []
+    var sends = 0
+    var copied: String?
+    func copyToClipboard(_ text: String) { copied = text }
+    func pasteText(_ text: String, targetApp: NSRunningApplication?, onPasted: (() -> Void)?) { pasted.append(text); onPasted?() }
+    func pasteTextResult(_ text: String, targetApp: NSRunningApplication?, context: PasteContext?, onOutcome: ((PasteOutcome) -> Void)?) {
+        pasted.append(text)
+        onOutcome?(.pastedVerified)
+    }
+    func replaceInjectedText(oldText: String, newText: String, targetApp: NSRunningApplication?, context: PasteContext?, onReplaced: (() -> Void)?) { onReplaced?() }
+    @MainActor func pressReturnBringingToFront(pid: pid_t, context: PasteContext?) async -> Bool { sends += 1; return true }
+    @MainActor func sendExistingMessage(context: PasteContext) -> Bool { sends += 1; return true }
+}
+
+extension CloudRoutingIntegrationTests {
+    func testCloudDictationPastesAndOnlyExplicitSendSubmits() async throws {
+        try await withCloud {
+            let foreground = try XCTUnwrap(NSWorkspace.shared.frontmostApplication)
+            for send in [false, true] {
+                let recorder = CloudDeliveryRecorder()
+                let state = AppState(textInjector: recorder)
+                state.nextTranscriptionID = 90
+                state.voiceRepliesEnabled = false
+                state.autoPasteEnabled = true
+                state.llmCleanupEnabled = true // Cloud-decided text must not be reclassified/rewritten.
+                let body = "Bu fonksiyonu düzelt ve testleri çalıştır"
+                let source = body + (send ? " sonra gönder" : "")
+                let plan = CloudDecisionPlanner.Plan(version: 2, mode: .dictation, requestID: "90",
+                    steps: [.init(kind: .dictation, source: source, text: body, send: send)])
+                state.cloudPlanningClient = PlanClient(answer: String(decoding: try JSONEncoder().encode(plan), as: UTF8.self))
+                let context = PasteContext(targetPID: foreground.processIdentifier, bundleIdentifier: "test.editor",
+                    applicationName: "Test Editor", focusedElement: nil, focusStatus: .editable,
+                    valueAtCapture: nil, selectedRangeAtCapture: nil, selectedTextAtCapture: nil)
+                let capture = RecordingTranscriptionSession(id: 90, targetApp: foreground,
+                    targetSpeakerEnabled: false, targetSpeakerProfile: nil, pasteContext: context)
+                capture.trigger = .fnHold
+                capture.isVoiceCommand = false
+                capture.wakeSpeakerVerified = true
+                capture.enqueue(.init(samples: Array(repeating: Float(0.1), count: 16_000), overlapSampleCount: 0))
+                capture.segmentTexts = [source]
+                capture.allSegmentTexts = [source]
+                await state.finishTranscription(capture)
+                XCTAssertEqual(recorder.pasted, [body], "outcome=\(capture.diagnosticOutcome.summary), message=\(state.flowBarMessage ?? "nil"), text=\(state.lastTranscription)")
+                XCTAssertEqual(recorder.sends, send ? 1 : 0)
+            }
         }
     }
 }

@@ -1,0 +1,522 @@
+[
+  {
+    "label": "volume",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "ses çok yüksek",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"command\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"command\",\n      \"source\": \"ses çok yüksek\",\n      \"text\": \"sesi kıs\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "command"
+  },
+  {
+    "label": "multi",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Sesi kıs ve Bluetooth'u aç",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\":2,\"mode\":\"command\",\"requestID\":\"session-42\",\"steps\":[{\"kind\":\"command\",\"source\":\"Sesi kıs\",\"text\":\"sesi kıs\",\"send\":false},{\"kind\":\"command\",\"source\":\"Bluetooth'u aç\",\"text\":\"Bluetooth'u aç\",\"send\":false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "dictation",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Buraya yaz: Wi-Fi'yi aç ve Bluetooth'u kapat",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\":2,\"mode\":\"dictation\",\"requestID\":\"session-42\",\"steps\":[{\"kind\":\"dictation\",\"source\":\"Buraya yaz: Wi-Fi'yi aç ve Bluetooth'u kapat\",\"text\":\"Wi-Fi'yi aç ve Bluetooth'u kapat\",\"send\":false}]}",
+    "mode": "dictation",
+    "body": "Wi-Fi'yi aç ve Bluetooth'u kapat",
+    "send": false
+  },
+  {
+    "label": "greeting",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Günaydın Jarvis",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"command\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"greeting\", \"source\": \"Günaydın Jarvis\", \"text\": \"goodMorning\", \"send\": false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "chat",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Jarvis sen neden böyle düşünüyorsun?",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"command\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"chat\",\n      \"source\": \"Jarvis sen neden böyle düşünüyorsun?\",\n      \"text\": \"Jarvis sen neden böyle düşünüyorsun?\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "command"
+  },
+  {
+    "label": "cancel",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "boş ver",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"command\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"cancel\", \"source\": \"boş ver\", \"text\": \"\", \"send\": false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "ambiguous",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "onu aç",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"command\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"clarify\", \"source\": \"onu aç\", \"text\": \"Hangi uygulamayı veya dosyayı açmamı istersiniz?\", \"send\": false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "negation",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Bluetooth'u kapatma, sadece sesi kıs",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"command\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"ignore\", \"source\": \"Bluetooth'u kapatma\", \"text\": \"\", \"send\": false}, {\"kind\": \"command\", \"source\": \"sadece sesi kıs\", \"text\": \"sesi kıs\", \"send\": false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "coding",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Bu fonksiyonu düzelt ve testleri çalıştır",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"dictation\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"dictation\",\n      \"source\": \"Bu fonksiyonu düzelt ve testleri çalıştır\",\n      \"text\": \"Bu fonksiyonu düzelt ve testleri çalıştır\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "dictation",
+    "body": "Bu fonksiyonu düzelt ve testleri çalıştır",
+    "send": false
+  },
+  {
+    "label": "coding_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Bu fonksiyonu düzelt ve testleri çalıştır sonra gönder",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"dictation\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"dictation\",\n      \"source\": \"Bu fonksiyonu düzelt ve testleri çalıştır sonra gönder\",\n      \"text\": \"Bu fonksiyonu düzelt ve testleri çalıştır\",\n      \"send\": true\n    }\n  ]\n}",
+    "mode": "dictation",
+    "body": "Bu fonksiyonu düzelt ve testleri çalıştır",
+    "send": true
+  },
+  {
+    "label": "write_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Buraya yaz: yarın geliyorum ve gönder",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"dictation\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"dictation\", \"source\": \"Buraya yaz: yarın geliyorum ve gönder\", \"text\": \"yarın geliyorum\", \"send\": true}]}",
+    "mode": "dictation",
+    "body": "yarın geliyorum",
+    "send": true
+  },
+  {
+    "label": "literal_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Buraya yaz: gönder",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"dictation\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"dictation\", \"source\": \"Buraya yaz: gönder\", \"text\": \"gönder\", \"send\": false}]}",
+    "mode": "dictation",
+    "body": "gönder",
+    "send": false
+  },
+  {
+    "label": "dont_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Buraya yaz: yarın geliyorum ama gönderme",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"dictation\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"dictation\",\n      \"source\": \"Buraya yaz: yarın geliyorum ama gönderme\",\n      \"text\": \"yarın geliyorum\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "dictation",
+    "body": "yarın geliyorum",
+    "send": false
+  },
+  {
+    "label": "existing_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "gönder",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\":2,\"mode\":\"command\",\"requestID\":\"session-42\",\"steps\":[{\"kind\":\"request\",\"source\":\"gönder\",\"text\":\"gönder\",\"send\":false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "calendar",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Yarın saat 15'e Mehmet ile toplantı ekle",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"command\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"command\",\n      \"source\": \"Yarın saat 15'e Mehmet ile toplantı ekle\",\n      \"text\": \"yarın saat 15'e Mehmet ile toplantı ekle\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "command"
+  },
+  {
+    "label": "music",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "müzik aç",
+      "trigger": "jarvisKey",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\":2,\"mode\":\"command\",\"requestID\":\"session-42\",\"steps\":[{\"kind\":\"command\",\"source\":\"müzik aç\",\"text\":\"müzik aç\",\"send\":false}]}",
+    "mode": "command"
+  },
+  {
+    "label": "feature",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Bana kullanıcı girişi olan bir sayfa yap",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"dictation\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"dictation\", \"source\": \"Bana kullanıcı girişi olan bir sayfa yap\", \"text\": \"Bana kullanıcı girişi olan bir sayfa yap\", \"send\": false}]}",
+    "mode": "dictation",
+    "body": "Bana kullanıcı girişi olan bir sayfa yap",
+    "send": false
+  },
+  {
+    "label": "article",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Bluetooth'u açmak için bu düğmeyi kullanacağız",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\"version\": 2, \"mode\": \"dictation\", \"requestID\": \"session-42\", \"steps\": [{\"kind\": \"dictation\", \"source\": \"Bluetooth'u açmak için bu düğmeyi kullanacağız\", \"text\": \"Bluetooth'u açmak için bu düğmeyi kullanacağız\", \"send\": false}]}",
+    "mode": "dictation",
+    "body": "Bluetooth'u açmak için bu düğmeyi kullanacağız",
+    "send": false
+  },
+  {
+    "label": "message",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Yarın toplantıya biraz geç kalacağım, beni beklemeyin.",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"dictation\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"dictation\",\n      \"source\": \"Yarın toplantıya biraz geç kalacağım, beni beklemeyin.\",\n      \"text\": \"Yarın toplantıya biraz geç kalacağım, beni beklemeyin.\",\n      \"send\": false\n    }\n  ]\n}",
+    "mode": "dictation",
+    "body": "Yarın toplantıya biraz geç kalacağım, beni beklemeyin.",
+    "send": false
+  },
+  {
+    "label": "named_send",
+    "context": {
+      "requestID": "session-42",
+      "transcript": "Codex'e gönder: merhaba",
+      "trigger": "fnHold",
+      "app": "Codex",
+      "bundleID": "com.openai.codex",
+      "focus": "editable",
+      "caret": 12,
+      "selectionLength": 0,
+      "conversationFollowUp": false,
+      "commandsOnly": false,
+      "lastCommand": "none",
+      "lastReply": "",
+      "hasWorkRecap": true,
+      "installedApps": [
+        "Safari",
+        "Spotify"
+      ],
+      "localTime": "2026-10-26T09:00:00+03:00"
+    },
+    "answer": "{\n  \"version\": 2,\n  \"mode\": \"dictation\",\n  \"requestID\": \"session-42\",\n  \"steps\": [\n    {\n      \"kind\": \"dictation\",\n      \"source\": \"Codex'e gönder: merhaba\",\n      \"text\": \"merhaba\",\n      \"send\": true\n    }\n  ]\n}",
+    "mode": "dictation",
+    "body": "merhaba",
+    "send": true
+  }
+]
