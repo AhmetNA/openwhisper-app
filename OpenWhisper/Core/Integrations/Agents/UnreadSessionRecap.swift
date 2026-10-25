@@ -222,8 +222,8 @@ enum UnreadSessionRecap {
     static func summary(_ exchange: Exchange, model: String, ollamaAvailable: Bool) async -> String? {
         let client: any ChatStreaming
         let selected: String
-        if ChatBackend.selected == .cloud, let (cloud, cloudModel) = CloudLLM.client() { client = cloud; selected = cloudModel }
-        else if ollamaAvailable { client = OllamaClient(); selected = model }
+        if CloudReasoning.enabled || ChatBackend.selected == .cloud, let (cloud, cloudModel) = CloudLLM.client() { client = cloud; selected = cloudModel }
+        else if !CloudReasoning.enabled && ollamaAvailable { client = OllamaClient(); selected = model }
         else { return nil }
         let instruction = """
         Kullanıcının sorusunu ve aldığı yanıtı Türkçe TEK kısa cümlede, en fazla 35 kelimeyle özetle.

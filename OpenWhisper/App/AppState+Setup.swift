@@ -16,7 +16,10 @@ extension AppState {
     func applyDecisionEngine() {
         guard decisionEngine.usesSetFit else {
             SetFitDecider.shared.stop()
-            setFitStatus = SetFitDecider.shared.status
+            setFitStatus = decisionEngine == .cloud
+                ? "Bulut planlayıcı · yerel model yedeği kapalı" : SetFitDecider.shared.status
+            llmCleanup = LLMCleanup(model: ollamaModel)
+            Task { await refreshOllamaStatus() }
             return
         }
         setFitStatus = "Başlatılıyor…"
@@ -51,7 +54,7 @@ extension AppState {
         // The local voice model takes ~15 s to load; do it now rather than on the first reply.
         if voiceRepliesEnabled { Task { await JarvisVoice.shared.prepare() } }
         // SetFit models load in ~5 s; start them with the app rather than on the first decision.
-        if decisionEngine.usesSetFit { applyDecisionEngine() }
+        applyDecisionEngine()
 
         // Request mic permission
         microphoneGranted = await audioEngine?.requestPermission() ?? false
@@ -304,6 +307,11 @@ extension AppState {
     /// merely when Ollama is running. Only local mode preloads it; cloud mode leaves local
     /// helpers and fallback to load on demand.
     func refreshOllamaStatus() async {
+        if CloudReasoning.enabled {
+            ollamaAvailable = CloudLLM.client() != nil
+            cleanupAvailable = ollamaAvailable
+            return
+        }
         ollamaAvailable = await LLMCleanup.checkAvailability()
         let model = ollamaModel
         cleanupAvailable = ollamaAvailable ? await LLMCleanup.isModelInstalled(model) : false

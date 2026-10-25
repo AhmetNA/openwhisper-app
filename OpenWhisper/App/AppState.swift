@@ -147,6 +147,13 @@ final class AppState {
     }
     /// Settings shows this under the engine picker.
     var setFitStatus = "Kapalı"
+    struct CloudClarification {
+        let request: String
+        let question: String
+        let createdAt: Date
+    }
+    @ObservationIgnored var cloudPlanningClient: any LLMClient = CloudReasoningClient()
+    var pendingCloudClarification: CloudClarification?
 
     @ObservationIgnored var jarvisReply = JarvisReply()
     /// "Dilayım'a yaz: …": the draft waiting for "evet" / "hayır".

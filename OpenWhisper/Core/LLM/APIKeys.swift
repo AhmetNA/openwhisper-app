@@ -89,7 +89,7 @@ struct APIKeyProvider: Identifiable, Sendable {
 enum APIKeys {
     static let cloudLLM = APIKeyProvider(
         id: "cloudLLM", title: "Bulut LLM",
-        purpose: "Jarvis sohbeti. OpenAI uyumlu herhangi bir servis.",
+        purpose: "Sohbet ve bulut karar motoru. Bulut modunda konuşma metni, uygulama/odak/imleç bilgisi ve sınırlı devam bağlamı bu servise gider.",
         placeholder: "API anahtarı", expectedPrefix: nil,
         service: "com.openwhisper.app.llm", account: "cloud.api_key",
         needsAddress: true, fixedTestURL: nil, keyHeader: "Authorization")

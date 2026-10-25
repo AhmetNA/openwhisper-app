@@ -123,9 +123,9 @@ enum ClaudeSessionRecap {
         let fallback = fallbackSummary(storedRecap: session.storedRecap, lastMessage: lastMessage)
         let messages = [["role": "user", "content": prompt(title: session.title, storedRecap: session.storedRecap, lastMessage: lastMessage)]]
         let client: (any ChatStreaming, String)?
-        if ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() {
+        if CloudReasoning.enabled || ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() {
             client = (cloud, model)
-        } else if ollamaAvailable {
+        } else if !CloudReasoning.enabled && ollamaAvailable {
             client = (OllamaClient(), ollamaModel)
         } else {
             client = nil

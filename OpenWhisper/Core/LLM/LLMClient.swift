@@ -50,7 +50,7 @@ protocol LLMClient: Sendable {
 
 enum LLM {
     /// The local Ollama server.
-    static let `default`: any LLMClient = OllamaClient()
+    static var `default`: any LLMClient { CloudReasoning.enabled ? CloudReasoningClient() : OllamaClient() }
 
     /// The model picked in Settings, for callers that have no `AppState` at hand.
     static var selectedModel: String {

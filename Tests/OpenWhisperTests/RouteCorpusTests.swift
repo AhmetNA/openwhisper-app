@@ -46,6 +46,8 @@ final class RouteCorpusTests: XCTestCase {
             }
         }
         switch VoiceRouter.route(text, facts: facts) {
+        case .unreadSessionRecap: return "unread-session-recap"
+        case .sessionNavigation: return "session-navigation"
         case .workResume: return "work-resume"
         case .sendExistingMessage: return "send-existing"
         case .agentWithoutForeground: return "agent-send:no-foreground"

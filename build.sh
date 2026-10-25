@@ -103,6 +103,8 @@ if [ -n "$PREVIOUS_REQUIREMENT" ]; then
     echo "==> Verified compatibility with the installed permission identity"
 fi
 
+if [ "${SKIP_RUNTIME_SYNC:-}" != "1" ]; then
+
 # Local voice for spoken replies (OmniVoice): keep the installed server script and reference
 # voice in sync with the repo. The Python venv itself comes from servers/tts_server/setup.sh (once).
 TTS_DEST="$HOME/Library/Application Support/OpenWhisper/tts"
@@ -177,6 +179,8 @@ if [ -x "$DECIDER_DEST/.venv/bin/python" ]; then
 else
     echo "NOTE: SetFit decision models not installed; 'Karar motoru: SetFit' needs decision_model/install.sh"
 fi
+
+fi # SKIP_RUNTIME_SYNC
 
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then

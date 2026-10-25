@@ -51,8 +51,8 @@ enum GreetingBriefing {
         let fallback = workLine(work)
         guard !work.excerpt.isEmpty else { return fallback }
         let backend: (any ChatStreaming, String)?
-        if ChatBackend.selected == .cloud, let cloud = CloudLLM.client() { backend = cloud }
-        else if ollamaAvailable { backend = (OllamaClient(), model) }
+        if CloudReasoning.enabled || ChatBackend.selected == .cloud, let cloud = CloudLLM.client() { backend = cloud }
+        else if !CloudReasoning.enabled && ollamaAvailable { backend = (OllamaClient(), model) }
         else { backend = nil }
         guard let (client, selected) = backend else { return fallback }
         let prompt = """

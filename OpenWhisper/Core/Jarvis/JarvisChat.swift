@@ -103,6 +103,11 @@ final class JarvisChat {
     /// failing (`ChatFallback`); otherwise Ollama alone. `backend` names who answered, for the log.
     private static func stream(messages: [[String: String]], ollamaModel: String,
                                backend: Backend) -> AsyncThrowingStream<String, Error> {
+        if CloudReasoning.enabled {
+            backend.set("cloud planner")
+            return LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: messages, timeout: 20,
+                                                       temperature: 0.6, maxTokens: 300))
+        }
         let local = { @Sendable in
             LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: messages, timeout: 10,
                                                   temperature: 0.6, maxTokens: 110))
@@ -133,7 +138,7 @@ final class JarvisChat {
     }
 
     /// The cloud model can answer on its own, without Ollama running.
-    static var cloudReady: Bool { ChatBackend.selected == .cloud && CloudLLM.client() != nil }
+    static var cloudReady: Bool { (CloudReasoning.enabled || ChatBackend.selected == .cloud) && CloudLLM.client() != nil }
 
     // MARK: - Text
 

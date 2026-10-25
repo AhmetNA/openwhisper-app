@@ -21,10 +21,11 @@ final class SetFitDecider {
     private static let variant = "minilm"
 
     enum Engine: String, CaseIterable, Identifiable {
-        case ollama, setfit
+        case ollama, setfit, cloud
         var id: String { rawValue }
         var label: String {
             switch self {
+            case .cloud: return "Bulut AI · planlayıcı"
             case .ollama: return "Ollama (LLM)"
             case .setfit: return "SetFit (hızlı) + Ollama yedek"
             }
@@ -32,7 +33,7 @@ final class SetFitDecider {
         /// Used until the user picks one. Without the decider installed, every decision still
         /// falls through to Ollama (`prepare` reports "Kurulu değil").
         static let defaultEngine: Engine = .setfit
-        var usesSetFit: Bool { self != .ollama }
+        var usesSetFit: Bool { self == .setfit }
     }
 
     enum Task: String, Sendable {
@@ -207,6 +208,7 @@ final class SetFitDecider {
     /// One decision, or nil when SetFit is off, not ready, or doesn't answer within `timeout`.
     /// `confident` says whether it cleared the task's threshold; callers act only on those.
     nonisolated static func decide(_ task: Task, text: String, timeout: TimeInterval = 0.5) async -> Decision? {
+        if CloudReasoning.enabled { return await CloudReasoning.classify(task, text: text) }
         guard isActive else { return nil }
         var request = URLRequest(url: baseURL.appendingPathComponent("decide"), timeoutInterval: timeout)
         request.httpMethod = "POST"

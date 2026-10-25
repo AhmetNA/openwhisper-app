@@ -140,7 +140,7 @@ enum CloudSessionNavigation {
                 : await CodexSessionNavigator.openNewThread(app, folder: nil)
             return opened ? newChatOpened : "Yeni sohbetin açıldığını doğrulayamadım."
         }
-        guard ChatBackend.selected == .cloud, let (client, model) = CloudLLM.client() else {
+        guard CloudReasoning.enabled || ChatBackend.selected == .cloud, let (client, model) = CloudLLM.client() else {
             return "Sohbetler arası geçiş için ayarlardan bulut modelini seçmelisin."
         }
         let current = front.flatMap { RecordedConversation.capture(app: $0) }

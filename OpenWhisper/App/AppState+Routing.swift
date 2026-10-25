@@ -655,6 +655,8 @@ extension AppState {
                 var stepTargetApp = session.targetApp
                 var ran: [VoiceCommand] = []
                 for step in steps {
+                    guard !session.isCancelled, !Task.isCancelled,
+                          !CloudReasoning.enabled || self.nextTranscriptionID == session.id else { return }
                     SpeechDiagnostics.event("action.begin", ["command": String(describing: step.command)])
                     switch step.command {
                     case .timer(let timerCommand):
@@ -1023,7 +1025,7 @@ extension AppState {
                 : VoiceRouter.route(text, facts: facts)
             let isWorkContinuation: Bool
             if case .workResume = route { isWorkContinuation = true } else { isWorkContinuation = false }
-            if session.acceptsCommands, !session.sendsToRecappedClaudeSession,
+            if !CloudReasoning.enabled, session.acceptsCommands, !session.sendsToRecappedClaudeSession,
                !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
                let selection = UnreadSessionRecap.selection(trimmed) {
                 session.latency.finishDecision(route: "okunmamış sohbet özeti")
@@ -1031,7 +1033,7 @@ extension AppState {
                 await self.readAgentSessions(trimmed, selection: selection, after: session)
                 return
             }
-            if session.acceptsCommands, !session.sendsToRecappedClaudeSession, !isWorkContinuation,
+            if !CloudReasoning.enabled, session.acceptsCommands, !session.sendsToRecappedClaudeSession, !isWorkContinuation,
                !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
                let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
                 session.latency.finishDecision(route: "bulut sohbet geçişi")
@@ -1078,13 +1080,68 @@ extension AppState {
                 route = VoiceRouter.route(text, facts: facts)
             }
 
+            var cloudRoutes: [CloudDecisionPlanner.Resolved]?
+            if CloudReasoning.enabled, session.acceptsCommands, !session.sendsToRecappedClaudeSession,
+               !facts.pendingDeletion, !facts.pendingWhatsAppSend, !facts.commandAmongPlayback {
+                let pendingCloud = self.pendingCloudClarification
+                self.pendingCloudClarification = nil
+                let continuesCloud = session.isConversationFollowUp && pendingCloud.map { Date().timeIntervalSince($0.createdAt) < 20 } == true
+                let context = CloudDecisionPlanner.Context(
+                    requestID: String(describing: session.id), transcript: trimmed,
+                    trigger: session.trigger.rawValue,
+                    app: session.targetApp?.localizedName ?? "unknown",
+                    bundleID: session.targetApp?.bundleIdentifier ?? "unknown",
+                    focus: session.routingFocus.rawValue,
+                    caret: session.pasteContext.selectedRangeAtCapture?.location,
+                    selectionLength: session.pasteContext.selectedRangeAtCapture?.length,
+                    conversationFollowUp: session.isConversationFollowUp,
+                    commandsOnly: session.takesOnlyCommands,
+                    lastCommand: session.commandFollowUpDomain?.rawValue ?? "none",
+                    lastReply: String((session.precedingReply ?? JarvisChat.shared.recentReply ?? "").suffix(600)),
+                    hasWorkRecap: facts.hasWorkRecap, installedApps: commandContext().installedApps,
+                    localTime: ISO8601DateFormatter().string(from: Date()),
+                    previousRequest: continuesCloud ? pendingCloud?.request : nil,
+                    clarificationQuestion: continuesCloud ? pendingCloud?.question : nil)
+                do {
+                    let decision = try await CloudDecisionPlanner.plan(context, facts: facts, client: self.cloudPlanningClient)
+                    guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id,
+                          self.recordingState != .recording else { return }
+                    switch decision {
+                    case .routes(let planned):
+                        cloudRoutes = planned
+                        route = planned[0].route
+                        SpeechDiagnostics.event("cloud.plan", ["version": "1", "steps": String(planned.count)])
+                    case .clarify(let question):
+                        self.pendingCloudClarification = .init(request: continuesCloud ? pendingCloud!.request : trimmed,
+                            question: question, createdAt: Date())
+                        session.latency.finishDecision(route: "bulut açıklama istiyor")
+                        let heard = await self.speakReply(question)
+                        self.showFlowBarMessage(question, durationMs: 8000)
+                        if self.listenForReplyAnswer(question, heard: heard, after: session) { holdMediaForReplyAnswer = true }
+                        return
+                    case .cancel:
+                        session.latency.finishDecision(route: "bulut iptal")
+                        return
+                    }
+                } catch {
+                    guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id else { return }
+                    session.latency.finishDecision(route: "bulut planı uygulanmadı")
+                    SpeechDiagnostics.event("cloud.plan.rejected", ["reason": String(describing: error)])
+                    await say("İsteği güvenle planlayamadım; işlem yapmadım. Tekrar söyler misin?", durationMs: 6000)
+                    return
+                }
+            }
+
             // Resolve screen-relative requests only in foreground YouTube, preserving explicit commands.
+            if cloudRoutes == nil {
             switch route {
             case .spotifyOrConversation, .command(.spotify):
                 if (facts.isVoiceCommand || session.takesOnlyCommands || applicationCommands),
                    session.targetApp?.bundleIdentifier == BrowserController.bundleID,
                    let command = await YouTubeVoice.contextual(trimmed) { route = .command(command) }
             default: break
+            }
+
             }
 
             // The mic stayed open after a command: only a command is taken from it, never
@@ -1094,7 +1151,7 @@ extension AppState {
                 var isCommand: Bool {
                     switch route { case .command, .commands: true; default: false }
                 }
-                if !isCommand, let domain = session.commandFollowUpDomain,
+                if cloudRoutes == nil, !isCommand, let domain = session.commandFollowUpDomain,
                    let fix = CommandFollowUp.resolve(trimmed, after: domain) {
                     owLog("[FollowUp] '\(trimmed)' after a \(domain.rawValue) command → \(fix)")
                     route = .command(fix)
@@ -1122,6 +1179,12 @@ extension AppState {
                 }
             }
 
+            for planned in cloudRoutes ?? [.init(source: trimmed, route: route)] {
+            guard !session.isCancelled, !Task.isCancelled,
+                  cloudRoutes == nil || self.nextTranscriptionID == session.id else { return }
+            let route = planned.route
+            let text = planned.source
+            let trimmed = planned.source.trimmingCharacters(in: .whitespacesAndNewlines)
             SpeechDiagnostics.event("route.selected", ["route": String(describing: route),
                 "voice": String(facts.isVoiceCommand), "focus": String(describing: facts.focus),
                 "commandsOnly": String(session.takesOnlyCommands)])
@@ -1137,6 +1200,20 @@ extension AppState {
             }
 
             switch route {
+            case .unreadSessionRecap(let request, let selection):
+                session.latency.finishDecision(route: "bulut sohbet özeti")
+                await self.readAgentSessions(request, selection: selection, after: session)
+                return
+
+            case .sessionNavigation(let request):
+                session.latency.finishDecision(route: "bulut sohbet geçişi")
+                let reply = await CloudSessionNavigation.handle(request, front: session.targetApp)
+                guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id else { return }
+                await say(reply ?? "İstenen sohbeti açamadım.", durationMs: 6000)
+                if reply == CloudSessionNavigation.newChatOpened, session.isVoiceCommand {
+                    developerSessionApp = NSWorkspace.shared.frontmostApplication
+                }
+
             case .sendExistingMessage:
                 let sent = TextInjector().sendExistingMessage(context: session.pasteContext)
                 let status = sent ? "Gönderme komutu uygulandı" : "Mesaj alanına odaklanıp tekrar gönder diyebilirsin"
@@ -1519,6 +1596,7 @@ extension AppState {
                     }
                 }
             }
+            } // cloud plan steps
         }
         }
         }

@@ -44,6 +44,8 @@ enum VoiceRouter {
         case agent(AgentDictation)
         /// "Claude'da son session'ı özetle": two spoken sentences, then the next words go there.
         case claudeSessionRecap
+        case unreadSessionRecap(String, UnreadSessionRecap.Selection)
+        case sessionNavigation(String)
         /// "Buraya yaz …", "… bunu yaz": always typed, even if the words are a command.
         case typed(String)
         /// "Jarvis, …" said while a text field has focus.
