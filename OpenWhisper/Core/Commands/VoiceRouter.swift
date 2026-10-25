@@ -21,6 +21,8 @@ enum VoiceRouter {
         var hasTargetApp: Bool
         var targetBundleID: String?
         /// A reminder deletion waits for "evet" / "hayır".
+        var greetingAfterWake = false
+        var hasWorkRecap = false
         var pendingDeletion = false
         /// A WhatsApp message waits for "evet" / "hayır" (`WhatsAppSender`).
         var pendingWhatsAppSend = false
@@ -36,6 +38,7 @@ enum VoiceRouter {
 
     enum Route {
         /// "… gönder" in a Jarvis session with no app in front: nothing to send to.
+        case sendExistingMessage
         case agentWithoutForeground
         /// "Claude Code'a yaz …", or "… gönder" into the frontmost agent app.
         case agent(AgentDictation)
@@ -46,6 +49,7 @@ enum VoiceRouter {
         /// "Jarvis, …" said while a text field has focus.
         case chat(String)
         case greeting(JarvisReply.Greeting)
+        case workResume(WorkResume.Action)
         case meta(JarvisReply.Meta)
         case memory(UserMemoryCommand)
         /// "Test modunu başlat", then "geçti" / "kaldı …" / "atla" / "tekrar oku" / "bitir".
@@ -73,6 +77,12 @@ enum VoiceRouter {
     static func route(_ text: String, facts: Facts) -> Route {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let voice = facts.isVoiceCommand
+
+        // A complete send-only request refers to the draft already in the captured field.
+        if voice, AgentCommandParser.isExistingMessageSend(trimmed) {
+            if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
+            return facts.hasTargetApp ? .sendExistingMessage : .agentWithoutForeground
+        }
 
         // A named target wins; otherwise a Jarvis send goes to the app that was frontmost
         // when recording began. TextInjector still verifies that the destination is safe.
@@ -111,12 +121,22 @@ enum VoiceRouter {
         if voice {
             // First: "evet" / "tamam" would otherwise read as a greeting or a meta answer.
             if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
+            if facts.hasWorkRecap, !facts.pendingDeletion, !facts.commandAmongPlayback,
+               let action = WorkResume.action(trimmed) { return .workResume(action) }
             if AgentCommandParser.isSessionSummaryRequest(trimmed) { return .claudeSessionRecap }
             // An editable field normally routes to dictation. This explicit phrase lets the
             // user talk to Jarvis without first clicking away from the field.
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }
-            // In a text field a greeting stays dictation ("Selam nasılsın?" typed into WhatsApp).
-            if facts.focus != .editable, let greeting = JarvisReply.greeting(in: trimmed) { return .greeting(greeting) }
+            // A farewell addressed by voice ends the session even with a composer focused.
+            // Match the whole request, never a sentence extracted from an explanatory prompt.
+            if facts.acceptsCommands, !facts.pendingDeletion,
+               SystemCommandParser.isFarewell(trimmed) {
+                return .command(.system(.lockScreen))
+            }
+            // A named greeting addresses Jarvis even in a follow-up with an editor focused.
+            // Unaddressed greetings in a text field remain dictation.
+            if facts.focus != .editable || facts.greetingAfterWake || JarvisReply.isAddressedGreeting(in: trimmed),
+               let greeting = JarvisReply.greeting(in: trimmed, afterWake: facts.greetingAfterWake) { return .greeting(greeting) }
             if let test = VoiceTestCommand.parse(trimmed, active: facts.voiceTestActive) { return .voiceTest(test) }
             if let meta = JarvisReply.meta(in: trimmed) { return .meta(meta) }
             if let memory = UserMemoryCommand.parse(trimmed) { return .memory(memory) }
@@ -128,6 +148,9 @@ enum VoiceRouter {
 
         let firstSentence = voice ? leadingSentence(of: trimmed) : nil
         if facts.acceptsCommands {
+            if voice, let action = YouTubeVoice.recoveredVoiceRequest(trimmed) {
+                return .command(.system(.browser(action)))
+            }
             let context = facts.commandContext()
             // Only when every part is a command on its own; otherwise the transcript goes on
             // to the single command below.

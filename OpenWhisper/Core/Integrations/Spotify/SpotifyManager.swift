@@ -169,7 +169,8 @@ final class SpotifyManager: @unchecked Sendable {
         "çalar": "çal", "calar": "çal", "çalabilir": "çal", "calabilir": "çal",
         "açar": "aç", "acar": "aç", "açabilir": "aç", "acabilir": "aç",
         "koyar": "çal", "koyabilir": "çal",
-        "oynatır": "oynat", "oynatir": "oynat", "oynatabilir": "oynat"
+        "oynatır": "oynat", "oynatir": "oynat", "oynatabilir": "oynat",
+        "başlatır": "başlat", "baslatir": "başlat", "başlatabilir": "başlat", "baslatabilir": "başlat"
     ]
     static let questionParticles: Set<String> = ["mısın", "misin", "musun", "müsün", "misiniz", "mısınız"]
 
@@ -263,10 +264,23 @@ final class SpotifyManager: @unchecked Sendable {
     static func explicitIntent(in text: String) -> ExplicitSpotifyIntent? {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return nil }
+        // A polite playback phrase followed by “yaz” is quoted dictation.
+        if normalized.range(of: #"\b(?:mısın|misin|musun|müsün)\s+yaz$"#,
+                            options: .regularExpression) != nil { return nil }
 
         if mentionVetoAllows(normalized),
            let extended = extendedIntent(normalized) ?? queueIntentFromRules(normalized) {
             return extended
+        }
+        // Complete volume imperatives must also work as steps in a command chain,
+        // where no model is consulted. Anchor the whole phrase so quoted commands,
+        // negations and descriptions such as "sesi kısık" remain ordinary text.
+        let volumeCommand = #"^(?:lütfen\s+)?(?:ses|sesi|sesini)\s+(?:(?:biraz|azıcık|hafifçe|iyice)\s+)?"#
+        if normalized.range(of: volumeCommand + #"(?:kıs|azalt|düşür)(?:\s+lütfen)?$"#, options: .regularExpression) != nil {
+            return .adjustVolume(-volumeStep(in: normalized))
+        }
+        if normalized.range(of: volumeCommand + #"(?:aç|artır|arttır|yükselt)(?:\s+lütfen)?$"#, options: .regularExpression) != nil {
+            return .adjustVolume(volumeStep(in: normalized))
         }
         let words = canonicalizeVerbs(intentWords(normalized))
         // Counted on whitespace, not on `words`: the apostrophe split turns "Spotify'da" and
@@ -351,6 +365,11 @@ final class SpotifyManager: @unchecked Sendable {
             || hasLeadingVerb(playVerbs, in: words)) {
             // "Şarkı aç", "müzik çal": nothing named, so the user's Liked Songs. Only "devam et"
             // (above) resumes what was paused.
+            // Timing/politeness words do not name a song in a generic playback request.
+            let genericWords: Set<String> = ["şu", "an", "anda", "şimdi", "hemen", "bana", "bir",
+                                             "lütfen", "hadi", "bakalım", "artık"]
+            if words.allSatisfy({ genericWords.contains($0) || musicContextWords.contains($0)
+                || isSpotifyWord($0) || playVerbs.contains($0) }) { return .playLikedSongs }
             let query = shared.extractSearchQuery(normalized)
             return query.isEmpty ? .playLikedSongs : .search(SpotifyRequestParser.requestFromRules(normalized))
         }

@@ -92,6 +92,8 @@ enum BrowserAction: Equatable, Sendable {
     case youtubeMore
     /// "İkinciyi aç": a video of the list just read, counted from its top; 0 = the last one read.
     case youtubePick(Int)
+    case youtubeTitle(String)
+    case youtubeVisible
 }
 
 /// A video by voice: "videoyu durdur", "başa sar", "10 saniye ileri sar", "hızı 1.5 yap".
@@ -112,6 +114,7 @@ enum VideoAction: Equatable, Sendable {
     case subtitles(on: Bool)
     /// YouTube's next-video button.
     case next
+    case previous
     /// YouTube's "f" key; there is no fullscreen without a real user gesture otherwise.
     case fullscreen
     /// "Videonun bitmesine ne kadar var?"
@@ -152,6 +155,17 @@ enum SystemCommandParser {
         return command
     }
 
+    /// Whole farewell utterances only: quoted examples and explanatory prompts are not actions.
+    static func isFarewell(_ text: String) -> Bool {
+        let cleaned = WakeWordVerifier.strippingLeadingWakeWord(text)
+            .lowercased(with: locale)
+            .replacingOccurrences(of: #"[.,!?;:]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let farewell = #"(?:görüşürüz|görüşmek üzere|hoşça kal|hoşçakal|bay bay|baybay|kendine iyi bak(?:ın)?)"#
+        return matches(cleaned, #"^(?:(?:teşekkürler|tamam|peki|hadi) )?(?:\#(farewell))(?: (?:\#(farewell)))*$"#)
+    }
+
     /// Everything but mail replies, calendar, browser requests and video: Wi-Fi, apps, mail,
     /// brightness, …; `CommandRegistry` runs those first.
     static func parseMac(_ text: String, installedApps: [String] = [], shortcuts: [String] = []) -> SystemCommand? {
@@ -171,7 +185,10 @@ enum SystemCommandParser {
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
         // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
         if cleaned.split(separator: " ").count <= 12, let search = parseWhatsAppSearch(cleaned) { return search }
-        guard cleaned.split(separator: " ").count <= maxWords else { return nil }
+        // Explicit app requests can include polite wording and ASR-separated suffixes.
+        if cleaned.split(separator: " ").count > maxWords {
+            return parseOpenApp(cleaned, installedApps: installedApps)
+        }
         if let briefing = parseBriefing(cleaned) { return briefing }
 
         if let mail = parseMail(cleaned) { return mail }
@@ -464,7 +481,8 @@ enum SystemCommandParser {
         }
         if matches(text, #"(?:aydınlık|açık|light) (?:mod|tema|görünüm)"#),
            matches(text, #"\baç|geç|etkinleştir|yap"#) { return .darkMode(on: false) }
-        if matches(text, #"(?:ekranı|bilgisayarı|mac'?i|makineyi) kilitl[ei]|^kilitle$|lock (?:the )?screen"#) { return .lockScreen }
+        if matches(text, #"^(?:(?:ekranı|bilgisayarı|mac'?i|makineyi) )?(?:kilitle|kilitli|kilitleyelim|kilitler misin|kilitleyebilir misin)(?: lütfen)?$|^lock (?:the )?screen$"#)
+            || matches(text, #"^(?:bilgisayarı|mac'?i|makineyi) (?:kapat|kapatalım|kapatır mısın)(?: lütfen)?$"#) { return .lockScreen }
         if matches(text, #"^ekranı (?:kapat|kapa|söndür|uyut)"#) { return .displaySleep }
         if matches(text, #"^(?:ekranı|monitörü) (?:aç|uyandır)(?:ar mısın|abilir misin|ır mısın|abilir mısın)?(?: lütfen)?$"#) { return .displayWake }
         if matches(text, #"(?:^|\b(?:ekranın|bilgisayarın|mac'?in|ekran|bilgisayar) )kilid(?:i|ini) (?:aç|kaldır)|^(?:şifremi|şifreyi|parolamı|parolayı) (?:gir|yaz)"#) { return .unlockRequest }
@@ -499,6 +517,9 @@ enum SystemCommandParser {
         guard !raw.isEmpty, raw.split(separator: " ").count <= 14 else { return nil }
         let polite = #"(?: lütfen)?$"#
 
+        // Singular next/previous video belongs to the player, not recommendation paging.
+        if matches(raw, #"^(?:bir )?(?:sonraki|diğer|önceki|evvelki) video(?:yu|ya)?(?: (?:geç|git|aç|oynat|dön))?$"#) { return nil }
+        if let action = YouTubeVoice.explicit(raw) { return action }
         if let number = YouTubeList.pick(in: raw, requireVerb: true) { return .youtubePick(number) }
         // "YouTube'u aç", "YouTube'da ne var", "YouTube önerilerini oku", "YouTube'a gir".
         if matches(raw, #"^\#(youtube)(?:'?y?[uü]|'?y?a)? (?:aç|açar mısın|gir|git)\#(polite)"#)
@@ -572,6 +593,8 @@ enum SystemCommandParser {
         let fullscreenVerb = #"(?:yap(?:ar mısın|sana|ıver)?|jap|ja|yab|yapp|hap)"#
         if matches(raw, #"^(?:\S+ ){0,2}tam ekran(?:ı?[ ,]*\#(fullscreenVerb)|a (?:al|geç|geçir)(?:ır mısın|sana)?|dan çık(?:ar mısın)?)$"#) { return .fullscreen }
         if matches(raw, #"^(?:bir )?(?:sonraki|diğer) video(?:ya)?(?: (?:geç|git|aç|oynat))?$|^(?:bu |şu )?\#(noun) (?:geç|atla)$"#) { return .next }
+
+        if matches(raw, #"^(?:bir )?(?:önceki|evvelki) video(?:yu|ya)?(?: (?:geç|git|aç|oynat|dön))?$"#) { return .previous }
 
         let hasNoun = matches(raw, #"(?:^|\s)\#(noun)"#)
         if matches(raw, #"^(?:bu |şu )?\#(noun) (?:bitmesine |sonuna )?(?:ne kadar (?:kaldı|var)|kaç dakika\S* (?:kaldı|var)|süresi ne(?: kadar)?)$"#) { return .remaining }
@@ -689,8 +712,24 @@ enum SystemCommandParser {
 
     /// "Safari'yi aç", "Chrome'u kapat", "Notlar uygulamasını aç",
     /// "Chrome'u zorla kapat", "Slack'i öldür", "Xcode'u kill et".
+    private static func parseOpenApp(_ text: String, installedApps: [String]) -> SystemCommand? {
+        guard let spoken = group(
+            #"^(?:(?:hemen|şimdi|şu anda|lütfen) )?(.+?) (?:uygulamasını |programını )?(?:(?:hemen|şimdi|şu anda) )?(?:aç|başlat|açar mısın|açabilir misin|açsana|başlatır mısın|başlatabilir misin)(?: lütfen)?$"#,
+            in: text
+        ) else { return nil }
+        if let agent = AgentCommandParser.agentApp(named: spoken) { return .switchToAgent(agent) }
+        // Name resolution strips case endings at the apostrophe; reject extra words
+        // there so “Safari’yi zorla aç” cannot become a regular open request.
+        if let apostrophe = spoken.firstIndex(where: { "'’`".contains($0) }) {
+            let suffix = String(spoken[spoken.index(after: apostrophe)...])
+            guard matches(suffix, #"^(?:y?[ıiuü]|n[ıiuü])$"#) else { return nil }
+        }
+        guard let app = resolveApp(spoken, in: installedApps) else { return nil }
+        return .openApp(app)
+    }
+
     private static func parseApp(_ text: String, installedApps: [String]) -> SystemCommand? {
-        guard !installedApps.isEmpty else { return nil }
+        if let command = parseOpenApp(text, installedApps: installedApps) { return command }
         if let command = parseAppPhrase(text, installedApps: installedApps) { return command }
         // Whisper glues the case ending onto the verb: "Saferi Yaç", "Safer iyaç" (Safari'yi aç).
         // Move it back onto the name; the buffer "y" goes.
@@ -710,6 +749,12 @@ enum SystemCommandParser {
         let spoken = String(text[nameRange])
         let verb = String(text[verbRange])
         let forced = match.range(at: 2).location != NSNotFound
+        // Spoken agent aliases need bundle-ID activation: Codex may be installed as
+        // ChatGPT, and Turkish speech commonly spells it "Kodeks".
+        if !forced, ["aç", "başlat"].contains(verb),
+           let agent = AgentCommandParser.agentApp(named: spoken) {
+            return .switchToAgent(agent)
+        }
         guard let app = resolveApp(spoken, in: installedApps) else { return nil }
         if ["aç", "başlat"].contains(verb) { return forced ? nil : .openApp(app) }
         if forced || ["öldür", "sonlandır", "kill et", "killle", "kille"].contains(verb) { return .forceQuitApp(app) }

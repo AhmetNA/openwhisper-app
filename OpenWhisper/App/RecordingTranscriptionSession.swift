@@ -11,6 +11,9 @@ import os
 /// later Fn press cannot reset or append to a dictation that is still being transcribed.
 @MainActor
 final class RecordingTranscriptionSession {
+    let diagnosticOutcome = SpeechOutcome()
+    let diagnosticID = UUID().uuidString
+    var diagnosticSampleEnd = 0
     let id: UInt64
     let startedAt = Date()
     let latency = VoiceLatencyTracker()
@@ -25,6 +28,8 @@ final class RecordingTranscriptionSession {
     /// Started by voice ("Jarvis", Vocal Shortcuts, openwhisper://start) rather than Fn:
     /// the user is giving a command, so Spotify intents are read less strictly.
     var isVoiceCommand = false
+    /// The user explicitly accepted a retained transcript; route it once without rechecking identity.
+    var speakerConfirmedByUser = false
     /// How the recording was started; upgraded to `.fnSpace` when Space locks a Fn hold.
     var trigger: RecordingTrigger = .fnHold
     /// The Mac was playing media during the recording: audio the profile rejects is then most
@@ -66,6 +71,24 @@ final class RecordingTranscriptionSession {
     var commandFollowUpDomain: CommandFollowUp.Domain?
     /// A `.followUp` opened after a Claude session recap: the transcript is sent to that session.
     var sendsToRecappedClaudeSession = false
+    var isUnreadRecapWindow = false
+    var unreadRecapSessionID: String?
+    var greetingWorkContext: WorkResume.Context?
+    var isGreetingFollowUp = false
+    var isConversationFollowUp = false
+    var addresseeClarification: AddresseeClarification?
+    var recoversWakeGreeting: Bool {
+        speakerConfirmedByUser || isVoiceCommand &&
+            (trigger == .wakeWord || trigger == .jarvisKey || isGreetingFollowUp || isConversationFollowUp)
+    }
+
+    struct AddresseeClarification {
+        let text: String
+        let targetApp: NSRunningApplication?
+        let pasteContext: PasteContext
+        let createdAt = Date()
+        func isFresh(now: Date = Date()) -> Bool { now.timeIntervalSince(createdAt) < 20 }
+    }
     /// Jarvis's reply that was playing when this follow-up opened; its echo is cut from the text.
     var precedingReply: String?
     var acceptsCommands: Bool {

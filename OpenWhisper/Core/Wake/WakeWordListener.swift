@@ -113,7 +113,7 @@ final class WakeWordListener {
     /// Native-rate channel-0 audio of the last `nativeRingSeconds`, host-timed, filled on the audio
     /// thread. Touched only inside the capture's handler lock (the callback, and the handoff's
     /// `beforeSwap`), so it needs no lock of its own.
-    private let nativeRing = NativeAudioRing(seconds: 1.5)
+    private let nativeRing = NativeAudioRing(seconds: 3)
     /// Host time where the command after the last direct wake begins (see `score`).
     private let wakeAudioHostTime = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
     /// Uptime of the last buffer from the tap: the only reliable sign the mic is still flowing.
@@ -657,21 +657,20 @@ final class WakeWordListener {
                              s, detector.lastLevelDB, detector.gate?.floor ?? .nan))
                 if pendingCandidate != nil { owLog("[WakeWord] Candidate superseded by direct detection") }
                 pendingCandidate = nil
-                // The command starts where the scored audio ends, less what the detector may
-                // still hold unscored (up to one 80 ms frame). On the plain path that point is on
-                // the audio clock; behind the echo aligner only the wall clock is known, less
-                // its lookahead too. Most "…vis" tails that slip in are removed from the
-                // transcript (`WakeWordVerifier.strippingLeadingWakeWord`).
+                // Detection can peak after the next word has already begun. Keep 600 ms
+                // before the scored end, not just the pending 80 ms model frame. The existing
+                // transcript cleanup removes a leading wake word. The larger native ring also
+                // leaves room for queued inference and main-thread handoff work.
                 let now = mach_absolute_time()
                 let start: UInt64
                 if let end = scoredEndHostIndex {
                     let endHost = AVAudioTime.hostTime(forSeconds: Double(end) / Double(EchoCanceller.sampleRate))
-                    start = endHost - AVAudioTime.hostTime(forSeconds: 0.08)
+                    start = Self.commandAudioStart(endHostTime: endHost)
                     let lag = now >= endHost ? AVAudioTime.seconds(forHostTime: now - endHost) : 0
                     owLog(String(format: "[WakeWord] Command audio anchored on the audio clock (scoring %.0f ms behind the mic)", lag * 1000))
                 } else {
-                    let held = 0.08 + Double(EchoCanceller.lookahead) / Double(EchoCanceller.sampleRate)
-                    start = now - AVAudioTime.hostTime(forSeconds: held)
+                    start = Self.commandAudioStart(endHostTime: now,
+                        echoLookahead: Double(EchoCanceller.lookahead) / Double(EchoCanceller.sampleRate))
                     owLog("[WakeWord] Command audio anchored on the wall clock (echo-cancelled path)")
                 }
                 wakeAudioHostTime.withLock { $0 = start }
@@ -714,6 +713,11 @@ final class WakeWordListener {
             peakSinceLog = 0
             lastPeakLog = Date()
         }
+    }
+
+    static func commandAudioStart(endHostTime: UInt64, echoLookahead: Double = 0) -> UInt64 {
+        let lookback = AVAudioTime.hostTime(forSeconds: 0.6 + echoLookahead)
+        return endHostTime > lookback ? endHostTime - lookback : 0
     }
 
     /// The raw mic is quiet (speech around -50 dBFS); bring the peak to -6 dBFS for Whisper,

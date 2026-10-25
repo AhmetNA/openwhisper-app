@@ -30,7 +30,7 @@ extension AppState {
             _ = await capture.value
             self?.typedRequestPanel?.show(prompt: prompt, onDismiss: onDismiss)
         }
-        if ollamaAvailable && !JarvisChat.cloudReady {
+        if ollamaAvailable && ChatBackend.selected == .ollama {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }

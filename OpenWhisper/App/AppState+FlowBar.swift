@@ -30,6 +30,7 @@ extension AppState {
     }
 
     func showFlowBarMessage(_ message: String, durationMs: Int = 1500) {
+        SpeechDiagnostics.event("ui.message", ["text": message, "durationMs": String(durationMs)])
         flowBarMessageTask?.cancel()
         flowBarMessage = message
         syncFlowBarVisibility()
@@ -55,12 +56,10 @@ extension AppState {
         flowBarMessageTask = nil
         confirmationOperationID &+= 1
         isConfirmationInFlight = false
-        confirmationPasteOutcome = nil
-        confirmationPasteCompleted = false
+        confirmationRoutingCompleted = false
         confirmationAppendCompleted = false
         confirmationAppendSucceeded = false
         confirmationAppendError = nil
-        confirmationTextBeingDelivered = ""
         dismissTargetSpeakerAppendOffer()
         if flowBarMessage != nil {
             flowBarMessage = nil

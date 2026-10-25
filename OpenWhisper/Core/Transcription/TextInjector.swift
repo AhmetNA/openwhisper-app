@@ -284,6 +284,18 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         return true
     }
 
+    /// Submit the existing draft without pasting, replacing text, or changing the clipboard.
+    @MainActor
+    func sendExistingMessage(context: PasteContext) -> Bool {
+        guard let pid = context.targetPID,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              context.conversationIsCurrent,
+              let captured = context.focusedElement,
+              let current = AXTextAccess.focusedEditableElement(matchingPID: pid),
+              CFEqual(captured, current) else { return false }
+        return pressReturn(inPID: pid)
+    }
+
     /// `pressReturn`, but when `pid` is in the background (another app or full-screen Space,
     /// after a background paste) it is brought forward for the Return and the app that was
     /// in front gets the focus back. Return is still only posted once `pid` is frontmost.

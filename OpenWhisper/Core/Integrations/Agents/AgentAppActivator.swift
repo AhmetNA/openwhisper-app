@@ -7,7 +7,7 @@ import AppKit
 @MainActor
 enum AgentAppActivator {
     /// The frontmost agent app, or nil when it is not installed or never came to the front.
-    static func activate(_ agent: AgentApp) async -> NSRunningApplication? {
+    static func activate(_ agent: AgentApp, waitForComposer: Bool = true) async -> NSRunningApplication? {
         if let front = NSWorkspace.shared.frontmostApplication,
            let bundleID = front.bundleIdentifier,
            agent.bundleIdentifiers.contains(bundleID) {
@@ -38,6 +38,7 @@ enum AgentAppActivator {
             let deadline = Date().addingTimeInterval(wasRunning ? 2 : 15)
             while Date() < deadline {
                 if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier == pid {
+                    if !waitForComposer { return front }
                     if agent == .claudeCode {
                         // Claude is frontmost well before its web content loads. Without a
                         // window to begin with, nothing is pasted until the composer is up.

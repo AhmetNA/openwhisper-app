@@ -31,11 +31,13 @@ final class LLMCleanup: Sendable {
         ("lfm2.5:8b", "🧪 LFM2.5 8B-A1B (deneysel)")
     ]
 
-    /// How long Ollama keeps the model resident after a request. Every request to the model
-    /// (cleanup, Spotify, reminders) must send this: Ollama resets the timer to whatever the
-    /// latest request asked for, so one request without it would drop back to the 5 min default
-    /// and the next push-to-talk would pay the cold load again.
-    static let keepAlive = "30m"
+    /// Cloud mode only needs Ollama for occasional local helpers or fallback. Release it
+    /// after each request instead of keeping a second LLM resident for half an hour.
+    static func keepAlive(for backend: ChatBackend) -> String {
+        backend == .cloud ? "0s" : "30m"
+    }
+
+    static var keepAlive: String { keepAlive(for: ChatBackend.selected) }
 
     private static let basePrompt = """
         You are a minimal transcript cleaner. Your SINGLE task is to remove spoken filler words (şey, yani, ee, ıı, hani, um, uh, falan, filan, vs.) and fix capitalization/punctuation.

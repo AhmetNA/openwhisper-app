@@ -27,7 +27,7 @@ final class CommandFollowUpTests: XCTestCase {
     func testVideoDomain() {
         XCTAssertEqual(CommandFollowUp.resolve("sonrakine geç", after: .video), .system(.video(.next)))
         XCTAssertEqual(CommandFollowUp.resolve("durdur", after: .video), .system(.video(.pause)))
-        XCTAssertNil(CommandFollowUp.resolve("öncekine geç", after: .video))
+        XCTAssertEqual(CommandFollowUp.resolve("öncekine geç", after: .video), .system(.video(.previous)))
     }
 
     func testSentencesOfTheirOwnAreNoFix() {

@@ -12,8 +12,10 @@ enum VideoController {
     static let javaScriptOff = "Safari'de Apple Events'ten JavaScript izni kapalı"
     static let unreachable = "Safari'ye ulaşılamadı"
     static let noButton = "Bu videoda o düğme yok"
+    static let playbackFailed = "Video oynatılamadı"
+    static let pauseFailed = "Video duraklatılamadı"
     static let outOfRange = "Video o kadar uzun değil"
-    static let failures: Set<String> = [notFound, javaScriptOff, unreachable, noButton, outOfRange, BrowserController.notFront]
+    static let failures: Set<String> = [notFound, javaScriptOff, unreachable, noButton, outOfRange, playbackFailed, pauseFailed, BrowserController.notFront]
 
     static func perform(_ action: VideoAction) async -> String {
         await Task.detached(priority: .userInitiated) { performBlocking(action) }.value
@@ -22,7 +24,7 @@ enum VideoController {
     private static func performBlocking(_ action: VideoAction) -> String {
         if action == .fullscreen { return fullscreen() }
         let running = !NSRunningApplication.runningApplications(withBundleIdentifier: safariBundleID).isEmpty
-        let result = running ? runInBestTab(javaScript(for: action)) : "none"
+        let result = running ? OSAScriptRunner.run(["-e", bestTabScript(javaScript(for: action), playbackAction: action.changesPlayback ? action : nil)], timeout: 10) : "none"
         owLog("[Video] \(action) → \(result ?? "script failed")")
         switch result {
         case "jsoff":
@@ -31,6 +33,8 @@ enum VideoController {
             return mediaRemoteFallback(action) ?? unreachable
         case "none":
             return mediaRemoteFallback(action) ?? notFound
+        case "playfailed": return playbackFailed
+        case "pausefailed": return pauseFailed
         case "nobutton":
             return noButton
         case "range":
@@ -54,6 +58,7 @@ enum VideoController {
         case .mute(let mute): return mute ? "Videonun sesi kapatıldı" : "Videonun sesi açıldı"
         case .subtitles(let on): return on ? "Altyazı açıldı" : "Altyazı kapatıldı"
         case .next: return "Sonraki video"
+        case .previous: return "Önceki videoya dönülüyor"
         case .fullscreen: return "Tam ekran"
         case .remaining:
             let parts = result.split(separator: "|").compactMap { Double($0) }
@@ -72,7 +77,10 @@ enum VideoController {
     /// inside `do JavaScript "…"`.
     private static let pickVideo = """
         var vs=Array.prototype.slice.call(document.querySelectorAll('video'));\
-        var v=vs.filter(function(m){return m.dataset.jarvisPaused})[0]\
+        var visible=vs.filter(function(m){return m.getClientRects().length&&m.clientWidth>0&&m.clientHeight>0});\
+        var v=visible.filter(function(m){return m.dataset.jarvisPaused})[0]\
+        ||visible.sort(function(a,b){return b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight})[0]\
+        ||vs.filter(function(m){return m.dataset.jarvisPaused})[0]\
         ||vs.filter(function(m){return !m.paused&&!m.ended})[0]\
         ||vs.filter(function(m){return m.duration>0}).sort(function(a,b){return b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight})[0];\
         if(!v)return 'none';
@@ -91,8 +99,8 @@ enum VideoController {
     static func javaScript(for action: VideoAction) -> String {
         let body: String
         switch action {
-        case .play: body = "v.play();\(clearMarks)return 'ok';"
-        case .pause: body = "v.pause();\(clearMarks)return 'ok';"
+        case .play: body = "window.__jarvisPlaybackTarget=v;window.__jarvisPlaybackStart=v.currentTime;var p=v.play();if(p&&p.catch)p.catch(function(){});\(clearMarks)return 'pending';"
+        case .pause: body = "window.__jarvisPlaybackTarget=v;v.pause();\(clearMarks)return 'pending';"
         case .restart: body = "v.currentTime=0;return 'ok';"
         case .seekBy(let seconds):
             body = "v.currentTime=Math.max(0,Math.min(isFinite(v.duration)?v.duration-1:1e9,v.currentTime+(\(seconds))));return 'ok';"
@@ -108,6 +116,8 @@ enum VideoController {
                 + "if((b.getAttribute('aria-pressed')==='true')!==\(on))b.click();return 'ok';"
         case .next:
             body = "var b=document.querySelector('.ytp-next-button');if(!b||!b.offsetParent)return 'nobutton';b.click();return 'ok';"
+        case .previous:
+            body = "if(location.hostname!=='www.youtube.com'&&location.hostname!=='youtube.com')return 'nobutton';var b=document.querySelector('.ytp-prev-button');if(b&&b.offsetParent){b.click();return 'ok'}if(history.length<=1)return 'nobutton';history.back();return 'ok';"
         case .remaining:
             body = "return v.currentTime+'|'+(isFinite(v.duration)?v.duration:0);"
         case .fullscreen:
@@ -123,8 +133,25 @@ enum VideoController {
         OSAScriptRunner.run(["-e", bestTabScript(javaScript)], timeout: 8)
     }
 
-    static func bestTabScript(_ javaScript: String) -> String {
-        """
+    static func bestTabScript(_ javaScript: String, playbackAction: VideoAction? = nil) -> String {
+        let verify: String
+        if let playbackAction {
+            let condition = playbackAction == .play
+                ? "!v.paused&&!v.ended&&v.currentTime>window.__jarvisPlaybackStart+0.05"
+                : "v.paused"
+            verify = """
+                do JavaScript "\(javaScript)" in best
+                repeat 12 times
+                    delay 0.15
+                    set playbackState to (do JavaScript "(function(){var v=window.__jarvisPlaybackTarget;return !!(v&&v.isConnected&&\(condition))})()" in best)
+                    if playbackState is true then return "ok"
+                end repeat
+                return "\(playbackAction == .play ? "playfailed" : "pausefailed")"
+                """
+        } else {
+            verify = "return (do JavaScript \"\(javaScript)\" in best) as text"
+        }
+        return """
             on probe(t)
                 tell application id "com.apple.Safari" to return (do JavaScript "\(probe)" in t)
             end probe
@@ -140,6 +167,7 @@ enum VideoController {
                         set end of candidates to contents of t
                     end repeat
                 end repeat
+                \(playbackAction != nil ? "try\nif my probe(current tab of front window) > 0 then\nset best to current tab of front window\nset bestScore to 4\nend if\nend try" : "")
                 repeat with t in candidates
                     try
                         set s to my probe(contents of t)
@@ -153,7 +181,7 @@ enum VideoController {
                     end try
                 end repeat
                 if best is missing value then return "none"
-                return (do JavaScript "\(javaScript)" in best) as text
+                \(verify)
             end tell
             """
     }
@@ -211,20 +239,29 @@ enum VideoController {
 
     /// Play/pause for whatever else holds Now Playing (Chrome, Stremio, IINA, Safari without
     /// the JavaScript setting). Spotify is left alone: "müziği durdur" is its command.
-    private static func mediaRemoteFallback(_ action: VideoAction) -> String? {
+    static func mediaRemoteFallback(_ action: VideoAction, bridge: any MediaRemoteAccess = SystemNowPlayingBridge(),
+                                    wait: () -> Void = { Thread.sleep(forTimeInterval: 0.15) }) -> String? {
         guard action.changesPlayback else { return nil }
-        let bridge = SystemNowPlayingBridge()
         let players = bridge.snapshots().filter { !$0.playerID.contains(":\(SpotifyController.spotifyBundleID):") }
         if action == .pause {
             guard let playing = players.first(where: \.isPlaying) else {
                 // The recording already paused it; not resuming it is the pause.
                 return players.isEmpty ? nil : "Video durduruldu"
             }
-            return bridge.send(.pause, to: playing) ? "Video durduruldu" : nil
+            guard bridge.send(.pause, to: playing) else { return pauseFailed }
+            for _ in 0..<12 {
+                wait()
+                if let state = bridge.snapshot(for: playing), state.matches(playing), !state.isPlaying { return "Video durduruldu" }
+            }
+            return pauseFailed
         }
         if players.contains(where: \.isPlaying) { return "Video oynatılıyor" }
         guard let paused = players.first, bridge.send(.play, to: paused) else { return nil }
-        return "Video oynatılıyor"
+        for _ in 0..<12 {
+            wait()
+            if let state = bridge.snapshot(for: paused), state.matches(paused), state.isPlaying { return "Video oynatılıyor" }
+        }
+        return playbackFailed
     }
 
     // MARK: - Formatting

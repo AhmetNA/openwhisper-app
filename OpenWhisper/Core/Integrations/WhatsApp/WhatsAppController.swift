@@ -70,6 +70,8 @@ enum WhatsAppController {
     /// more there are, the shorter the summary is asked to be. Without the model, the last
     /// few messages are read instead.
     static func conversation(with name: String) async -> String {
+        do { try await WhatsAppBackground.ensureRunning() }
+        catch { return "WhatsApp arka planda açılamadı; mesajlar güncellenemedi" }
         let contacts = await matchingContacts(name)
         let found = await Task.detached(priority: .userInitiated) { () -> Result<(WhatsAppStore.Chat, [WhatsAppStore.Message])?, Error> in
             Result {
@@ -106,6 +108,8 @@ enum WhatsAppController {
     /// (or, failing that, words the local model relates to it: "petek", "doğalgaz"), and the
     /// talk around it summed up with when and with whom. Only text and file names are searched.
     static func search(topic: String, person: String?) async -> String {
+        do { try await WhatsAppBackground.ensureRunning() }
+        catch { return "WhatsApp arka planda açılamadı; mesajlar güncellenemedi" }
         let contacts = person == nil ? [] : await matchingContacts(person!)
         let topicStems = WhatsAppStore.fold(topic).split(separator: " ").map(String.init).filter { $0.count >= 3 }
         let related = await relatedWords(topic).filter { !topicStems.contains($0) }
@@ -345,6 +349,8 @@ enum WhatsAppController {
 
     /// Runs `body` off the main thread and turns the store's failures into statuses.
     private static func read(_ body: @escaping @Sendable (URL) throws -> String) async -> String {
+        do { try await WhatsAppBackground.ensureRunning() }
+        catch { return "WhatsApp arka planda açılamadı; mesajlar güncellenemedi" }
         let result = await Task.detached(priority: .userInitiated) { () -> Result<String, Error> in
             Result { try body(WhatsAppStore.defaultURL) }
         }.value

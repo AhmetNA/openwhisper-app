@@ -19,7 +19,7 @@ enum YouTubeList {
     nonisolated static let outOfRange = "Listede o sırada video yok"
     nonisolated static let noMore = "Başka video yok"
     nonisolated static let jsOff = "Safari'de Apple Events'ten JavaScript'e izin kapalı"
-    nonisolated static let failures: Set<String> = [notFound, noList, outOfRange, noMore, jsOff]
+    nonisolated static let failures: Set<String> = [notFound, noList, outOfRange, noMore, jsOff, "Birden fazla video uyuyor; başlığı biraz daha uzun söyle."]
 
     @MainActor private static var videos: [Video] = []
     @MainActor private static var offset = 0
@@ -46,6 +46,10 @@ enum YouTubeList {
         }
         owLog("[YouTube] \(found.count) videos on \(path): \(found.prefix(pageSize).map(\.title))")
         guard !found.isEmpty else { return notFound }
+        return remember(found)
+    }
+
+    @MainActor static func remember(_ found: [Video]) -> String {
         videos = found
         offset = 0
         listedAt = Date()
@@ -219,7 +223,8 @@ enum YouTubeList {
             let title = video.title.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
             // A thumbnail's "12:34" badge is no title.
-            guard title.contains(where: \.isLetter) else { return nil }
+            guard title.contains(where: \.isLetter),
+                  video.id.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil else { return nil }
             return Video(id: video.id, title: title)
         }
     }
@@ -266,6 +271,8 @@ enum YouTubeList {
                 set t to current tab of front window
                 if URL of t contains "youtube.com" then
                     set URL of t to "\(address)"
+                    set miniaturized of front window to false
+                    activate
                     return "ok"
                 end if
             end if

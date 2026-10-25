@@ -30,7 +30,7 @@ enum SystemController {
         case .forceQuitApp(let name): return forceQuitApp(name)
         case .switchToApp(let name): return await switchToApp(name)
         case .switchToAgent(let agent):
-            return await AgentAppActivator.activate(agent) != nil ? "\(agent.displayName) önde" : "\(agent.displayName) açılamadı"
+            return await AgentAppActivator.activate(agent, waitForComposer: false) != nil ? "\(agent.displayName) önde" : "\(agent.displayName) açılamadı"
         case .mailCount: return await mailCount()
         case .mailCheck:
             await MailController.checkForNewMail()
@@ -211,10 +211,16 @@ enum SystemController {
             names += items.filter { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
         }
         // Not in the folders above, but "Finder'a geç" should work.
-        return names + ["Finder"]
+        return (names + ["Finder"]).filter(isVoiceApp)
+    }
+
+    /// Music playback belongs to Spotify; Apple Music is not a voice-command target.
+    nonisolated static func isVoiceApp(_ name: String) -> Bool {
+        !["music", "apple music", "müzik"].contains(name.lowercased())
     }
 
     private static func appURL(_ name: String) -> URL? {
+        guard isVoiceApp(name) else { return nil }
         let folders = ["/Applications", "/Applications/Utilities", "/System/Applications",
                        "/System/Applications/Utilities", NSHomeDirectory() + "/Applications"]
         if name == "Finder" { return URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app") }

@@ -14,6 +14,17 @@ enum ForeignTranscriptGuard {
     static let minimumWordsForLanguageID = 4
     static let foreignConfidence = 0.8
 
+    static func requiresTurkishRetry(_ text: String, detectedLanguages: [String], misheardCount: Int) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        if detectedLanguages.contains(where: { !["", "tr", "en"].contains($0.lowercased()) }) {
+            return true
+        }
+        let letters = text.filter(\.isLetter)
+        let foreignLetters = letters.filter { hasForeignLetters(String($0)) }.count
+        if foreignLetters >= 2 && foreignLetters * 2 > letters.count { return true }
+        return isForeign(text, misheardCount: misheardCount)
+    }
+
     static func isForeign(_ text: String, misheardCount: Int) -> Bool {
         guard misheardCount > 0 else { return false }
         let words = text.split { !$0.isLetter && $0 != "'" }

@@ -17,9 +17,9 @@ enum CommandFollowUp {
     static func domain(of command: VoiceCommand) -> Domain? {
         switch command {
         case .spotify: .music
-        case .system(.browser(.youtubeHome)), .system(.browser(.youtubeMore)),
+        case .system(.browser(.youtubeHome)), .system(.browser(.youtubeMore)), .system(.browser(.youtubeVisible)),
              .system(.browser(.search(.youtube, _))): .youtubeList
-        case .system(.video), .system(.browser(.youtubePick)): .video
+        case .system(.video), .system(.browser(.youtubePick)), .system(.browser(.youtubeTitle)): .video
         default: nil
         }
     }
@@ -68,7 +68,8 @@ enum CommandFollowUp {
         case (.video, .next): return .system(.video(.next))
         case (.video, .pause): return .system(.video(.pause))
         case (.video, .resume): return .system(.video(.play))
-        case (.video, .previous), (.youtubeList, _): return nil
+        case (.video, .previous): return .system(.video(.previous))
+        case (.youtubeList, _): return nil
         }
     }
 

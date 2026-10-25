@@ -2,6 +2,26 @@ import XCTest
 @testable import OpenWhisper
 
 final class JarvisChatSafetyTests: XCTestCase {
+    func testCloudPayloadCarriesCapabilitiesAndExecutionLimits() {
+        for language: ReplyLanguage in [.turkish, .english] {
+            let prompt = JarvisChat.systemPrompt(now: Date(), language: language)
+            let request = LLMChatRequest(model: "test", messages: [
+                ["role": "system", "content": prompt],
+                ["role": "user", "content": "YouTube önerilerini okuyabiliyor musun?"]
+            ], timeout: 10, temperature: 0.6, maxTokens: 110)
+            let messages = CloudChatClient.chatBody(request)["messages"] as? [[String: String]]
+            XCTAssertEqual(messages?.first?["role"], "system")
+            let sent = messages?.first?["content"] ?? ""
+            for service in ["Spotify", "Safari", "YouTube", "Claude Code", "Codex", "ChatGPT"] {
+                XCTAssertTrue(sent.contains(service), service)
+            }
+            XCTAssertTrue(sent.contains("burada araç çağrısı veya işlem çalıştırma yoktur"))
+            XCTAssertTrue(sent.contains("Servis tanımı bir işlem sonucu değildir"))
+            XCTAssertTrue(sent.contains("YouTube'da neler var?"))
+            XCTAssertFalse(sent.contains("İnternete, hava durumuna ve haberlere erişimin yok"))
+        }
+    }
+
     func testBlocksFabricatedReminderDeletionSuccess() {
         XCTAssertEqual(
             JarvisChat.preventUnsupportedActionClaim(

@@ -274,6 +274,70 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
 typealias FluidAudioSortformerTargetSpeakerDiarizationService =
     FluidAudioTargetSpeakerDiarizationService
 
+/// Identity embeddings need enough solo speech, not necessarily one uninterrupted phrase.
+/// Pool short runs only within a Sortformer slot, excluding silence and overlapping speakers.
+/// Keep established contiguous windows when available; pooling is a fallback for fragmented speech.
+enum TargetSpeakerIdentityWindows {
+    struct Window: Equatable {
+        let speakerSlot: Int
+        let ranges: [Range<Int>]
+    }
+
+    static func make(frames: [TargetSpeakerActivityFrame], audioSampleCount: Int) -> [Window] {
+        let rate = Double(TargetSpeakerDiarizationConfiguration.sampleRate)
+        let minimum = Int(TargetSpeakerDiarizationConfiguration.minimumSoloIntervalSeconds * rate)
+        let windowLength = Int(TargetSpeakerDiarizationConfiguration.embeddingWindowSeconds * rate)
+        let hop = max(windowLength / 2, 1)
+        var runs: [Int: [Range<Int>]] = [:]
+        for frame in frames where frame.activeSpeakerSlots.count == 1 {
+            let start = max(0, min(audioSampleCount, Int((frame.startTime * rate).rounded())))
+            let end = max(0, min(audioSampleCount, Int((frame.endTime * rate).rounded())))
+            guard end > start else { continue }
+            let slot = frame.activeSpeakerSlots[0]
+            if let last = runs[slot]?.last, last.upperBound == start {
+                runs[slot]![runs[slot]!.count - 1] = last.lowerBound..<end
+            } else {
+                runs[slot, default: []].append(start..<end)
+            }
+        }
+
+        var result: [Window] = []
+        for slot in runs.keys.sorted() {
+            let slotRuns = runs[slot, default: []]
+            let longRuns = slotRuns.filter { $0.count >= minimum }
+            if !longRuns.isEmpty {
+                for run in longRuns {
+                    var start = run.lowerBound
+                    while start + windowLength <= run.upperBound {
+                        result.append(Window(speakerSlot: slot, ranges: [start..<(start + windowLength)]))
+                        start += hop
+                    }
+                }
+            } else {
+                // No repetition or silence padding: the same minimum amount of actual solo
+                // evidence is required. Never combine different slots to reach that minimum.
+                var ranges: [Range<Int>] = []
+                var count = 0
+                for run in slotRuns {
+                    var start = run.lowerBound
+                    while start < run.upperBound {
+                        let end = min(run.upperBound, start + windowLength - count)
+                        ranges.append(start..<end)
+                        count += end - start
+                        start = end
+                        if count == windowLength {
+                            result.append(Window(speakerSlot: slot, ranges: ranges))
+                            ranges = []
+                            count = 0
+                        }
+                    }
+                }
+            }
+        }
+        return result
+    }
+}
+
 private actor FluidAudioTargetSpeakerDiarizationRuntime {
     private let configuration: TargetSpeakerDiarizationConfiguration
     private let sortformerConfig = SortformerConfig.default
@@ -566,89 +630,33 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         )
     }
 
-    private struct SoloRun: Sendable {
-        let speakerSlot: Int
-        let startFrame: Int
-        let endFrame: Int
-    }
-
-    private func soloRuns(from frames: [TargetSpeakerActivityFrame]) -> [SoloRun] {
-        var runs: [SoloRun] = []
-        for speakerSlot in 0..<sortformerConfig.numSpeakers {
-            var startFrame: Int?
-            var previousFrame: Int?
-            for frame in frames {
-                let isSolo = frame.activeSpeakerSlots == [speakerSlot]
-                if isSolo {
-                    if startFrame == nil { startFrame = frame.frameIndex }
-                    previousFrame = frame.frameIndex
-                } else if let completedStart = startFrame, let completedEnd = previousFrame {
-                    runs.append(SoloRun(
-                        speakerSlot: speakerSlot,
-                        startFrame: completedStart,
-                        endFrame: completedEnd + 1
-                    ))
-                    startFrame = nil
-                    previousFrame = nil
-                }
-            }
-            if let startFrame, let previousFrame {
-                runs.append(SoloRun(
-                    speakerSlot: speakerSlot,
-                    startFrame: startFrame,
-                    endFrame: previousFrame + 1
-                ))
-            }
-        }
-        let minimumFrames = Int(ceil(
-            TargetSpeakerDiarizationConfiguration.minimumSoloIntervalSeconds
-                / TargetSpeakerDiarizationConfiguration.frameDuration
-        ))
-        return runs.filter { $0.endFrame - $0.startFrame >= minimumFrames }
-    }
-
     private func identifyTargetSlot(
         frames: [TargetSpeakerActivityFrame],
         audioData: [Float],
         profile: TargetSpeakerProfile,
         embeddingDiarizer: DiarizerManager
     ) throws -> Int {
+        let windows = TargetSpeakerIdentityWindows.make(frames: frames, audioSampleCount: audioData.count)
         var scoresBySlot: [Int: [Float]] = [:]
-        for run in soloRuns(from: frames) {
-            let runStart = Int((Double(run.startFrame) * TargetSpeakerDiarizationConfiguration.frameDuration
-                * Double(TargetSpeakerDiarizationConfiguration.sampleRate)).rounded())
-            let runEnd = min(
-                audioData.count,
-                Int((Double(run.endFrame) * TargetSpeakerDiarizationConfiguration.frameDuration
-                    * Double(TargetSpeakerDiarizationConfiguration.sampleRate)).rounded())
-            )
-            guard runEnd > runStart else { continue }
-            let windowLength = Int(
-                TargetSpeakerDiarizationConfiguration.embeddingWindowSeconds
-                    * Double(TargetSpeakerDiarizationConfiguration.sampleRate)
-            )
-            let hop = max(windowLength / 2, 1)
-            var windowStart = runStart
-            while windowStart + windowLength <= runEnd {
-                let samples = Array(audioData[windowStart..<(windowStart + windowLength)])
-                if let embedding = try? embeddingDiarizer.extractSpeakerEmbedding(from: samples),
-                   let score = bestProfileSimilarity(embedding, profile: profile),
-                   score.isFinite
-                {
-                    scoresBySlot[run.speakerSlot, default: []].append(score)
+        var extractionFailures = 0
+        for window in windows {
+            let samples = window.ranges.flatMap { Array(audioData[$0]) }
+            do {
+                let embedding = try embeddingDiarizer.extractSpeakerEmbedding(from: samples)
+                if let score = bestProfileSimilarity(embedding, profile: profile), score.isFinite {
+                    scoresBySlot[window.speakerSlot, default: []].append(score)
+                } else {
+                    extractionFailures += 1
                 }
-                windowStart += hop
-            }
-            if runEnd - runStart < windowLength {
-                let samples = Array(audioData[runStart..<runEnd])
-                if let embedding = try? embeddingDiarizer.extractSpeakerEmbedding(from: samples),
-                   let score = bestProfileSimilarity(embedding, profile: profile),
-                   score.isFinite
-                {
-                    scoresBySlot[run.speakerSlot, default: []].append(score)
-                }
+            } catch {
+                extractionFailures += 1
+                owLog("[TargetSpeakerDiarization] Identity embedding extraction failed: \(error)")
             }
         }
+        let scoreSummary = scoresBySlot.keys.sorted().map { slot in
+            "slot=\(slot):" + scoresBySlot[slot, default: []].map { String(format: "%.3f", $0) }.joined(separator: ",")
+        }.joined(separator: " ")
+        owLog("[TargetSpeakerDiarization] identity evidence: windows=\(windows.count), pooled=\(windows.filter { $0.ranges.count > 1 }.count), extractionFailures=\(extractionFailures), threshold=\(configuration.targetSimilarityThreshold), scores=[\(scoreSummary)]")
 
         let ranked = scoresBySlot.compactMap { slot, scores -> (slot: Int, score: Float)? in
             guard !scores.isEmpty else { return nil }

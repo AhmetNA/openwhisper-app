@@ -18,6 +18,7 @@ enum JarvisAddressee {
     enum DefaultRoute: String, Equatable, Sendable {
         case type
         case chat
+        case clarify
     }
 
     /// Chat only at or above this score (0–100). `defaults write com.openwhisper.app jarvisChatMinScore 60`
@@ -48,6 +49,35 @@ enum JarvisAddressee {
         case .unknown:
             return isForJarvis(score: score, minScore: minScore) ? .chat : .type
         }
+    }
+
+    /// A voice request needs a strong destination; missing/intermediate model scores
+    /// must not turn into an unsolicited paste. Keyboard dictation keeps defaultRoute.
+    static func voiceRoute(focusStatus: TextFocusStatus, score: Int?, minScore: Int,
+                           continuingConversation: Bool = false) -> DefaultRoute {
+        if continuingConversation || focusStatus == .notEditable { return .chat }
+        if isForJarvis(score: score, minScore: minScore) { return .chat }
+        if focusStatus == .editable, let score, score <= min(30, minScore - 1) { return .type }
+        return .clarify
+    }
+
+    enum ClarificationChoice: Equatable { case chat, type, cancel }
+
+    static func clarificationChoice(_ text: String) -> ClarificationChoice? {
+        let phrase = text.lowercased(with: locale)
+            .components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        if ["sana", "sana söyledim", "sana sordum", "seninle konuşuyorum", "bana cevap ver", "cevapla", "sohbet"].contains(phrase) { return .chat }
+        if ["yaz", "bunu yaz", "buraya yaz", "yazmanı istedim", "yazmanı istiyorum", "dikte"].contains(phrase) { return .type }
+        if ["iptal", "vazgeç", "boş ver", "boşver", "hayır", "hiçbiri"].contains(phrase) { return .cancel }
+        return nil
+    }
+
+    /// Outside agent chats, a confirmed non-text focus means an application request,
+    /// including when recording started with the dictation keys. Unknown AX state is
+    /// not evidence that the user left their text field.
+    static func usesApplicationCommands(acceptsCommands: Bool, focus: TextFocusStatus,
+                                        bundleID: String?) -> Bool {
+        acceptsCommands && focus == .notEditable && !AgentApp.isAgentFront(bundleID)
     }
 
     private static let questionRegex = try! NSRegularExpression(

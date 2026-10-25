@@ -107,6 +107,59 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Terminal uygulamasını aç", installedApps: apps), .openApp("Terminal"))
     }
 
+    func testOpenAgentBySpokenName() {
+        for text in ["Kodeksi aç", "Kodeks'i aç", "Codex'i aç", "Kodex uygulamasını aç", "Kodeksi başlat"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .switchToAgent(.codex), text)
+        }
+        for text in ["ChatGPT'yi aç", "Chat GPT’yi aç", "ChatGPTyi aç"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .switchToAgent(.chatGPT), text)
+        }
+        XCTAssertNil(SystemCommandParser.parse("Kodeksi aç dedim"))
+        XCTAssertNil(SystemCommandParser.parse("Kodeksi zorla aç"))
+        XCTAssertNil(SystemCommandParser.parse("Kodeks"))
+    }
+
+    func testClaudeOpenAliasesAndSpeechSpacing() {
+        for text in ["Cloud'u aç", "cloud 'u aç", "Cloud ’u aç", "Cloud kodu aç", "Cloud Code'u aç",
+                     "Claude'u aç", "Claude Code'u aç", "Klodu aç", "Kloud'u aç", "Klaut'u aç",
+                     "Klod kodu aç", "Cloudkod aç", "Cloud kod uygulamasını aç", "Cloud uaç",
+                     "Cloud'u hemen aç", "Şimdi cloud kodu aç", "Cloud'u açar mısın?", "Cloud'u aç lütfen"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .switchToAgent(.claudeCode), text)
+        }
+        for text in ["Cloud'u aç dedim", "Cloud'u açma", "Cloud hakkında konuş", "Cloud", "Cloud kodu"] {
+            XCTAssertNil(SystemCommandParser.parse(text), text)
+        }
+        XCTAssertEqual(SystemCommandParser.parse("ChatGPT 'yi aç"), .switchToAgent(.chatGPT))
+        XCTAssertEqual(SystemCommandParser.parse("Kodeksi hemen aç"), .switchToAgent(.codex))
+    }
+
+    func testPoliteAppOpenRequests() {
+        for text in ["Klaut kudu aç?", "Klanat kodu açar mısın?", "Şu anda Cloud Code 'u açar mısın?", "Cloud Code’u şu anda açabilir misin?",
+                     "Jarvis şu anda Cloud Code uygulamasını açabilir misin lütfen?"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .switchToAgent(.claudeCode), text)
+        }
+        for text in ["Safari'yi açar mısın?", "Şu anda Safari'yi açabilir misin lütfen?",
+                     "Terminal uygulamasını başlatır mısın?"] {
+            let app = text.contains("Terminal") ? "Terminal" : "Safari"
+            XCTAssertEqual(SystemCommandParser.parse(text, installedApps: apps), .openApp(app), text)
+        }
+        for text in ["Cloud Code'u açma", "Cloud Code'u açar mısın dedim", "Safari'yi açabilir misin diye sordu",
+                     "Safari'yi zorla aç", "Kapıyı açar mısın?"] {
+            XCTAssertNil(SystemCommandParser.parse(text, installedApps: apps), text)
+        }
+    }
+
+    func testPhoneticClaudeOpenCommands() {
+        for name in ["Kılaat kodu", "Kılat kodu", "Kulaat kodu", "Klaot kodu", "Kılaad Code'u"] {
+            XCTAssertEqual(SystemCommandParser.parse("\(name) açar mısın?"), .switchToAgent(.claudeCode), name)
+        }
+        XCTAssertEqual(SystemCommandParser.parse("Kılaat koda geç"), .switchToAgent(.claudeCode))
+        for text in ["Kılaat kodu açma", "Kılaat kodu açar mısın dedim", "Kilit kodu aç", "Kanat kodu aç",
+                     "Kredi kodu aç", "Kılaat aç", "Kılaat kodu ne demek?"] {
+            XCTAssertNil(SystemCommandParser.parse(text), text)
+        }
+    }
+
     func testMisheardAppCommands() {
         // Whisper: case ending glued onto the verb, vowels misheard.
         XCTAssertEqual(SystemCommandParser.parse("Saferi Yaç", installedApps: apps), .openApp("Safari"))

@@ -2,6 +2,13 @@ import XCTest
 @testable import OpenWhisper
 
 final class RecordedConversationTests: XCTestCase {
+    func testUnfocusedDraftRequiresUniqueComposerAndUnchangedForegroundWindow() {
+        XCTAssertTrue(RecordedConversation.canFocusDraftComposer(candidateCount: 1, stillShown: true))
+        XCTAssertFalse(RecordedConversation.canFocusDraftComposer(candidateCount: 0, stillShown: true))
+        XCTAssertFalse(RecordedConversation.canFocusDraftComposer(candidateCount: 2, stillShown: true))
+        XCTAssertFalse(RecordedConversation.canFocusDraftComposer(candidateCount: 1, stillShown: false))
+    }
+
     func testRecognizesOnlyExplicitDraftTitles() {
         for title in ["ChatGPT", "Codex", "New chat", "Yeni sohbet"] {
             XCTAssertTrue(RecordedConversation.isDraftTitle(title, agent: .codex))

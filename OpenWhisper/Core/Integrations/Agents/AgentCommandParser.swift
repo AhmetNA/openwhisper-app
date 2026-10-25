@@ -88,7 +88,7 @@ enum AgentCommandParser {
 
     // "claude code'a", "cloud code'a", "cloudco'da", "klod koda", "claude'a", "codex'e", "kodekse" …
     // followed by an optional "şunu/şöyle/bunu" and a required verb, then an optional ":".
-    private static let claudeName = #"(?:claude|cloud|clod|klod|klot|clot|klaud|claud|kılık|kilik|klık|kılod|kılot|kulod)(?:\s*(?:code|kodu|kod|kot|co|ko))?"#
+    private static let claudeName = #"(?:claude|cloud|clod|klod|klot|clot|klaud|kloud|klaut|klanat|claud|kılık|kilik|klık|kılod|kılot|kulod)(?:\s*(?:code|kodu|kudu|kod|kot|co|ko))?"#
     private static let codexName = #"(?:codex|kodeks|kodex|codeks|codecs|kodaks|kadex|kadexe|kadeks)"#
     // Whisper often writes the spoken English name as "chatypti" / "chatypt".
     private static let chatGPTName = #"(?:chat\s*gpt|chatgpt|chat\s*y?pti|chatypti|chatypt|çet\s*citi\s*piti|çetypti|çetypt)"#
@@ -156,9 +156,9 @@ enum AgentCommandParser {
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
-    // "Claude Code'a" / "ChatGPT'ye" alone: the app a "… geç" switches to.
+    // A standalone app name for switching or opening, including Turkish case endings.
     private static let nameOnlyRegex: NSRegularExpression = {
-        try! NSRegularExpression(pattern: "^\\s*\(names)\(suffix)\\s*$", options: [.caseInsensitive])
+        try! NSRegularExpression(pattern: "^\\s*\(names)(?:['’`]?\\s*(?:y?[ıiuü]))?\(suffix)\\s*$", options: [.caseInsensitive])
     }()
 
     // "Claude Code'a geç ve şunu yolla …", "Cloud koda geç, yeni session başlat": the switch,
@@ -242,8 +242,18 @@ enum AgentCommandParser {
     /// The coding agent a spoken name means ("claude code'a", "cloud koda", "chatgpt'ye").
     static func agentApp(named spoken: String) -> AgentApp? {
         let lowered = spoken.lowercased(with: locale)
-        guard let match = nameOnlyRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else { return nil }
-        return targetApp(for: match)
+            .replacingOccurrences(of: #"\s+(['’`])"#, with: "$1", options: .regularExpression)
+        if let match = nameOnlyRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) {
+            return targetApp(for: match)
+        }
+        // Turkish ASR varies the vowels in Claude: Kılaat, Kılat, Kulaat, Klaot…
+        // Keep this tolerance local to opening/switching, and require Code as a second
+        // word. A bare approximate name must not redirect dictation or send a message.
+        let phoneticClaudeCode = #"^[kc][ıiuü]?l[ao][aouıiü]{0,2}[dt]\s+(?:code|kod|kodu|kudu|kot)(?:['’`]?\s*(?:y?[ıiuü]|y?[ae]))?$"#
+        if lowered.trimmingCharacters(in: .whitespaces).range(of: phoneticClaudeCode, options: .regularExpression) != nil {
+            return .claudeCode
+        }
+        return nil
     }
 
     /// "Claude Code'a geç ve şunu yolla: …", "ChatGPT'ye geç, şunu yaz …", "Claude'a geç ve
@@ -279,6 +289,16 @@ enum AgentCommandParser {
     static func isSessionSummaryRequest(_ text: String) -> Bool {
         let lowered = WakeWordVerifier.strippingLeadingWakeWord(text).lowercased(with: locale)
         return summaryRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
+    }
+
+    /// Whole-utterance matching keeps message content and negative verbs out of this action.
+    static func isExistingMessageSend(_ text: String) -> Bool {
+        let text = WakeWordVerifier.strippingLeadingWakeWord(text).lowercased(with: locale)
+        let object = #"(?:bunu|şunu|onu|mesajı|bu mesajı|şu mesajı|yazdığımı|yazılan mesajı)"#
+        let action = #"(?:gönder|gonder|yolla|ilet|(?:gönderir|gonderir|gönderebilir|gonderebilir|yollar|yollayabilir|iletir|iletebilir)\s+m[ıi]s[ıi]n|(?:gönderir|yollar|iletir)\s+m[ıi]s[ıi]n[ıi]z)"#
+        let extra = #"(?:(?:lütfen|lutfen|hemen|şimdi)\s+)*"#
+        let pattern = "^\\s*\(extra)(?:\(object)\\s+)?\(action)(?:\\s+\(object))?(?:\\s+(?:lütfen|lutfen|hemen|şimdi))*[\\s.!?,]*$"
+        return text.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// Returns nil when the text is neither addressed to an agent nor ends with "gönder".

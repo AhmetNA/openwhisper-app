@@ -35,8 +35,14 @@ private let owLogDateFormatter: DateFormatter = {
 /// in the app's log were mistaken for real use while diagnosing wake-word failures.
 private let owLogPath = NSClassFromString("XCTestCase") != nil ? "/tmp/openwhisper-tests.log" : "/tmp/openwhisper.log"
 
-func owLog(_ msg: String) {
+private let owLogLock = NSLock()
+
+func owLog(_ rawMessage: String) {
+    let msg = SpeechDiagnostics.context + rawMessage
     VoiceEventLog.shared.appendToCurrent(msg)
+    // Decoder, wake verifier and routing can log concurrently. Keep lines and timestamps intact.
+    owLogLock.lock()
+    defer { owLogLock.unlock() }
     let timestamp = owLogDateFormatter.string(from: Date())
     let line = "[\(timestamp)] \(msg)\n"
     let path = owLogPath

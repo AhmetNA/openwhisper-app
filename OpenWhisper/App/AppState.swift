@@ -48,6 +48,12 @@ final class AppState {
 
     // MARK: - Settings (persisted via UserDefaults)
 
+    var listeningMode = ListeningMode(
+        rawValue: UserDefaults.standard.string(forKey: "listeningMode") ?? ""
+    ) ?? .short {
+        didSet { UserDefaults.standard.set(listeningMode.rawValue, forKey: "listeningMode") }
+    }
+
     /// Selected transcription-provider ID. The persisted key remains `whisperModel` for
     /// backwards compatibility with existing installations.
     var transcriptionModel: String {
@@ -418,16 +424,15 @@ final class AppState {
     /// or tap; no rejected/overlap audio is substituted into this path.
     var retainedConfirmationCandidate: TargetSpeakerConfirmationCandidate?
     var retainedConfirmationText: String?
+    var retainedConfirmationSession: RecordingTranscriptionSession?
     var retainedConfirmationPasteContext: PasteContext?
     var retainedConfirmationTargetApp: NSRunningApplication?
     var confirmationOperationID: UInt64 = 0
     var isConfirmationInFlight = false
-    var confirmationPasteOutcome: PasteOutcome?
-    var confirmationPasteCompleted = false
+    var confirmationRoutingCompleted = false
     var confirmationAppendCompleted = false
     var confirmationAppendSucceeded = false
     var confirmationAppendError: String?
-    var confirmationTextBeingDelivered = ""
     var lastConfirmedAppendReceipt: TargetSpeakerProfileAppendReceipt?
     var activeTranscriptionSession: RecordingTranscriptionSession?
     /// Sessions are transcribed in order, while the microphone can start the next session as
@@ -498,18 +503,27 @@ final class AppState {
     @ObservationIgnored var pendingWakeSpeakerVerified = false
     /// Back-to-back reply follow-ups; capped so echo or a TV can't keep Jarvis listening.
     @ObservationIgnored var replyFollowUpChain = 0
+    /// A hello opens a full command recording with a short initial silence window.
+    @ObservationIgnored var pendingGreetingFollowUp = false
+    @ObservationIgnored var pendingConversationFollowUp = false
+    @ObservationIgnored var pendingAddresseeClarification: RecordingTranscriptionSession.AddresseeClarification?
+    @ObservationIgnored var recentWorkContext: WorkResume.Context?
+    nonisolated static let greetingFollowUpWindow: TimeInterval = 6
     /// After Jarvis asks something back, how long the mic waits for the first word.
-    nonisolated static let replyFollowUpWindow: TimeInterval = 2.5
+    nonisolated static let replyFollowUpWindow: TimeInterval = 5
     /// Leading part of that window ignored as Jarvis's own voice tail.
     nonisolated static let replyFollowUpEchoGuard: TimeInterval = 0.4
     nonisolated static let maxReplyFollowUps = 2
     /// The next `.followUp` recording is the message for the Claude session just recapped;
     /// the recap, shown again once the recording cleared the bar.
     @ObservationIgnored var pendingClaudeMessage: String?
+    @ObservationIgnored var pendingUnreadRecap = false
+    @ObservationIgnored var pendingUnreadRecapSessionID: String?
     /// After a Claude session recap, how long the mic waits for the first word of the message.
     nonisolated static let claudeMessageWindow: TimeInterval = 6
     /// The next `.followUp` recording comes after a command (`listenAfterCommand`): the
     /// command's domain, nil inside when "sonraki" means nothing there. Consumed at the start.
+    @ObservationIgnored var pendingYouTubeRequest = YouTubeVoice.PendingRequest()
     @ObservationIgnored var pendingCommandFollowUp: CommandFollowUp.Domain??
     /// Back-to-back command follow-ups ("sonrakine geç", again and again).
     @ObservationIgnored var commandFollowUpChain = 0

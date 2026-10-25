@@ -14,6 +14,13 @@ enum CalendarEventParser {
     }
 
     static let defaultMinutes = 60
+    /// A confident classifier alone must not turn "Toplantı yarın saat üçte" into a write.
+    static func isCreationRequest(_ text: String) -> Bool {
+        let t = text.lowercased(with: Locale(identifier: "tr_TR"))
+        guard !SharedCommandResolver.isNarrationOrNegation(t) else { return false }
+        return t.range(of: #"\b(?:ekle|ekler|ekleyebilir|ekleyelim|oluştur|oluşturur|oluşturabilir|oluşturalım|koy|koyar|koyabilir|koyalım|kaydet|kaydeder|kaydedebilir|kaydedelim|planla|planlar|planlayabilir|planlayalım|not düş|not düşer|not düşebilir)\b"#,
+                       options: .regularExpression) != nil
+    }
     private static let placeholder = "etkinlik"
     private static let locale = Locale(identifier: "tr_TR")
 

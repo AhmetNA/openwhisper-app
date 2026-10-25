@@ -26,6 +26,12 @@ final class VideoScriptCompileTests: XCTestCase {
         XCTAssertEqual(try compile(VideoController.fullscreenScript), "")
     }
 
+    func testPlaybackScriptsCompile() throws {
+        for action: VideoAction in [.play, .pause] {
+            XCTAssertEqual(try compile(VideoController.bestTabScript(VideoController.javaScript(for: action), playbackAction: action)), "")
+        }
+    }
+
     func testBestTabScriptCompiles() throws {
         XCTAssertEqual(try compile(VideoController.bestTabScript("(function(){return 'ok';})()")), "")
     }

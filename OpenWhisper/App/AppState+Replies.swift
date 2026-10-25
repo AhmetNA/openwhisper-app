@@ -106,7 +106,10 @@ extension AppState {
     /// `onStart` runs as the voice starts playing (a command opens its follow-up window there).
     @discardableResult
     func speakReply(_ reply: String?, volume: Float = JarvisVoice.replyVolume, onStart: () -> Void = {}) async -> Bool {
-        guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
+        guard let reply, voiceRepliesEnabled, recordingState != .recording else {
+            SpeechDiagnostics.event("reply.result", ["outcome": "skipped", "reason": reply == nil ? "no_reply_text" : !voiceRepliesEnabled ? "voice_replies_disabled" : "new_recording_active"])
+            return false
+        }
         owLog("[Voice] Reply: '\(reply)'")
         lastSpokenReply = reply
         let heard = await JarvisVoice.shared.speak(reply, volume: volume) { [weak self] in
@@ -114,6 +117,7 @@ extension AppState {
             onStart()
         }
         jarvisActivity = .none
+        SpeechDiagnostics.event("reply.result", ["outcome": heard ? "heard" : "not_heard", "kind": "spoken_reply"])
         return heard
     }
 
@@ -123,7 +127,7 @@ extension AppState {
     /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
     @discardableResult
     /// `recalled` is set for "geçen hafta ne demiştim?"; such a question is not journaled itself.
-    func chatReply(to text: String, recalled: [String] = []) async -> (text: String?, heard: Bool) {
+    func chatReply(to text: String, recalled: [String] = [], continuingReply: String? = nil) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable || JarvisChat.cloudReady else {
             owLog("[Chat] Neither Ollama nor the cloud model available")
             showFlowBarMessage("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum")
@@ -133,9 +137,15 @@ extension AppState {
         jarvisActivity = .thinking
         defer { jarvisActivity = .none }
         let context = await JarvisContext.gather()
-        owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
+        var contextLines = context.promptLines
+        if let continuingReply, !continuingReply.isEmpty {
+            // Greeting/work summaries are spoken outside JarvisChat's message history.
+            // Carry the actual reply into its continuation rather than an unrelated UI field.
+            contextLines.append("Kullanıcı az önceki sözlü yanıtının devamını söylüyor. Son yanıtın: \(continuingReply)")
+        }
+        owLog("[Chat] Context: \(contextLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
-            to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
+            to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: contextLines,
             userFacts: UserMemory.shared.promptLines, recalled: recalled
         )
         var heard = false
@@ -144,7 +154,10 @@ extension AppState {
         } else {
             for await _ in sentences {}
         }
-        guard recordingState != .recording else { return (nil, heard) }
+        guard recordingState != .recording else {
+            SpeechDiagnostics.event("reply.result", ["outcome": "interrupted_by_recording", "heard": String(heard)])
+            return (nil, heard)
+        }
         let answer = JarvisChat.shared.lastReply
         if let answer, !answer.isEmpty {
             lastSpokenReply = answer
@@ -153,11 +166,12 @@ extension AppState {
         if !heard, let answer, !answer.isEmpty {
             showFlowBarMessage(answer, durationMs: min(max(answer.count * 60, 3000), 10000))
         }
+        SpeechDiagnostics.event("reply.result", ["outcome": heard ? "heard" : (answer?.isEmpty == false ? "shown_on_screen" : "empty_model_response"), "kind": "chat"])
         return (answer, heard)
     }
 
-    /// Jarvis's answer asked something back ("anlayamadım, biraz daha açık söyler misin?"):
-    /// open the mic without the wake word. Silence for `replyFollowUpWindow` closes it; speech
+    /// After a Jarvis chat answer, keep its addressee for a bounded continuation window.
+    /// Open the mic without the wake word. Silence for `replyFollowUpWindow` closes it; speech
     /// keeps it open like a "Hey Jarvis" session. Returns true when the window opened, so the
     /// caller keeps paused media paused for the answer.
     func listenForReplyAnswer(_ reply: String?, heard: Bool, after session: RecordingTranscriptionSession) -> Bool {
@@ -166,8 +180,11 @@ extension AppState {
             if !session.isCancelled, let reply, JarvisChat.awaitsAnswer(reply) { openTypedRequestPanel(prompt: reply) }
             return false
         }
-        guard session.isVoiceCommand, !session.isCancelled, let reply, JarvisChat.awaitsAnswer(reply),
-              recordingState != .recording, hotkey?.isIdle == true else { return false }
+        // A chat reached from dictation keys can also continue; ordinary dictation never
+        // calls this method. A newer recording must not inherit a late reply's context.
+        guard !session.isCancelled, let reply, !reply.isEmpty,
+              nextTranscriptionID == session.id, !Task.isCancelled,
+              recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
         let chain = session.trigger == .followUp ? replyFollowUpChain + 1 : 1
         guard chain <= Self.maxReplyFollowUps else {
             owLog("[FollowUp] \(Self.maxReplyFollowUps) follow-ups in a row; not listening again")
@@ -183,11 +200,33 @@ extension AppState {
             self.recordingMedia.end(resuming: true)
         }
         if !heard { showFlowBarMessage(reply, durationMs: 6000) }
-        owLog("[FollowUp] Reply asks back (\(chain)/\(Self.maxReplyFollowUps)); opening the mic")
+        owLog("[FollowUp] Jarvis conversation (\(chain)/\(Self.maxReplyFollowUps)); opening the mic")
         pendingCommandFollowUp = nil
+        pendingConversationFollowUp = true
         commandFollowUpOverReply = false
         startVoiceSession(trigger: .followUp)
-        return true
+        if hotkey?.isIdle == true {
+            pendingConversationFollowUp = false
+            pendingAddresseeClarification = nil
+        }
+        return hotkey?.isIdle == false
+    }
+
+    /// A greeting invites another command without another wake word.
+    func listenAfterGreeting(after session: RecordingTranscriptionSession) -> Bool {
+        guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled,
+              nextTranscriptionID == session.id, !Task.isCancelled,
+              recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
+        pendingCommandFollowUp = nil
+        pendingClaudeMessage = nil
+        pendingUnreadRecap = false
+        commandFollowUpOverReply = false
+        pendingWakeSpeakerVerified = session.wakeSpeakerVerified
+        pendingGreetingFollowUp = true
+        replyFollowUpChain = 0
+        startVoiceSession(trigger: .followUp)
+        if hotkey?.isIdle == true { pendingGreetingFollowUp = false }
+        return hotkey?.isIdle == false
     }
 
     /// A Claude session was just recapped: listen `claudeMessageWindow` without the wake word;

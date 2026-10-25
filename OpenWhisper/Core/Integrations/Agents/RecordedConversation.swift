@@ -32,8 +32,18 @@ struct RecordedConversation: @unchecked Sendable {
         let sessions = agent == .codex ? codexSessions() : claudeSessions()
         // A first message has no database row yet. Bind it to the original input,
         // and invalidate that binding as soon as navigation changes focus/title.
-        if isDraftTitle(title, agent: agent), !sessions.contains(where: { $0.title == title }),
-           let draft = RecordedDraft(app: app, window: window) {
+        if isDraftTitle(title, agent: agent), !sessions.contains(where: { $0.title == title }) {
+            // New-chat navigation can leave focus on the sidebar/button. Establish the
+            // composer before taking the draft lease, never after recording has finished.
+            if agent == .codex, AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) == nil {
+                guard focusDraftComposer(app: app, window: window, title: title) else {
+                    owLog("[Agent] Draft capture failed: new-chat composer could not be focused")
+                    return nil
+                }
+            }
+            guard let draft = RecordedDraft(app: app, window: window),
+                  currentTitle(window: window, agent: agent) == title else { return nil }
+            owLog("[Agent] Draft conversation captured")
             return RecordedConversation(agent: agent, window: window, title: title,
                                         sessionID: "draft:" + UUID().uuidString, draft: draft)
         }
@@ -43,6 +53,45 @@ struct RecordedConversation: @unchecked Sendable {
             return nil
         }
         return RecordedConversation(agent: agent, window: window, title: title, sessionID: id)
+    }
+
+    private static func focusDraftComposer(app: NSRunningApplication, window: AXUIElement, title: String) -> Bool {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        func stillShown() -> Bool {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                  let focused = element(root, kAXFocusedWindowAttribute), CFEqual(focused, window) else { return false }
+            return currentTitle(window: window, agent: .codex) == title
+        }
+        guard stillShown() else { return false }
+        var candidates: [AXUIElement] = []
+        func visit(_ node: AXUIElement, depth: Int) {
+            guard candidates.count < 2 else { return }
+            if string(node, kAXRoleAttribute) == kAXTextAreaRole,
+               AXTextAccess.isSafeEditableElement(node, matchingPID: app.processIdentifier) {
+                candidates.append(node)
+                return
+            }
+            guard depth > 0, string(node, kAXDescriptionAttribute) != "Conversation" else { return }
+            var children: CFTypeRef?
+            AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &children)
+            for child in children as? [AXUIElement] ?? [] { visit(child, depth: depth - 1) }
+        }
+        visit(window, depth: 40)
+        guard canFocusDraftComposer(candidateCount: candidates.count, stillShown: stillShown()),
+              let composer = candidates.first,
+              AXTextAccess.focus(composer, matchingPID: app.processIdentifier) else { return false }
+        // AX focus may settle asynchronously. This runs in the recording capture task.
+        for _ in 0..<5 {
+            guard stillShown() else { return false }
+            if let focused = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier),
+               CFEqual(focused, composer) { return true }
+            Thread.sleep(forTimeInterval: 0.03)
+        }
+        return false
+    }
+
+    static func canFocusDraftComposer(candidateCount: Int, stillShown: Bool) -> Bool {
+        candidateCount == 1 && stillShown
     }
 
     static func isDraftTitle(_ title: String, agent: AgentApp) -> Bool {
@@ -220,7 +269,10 @@ final class RecordedDraft: @unchecked Sendable {
     private var invalidated = false
 
     init?(app: NSRunningApplication, window: AXUIElement) {
-        guard let composer = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) else { return nil }
+        guard let composer = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) else {
+            owLog("[Agent] Draft capture failed: no focused editable composer")
+            return nil
+        }
         self.composer = composer
         let callback: AXObserverCallback = { _, _, _, context in
             guard let context else { return }
@@ -237,8 +289,12 @@ final class RecordedDraft: @unchecked Sendable {
         self.observer = observer
         let context = Unmanaged.passUnretained(self).toOpaque()
         let root = AXUIElementCreateApplication(app.processIdentifier)
-        guard AXObserverAddNotification(observer, root, kAXFocusedUIElementChangedNotification as CFString, context) == .success,
-              AXObserverAddNotification(observer, window, kAXTitleChangedNotification as CFString, context) == .success else { return nil }
+        let focusResult = AXObserverAddNotification(observer, root, kAXFocusedUIElementChangedNotification as CFString, context)
+        let titleResult = AXObserverAddNotification(observer, window, kAXTitleChangedNotification as CFString, context)
+        guard focusResult == .success, titleResult == .success else {
+            owLog("[Agent] Draft capture failed: observer registration (focus=\(focusResult.rawValue), title=\(titleResult.rawValue))")
+            return nil
+        }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
     }
 

@@ -46,6 +46,8 @@ final class RouteCorpusTests: XCTestCase {
             }
         }
         switch VoiceRouter.route(text, facts: facts) {
+        case .workResume: return "work-resume"
+        case .sendExistingMessage: return "send-existing"
         case .agentWithoutForeground: return "agent-send:no-foreground"
         case .agent(let agent):
             if let target = agent.target { return "agent:\(target.rawValue)" }

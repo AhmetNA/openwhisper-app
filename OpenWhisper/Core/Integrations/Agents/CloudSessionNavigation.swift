@@ -24,6 +24,17 @@ enum CloudSessionNavigation {
         return subject.contains(where: t.contains) && verb.contains(where: t.contains)
     }
 
+    /// Whole-request matching prevents a new-chat command from becoming an unread recap.
+    static func isNewChatRequest(_ text: String) -> Bool {
+        let t = text.lowercased(with: Locale(identifier: "tr_TR"))
+            .replacingOccurrences(of: "['’`]", with: "", options: .regularExpression)
+        let app = #"(?:codex|kodeks|chat\s*gpt|claude(?:\s+code)?|cloud(?:\s+code)?|klod(?:\s+kod)?)\p{L}*"#
+        let filler = #"(?:(?:hey|jarvis|harika|tamam|güzel|süper|hadi|haydi|şimdi|lütfen|o\s+zaman)[\s,]+)*"#
+        // "gelin sohbet aç" is the observed ASR rendering of "yeni sohbet aç".
+        let pattern = "^\\s*\(filler)(?:\(app)[\\s,]+)?(?:yeni|new|gelin)(?:\\s+bir)?\\s+(?:sohbet|chat|çet|çat|oturum|session|sesion|konuşma)\\p{L}*\\s+(?:aç|başlat)(?:ar\\s+m[ıi]s[ıi]n|abilir\\s+m[ıi]s[ıi]n)?(?:\\s+\(app))?(?:\\s+lütfen)?[\\s.!?,]*$"
+        return t.range(of: pattern, options: .regularExpression) != nil
+    }
+
     static func decision(_ text: String, candidates: [Candidate], currentID: String?) -> Decision? {
         guard let data = text.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
               let result = try? JSONDecoder().decode(Decision.self, from: data) else { return nil }
@@ -118,13 +129,17 @@ enum CloudSessionNavigation {
         // Explicit dictation must retain its body, even when that body describes navigation.
         // A named project ("Bitirme projesinde yeni çet aç") goes to that project's folder instead.
         if let dictation = AgentCommandParser.parse(text), !dictation.body.isEmpty || dictation.project != nil { return nil }
-        let lower = text.lowercased()
-        let agent: AgentApp
-        if ["claude", "cloud", "klod"].contains(where: lower.contains) { agent = .claudeCode }
-        else if ["codex", "kodeks", "chatgpt"].contains(where: lower.contains) { agent = .codex }
-        else if front?.bundleIdentifier == "com.anthropic.claudefordesktop" { agent = .claudeCode }
-        else if front?.bundleIdentifier == "com.openai.codex" { agent = .codex }
-        else { return "Hangi uygulamadaki sohbeti açayım: Claude mu, Codex mi?" }
+        guard let target = UnreadSessionRecap.target(text, frontBundleID: front?.bundleIdentifier) else {
+            return "Hangi uygulamadaki sohbeti açayım: Claude mu, Codex mi?"
+        }
+        let agent: AgentApp = target == .claudeCode ? .claudeCode : .codex
+        if isNewChatRequest(text) {
+            guard !Task.isCancelled, !RemoteControl.screenIsLocked,
+                  let app = await AgentAppActivator.activate(agent) else { return "Sohbet uygulamasını açamadım." }
+            let opened = agent == .claudeCode ? await ClaudeSessionNavigator.openNewSession(app)
+                : await CodexSessionNavigator.openNewThread(app, folder: nil)
+            return opened ? newChatOpened : "Yeni sohbetin açıldığını doğrulayamadım."
+        }
         guard ChatBackend.selected == .cloud, let (client, model) = CloudLLM.client() else {
             return "Sohbetler arası geçiş için ayarlardan bulut modelini seçmelisin."
         }

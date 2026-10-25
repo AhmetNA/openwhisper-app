@@ -35,6 +35,16 @@ extension AppState {
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
         armVoiceAutoStopForNextRecording = false
         let recordingTrigger = hotkey?.trigger ?? .fnHold
+        let greetingFollowUp = recordingTrigger == .followUp && pendingGreetingFollowUp
+        pendingGreetingFollowUp = false
+        let conversationFollowUp = recordingTrigger == .followUp && pendingConversationFollowUp
+        pendingConversationFollowUp = false
+        let clarification = recordingTrigger == .followUp ? pendingAddresseeClarification : nil
+        pendingAddresseeClarification = nil
+        let unreadRecap = recordingTrigger == .followUp && pendingUnreadRecap
+        let unreadRecapSessionID = unreadRecap ? pendingUnreadRecapSessionID : nil
+        pendingUnreadRecapSessionID = nil
+        pendingUnreadRecap = false
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
         let claudeRecap = recordingTrigger == .followUp ? pendingClaudeMessage : nil
@@ -93,13 +103,23 @@ extension AppState {
             // fix): no speech within the window closes the mic quietly. Both detectors need
             // it — while Smart Turn is ready, it alone decides.
             let window = commandFollowUp != nil ? Self.commandFollowUpWindow
-                : claudeMessage ? Self.claudeMessageWindow : Self.replyFollowUpWindow
+                : claudeMessage ? Self.claudeMessageWindow
+                : greetingFollowUp ? Self.greetingFollowUpWindow : Self.replyFollowUpWindow
             endpointFallbackConfig.noSpeechTimeout = window
             smartTurnConfig.noSpeechTimeout = window
             if commandFollowUp != nil {
                 // A fix is a few words; vocals of the song just started must not keep it open.
                 endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
                 smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
+            }
+            if unreadRecap && !overReply {
+                endpointFallbackConfig = endpointFallbackConfig.afterUnreadRecap
+                smartTurnConfig.noSpeechTimeout = endpointFallbackConfig.noSpeechTimeout
+                smartTurnConfig.maxDuration = endpointFallbackConfig.maxDuration
+            }
+            if listeningMode == .relaxed {
+                listeningMode.apply(to: &endpointFallbackConfig)
+                listeningMode.apply(to: &smartTurnConfig)
             }
             if overReply {
                 // Jarvis is still speaking: nothing counts until `commandFollowUpReplyEnded`
@@ -108,7 +128,11 @@ extension AppState {
                 endpointFallbackConfig.maxDuration = 90
             }
             owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
-                         commandFollowUp != nil ? "a fix to the command" : claudeMessage ? "the Claude message" : "an answer", window))
+                         commandFollowUp != nil ? "a fix to the command" : claudeMessage ? "the Claude message" : "an answer", smartTurnConfig.noSpeechTimeout))
+        }
+        if wakeLikeSession && !isReplyFollowUp {
+            listeningMode.apply(to: &endpointFallbackConfig)
+            listeningMode.apply(to: &smartTurnConfig)
         }
         voiceEndpointDetector = armVoiceAutoStop
             ? VoiceEndpointDetector(
@@ -144,7 +168,7 @@ extension AppState {
         }
         // Mac mic only: the gate scores against the Mac profile every 0.5 s and cuts the session
         // after ~2 s of "someone else", too risky before the other profiles were checked in noise.
-        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && recordingMic == .mac
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && !unreadRecap && recordingMic == .mac
             && (targetSpeakerFiltersSession || watchesPlayback) && targetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
@@ -295,6 +319,15 @@ extension AppState {
             session.playbackSurvivedPause = { media.playbackLeftRunning }
         }
         session.sendsToRecappedClaudeSession = claudeMessage
+        session.isUnreadRecapWindow = unreadRecap
+        session.unreadRecapSessionID = unreadRecapSessionID
+        session.isGreetingFollowUp = greetingFollowUp
+        session.isConversationFollowUp = conversationFollowUp || greetingFollowUp
+        if session.isConversationFollowUp { session.precedingReply = lastSpokenReply }
+        session.addresseeClarification = clarification?.isFresh() == true ? clarification : nil
+        if session.isVoiceCommand, recentWorkContext?.isFresh() == true {
+            session.greetingWorkContext = recentWorkContext
+        }
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp
@@ -315,27 +348,41 @@ extension AppState {
 
         let previousTask = transcriptionQueueTail
         let transcriptionTask = Task { @MainActor [weak self] in
-            let queueStartedAt = session.latency.timestamp()
-            if let previousTask {
-                await previousTask.value
-            }
-            session.latency.record(.queueWait, since: queueStartedAt)
+            await SpeechDiagnostics.$outcome.withValue(session.diagnosticOutcome) {
+            await SpeechDiagnostics.$session.withValue(session.diagnosticID) {
+                SpeechDiagnostics.event("session.begin", ["sessionNumber": String(session.id),
+                    "trigger": session.trigger.rawValue, "target": session.targetApp?.bundleIdentifier ?? "unknown",
+                    "language": self?.language ?? "unknown", "model": self?.transcriptionModel ?? "unknown", "speakerFilter": String(session.targetSpeakerEnabled),
+                    "mediaPlaying": String(session.mediaWasPlaying), "echoCancellation": String(session.echoCancelled)])
+                let queueStartedAt = session.latency.timestamp()
+                if let previousTask {
+                    await previousTask.value
+                }
+                session.latency.record(.queueWait, since: queueStartedAt)
 
-            guard let self else { return }
-            for await segment in session.stream {
-                if Task.isCancelled || session.isCancelled { break }
-                if !session.historySaveFailed {
-                    do {
-                        try await self.recordingHistoryStore.append(segment, sessionID: session.id, startedAt: session.startedAt)
-                    } catch {
-                        session.historySaveFailed = true
-                        owLog("[RecordingHistory] Save failed: \(error)")
-                        self.lastError = "Ses geçmişi kaydedilemedi: \(error.localizedDescription)"
+                guard let self else { return }
+                for await segment in session.stream {
+                    if Task.isCancelled || session.isCancelled { break }
+                    if !session.historySaveFailed {
+                        do {
+                            try await self.recordingHistoryStore.append(segment, sessionID: session.id, startedAt: session.startedAt)
+                        } catch {
+                            session.historySaveFailed = true
+                            owLog("[RecordingHistory] Save failed: \(error)")
+                            self.lastError = "Ses geçmişi kaydedilemedi: \(error.localizedDescription)"
+                        }
+                    }
+                    await SpeechDiagnostics.$batch.withValue(session.nextSegmentNumber + 1) {
+                        await self.transcribeStreamingSegment(segment, session: session)
                     }
                 }
-                await self.transcribeStreamingSegment(segment, session: session)
+                await self.finishTranscription(session)
+                SpeechDiagnostics.event("session.routingFinished", ["cancelled": String(session.isCancelled),
+                    "batches": String(session.nextSegmentNumber), "acceptedTexts": String(session.segmentTexts.count),
+                    "rejectedTexts": String(session.unmatchedSegmentTexts.count),
+                    "note": "Async cleanup/delivery may continue under the same speech ID"])
             }
-            await self.finishTranscription(session)
+        }
         }
         session.task = transcriptionTask
         transcriptionQueueTail = transcriptionTask
@@ -375,7 +422,7 @@ extension AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 
-    func stopRecording() {
+    func stopRecording(reason: String = "explicit_stop") {
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
@@ -396,6 +443,10 @@ extension AppState {
             owLog("[OpenWhisper] No audio engine")
             recordingState = pendingTranscriptionCount > 0 ? .transcribing : .idle
             return
+        }
+        SpeechDiagnostics.$session.withValue(session.diagnosticID) {
+            SpeechDiagnostics.event("capture.stop", ["reason": reason,
+                "wallSeconds": String(Date().timeIntervalSince(session.startedAt))])
         }
         let segments = audioEngine.stopRecording()
         noteRecordingNoiseFloor(audioEngine)
@@ -446,6 +497,14 @@ extension AppState {
         defer { session.latency.record(.transcription, since: transcriptionStartedAt) }
         session.nextSegmentNumber += 1
         let segmentNumber = session.nextSegmentNumber
+        let startSample = max(0, session.diagnosticSampleEnd - segment.overlapSampleCount)
+        session.diagnosticSampleEnd = startSample + segment.samples.count
+        SpeechDiagnostics.event("batch.audio", ["samples": String(segment.samples.count),
+            "overlapSamples": String(segment.overlapSampleCount), "sampleRate": "16000",
+            "startSeconds": String(Double(startSample) / 16000),
+            "endSeconds": String(Double(session.diagnosticSampleEnd) / 16000)])
+        defer { SpeechDiagnostics.event("batch.finished", ["cancelled": String(session.isCancelled),
+            "acceptedTextsTotal": String(session.segmentTexts.count), "rejectedTextsTotal": String(session.unmatchedSegmentTexts.count)]) }
 
         guard let transcriber = activeTranscriptionService else {
             owLog("[OpenWhisper] No transcriber for background batch \(segmentNumber)")
@@ -811,6 +870,7 @@ extension AppState {
             }
             guard !session.isCancelled else { return }
             owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
+            SpeechDiagnostics.text("batch.afterSpeakerFilter", segmentText)
             guard !segmentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             session.allSegmentTexts.append(segmentText)
             let trimmedSegmentText = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -833,6 +893,7 @@ extension AppState {
             }
         } catch {
             guard !session.isCancelled else { return }
+            SpeechDiagnostics.event("output.skipped", ["reason": "transcription_failed", "error": error.localizedDescription])
             owLog("[OpenWhisper] Background batch \(segmentNumber) failed: \(error)")
             noteSpeakers { $0.notes.append("Whisper failed: \(error)") }
             lastError = error.localizedDescription
@@ -851,6 +912,9 @@ extension AppState {
         }
         recordingTimer?.invalidate()
         recordingTimer = nil
+        SpeechDiagnostics.$session.withValue(session.diagnosticID) {
+            SpeechDiagnostics.event("capture.discard", ["reason": reason])
+        }
         session.isCancelled = true
         session.continuation.finish()
         session.task?.cancel()
@@ -875,7 +939,7 @@ extension AppState {
         // Load the model while the user is still speaking; after an idle night Ollama has
         // unloaded it and the cold load alone outlasts a command's wait.
         // With the chat on the cloud, commands are parsed there too and Gemma isn't needed.
-        if ollamaAvailable && !JarvisChat.cloudReady {
+        if ollamaAvailable && ChatBackend.selected == .ollama {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }
@@ -961,7 +1025,7 @@ extension AppState {
         case .stop, .stopMaxDuration:
             // No release tail: the speaker has already been quiet for `silenceToStop`.
             hotkey?.externalCancelHandsFree()
-            stopRecording()
+            stopRecording(reason: "endpoint: \(smartDecision); level: \(decision); \(detector.summary)")
         case .cancelNoSpeech:
             hotkey?.externalCancelHandsFree()
             discardActiveRecording(reason: "voice trigger, no speech")
@@ -1022,7 +1086,7 @@ extension AppState {
             self.smartTurnEndpointDetector = nil
             self.ownVoiceStopGate = nil
             self.hotkey?.externalCancelHandsFree()
-            self.stopRecording()
+            self.stopRecording(reason: "speaker_gate: \(verdict)")
         }
     }
 
@@ -1107,8 +1171,12 @@ extension AppState {
         var config = detector.config
         config.noSpeechTimeout = Self.commandFollowUpWindow
         config.maxDuration = Self.commandFollowUpMaxDuration
+        if activeTranscriptionSession?.isUnreadRecapWindow == true {
+            config = config.afterUnreadRecap
+        }
+        listeningMode.apply(to: &config)
         voiceEndpointDetector = VoiceEndpointDetector(
             startTime: now, config: config, ignoreUntil: now + Self.replyFollowUpEchoGuard)
-        owLog(String(format: "[FollowUp] Reply finished; listening %.1f s more for a fix", Self.commandFollowUpWindow))
+        owLog(String(format: "[FollowUp] Reply finished; listening %.1f s more for a fix", config.noSpeechTimeout))
     }
 }

@@ -3,7 +3,8 @@ import Foundation
 /// What Jarvis says back after a voice command: short and butler-like. Questions ("saat kaç?")
 /// get their answer; every action he takes on the computer gets a one-word ack; failures say
 /// why. Plain dictation gets nothing. Nothing narrates what Spotify is doing, the ack is enough.
-/// Now and then the user is addressed as "patron" / "efendim" / "sör", never twice in a row.
+/// Now and then the user is addressed as "patron" / "efendim" / "sir", never twice in a row.
+/// Short acknowledgements can also end with "emrinizdeyim".
 struct JarvisReply {
     private var rng: any RandomNumberGenerator
     private var addressedLastTime = false
@@ -18,7 +19,8 @@ struct JarvisReply {
 
     static let acks = ["Tamamdır.", "Hallettim.", "Hemen.", "Oldu.", "Anlaşıldı.", "Tamam.",
                        "Derhal.", "Emredersiniz.", "Başüstüne.", "Elbette.", "Hemen hallediyorum."]
-    static let addresses = ["patron", "efendim", "sör"]
+    static let addresses = ["patron", "efendim", "sir"]
+    static let ackEndings = addresses + ["emrinizdeyim"]
     /// Replies that aren't in `acks` but repeat word for word, so they're worth pre-synthesizing.
     static let fixedPhrases = ["Not ettim.", "Gönderdim.", "Yazdım."]
 
@@ -176,7 +178,7 @@ struct JarvisReply {
     /// An ack from `ack()`, with or without the address.
     static func isAck(_ reply: String) -> Bool {
         var body = reply
-        for who in addresses { body = body.replacingOccurrences(of: ", \(who).", with: ".") }
+        for who in ackEndings { body = body.replacingOccurrences(of: ", \(who).", with: ".") }
         return acks.contains(body)
     }
 
@@ -186,7 +188,7 @@ struct JarvisReply {
         var index = Int.random(in: 0..<Self.acks.count, using: &rng)
         if index == lastAckIndex { index = (index + 1 + Int.random(in: 0..<(Self.acks.count - 1), using: &rng)) % Self.acks.count }
         lastAckIndex = index
-        return addressing(Self.acks[index])
+        return addressing(Self.acks[index], endings: Self.ackEndings)
     }
 
     // MARK: - About Jarvis himself
@@ -272,25 +274,65 @@ struct JarvisReply {
         case hello, goodMorning, goodDay, goodEvening, goodNight, howAreYou
     }
 
-    /// The whole utterance is a greeting ("Günaydın", "Selam Jarvis", "Nasılsın?"); anything
-    /// longer ("günaydın, müziği aç") is left to the command routes.
-    static func greeting(in text: String) -> Greeting? {
+    // Observed Whisper spellings. Recovery stays inside whole greeting/check-in matching.
+    private static let greetingNamePattern = #"\b(?:jarvis|jervis|carvis|carviz|caresim|tecaviz|ticavisi)(?:['’]?\s*im)?\b|^\s*(?:bu servis|ne cariz|sıra jarvis)\b"#
+
+    static func isAddressedGreeting(in text: String) -> Bool {
+        let lowered = text.lowercased(with: Locale(identifier: "tr_TR"))
+        return lowered.range(of: greetingNamePattern, options: .regularExpression) != nil
+            && greeting(in: text) != nil
+    }
+
+    /// Match the whole greeting or recent-work check-in, so an appended action stays
+    /// available to the command routes ("günaydın, müziği aç").
+    static func greeting(in text: String, afterWake: Bool = false) -> Greeting? {
         let locale = Locale(identifier: "tr_TR")
-        var words = text.lowercased(with: locale)
-            .components(separatedBy: CharacterSet.letters.inverted)
-            .filter { !$0.isEmpty }
-        let fillers: Set<String> = ["jarvis", "hey", "patron", "efendim", "ya", "canım", "dostum"]
-        words.removeAll { fillers.contains($0) }
-        switch words.joined(separator: " ") {
-        case "günaydın", "günaydınlar": return .goodMorning
-        case "merhaba", "selam", "selamlar", "selamün aleyküm", "selamun aleykum", "selamın aleyküm": return .hello
-        case "iyi günler": return .goodDay
-        case "iyi akşamlar": return .goodEvening
-        case "iyi geceler": return .goodNight
-        case "nasılsın", "naber", "ne haber", "nasıl gidiyor", "naber nasılsın", "selam nasılsın", "merhaba nasılsın", "günaydın nasılsın":
-            return .howAreYou
-        default: return nil
+        var normalized = text.lowercased(with: locale)
+            // Common spoken-name transcriptions, including "Jarvis’im" / "Carvizim".
+            .replacingOccurrences(of: greetingNamePattern,
+                                  with: " ", options: .regularExpression)
+        // Only recover an observed address at the start of an already-called session.
+        // Whole-phrase greeting matching below prevents changing arbitrary dictation.
+        if afterWake {
+            normalized = normalized.replacingOccurrences(
+                of: #"^\s*(?:hey\s+)?(?:acariz|cariz|cans|tecarisi|cervis|sıra cervis)\b[\s,.:;!?]*"#,
+                with: "", options: .regularExpression)
         }
+        var words = normalized.components(separatedBy: CharacterSet.letters.inverted)
+            .filter { !$0.isEmpty }
+        let fillers: Set<String> = ["hey", "patron", "efendim", "ya", "canım", "dostum"]
+        words.removeAll { fillers.contains($0) }
+        let phrase = words.joined(separator: " ")
+        let greetings: [String: Greeting] = [
+            "günaydın": .goodMorning, "günaydınlar": .goodMorning,
+            "merhaba": .hello, "selam": .hello, "selamlar": .hello,
+            "selamün aleyküm": .hello, "selamun aleykum": .hello, "selamın aleyküm": .hello,
+            "iyi günler": .goodDay, "iyi akşamlar": .goodEvening, "iyi geceler": .goodNight
+        ]
+        if let greeting = greetings[phrase] { return greeting }
+
+        let checkIns: Set<String> = [
+            "nasılsın", "naber", "ne haber", "nasıl gidiyor", "ne var ne yok",
+            "naber nasılsın", "ne haber nasılsın", "nasılsın ne haber", "nasılsın naber",
+            "ne haber nasıl gidiyor", "naber nasıl gidiyor", "işler nasıl", "işler nasıl gidiyor",
+            "selamın haber", "selamlı haber",
+            "ne yaptık", "neler yaptık", "ne yaptık son işleri", "son ne yaptık", "son neler yaptık",
+            "en son ne yaptık", "en son neler yaptık", "en son neler yaptık özetle", "son işleri", "son işler",
+            "son işler ne durumda", "son yaptıklarımız", "en son yaptıklarımız",
+            "ne yapıyorduk", "neler yapıyorduk", "en son ne yapıyorduk", "en son neler yapıyorduk",
+            "nerede kalmıştık", "en son nerede kalmıştık", "son çalışmaları özetle",
+            "son işleri özetle", "son yaptıklarımızı hatırlat"
+        ]
+        if checkIns.contains(phrase) { return .howAreYou }
+        // "Son işleri" was transcribed as "sonuçları" in an addressed voice check-in.
+        // A bare request to summarize results can refer to other content.
+        if phrase == "sonuçları özetle",
+           (afterWake || normalized != text.lowercased(with: locale)) { return .howAreYou }
+        // A salutation may precede any check-in; every remaining word must still match.
+        for salutation in greetings.keys where phrase.hasPrefix(salutation + " ") {
+            if checkIns.contains(String(phrase.dropFirst(salutation.count + 1))) { return .howAreYou }
+        }
+        return nil
     }
 
     /// A greeting answered by the clock: "günaydın" at 22:00 gets a gentle correction.
@@ -335,11 +377,11 @@ struct JarvisReply {
     }
 
     /// Appends ", patron" to the sentence at `addressChance`, never on two replies in a row.
-    private mutating func addressing(_ sentence: String) -> String {
+    private mutating func addressing(_ sentence: String, endings: [String] = Self.addresses) -> String {
         let use = !addressedLastTime && Double.random(in: 0..<1, using: &rng) < addressChance
         addressedLastTime = use
         guard use else { return sentence }
-        let who = Self.addresses[Int.random(in: 0..<Self.addresses.count, using: &rng)]
+        let who = endings[Int.random(in: 0..<endings.count, using: &rng)]
         var body = sentence
         while let last = body.last, ".!".contains(last) { body.removeLast() }
         return "\(body), \(who)."

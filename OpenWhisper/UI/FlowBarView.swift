@@ -10,18 +10,6 @@ struct FlowBarView: View {
             } else if let message = appState.flowBarMessage {
                 if appState.targetSpeakerAppendOfferActive {
                     rejectedRecordingOfferContent(message: message)
-
-                    if appState.recordingState == .recording {
-                        Divider()
-                            .frame(height: 14)
-                            .opacity(0.3)
-                        recordingContent
-                    } else if appState.recordingState == .transcribing {
-                        Divider()
-                            .frame(height: 14)
-                            .opacity(0.3)
-                        transcribingContent
-                    }
                 } else {
                     Text(message)
                         .font(.custom("Bradley Hand", size: 16).weight(.medium))
@@ -29,6 +17,20 @@ struct FlowBarView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
                         .frame(minHeight: 26)
+                }
+
+                // A reply can remain visible after listening has already resumed.
+                // Keep the live microphone indicator alongside every message.
+                if appState.recordingState == .recording {
+                    Divider()
+                        .frame(height: 14)
+                        .opacity(0.3)
+                    recordingContent
+                } else if appState.targetSpeakerAppendOfferActive && appState.recordingState == .transcribing {
+                    Divider()
+                        .frame(height: 14)
+                        .opacity(0.3)
+                    transcribingContent
                 }
             } else {
                 switch appState.recordingState {

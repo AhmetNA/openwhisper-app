@@ -39,6 +39,10 @@ extension AppState {
     /// recording's own speaker filter decides, and a weak "Jarvis" must still be confirmed by
     /// Whisper.
     func handleDirectWake(audio: [Float], score: Float) {
+        guard JarvisVoice.shared.acceptsWakeWord() else {
+            owLog("[WakeWord] Ignored detection during Jarvis reply or its echo tail")
+            return
+        }
         owLog("[OpenWhisper] Voice session requested (wake word)")
         pendingWakeSpeakerVerified = false
         let clipID = beginWakeClip(audio: audio, score: score, kind: "direct")
@@ -195,8 +199,9 @@ extension AppState {
     /// Grey-zone wake score: Whisper must hear "Jarvis" and the LLM must judge it a call rather
     /// than a song or talk about Jarvis (`WakeWordVerifier`). One check at a time.
     func verifyWakeCandidate(audio: [Float], peak: Float) {
-        guard !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
+        guard JarvisVoice.shared.acceptsWakeWord(), !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
               let hotkey, hotkey.isIdle else { return }
+        let voiceGeneration = JarvisVoice.shared.wakeGeneration
         wakeCandidateVerifying = true
         // Not yet a session: opened directly, handed to one only if the candidate is accepted.
         let clipID = WakeClipLog.shared.begin(audio: audio, wakeScore: peak, kind: "candidate")
@@ -215,6 +220,11 @@ extension AppState {
                 ollamaAvailable: ollama, model: model
             )
             self.wakeCandidateVerifying = false
+            guard JarvisVoice.shared.acceptsWakeWord(generation: voiceGeneration) else {
+                WakeClipLog.shared.finish(clipID, outcome: "ignored during Jarvis reply")
+                owLog("[WakeWord] Dropped candidate spanning a Jarvis reply")
+                return
+            }
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(verdict) }
             switch verdict {

@@ -88,7 +88,7 @@ final class JarvisReplyTests: XCTestCase {
         var addressed: [Bool] = []
         for _ in 0..<200 {
             let spoken = reply.ack()
-            addressed.append(JarvisReply.addresses.contains { spoken.hasSuffix(", \($0).") })
+            addressed.append(JarvisReply.ackEndings.contains { spoken.hasSuffix(", \($0).") })
         }
         XCTAssertFalse(zip(addressed, addressed.dropFirst()).contains { $0 && $1 })
         let share = Double(addressed.filter { $0 }.count) / Double(addressed.count)

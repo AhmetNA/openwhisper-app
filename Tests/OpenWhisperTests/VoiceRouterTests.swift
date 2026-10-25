@@ -12,6 +12,96 @@ final class VoiceRouterTests: XCTestCase {
                           pendingDeletion: pendingDeletion, commandAmongPlayback: overPlayback)
     }
 
+    func testVoiceFarewellsLockButExplanationsAndDictationDoNot() {
+        for text in ["Hey Jarvis, görüşürüz, kendine iyi bak.", "Jarvis bay bay",
+                     "Teşekkürler. Görüşürüz. Kendine iyi bakın.", "Görüşmek üzere",
+                     "Bilgisayarı kapatalım", "Bilgisayarı kilitleyelim"] {
+            guard case .command(.system(.lockScreen)) = VoiceRouter.route(text, facts: facts(focus: .editable)) else {
+                return XCTFail("Expected lock: \(text)")
+            }
+        }
+        for text in ["Görüşürüz, kendine iyi bak gibi kelimelerin uykuya geçirmesini sağlayalım",
+                     "Yeni bir ayar yapalım. Mesela hey Jarvis bay bay. Bunlar bilgisayarı kilitlemeli.",
+                     "Bilgisayarı kilitleyelim dediğimde ne oluyor?", "Görüşürüz deme",
+                     "Buraya yaz görüşürüz kendine iyi bak"] {
+            if case .command(.system(.lockScreen)) = VoiceRouter.route(text, facts: facts(overPlayback: true)) {
+                XCTFail("Not an immediate lock request: \(text)")
+            }
+        }
+        if case .command(.system(.lockScreen)) = VoiceRouter.route("Görüşürüz kendine iyi bak", facts: facts(voice: false, focus: .editable)) {
+            XCTFail("Keyboard dictation must stay text")
+        }
+    }
+
+    func testOpenChatGPTAndVolumeChainFromSafari() {
+        for focus: TextFocusStatus in [.notEditable, .editable, .unknown] {
+            guard case .commands(let steps) = VoiceRouter.route(
+                "ChatGPT 'yi aç ve sesi kız.",
+                facts: facts(focus: focus, targetBundleID: "com.apple.Safari")) else {
+                return XCTFail("Both commands must route from Safari")
+            }
+            XCTAssertEqual(steps.map(\.command), [.system(.switchToAgent(.chatGPT)), .spotify("sesi kıs")])
+            XCTAssertEqual(SpotifyManager.explicitIntent(in: "sesi kıs"), .adjustVolume(-20))
+        }
+    }
+
+    func testRecentYouTubeFailuresRouteAsVoiceCommands() {
+        for text in ["Yutu vat-salam", "Youtube'a bakan", "Youtube'da ne izleyebilirim?",
+                     "Hey Jarvis, yutup açsana", "You tube'a bakalım"] {
+            guard case .command(.system(.browser(.youtubeHome))) = VoiceRouter.route(
+                text, facts: facts(focus: .editable, targetBundleID: "com.openai.codex")) else {
+                return XCTFail("YouTube request fell through: \(text)")
+            }
+        }
+        for text in ["Yutu vat-salam", "Youtube'a bakan", "YouTube'a bakan insanları gördüm"] {
+            if case .command(.system(.browser(.youtubeHome))) = VoiceRouter.route(text, facts: facts(voice: false, focus: .editable)) {
+                XCTFail("Literal dictation must not be repaired: \(text)")
+            }
+        }
+        guard case .typed = VoiceRouter.route("buraya yaz Yutu vat-salam", facts: facts(focus: .editable)) else {
+            return XCTFail("Explicit dictation wins")
+        }
+        guard case .deletionConfirmation = VoiceRouter.route("Yutu vat-salam", facts: facts(pendingDeletion: true)) else {
+            return XCTFail("Pending confirmation wins")
+        }
+    }
+
+    func testYouTubeListingDoesNotFallThroughToCloudChat() {
+        for text in ["YouTube'da neyler var?", "YouTube'da neler var?",
+                     "Youtube'da güncel videolar neler var?", "YouTube'da ne izleyebilirim?"] {
+            for focus: TextFocusStatus in [.unknown, .editable] {
+                guard case .command(.system(.browser(.youtubeHome))) = VoiceRouter.route(
+                    text, facts: facts(focus: focus, targetBundleID: "com.openai.codex")) else {
+                    return XCTFail("YouTube listing fell through: \(text)")
+                }
+            }
+        }
+        guard case .typed = VoiceRouter.route(
+            "buraya yaz YouTube'da neyler var?", facts: facts(focus: .editable)) else {
+            return XCTFail("Explicit dictation must remain dictation")
+        }
+    }
+
+    func testOpenAgentCommandWinsOverDictation() {
+        for voice in [true, false] {
+            for (text, target) in [("Kodeksi aç", AgentApp.codex), ("ChatGPT'yi aç", .chatGPT),
+                                   ("cloud 'u aç", .claudeCode), ("cloud kodu aç", .claudeCode),
+                                   ("Cloud’u hemen aç", .claudeCode), ("Klaut kudu aç?", .claudeCode),
+                                   ("Klanat kodu açar mısın?", .claudeCode),
+                                   ("Kılaat kodu açar mısın?", .claudeCode),
+                                   ("Şu anda Cloud Code 'u açar mısın?", .claudeCode)] {
+                guard case .command(.system(.switchToAgent(let agent))) = VoiceRouter.route(
+                    text, facts: facts(voice: voice, focus: .editable)) else {
+                    return XCTFail("\(text) must open the app even in a text field")
+                }
+                XCTAssertEqual(agent, target)
+            }
+        }
+        guard case .typed("Kodeksi aç") = VoiceRouter.route("buraya yaz Kodeksi aç", facts: facts(focus: .editable)) else {
+            return XCTFail("explicit dictation must still type the phrase")
+        }
+    }
+
     func testGreetingIsDictationInATextField() {
         guard case .greeting = VoiceRouter.route("Günaydın", facts: facts(focus: .notEditable)) else {
             return XCTFail("a greeting with no text field is answered")
@@ -50,6 +140,32 @@ final class VoiceRouterTests: XCTestCase {
         }
         guard case .command = VoiceRouter.route("Wi-Fi'yi kapat", facts: on) else {
             return XCTFail("commands still run while testing")
+        }
+    }
+
+    func testExistingDraftSendRequests() {
+        for text in ["gönder", "Hey Jarvis, gönder", "gönderebilir misin bunu?",
+                     "gönderir misin bunu", "mesajı ilet", "mesajı yolla",
+                     "bunu gönder", "lütfen bu mesajı gönder", "yollar mısın bunu"] {
+            guard case .sendExistingMessage = VoiceRouter.route(text, facts: facts(focus: .editable)) else {
+                XCTFail("Must submit existing draft: \(text)")
+                continue
+            }
+            guard case .agentWithoutForeground = VoiceRouter.route(text, facts: facts(hasTargetApp: false)) else {
+                return XCTFail("No app must not send")
+            }
+            if case .sendExistingMessage = VoiceRouter.route(text, facts: facts(voice: false)) {
+                XCTFail("Send-only action requires a Jarvis session")
+            }
+        }
+        for text in ["gönderme", "mesajı yollama", "mesajı iletme", "gönderdim",
+                     "bana dosyayı gönderir misin", "buraya yaz mesajı yolla", "merhaba gönder"] {
+            XCTAssertFalse(AgentCommandParser.isExistingMessageSend(text), text)
+        }
+        var pending = facts()
+        pending.pendingWhatsAppSend = true
+        guard case .whatsAppConfirmation = VoiceRouter.route("gönder", facts: pending) else {
+            return XCTFail("Pending WhatsApp draft retains its confirmation flow")
         }
     }
 

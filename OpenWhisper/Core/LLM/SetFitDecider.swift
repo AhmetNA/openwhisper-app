@@ -42,6 +42,11 @@ final class SetFitDecider {
         case reminderConfirm = "reminder_confirm"
         /// add_event / query_events / none. Only add_event is acted on (`calendarEventRequest`).
         case calendarIntent = "calendar_intent"
+        case systemIntent = "system_intent", appAction = "app_action", browserIntent = "browser_intent"
+        case videoIntent = "video_intent", spotifyExtended = "spotify_extended", timerIntent = "timer_intent"
+        case reminderIntent = "reminder_intent", mailIntent = "mail_intent", whatsAppIntent = "whatsapp_intent"
+        case agentIntent = "agent_intent", routingIntent = "routing_intent", followupIntent = "followup_intent"
+        case commandStructure = "command_structure", agentTarget = "agent_target", agentSession = "agent_session"
 
         /// Below this, the answer is ignored and Ollama decides. Measured on the dev set
         /// (27 Sep 2026): spotify at 0.9 was 96% right while answering 75% of the texts.
@@ -53,6 +58,7 @@ final class SetFitDecider {
             case .reminderConfirm: return 0.9
             // No Ollama behind it: below this the sentence is dictated or chatted as before.
             case .calendarIntent: return 0.9
+            default: return 0.98
             }
         }
     }
@@ -79,6 +85,8 @@ final class SetFitDecider {
     }
     /// SetFit is selected and its server answered /health.
     nonisolated static var isActive: Bool { isEnabled && isReady }
+    private nonisolated static let sharedFlag = OSAllocatedUnfairLock(initialState: false)
+    nonisolated static var hasSharedEncoder: Bool { sharedFlag.withLock { $0 } }
 
     private(set) var status = "Kapalı"
     // A menu-bar app's child otherwise runs at background QoS: efficiency cores and
@@ -128,6 +136,7 @@ final class SetFitDecider {
         case .ready(let json):
             let models = Self.describeModels(json)
             Self.readyFlag.withLock { $0 = true }
+            Self.sharedFlag.withLock { $0 = json["backend"] as? String == "shared_encoder" }
             status = "Hazır — \(models)"
             owLog("[Decider] SetFit ready: \(models)")
         case .failed(let error):
@@ -145,6 +154,7 @@ final class SetFitDecider {
     /// Switching back to Ollama frees the server's memory (~0.5 GB).
     func stop() {
         Self.readyFlag.withLock { $0 = false }
+        Self.sharedFlag.withLock { $0 = false }
         server.stop()
         status = "Kapalı"
     }
@@ -158,13 +168,38 @@ final class SetFitDecider {
 
     /// "addressee %94, reminder_confirm %89, …" from the `/health` answer.
     private static func describeModels(_ json: [String: Any]) -> String {
-        (json["models"] as? [String: [String: Any]] ?? [:])
+        if json["backend"] as? String == "shared_encoder" {
+            return "Tek kodlayıcı · \((json["models"] as? [String: Any] ?? [:]).count) karar başlığı"
+        }
+        return (json["models"] as? [String: [String: Any]] ?? [:])
             .sorted { $0.key < $1.key }
             .map { name, meta in
                 let accuracy = (meta["accuracy"] as? Double).map { String(format: "%%%.0f", $0 * 100) } ?? "?"
                 return "\(name) \(accuracy)"
             }
             .joined(separator: ", ")
+    }
+
+    /// Every head shares the same encoded text/context. Never an executable action on its own.
+    nonisolated static func decideAll(text: String, context: [String: String], timeout: TimeInterval = 0.5) async -> [String: Decision]? {
+        guard isActive, hasSharedEncoder else { return nil }
+        var request = URLRequest(url: baseURL.appendingPathComponent("decide_all"), timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["text": text, "context": context])
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = json["decisions"] as? [String: [String: Any]] else { return nil }
+        var decisions: [String: Decision] = [:]
+        for (name, value) in raw {
+            guard let task = Task(rawValue: name), let label = value["label"] as? String,
+                  let confidence = value["confidence"] as? Double else { continue }
+            decisions[name] = Decision(label: label, confidence: confidence,
+                probabilities: value["probabilities"] as? [String: Double] ?? [:], ms: json["ms"] as? Double ?? 0,
+                confident: confidence >= task.minConfidence)
+        }
+        return decisions
     }
 
     // MARK: - Decisions

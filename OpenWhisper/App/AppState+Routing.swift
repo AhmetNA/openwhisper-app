@@ -64,9 +64,12 @@ extension AppState {
         }
         // Only kept recordings get a trace: it lives and is pruned next to their audio.
         let traceID = recordingID.flatMap { id in savedRecordings.contains { $0.id == id } ? id : nil }
+        SpeechDiagnostics.event("session.recording", ["recordingID": recordingID?.uuidString ?? "none",
+            "traceKept": String(traceID != nil), "speech": session.diagnosticID])
         if let traceID {
             VoiceEventLog.shared.begin(traceID, header: [
                 "Recording \(traceID.uuidString)",
+                "Speech diagnostic ID: \(session.diagnosticID)",
                 "Started: \(session.startedAt.formatted(date: .numeric, time: .standard))",
                 "Source: \(session.trigger.rawValue) — \(session.trigger.title)",
                 "Target app: \(session.targetApp?.bundleIdentifier ?? "unknown")",
@@ -101,9 +104,27 @@ extension AppState {
             }
         }
 
+        await SpeechDiagnostics.$session.withValue(session.diagnosticID) {
+        await SpeechDiagnostics.$outcome.withValue(session.diagnosticOutcome) {
         await VoiceTrace.$current.withValue(traceID) {
-            defer { session.latency.finishIfNeeded() }
-            guard !session.isCancelled else { return }
+            defer {
+                var summary = session.diagnosticOutcome.summary
+                summary["cancelled"] = String(session.isCancelled)
+                summary["acceptedTexts"] = String(session.segmentTexts.count)
+                summary["batches"] = String(session.nextSegmentNumber)
+                summary["scope"] = "routing_finished; later async events retain this speech ID"
+                SpeechDiagnostics.event("session.summary", summary)
+            }
+            defer {
+                let outcome = session.diagnosticOutcome.summary
+                session.latency.finishIfNeeded(outcome["assessment"] == "no_action_result_reported"
+                    ? "işlem yapılmadı: \(outcome["reasons"] ?? "neden kaydedilmedi")"
+                    : "yönlendirme bitti; sonuçlar session.summary kaydında")
+            }
+            guard !session.isCancelled else {
+                SpeechDiagnostics.event("output.skipped", ["reason": "session_cancelled"])
+                return
+            }
             // The weak-wake check may fail after a batch was already transcribed: the video called.
             if session.segmentTexts.isEmpty, !session.playbackCommandTexts.isEmpty, !session.hadFailClosedPassthrough,
                !session.wakeUnconfirmed {
@@ -118,6 +139,11 @@ extension AppState {
                      featureEnabled: session.targetSpeakerEnabled,
                      acceptedSampleCount: session.acceptedTargetSpeechSamples
                  )) {
+                SpeechDiagnostics.event("output.skipped", ["reason": "speaker_gate_rejected",
+                    "acceptedSamples": String(session.acceptedTargetSpeechSamples),
+                    "uncertain": String(session.hadSingleSpeakerUncertain),
+                    "diarizationFailed": String(session.hadDiarizationFailure),
+                    "followUp": String(session.followsCommand)])
                 let rawCandidateText: String = {
                     let confirmationText = AudioSegmentation.joinTranscripts(session.confirmationTranscriptTexts).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !confirmationText.isEmpty && !confirmationText.hasPrefix("[BLANK") && !confirmationText.hasPrefix("(BLANK") {
@@ -161,8 +187,10 @@ extension AppState {
                         text: rawCandidateText,
                         pasteContext: session.pasteContext,
                         targetApp: session.targetApp,
-                        mic: session.targetSpeakerMic
+                        mic: session.targetSpeakerMic,
+                        session: session
                     )
+                    SpeechDiagnostics.event("action.result", ["result": textInjector == nil ? "clipboard_unavailable" : "candidate_copied_for_confirmation"])
                     textInjector?.copyToClipboard(rawCandidateText)
                     showTargetSpeakerAppendOffer(message: "")
                     owLog("[OpenWhisper] Near-threshold candidate retained for 'Bu benim sesimdi' confirmation without showing error warning")
@@ -179,6 +207,7 @@ extension AppState {
                 return
             }
             guard !session.appliesSpeechChecks || session.queuedSampleCount >= 6400 else {
+                SpeechDiagnostics.event("output.skipped", ["reason": "[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)"])
                 owLog("[OpenWhisper] Audio too short (\(session.queuedSampleCount) samples < 0.4s)")
                 return
             }
@@ -187,12 +216,14 @@ extension AppState {
             // still recognized; the list is the user's ses-benzerleri.txt.
             // Wake sessions now start at the wake itself, so the tail of "Jarvis" can be heard.
             let joined = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            SpeechDiagnostics.text("transcript.joined", joined)
             // A follow-up opened over Jarvis's reply heard the reply first, and may itself
             // start with "Hey Jarvis," (voice test 2026-10-22).
             let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined)
-                : session.followsCommand
+                : session.followsCommand || session.isConversationFollowUp
                     ? WakeWordVerifier.strippingLeadingWakeWord(CommandFollowUp.removingEcho(of: session.precedingReply, from: joined))
                 : joined
+            SpeechDiagnostics.text("transcript.afterWakeEcho", spoken, previous: joined)
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
             // The app in front comes first: its ses-benzerleri.txt section ("cloud" → Claude in
             // Claude), its name in app matching and in the cleanup model's terms.
@@ -203,19 +234,23 @@ extension AppState {
                                               keeping: GlossaryStore.multiWordTerms())
                 : (spoken, [])
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
+            SpeechDiagnostics.text("transcript.afterSoundAlikes", text, previous: spoken)
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
                   !trimmed.hasPrefix("[BLANK"),
                   !trimmed.hasPrefix("(BLANK") else {
+                SpeechDiagnostics.event("output.skipped", ["reason": "[OpenWhisper] Empty/blank transcription, skipping"])
                 owLog("[OpenWhisper] Empty/blank transcription, skipping")
                 return
             }
             guard !session.appliesSpeechChecks || !AudioSegmentation.isRepetitionHallucination(trimmed) else {
+                SpeechDiagnostics.event("output.skipped", ["reason": "[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)"])
                 owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
                 return
             }
             guard !session.appliesSpeechChecks
                     || !ForeignTranscriptGuard.isForeign(trimmed, misheardCount: misheardWords(in: trimmed).count) else {
+                SpeechDiagnostics.event("output.skipped", ["reason": "[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)"])
                 owLog("[OpenWhisper] Not Turkish or English, nothing pasted or run: \(trimmed)")
                 if session.followsCommand {
                     dismissFlowBarMessage()
@@ -254,6 +289,7 @@ extension AppState {
                 agentDeliveryFailure = nil
                 // Never type into the lock screen.
                 guard !RemoteControl.screenIsLocked else {
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] Screen locked; nothing pasted"])
                     owLog("[Result] Screen locked; nothing pasted")
                     session.latency.finishDecision(route: "Mac kilitli")
                     await self.speakReply(self.jarvisReply.answer(RemoteControl.lockedAnswer))
@@ -263,6 +299,7 @@ extension AppState {
                 let preprocessingStartedAt = session.latency.timestamp()
                 var initialText = rawText
 
+                SpeechDiagnostics.text("dictation.input", rawText)
                 // Tracks which learned pairs actually fired for THIS dictation, so the paste
                 // callback below can hand them to DictationSnapshot.capture for reversal detection.
                 // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
@@ -282,7 +319,9 @@ extension AppState {
                     }
                 }
 
+                SpeechDiagnostics.text("dictation.afterLearnedCorrections", initialText, previous: rawText)
                 let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
+                SpeechDiagnostics.text("dictation.afterPhoneticGlossary", phoneticCorrected, previous: initialText)
                 if !phoneticApplied.isEmpty {
                     initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
                     for (wrong, right) in phoneticApplied {
@@ -304,6 +343,7 @@ extension AppState {
                 initialText = TranscriptSanitizer.removeForbiddenArtifacts(from: initialText)
                 session.latency.record(.preprocessing, since: preprocessingStartedAt)
                 guard !initialText.isEmpty else {
+                    SpeechDiagnostics.event("output.skipped", ["reason": "[OpenWhisper] Forbidden-only transcript blocked before output"])
                     owLog("[OpenWhisper] Forbidden-only transcript blocked before output")
                     return false
                 }
@@ -321,6 +361,7 @@ extension AppState {
                    let target = targetApp, !target.isTerminated,
                    let front = NSWorkspace.shared.frontmostApplication,
                    front.processIdentifier != target.processIdentifier {
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")"])
                     owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
                     if await AgentAppActivator.bringToFront(target) {
                         hopFrom = front
@@ -354,6 +395,21 @@ extension AppState {
                     }
                 }
 
+                // Confirmation must use the cursor captured before speech, never a field
+                // that appeared when the user clicked the confirmation chip.
+                if session.speakerConfirmedByUser, pasteContext.focusStatus != .editable {
+                    if let injector = self.textInjector { injector.copyToClipboard(initialText) }
+                    else {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(initialText, forType: .string)
+                    }
+                    self.showFlowBarMessage("Panoya kopyalandı — kayıt başında imleç yoktu", durationMs: 4500)
+                    SpeechDiagnostics.event("action.result", ["result": "confirmed_dictation_copied_no_original_cursor"])
+                    session.latency.markOutput("panoya kopyalandı")
+                    goBack()
+                    return false
+                }
+
                 if self.autoPasteEnabled, RecordedConversation.requiresBinding(pasteContext.bundleIdentifier) {
                     guard let app = targetApp, let conversation = pasteContext.conversation,
                           await conversation.restore(in: app) else {
@@ -364,7 +420,9 @@ extension AppState {
                             : "Kaydın başladığı sohbete dönülemedi"
                         agentDeliveryFailure = reason
                         self.lastError = "\(reason). Metin panoya kopyalandı."
+                        self.showFlowBarMessage("\(reason). Panoya kopyalandı.", durationMs: 4500)
                         session.latency.markOutput(reason)
+                        SpeechDiagnostics.event("output.skipped", ["reason": "[Agent] Delivery blocked: \(reason)"])
                         owLog("[Agent] Delivery blocked: \(reason)")
                         goBack()
                         return false
@@ -398,10 +456,13 @@ extension AppState {
                     ) { [weak self] outcome in
                         // The paste callback runs outside the task: re-bind the trace so the
                         // cleanup below (and everything it logs) still lands in it.
-                        Task { @MainActor in VoiceTrace.$current.withValue(traceID) {
+                        Task { @MainActor in SpeechDiagnostics.withTrace(session.diagnosticID, recording: traceID, outcome: session.diagnosticOutcome) {
                             guard let self else { return }
                             session.latency.record(.paste, since: pasteStartedAt, detail: "\(outcome)")
                             session.latency.markOutput("\(outcome)")
+                            SpeechDiagnostics.text("delivery.pasteText", initialText)
+                            SpeechDiagnostics.event("delivery.result", ["outcome": String(describing: outcome), "target": targetApp?.bundleIdentifier ?? "unknown"])
+                            SpeechDiagnostics.event("action.result", ["result": "[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'"])
                             owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
                             switch outcome {
                             case .pastedVerified where send, .pastedUnverified where send:
@@ -430,9 +491,11 @@ extension AppState {
                                            app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
                                            NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                                            await ClaudeSessionNavigator.composerStillHolds(app, text: initialText) {
+                                            SpeechDiagnostics.event("action.result", ["result": "[Result] Return pressed but the text is still in Claude's composer"])
                                             owLog("[Result] Return pressed but the text is still in Claude's composer")
                                             sent = false
                                         }
+                                        SpeechDiagnostics.event("action.result", ["result": "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")"])
                                         owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
                                         if let traceID {
                                             VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
@@ -470,6 +533,8 @@ extension AppState {
                                         let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard, focus: focus) ?? initialText
                                         session.latency.record(.cleanup, since: cleanupStartedAt)
                                         let formatted = await self.formatTurkishDictation(cleaned)
+                                        SpeechDiagnostics.text("cleanup.modelOutput", cleaned, previous: initialText)
+                                        SpeechDiagnostics.text("cleanup.formatted", formatted, previous: cleaned)
                                         let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                         guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
@@ -518,6 +583,9 @@ extension AppState {
                                                     targetApp: targetApp,
                                                     appliedPairs: appliedCorrectionPairs
                                                 )
+                                                SpeechDiagnostics.withTrace(session.diagnosticID, recording: traceID, outcome: session.diagnosticOutcome) {
+                                                    SpeechDiagnostics.text("delivery.cleanupReplacement", trimmedCleaned, previous: initialText)
+                                                }
                                                 owLog("[OpenWhisper] Async LLM replacement finished.")
                                                 if let traceID {
                                                     VoiceEventLog.shared.append(traceID, "[Result] Replaced pasted text with cleanup: '\(trimmedCleaned)'")
@@ -543,14 +611,25 @@ extension AppState {
                         session.latency.markOutput("yapıştırma sonucu zaman aşımı")
                         // The send path hops apps and waits, but never this long.
                         try? await Task.sleep(for: .seconds(6))
-                        if !finished { owLog("[Result] Paste result never came back; reporting not delivered") }
+                        if !finished {
+                            SpeechDiagnostics.event("output.skipped", ["reason": "paste_callback_timeout"])
+                            owLog("[Result] Paste result never came back; reporting not delivered")
+                        }
                         finish(false)
                     }
                     }
                 } else {
-                    self.textInjector?.copyToClipboard(initialText)
+                    guard let textInjector = self.textInjector else {
+                        SpeechDiagnostics.event("output.skipped", ["reason": "text_injector_unavailable"])
+                        return false
+                    }
+                    textInjector.copyToClipboard(initialText)
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] Auto-paste off, copied to clipboard: '\(initialText)'"])
                     owLog("[Result] Auto-paste off, copied to clipboard: '\(initialText)'")
                     session.latency.markOutput("panoya kopyalandı")
+                    if session.speakerConfirmedByUser {
+                        self.showFlowBarMessage("Panoya kopyalandı", durationMs: 4500)
+                    }
                     return false
                 }
             }
@@ -576,6 +655,7 @@ extension AppState {
                 var stepTargetApp = session.targetApp
                 var ran: [VoiceCommand] = []
                 for step in steps {
+                    SpeechDiagnostics.event("action.begin", ["command": String(describing: step.command)])
                     switch step.command {
                     case .timer(let timerCommand):
                         let status: String
@@ -587,6 +667,7 @@ extension AppState {
                         } else {
                             status = timers.perform(timerCommand)
                         }
+                        SpeechDiagnostics.event("action.result", ["result": "[Result] Timer: \(status)"])
                         owLog("[Result] Timer: \(status)")
                         ran.append(step.command)
                         statuses.append(status)
@@ -621,6 +702,7 @@ extension AppState {
                         case .switchToApp, .switchToAgent: stepTargetApp = NSWorkspace.shared.frontmostApplication
                         default: break
                         }
+                        SpeechDiagnostics.event("action.result", ["result": "[Result] System command: \(status)"])
                         owLog("[Result] System command: \(status)")
                         ran.append(step.command)
                         statuses.append(status)
@@ -632,6 +714,7 @@ extension AppState {
                         let speaksFailure = SpotifyManager.speaksFailure(afterCommand: request)
                         let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
                         let message = SpotifyManager.shared.takeResultMessage(for: request)
+                        SpeechDiagnostics.event("action.result", ["result": "[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'"])
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
                         if handled, !resumes { resumeMediaAfterCommand = false }
                         if handled { ran.append(step.command) }
@@ -677,7 +760,10 @@ extension AppState {
             @MainActor func chat(_ chatText: String, recalled: [String] = [], detail: String) async {
                 self.lastTranscription = text
                 let actionStartedAt = session.latency.timestamp()
-                let answer = await self.chatReply(to: chatText, recalled: recalled)
+                let answer = await self.chatReply(to: chatText, recalled: recalled,
+                    continuingReply: session.isConversationFollowUp && session.addresseeClarification == nil
+                        ? session.precedingReply : nil)
+                self.pendingYouTubeRequest.remember(user: chatText, reply: answer.text ?? "")
                 session.latency.record(.action, since: actionStartedAt, detail: detail)
                 session.latency.markOutput("Jarvis cevabı")
                 if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
@@ -694,10 +780,12 @@ extension AppState {
             @MainActor func sayWhatsApp(_ prepared: WhatsAppSender.Prepared) async {
                 switch prepared {
                 case .confirm(let prompt):
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] WhatsApp draft read back, awaiting confirmation"])
                     owLog("[Result] WhatsApp draft read back, awaiting confirmation")
                     let heard = await self.speakReply(prompt)
                     askFollowUp(prompt, heard: heard)
                 case .done(let status):
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] WhatsApp: \(status)"])
                     owLog("[Result] WhatsApp: \(status)")
                     await say(status, durationMs: 5000)
                 }
@@ -729,24 +817,86 @@ extension AppState {
                 self.startVoiceSession(trigger: .confirmation)
             }
 
+            let applicationCommands = JarvisAddressee.usesApplicationCommands(
+                acceptsCommands: session.acceptsCommands, focus: session.routingFocus,
+                bundleID: session.targetApp?.bundleIdentifier)
+
             // For a Jarvis session that is not a command, keyboard focus is the primary signal:
             // editable means dictation (unless the model says a question is for Jarvis), known
             // non-editable means chat. The LLM is otherwise only a fallback when Accessibility
-            // could not determine the focus. Fn dictation is always typed.
+            // could not determine the focus. Dictation keys also take commands outside text fields.
             @MainActor func dictateOrChat() async {
+                // One shared encoder supplies all heads. Only a short, explicit, unambiguous
+                // prediction may become a command; target and action guards remain rule-owned.
+                if session.isVoiceCommand || session.takesOnlyCommands || applicationCommands,
+                   trimmed.count <= 200, CommandRewriter.looksLikeCommand(trimmed),
+                   !SharedCommandResolver.isNarrationOrNegation(trimmed.lowercased(with: Locale(identifier: "tr_TR"))) {
+                    let bundle = session.targetApp?.bundleIdentifier?.lowercased() ?? ""
+                    let appCategory = AgentApp.isAgentFront(bundle) ? "agent"
+                        : ["whatsapp", "mail", "messages", "slack", "telegram"].contains(where: bundle.contains) ? "messaging"
+                        : ["safari", "chrome", "firefox", "brave", "edge"].contains(where: bundle.contains) ? "browser"
+                        : bundle.isEmpty ? "unknown" : "other"
+                    let focus = session.routingFocus == .editable ? "editable"
+                        : session.routingFocus == .notEditable ? "not_editable" : "unknown"
+                    let last = session.commandFollowUpDomain == .music ? "music"
+                        : session.commandFollowUpDomain == .video ? "video"
+                        : session.commandFollowUpDomain == .youtubeList ? "youtube_list" : "none"
+                    let modelContext = ["mode": session.isVoiceCommand ? "voice" : "keys", "focus": focus,
+                        "app": appCategory, "pending": "none", "last": last]
+                    if let decisions = await SetFitDecider.decideAll(text: trimmed, context: modelContext),
+                       let command = SharedCommandResolver.resolve(trimmed, decisions: decisions,
+                           context: commandContext(), frontBundleID: session.targetApp?.bundleIdentifier) {
+                        session.latency.finishDecision(route: "ortak karar modeli")
+                        owLog("[Route] shared-model '\(trimmed)' → \(command)")
+                        await runCommands([MultiCommandSplitter.Step(text: trimmed, command: command)], output: "komut")
+                        return
+                    }
+                }
+                // Resolve misheard installed-app requests even when a text field has focus
+                // or this is the command-only follow-up. Fn dictation never reaches the model.
+                if (session.isVoiceCommand || session.takesOnlyCommands || applicationCommands), self.ollamaAvailable,
+                   let command = await CommandRewriter.appCommand(
+                       trimmed, installedApps: commandContext().installedApps, model: self.ollamaModel) {
+                    session.latency.finishDecision(route: "LLM uygulama komutu")
+                    owLog("[Route] llm-app '\(trimmed)' → \(command)")
+                    await runCommands([MultiCommandSplitter.Step(text: trimmed, command: .system(command))],
+                                      output: "uygulama komutu")
+                    return
+                }
+                if session.takesOnlyCommands, applicationCommands, self.ollamaAvailable,
+                   CommandRewriter.looksLikeCommand(trimmed),
+                   let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
+                       frontApp: applicationCommands ? session.targetApp?.localizedName : nil),
+                   let command = CommandRewriter.safeCommand(rewritten, context: commandContext()) {
+                    session.latency.finishDecision(route: "komut sonrası yeniden yorumlama")
+                    await runCommands([MultiCommandSplitter.Step(text: rewritten, command: command)],
+                                      output: "yeniden yorumlanan komut")
+                    return
+                }
                 // After a command only a command is taken (see the follow-up check below).
                 if session.takesOnlyCommands {
+                    SpeechDiagnostics.event("output.skipped", ["reason": "[FollowUp] No command after the command; ignored: '\(trimmed)'"])
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
                     dismissFlowBarMessage()
                     return
                 }
+                if session.isConversationFollowUp, JarvisAddressee.clarificationChoice(trimmed) == .cancel {
+                    session.latency.finishDecision(route: "sohbet devamı iptal")
+                    await say("Tamam.", durationMs: 1500)
+                    return
+                }
+                if session.speakerConfirmedByUser, !session.isConversationFollowUp {
+                    await pasteAsDictation(trimmed, targetApp: session.targetApp,
+                                           pasteContext: session.pasteContext, send: false)
+                    return
+                }
                 let front = session.targetApp?.bundleIdentifier
-                if session.isVoiceCommand {
+                if session.isVoiceCommand || applicationCommands {
                     // The lock screen's password field has focus, but nobody dictates into it.
                     let focusStatus = RemoteControl.screenIsLocked ? .notEditable : session.routingFocus
                     let isQuestion = JarvisAddressee.looksLikeQuestion(trimmed)
-                    let needsScore = focusStatus == .unknown || (focusStatus == .editable && isQuestion)
+                    let needsScore = !session.isConversationFollowUp && (focusStatus == .unknown || (focusStatus == .editable && (session.isVoiceCommand || isQuestion)))
                     let score = needsScore && (self.ollamaAvailable || SetFitDecider.isActive)
                         ? await JarvisAddressee.score(
                             text: trimmed,
@@ -755,15 +905,31 @@ extension AppState {
                             model: self.ollamaModel)
                         : nil
                     let minScore = JarvisAddressee.minScore
-                    let route = JarvisAddressee.defaultRoute(
-                        focusStatus: focusStatus,
-                        score: score,
-                        minScore: minScore,
-                        isQuestion: isQuestion
-                    )
+                    let route = session.isVoiceCommand
+                        ? JarvisAddressee.voiceRoute(focusStatus: focusStatus, score: score, minScore: minScore,
+                                                     continuingConversation: session.isConversationFollowUp)
+                        : JarvisAddressee.defaultRoute(focusStatus: focusStatus, score: score,
+                                                      minScore: minScore, isQuestion: isQuestion)
+                    if route == .clarify {
+                        session.latency.finishDecision(route: "muhatap açıklaması bekleniyor")
+                        let prompt = "Bana mı söyledin, yazmamı mı istedin?"
+                        let heard = await self.speakReply(prompt)
+                        guard !session.isCancelled, self.nextTranscriptionID == session.id,
+                              !Task.isCancelled else { return }
+                        self.showFlowBarMessage(prompt, durationMs: 6000)
+                        self.pendingAddresseeClarification = .init(text: trimmed,
+                            targetApp: session.targetApp, pasteContext: session.pasteContext)
+                        if self.listenForReplyAnswer(prompt, heard: heard, after: session) {
+                            holdMediaForReplyAnswer = true
+                        } else {
+                            self.pendingAddresseeClarification = nil
+                        }
+                        return
+                    }
                     owLog("[Addressee] focus \(focusStatus.rawValue), question \(isQuestion), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
                     if route == .chat,
                        JarvisAddressee.skipsChat(frontBundleID: front, misheardWordCount: self.misheardWords(in: trimmed).count) {
+                        SpeechDiagnostics.event("output.skipped", ["reason": "[Addressee] Lock screen and the text has non-words; not answering: '\(trimmed)'"])
                         owLog("[Addressee] Lock screen and the text has non-words; not answering: '\(trimmed)'")
                         session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
                         return
@@ -771,7 +937,8 @@ extension AppState {
                     // Sounds like a command no rule caught: let the model rephrase it, and run
                     // it only if a rule then recognises the rephrased sentence.
                     if route == .chat, self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
-                       let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel) {
+                       let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
+                       frontApp: applicationCommands ? session.targetApp?.localizedName : nil) {
                         if let command = CommandRewriter.safeCommand(rewritten, context: commandContext()) {
                             session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
                             owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
@@ -789,19 +956,60 @@ extension AppState {
                 await pasteAsDictation(trimmed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
             }
 
+            if let request = session.addresseeClarification, request.isFresh(),
+               ["evet", "tamam"].contains(trimmed.lowercased(with: Locale(identifier: "tr_TR"))
+                    .trimmingCharacters(in: .punctuationCharacters.union(.whitespacesAndNewlines))) {
+                let prompt = "Sana söyledim veya bunu yaz diyebilirsin."
+                let heard = await self.speakReply(prompt)
+                guard !session.isCancelled, self.nextTranscriptionID == session.id, !Task.isCancelled else { return }
+                self.pendingAddresseeClarification = request
+                if self.listenForReplyAnswer(prompt, heard: heard, after: session) {
+                    holdMediaForReplyAnswer = true
+                } else {
+                    self.pendingAddresseeClarification = nil
+                }
+                return
+            }
+
+            if let request = session.addresseeClarification, request.isFresh(),
+               let choice = JarvisAddressee.clarificationChoice(trimmed) {
+                session.latency.finishDecision(route: "muhatap açıklaması")
+                switch choice {
+                case .chat:
+                    await chat(request.text, detail: "açıklanan Jarvis sohbeti")
+                case .type:
+                    await pasteAsDictation(request.text, targetApp: request.targetApp,
+                                           pasteContext: request.pasteContext, send: false)
+                case .cancel:
+                    await say("Tamam, iptal ettim.", durationMs: 2000)
+                }
+                return
+            }
+
             // The rules decide where the transcript goes (`VoiceRouter`, in their order); this
             // runs the decision.
             var facts = VoiceRouter.Facts(
-                isVoiceCommand: session.isVoiceCommand,
+                isVoiceCommand: session.isVoiceCommand || session.speakerConfirmedByUser,
                 acceptsCommands: session.acceptsCommands,
                 focus: session.routingFocus,
                 hasTargetApp: session.targetApp != nil,
                 targetBundleID: session.targetApp?.bundleIdentifier,
+                greetingAfterWake: session.recoversWakeGreeting,
+                hasWorkRecap: !session.takesOnlyCommands && session.greetingWorkContext?.isFresh() == true,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
                 pendingWhatsAppSend: self.whatsAppSender.hasPending,
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 commandContext: commandContext)
+            if session.isVoiceCommand {
+                let confirmed = self.pendingYouTubeRequest.take(for: trimmed)
+                if let confirmed, !facts.pendingDeletion, !facts.pendingWhatsAppSend,
+                   !session.sendsToRecappedClaudeSession {
+                    session.latency.finishDecision(route: "YouTube isteği onaylandı")
+                    await runCommands([MultiCommandSplitter.Step(text: trimmed, command: .system(.browser(confirmed)))], output: "YouTube")
+                    return
+                }
+            }
             // The mic opened after a Claude session recap: all of it is the message for that
             // session, unless the user called it off ("boş ver", "vazgeç").
             if session.sendsToRecappedClaudeSession, ClaudeSessionRecap.isCancel(trimmed) {
@@ -810,7 +1018,20 @@ extension AppState {
                 await say("Tamam, göndermedim.", durationMs: 3000)
                 return
             }
+            var route = session.sendsToRecappedClaudeSession
+                ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
+                : VoiceRouter.route(text, facts: facts)
+            let isWorkContinuation: Bool
+            if case .workResume = route { isWorkContinuation = true } else { isWorkContinuation = false }
             if session.acceptsCommands, !session.sendsToRecappedClaudeSession,
+               !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
+               let selection = UnreadSessionRecap.selection(trimmed) {
+                session.latency.finishDecision(route: "okunmamış sohbet özeti")
+                self.lastTranscription = text
+                await self.readAgentSessions(trimmed, selection: selection, after: session)
+                return
+            }
+            if session.acceptsCommands, !session.sendsToRecappedClaudeSession, !isWorkContinuation,
                !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
                let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
                 session.latency.finishDecision(route: "bulut sohbet geçişi")
@@ -821,10 +1042,6 @@ extension AppState {
                 await say(reply, durationMs: 5000)
                 return
             }
-            var route = session.sendsToRecappedClaudeSession
-                ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
-                : VoiceRouter.route(text, facts: facts)
-
             // While a deletion confirmation is pending, only an explicit approval can execute the
             // already-resolved plan; any other ordinary voice response discards it without
             // touching reminders. No answer at all (a new delete command, an expired plan):
@@ -835,6 +1052,7 @@ extension AppState {
                 ) {
                     session.latency.finishDecision(route: "hatırlatıcı silme onayı")
                     owLog("[Route] reminder deletion confirmation")
+                    SpeechDiagnostics.event("action.result", ["result": "[Result] Reminder deletion confirmation: \(String(describing: confirmation))"])
                     owLog("[Result] Reminder deletion confirmation: \(String(describing: confirmation))")
                     self.lastTranscription = text
                     let reply = self.jarvisReply.reminderDeletion(confirmation)
@@ -860,6 +1078,15 @@ extension AppState {
                 route = VoiceRouter.route(text, facts: facts)
             }
 
+            // Resolve screen-relative requests only in foreground YouTube, preserving explicit commands.
+            switch route {
+            case .spotifyOrConversation, .command(.spotify):
+                if (facts.isVoiceCommand || session.takesOnlyCommands || applicationCommands),
+                   session.targetApp?.bundleIdentifier == BrowserController.bundleID,
+                   let command = await YouTubeVoice.contextual(trimmed) { route = .command(command) }
+            default: break
+            }
+
             // The mic stayed open after a command: only a command is taken from it, never
             // dictation or chat (a TV, the song's lyrics, someone else in the room). A bare
             // "sonrakine geç" is about what the command just did.
@@ -876,7 +1103,18 @@ extension AppState {
                 // Spotify asks the models ("biraz rock bir şey aç"); its dictation and chat
                 // fallback is dropped in `dictateOrChat`.
                 case .command, .commands, .meta, .voiceTest, .spotifyOrConversation: break
+                case .agent(let request) where UnreadSessionRecap.allowsReplySend(
+                    request, isRecap: session.isUnreadRecapWindow && !session.heardOnlyOverPlayback,
+                    expectedID: session.unreadRecapSessionID,
+                    capturedID: session.pasteContext.conversation?.sessionID,
+                    capturedAgent: session.pasteContext.conversation?.agent):
+                    owLog("[FollowUp] Explicit send to the recapped conversation")
+                case .agent(let request) where session.isUnreadRecapWindow && request.send:
+                    session.latency.finishDecision(route: "özet sonrası gönderim hedefi doğrulanamadı")
+                    await say("Özetlediğim sohbeti doğrulayamadım; mesajı göndermedim.", durationMs: 5000)
+                    return
                 default:
+                    SpeechDiagnostics.event("output.skipped", ["reason": "[FollowUp] No command after the command; ignored: '\(trimmed)'"])
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
                     dismissFlowBarMessage()
@@ -884,10 +1122,14 @@ extension AppState {
                 }
             }
 
+            SpeechDiagnostics.event("route.selected", ["route": String(describing: route),
+                "voice": String(facts.isVoiceCommand), "focus": String(describing: facts.focus),
+                "commandsOnly": String(session.takesOnlyCommands)])
             // Locked: nothing can be typed into an app or done on screen. Say so instead of
             // failing silently (or typing into the lock screen); the rest runs as usual.
             if RemoteControl.needsUnlockedScreen(route), RemoteControl.screenIsLocked {
                 session.latency.finishDecision(route: "Mac kilitli")
+                SpeechDiagnostics.event("output.skipped", ["reason": "[Route] Screen locked; not running: '\(trimmed)'"])
                 owLog("[Route] Screen locked; not running: '\(trimmed)'")
                 self.lastTranscription = text
                 await say(self.jarvisReply.answer(RemoteControl.lockedAnswer), durationMs: 5000)
@@ -895,8 +1137,15 @@ extension AppState {
             }
 
             switch route {
+            case .sendExistingMessage:
+                let sent = TextInjector().sendExistingMessage(context: session.pasteContext)
+                let status = sent ? "Gönderme komutu uygulandı" : "Mesaj alanına odaklanıp tekrar gönder diyebilirsin"
+                self.showFlowBarMessage(status, durationMs: 3500)
+                if !sent { await self.speakReply(status) }
+
             case .agentWithoutForeground:
                 let status = "Önde bir uygulama bulamadım; mesaj gönderilmedi."
+                SpeechDiagnostics.event("output.skipped", ["reason": "[Agent] Send skipped: no foreground application"])
                 owLog("[Agent] Send skipped: no foreground application")
                 self.showFlowBarMessage(status, durationMs: 4500)
                 await self.speakReply(status)
@@ -905,6 +1154,7 @@ extension AppState {
                 owLog("[Route] agent (\(agent.target?.displayName ?? "frontmost app"), send: \(agent.send), session: \(agent.session.rawValue))")
                 // "Claude Code'da yeni session aç" / "Bitirme projesine geç" alone just open it.
                 guard !agent.body.isEmpty || agent.session == .new || agent.project != nil else {
+                    SpeechDiagnostics.event("output.skipped", ["reason": "[Agent] Nothing to write after the command words, skipping"])
                     owLog("[Agent] Nothing to write after the command words, skipping")
                     return
                 }
@@ -1001,35 +1251,40 @@ extension AppState {
 
             case .typed(let typed):
                 owLog("[Route] explicit dictation override: '\(typed)'")
-                await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
-                if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
+                let delivered = await pasteAsDictation(typed, targetApp: session.targetApp, pasteContext: session.pasteContext, send: false)
+                if delivered, session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: false)) }
 
             case .chat(let chatText):
                 session.latency.finishDecision(route: "Jarvis sohbet")
                 owLog("[Route] explicit Jarvis chat: '\(chatText)'")
                 await chat(chatText, detail: "Jarvis sohbet")
 
-            // "Günaydın", "Selam Jarvis", "Nasılsın?": answered at once by the clock, no LLM.
+            case .workResume(let action):
+                session.latency.finishDecision(route: "son çalışmaya dönüş")
+                guard let context = session.greetingWorkContext, context.isFresh() else { return }
+                await self.resumeGreetingWork(action, context: context, after: session)
+                holdMediaForReplyAnswer = self.hotkey?.isIdle == false
+
+            // Acknowledge immediately, then recap the last known work and listen again.
             case .greeting(let greeting):
                 session.latency.finishDecision(route: "selamlama")
                 owLog("[Route] greeting (\(greeting))")
                 self.lastTranscription = text
-                let now = Date()
-                let hour = Calendar.current.component(.hour, from: now)
-                var reply = self.jarvisReply.greet(greeting, hour: hour)
-                // The first "günaydın" / "selam" of the morning brings the day's summary.
-                let today = Calendar.current.startOfDay(for: now).timeIntervalSince1970
-                if [.goodMorning, .hello, .howAreYou].contains(greeting), (5..<12).contains(hour),
-                   UserDefaults.standard.double(forKey: "jarvisLastMorningBriefing") != today,
-                   let summary = await JarvisContext.withTimeout(.seconds(3), { await DailyBriefing.build(dayOffset: 0, now: now) }) {
-                    UserDefaults.standard.set(today, forKey: "jarvisLastMorningBriefing")
-                    reply = reply.replacingOccurrences(of: " Nasıl yardımcı olabilirim?", with: "")
-                        .replacingOccurrences(of: " Emrinizdeyim.", with: "")
-                        .replacingOccurrences(of: " Buradayım.", with: "")
-                        + " " + summary.morningLine(now: now)
-                    owLog("[Briefing] Morning: \(summary.headline)")
+                self.recentWorkContext = nil
+                if greeting == .goodNight {
+                    await say(self.jarvisReply.greet(greeting, hour: Calendar.current.component(.hour, from: Date())), durationMs: 4000)
+                } else {
+                    await say(greeting == .howAreYou ? "İyiyim, buradayım." : self.jarvisReply.greet(greeting, hour: Calendar.current.component(.hour, from: Date())), durationMs: 3000)
+                    guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id,
+                          self.recordingState != .recording else { return }
+                    let work = await Task.detached(priority: .utility) { GreetingBriefing.latestWork() }.value
+                    let reply = await GreetingBriefing.summary(work, model: self.ollamaModel, ollamaAvailable: self.ollamaAvailable)
+                    guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id,
+                          self.recordingState != .recording else { return }
+                    self.recentWorkContext = WorkResume.Context(work: work, summary: reply, createdAt: Date())
+                    await say(reply, durationMs: 10000)
+                    holdMediaForReplyAnswer = self.listenAfterGreeting(after: session)
                 }
-                await say(reply, durationMs: 6000)
 
             // "Ne dedin?" repeats the last reply; "Ne yapabilirsin?" lists what Jarvis does.
             case .meta(let meta):
@@ -1161,6 +1416,7 @@ extension AppState {
                 let result = await self.reminderManager?.beginDeletion(reminderDeletion) ?? .failed
                 session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı silme")
                 session.latency.markOutput("hatırlatıcı silme sonucu")
+                SpeechDiagnostics.event("action.result", ["result": "[Result] Reminder deletion request: \(String(describing: result))"])
                 owLog("[Result] Reminder deletion request: \(String(describing: result))")
                 let prompt = self.jarvisReply.reminderDeletion(result)
                 let promptWasHeard = await self.speakReply(prompt)
@@ -1176,6 +1432,7 @@ extension AppState {
                 let reminder = await self.reminderManager?.handleReminder(text: text)
                 session.latency.record(.action, since: actionStartedAt, detail: "hatırlatıcı")
                 session.latency.markOutput(reminder != nil ? "hatırlatıcı kuruldu" : "hatırlatıcı kurulamadı")
+                SpeechDiagnostics.event("action.result", ["result": "[Result] Reminder \(reminder != nil ? "scheduled" : "not scheduled")"])
                 owLog("[Result] Reminder \(reminder != nil ? "scheduled" : "not scheduled")")
                 if reminder == nil, !self.ollamaAvailable {
                     owLog("[OpenWhisper] Reminder not understood and Ollama is not available")
@@ -1229,6 +1486,7 @@ extension AppState {
                 session.latency.record(.action, since: actionStartedAt, detail: "Spotify")
                 let resultMessage = SpotifyManager.shared.takeResultMessage(for: commandText)
                 if handled { session.latency.markOutput("Spotify komutu tamamlandı") }
+                SpeechDiagnostics.event("action.result", ["result": "[Result] Spotify command \(handled ? "handled" : "not applied")"])
                 owLog("[Result] Spotify command \(handled ? "handled" : "not applied")")
                 guard handled else {
                     // Clearly a command, so typing it out would only hide that nothing plays.
@@ -1261,6 +1519,8 @@ extension AppState {
                     }
                 }
             }
+        }
+        }
         }
     }
 }

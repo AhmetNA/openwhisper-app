@@ -4,8 +4,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "==> Cleaning old build artifacts and processes..."
-pkill -9 -x OpenWhisper 2>/dev/null || true
+echo "==> Cleaning old build artifacts..."
 rm -rf build
 
 echo "==> Building OpenWhisper via SwiftPM..."
@@ -64,22 +63,45 @@ if [ -d ".build/debug/PackageFrameworks" ]; then
     cp -R .build/debug/PackageFrameworks/* "$APP_DIR/Frameworks/" 2>/dev/null || true
 fi
 
-# Sign with stable Apple identity (or fallback to ad-hoc)
+# Updates must retain the installed app's designated requirement (macOS code identity).
+# Never silently replace a certificate-signed installation with an ad-hoc build.
+INSTALLED_APP="/Applications/Jarvis.app"
+PREVIOUS_REQUIREMENT=""
+if [ -d "$INSTALLED_APP" ]; then
+    PREVIOUS_REQUIREMENT="$(codesign -d -r- "$INSTALLED_APP" 2>&1 | sed -n 's/^designated => //p')"
+    if [ -z "$PREVIOUS_REQUIREMENT" ]; then
+        echo "ERROR: Cannot read the installed Jarvis code identity; leaving it untouched."
+        exit 1
+    fi
+fi
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 if [ -z "$SIGNING_IDENTITY" ]; then
-    SIGNING_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-        | awk -F'"' '/Apple Development:|Developer ID Application:/{print $2; exit}')"
+    # Prefer the existing signer even when several development certificates are available.
+    INSTALLED_SIGNER="$(codesign -dv "$INSTALLED_APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+    IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null)"
+    SIGNING_IDENTITY="$(printf '%s\n' "$IDENTITIES" | awk -F'"' -v signer="$INSTALLED_SIGNER" '$2 == signer && signer != "" {print $2; exit}')"
+    if [ -z "$SIGNING_IDENTITY" ]; then
+        SIGNING_IDENTITY="$(printf '%s\n' "$IDENTITIES" | awk -F'"' '/Apple Development:|Developer ID Application:/{print $2; exit}')"
+    fi
 fi
-
-if [ -z "$SIGNING_IDENTITY" ]; then
-    echo "WARNING: No Apple signing identity found. Falling back to ad-hoc signing (-)."
-    SIGNING_IDENTITY="-"
+if [ -z "$SIGNING_IDENTITY" ] || [ "$SIGNING_IDENTITY" = "-" ]; then
+    echo "ERROR: A stable signing certificate is required. Unlock the login keychain or set SIGNING_IDENTITY."
+    echo "The installed app has not been changed; ad-hoc signing would not preserve its permission identity."
+    exit 1
 fi
 
 echo "==> Signing with '$SIGNING_IDENTITY'..."
 codesign --force --deep --options runtime \
     --entitlements OpenWhisper/OpenWhisper.entitlements \
     --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+codesign --verify --deep --strict "$APP_BUNDLE"
+if [ -n "$PREVIOUS_REQUIREMENT" ]; then
+    if ! codesign --verify --strict -R="$PREVIOUS_REQUIREMENT" "$APP_BUNDLE"; then
+        echo "ERROR: New build does not match the installed Jarvis identity; installation stopped."
+        exit 1
+    fi
+    echo "==> Verified compatibility with the installed permission identity"
+fi
 
 # Local voice for spoken replies (OmniVoice): keep the installed server script and reference
 # voice in sync with the repo. The Python venv itself comes from servers/tts_server/setup.sh (once).
@@ -145,6 +167,12 @@ fi
 DECIDER_DEST="$HOME/Library/Application Support/OpenWhisper/decider"
 if [ -x "$DECIDER_DEST/.venv/bin/python" ]; then
     cp ../decision_model/server.py "$DECIDER_DEST/"
+    if [ -d "$DECIDER_DEST/shared/current" ]; then
+        mkdir -p "$DECIDER_DEST/all_decisions_cloud"
+        for runtime_file in runtime.py common.py specs.py; do
+            cp "../decision_model/all_decisions_cloud/$runtime_file" "$DECIDER_DEST/all_decisions_cloud/"
+        done
+    fi
     echo "==> Updated SetFit decision server in $DECIDER_DEST"
 else
     echo "NOTE: SetFit decision models not installed; 'Karar motoru: SetFit' needs decision_model/install.sh"
@@ -153,9 +181,20 @@ fi
 install_app() {
     if [ "${SKIP_INSTALL:-}" != "1" ]; then
         echo "==> Installing to /Applications..."
-        # The app was called OpenWhisper before; drop that copy so only one is installed.
-        rm -rf /Applications/OpenWhisper.app /Applications/Jarvis.app
-        cp -R "$APP_BUNDLE" /Applications/
+        # Keep the registered bundle directory in place; deleting it can be observed as
+        # an uninstall. Stop the running binary only after the replacement is validated.
+        pkill -x OpenWhisper 2>/dev/null || true
+        for attempt in {1..30}; do
+            pgrep -x OpenWhisper >/dev/null || break
+            sleep 0.1
+        done
+        if pgrep -x OpenWhisper >/dev/null; then
+            echo "ERROR: Jarvis did not quit; installation stopped."
+            exit 1
+        fi
+        mkdir -p "$INSTALLED_APP"
+        /usr/bin/rsync -a --delete "$APP_BUNDLE/" "$INSTALLED_APP/"
+        codesign --verify --deep --strict "$INSTALLED_APP"
         echo "  Installed at /Applications/Jarvis.app"
 
         echo "==> Launching newly installed Jarvis..."

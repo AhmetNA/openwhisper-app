@@ -87,6 +87,16 @@ extension AppState {
                 let now = CACurrentMediaTime()
                 let delayMs = (now - GlobalHotkey.lastFnPressUptime) * 1000
                 owLog("[Perf] [HotkeyCallback] onPress callback triggered (+\(String(format: "%.2f", delayMs))ms from Fn press)")
+                // Wake detection already arrives on main. Start capture before the chime and
+                // voice/model warm-up in startVoiceSession, without another main-queue turn.
+                if Thread.isMainThread {
+                    let started = MainActor.assumeIsolated {
+                        guard let self, self.hotkey?.trigger == .wakeWord else { return false }
+                        self.startRecording()
+                        return true
+                    }
+                    if started { return }
+                }
                 DispatchQueue.main.async {
                     let mainNow = CACurrentMediaTime()
                     let mainDelayMs = (mainNow - GlobalHotkey.lastFnPressUptime) * 1000
@@ -291,13 +301,13 @@ extension AppState {
     }
 
     /// Cleanup counts as available only when the selected model is actually installed, not
-    /// merely when Ollama is running. When it is, the model is loaded in the background so the
-    /// first dictation doesn't wait on the cold load.
+    /// merely when Ollama is running. Only local mode preloads it; cloud mode leaves local
+    /// helpers and fallback to load on demand.
     func refreshOllamaStatus() async {
         ollamaAvailable = await LLMCleanup.checkAvailability()
         let model = ollamaModel
         cleanupAvailable = ollamaAvailable ? await LLMCleanup.isModelInstalled(model) : false
-        if cleanupAvailable && llmCleanupEnabled {
+        if cleanupAvailable && llmCleanupEnabled && ChatBackend.selected == .ollama {
             Task.detached(priority: .utility) { await LLMCleanup.warmUp(model: model) }
         }
     }

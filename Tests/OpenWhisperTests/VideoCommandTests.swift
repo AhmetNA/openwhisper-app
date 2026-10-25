@@ -1,4 +1,5 @@
 import XCTest
+import JavaScriptCore
 @testable import OpenWhisper
 
 final class VideoCommandTests: XCTestCase {
@@ -94,6 +95,29 @@ final class VideoCommandTests: XCTestCase {
             XCTAssertFalse(VideoController.javaScript(for: action).contains("\""), "\(action)")
         }
         XCTAssertTrue(VideoController.javaScript(for: .speed(1.5)).contains("v.playbackRate=1.5"))
+    }
+
+    func testPlayTargetsVisibleVideoInsteadOfHiddenPlayingPreview() throws {
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript("""
+            var hidden={paused:false,ended:false,duration:100,currentTime:8,clientWidth:0,clientHeight:0,dataset:{},getClientRects:()=>[],play:function(){this.called=true}};
+            var visible={paused:true,ended:false,duration:100,currentTime:20,clientWidth:1000,clientHeight:600,dataset:{},getClientRects:()=>[{}],play:function(){this.called=true;this.paused=false}};
+            var document={querySelectorAll:function(q){return q==='video'?[hidden,visible]:[]}};
+            var window={};
+            """)
+        XCTAssertEqual(context.evaluateScript(VideoController.javaScript(for: .play))?.toString(), "pending")
+        XCTAssertTrue(context.evaluateScript("visible.called===true && !hidden.called")!.toBool())
+        XCTAssertTrue(context.evaluateScript("window.__jarvisPlaybackTarget===visible")!.toBool())
+    }
+
+    func testLiveSafariPauseAndPlayWhenRequested() async throws {
+        guard ProcessInfo.processInfo.environment["JARVIS_VIDEO_LIVE"] == "1" else {
+            throw XCTSkip("Requires an open Safari video and explicit live-test opt-in")
+        }
+        let paused = await VideoController.perform(.pause)
+        let played = await VideoController.perform(.play)
+        XCTAssertEqual(paused, "Video durduruldu")
+        XCTAssertEqual(played, "Video oynatılıyor")
     }
 
     func testFormatting() {

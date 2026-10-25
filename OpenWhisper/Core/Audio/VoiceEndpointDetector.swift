@@ -20,6 +20,18 @@ struct VoiceEndpointDetector {
         /// Nobody spoke at all → the trigger was probably false; discard instead of transcribing
         /// silence (Whisper hallucinates on it).
         var noSpeechTimeout: TimeInterval = 6
+        /// Allow an onset already in progress at the response deadline to finish qualifying.
+        var allowsOnsetAtDeadline = false
+
+        var afterUnreadRecap: Config {
+            var result = self
+            result.noSpeechTimeout = 2
+            result.maxDuration = 120
+            result.silenceToStop = 1.5
+            result.allowsOnsetAtDeadline = true
+            return result
+        }
+
         var maxDuration: TimeInterval = 120
         /// A frame counts toward speech onset when it is this far above the floor… Quiet
         /// dictation on this mic sits only ~9 dB over the room, so this must stay well under that.
@@ -202,7 +214,11 @@ struct VoiceEndpointDetector {
     private func timeoutDecision(at time: TimeInterval) -> Decision {
         let elapsed = time - startTime
         if elapsed >= config.maxDuration { return speechDetected ? .stopMaxDuration : .cancelNoSpeech }
-        if !speechDetected && elapsed >= config.noSpeechTimeout { return .cancelNoSpeech }
+        if !speechDetected && elapsed >= config.noSpeechTimeout {
+            let finishingOnset = config.allowsOnsetAtDeadline && onsetAccumulated > 0
+                && elapsed < config.noSpeechTimeout + config.onsetDuration
+            if !finishingOnset { return .cancelNoSpeech }
+        }
         return .continueRecording
     }
 

@@ -106,6 +106,16 @@ After the repository is public, the following command clones or updates `~/.open
 curl -fsSL https://raw.githubusercontent.com/AhmetNA/openwhisper-app/main/install.sh | bash
 ```
 
+## Local updates and permission identity
+
+`bash build.sh` requires an Apple signing certificate available in the login keychain
+(or an explicit `SIGNING_IDENTITY`). It verifies the new build against the installed
+Jarvis designated requirement before updating `/Applications/Jarvis.app` in place.
+It does not delete the installed bundle or fall back to ad-hoc signing. If signing or
+identity validation fails, the installed application stays untouched. Unlock the
+keychain and use the original signer before retrying. This preserves code identity;
+macOS still controls permission grants and may require approval after an OS policy change.
+
 ## First launch permissions
 
 Jarvis is a menu-bar app, so it may not open a normal window at launch. Look for its microphone icon in the menu bar and open **Settings** from there.
@@ -204,6 +214,11 @@ Examples (Turkish is the primary language):
 - Calendar: "Yarın saat 3'te Mehmet'le toplantı ekle"
 - Safari and video: "YouTube'da lofi ara", "Bu sayfayı özetle", "10 saniye ileri sar"
 - Claude Code: "Claude Code'da yeni session'a şunu gönder: …"
+- Local Claude Code / Codex conversations: "ChatGPT'de son cevabı oku", "Claude'da son oturumu özetle",
+  "Bu sohbeti özetle", "Okunmamış yanıtları oku". Reading the latest or current reply does not require
+  an unread marker. Only locally available completed replies are used.
+- New conversation: "Codex'te yeni sohbet aç", "Harika, o zaman yeni sohbet aç Claude'da".
+  This explicit command works without a cloud model. The reply microphone opens after speech finishes.
 
 ### Command routing: SetFit decider
 
@@ -360,3 +375,16 @@ Cloud-assisted chat navigation is always enabled and has no separate settings to
 Examples: “Bir önceki chat’e geç”, “Yeni chat aç”, or “Claude Code’da ses modeliyle ilgili konuştuğumuz sohbeti aç”. An explicitly named app takes priority; otherwise the app focused when recording started is used. “Previous” means the most recently active conversation other than the current one. Searches cover the latest 40 non-archived conversations, using bounded user/assistant excerpts rather than full transcripts. Claude sessions without completed turns are excluded.
 
 The model selects only new-chat or existing-chat navigation. Unknown IDs and duplicate titles are rejected; an existing-chat success reply requires the destination ID to be verified locally. Model failures do not trigger a guessed navigation. Existing explicit new-session dictation commands remain available.
+
+### YouTube voice browsing (Safari)
+
+With Safari in front and YouTube open, say “Hey Jarvis” followed by:
+
+- “YouTube'a bakalım”, “YouTube açsana”, “YouTube'da ne izleyebilirim”: open recommendations.
+- “Ana sayfaya dön”, “Önerilere dön”: reuse the current YouTube tab.
+- “Ekranda ne var”, “Başlıkları oku”: read the visible video cards; “ikinciyi aç” selects from that list.
+- A visible title, with or without “aç”: open the matching video. Two or more title words also work when unique. Ambiguous matches ask for a longer title.
+- “Sonrakini aç” / “Sonraki video”: use the player's next button.
+- “Öncekini aç” / “Önceki videoya dön”: use the playlist's previous button, or browser history when unavailable (which can return to a listing).
+
+Visible-title selection rereads the viewport, so scroll first to the desired cards. It requires Safari's “Allow JavaScript from Apple Events” permission. Live microphone/browser verification is still required after installing this change.

@@ -12,6 +12,23 @@ final class MultiCommandTests: XCTestCase {
         CommandRegistry.plan(text, context: context)?.map(\.text)
     }
 
+    func testOpenChatGPTAndLowerVolumeFromRecordedTranscript() {
+        for text in ["ChatGPT 'yi aç ve sesi kız.", "ChatGPT'yi aç ve sesi kıs."] {
+            let steps = plan(text)
+            XCTAssertEqual(steps?.count, 2, text)
+            XCTAssertEqual(steps?.first, .system(.switchToAgent(.chatGPT)), text)
+            XCTAssertEqual(steps?.last, .spotify("sesi kıs"), text)
+        }
+    }
+
+    func testVolumeImperativesDoNotPromoteDescriptionsOrQuotedCommands() {
+        for text in ["sesi kısık", "sesi kısma", "sesi kıs dedim", "sesi aç ve bana bir fıkra anlat"] {
+            XCTAssertNil(SpotifyManager.explicitIntent(in: text), text)
+        }
+        XCTAssertEqual(SpotifyManager.explicitIntent(in: "sesi biraz kıs"), .adjustVolume(-10))
+        XCTAssertEqual(SpotifyManager.explicitIntent(in: "sesi aç"), .adjustVolume(20))
+    }
+
     func testTwoSystemCommandsJoinedByVe() {
         XCTAssertEqual(plan("Bluetooth'u kapat ve Wi-Fi'yi aç"), [.system(.bluetooth(on: false)), .system(.wifi(on: true))])
     }

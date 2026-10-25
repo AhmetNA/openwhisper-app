@@ -10,6 +10,16 @@ final class SpotifyDecisionTests: XCTestCase {
         SpotifyManager.decide(rules: SpotifyManager.explicitIntent(in: text), parse: parse, text: text)
     }
 
+    func testGenericMusicStartUsesSpotifyLikedSongs() {
+        for text in ["Şu anda müzik başlatabilir misin?", "Şarkı başlatır mısın", "Spotify başlatabilir misin",
+                     "Müzik aç", "Şimdi bir şarkı çal"] {
+            XCTAssertEqual(SpotifyManager.explicitIntent(in: text), .playLikedSongs, text)
+        }
+        for text in ["Müzik başlatma", "Müzik başlatabilir misin yaz", "Müzik hakkında konuşalım"] {
+            XCTAssertNil(SpotifyManager.explicitIntent(in: text), text)
+        }
+    }
+
     func testWithoutOllamaTheRulesDecide() {
         XCTAssertEqual(decide("Müziği durdur", nil), .pause)
         XCTAssertNil(decide("Hadise Düm Tek Tek çal", nil))

@@ -263,6 +263,7 @@ extension AppState {
         targetSpeakerAppendOfferTask?.cancel()
         targetSpeakerAppendOfferTask = nil
         targetSpeakerAppendOfferActive = false
+        retainedConfirmationSession = nil
         retainedConfirmationCandidate = nil
         retainedConfirmationText = nil
         retainedConfirmationPasteContext = nil
@@ -277,7 +278,8 @@ extension AppState {
         text: String,
         pasteContext: PasteContext?,
         targetApp: NSRunningApplication?,
-        mic: TargetSpeakerMic = .mac
+        mic: TargetSpeakerMic = .mac,
+        session: RecordingTranscriptionSession? = nil
     ) {
         guard !candidate.samples.isEmpty, !text.isEmpty else {
             owLog("[TargetSpeaker] retainConfirmation rejected empty candidate or text")
@@ -285,6 +287,7 @@ extension AppState {
             return
         }
         owLog("[TargetSpeaker] retainConfirmation stored candidate with \(candidate.samples.count) samples and text length \(text.count)")
+        retainedConfirmationSession = session
         retainedConfirmationCandidate = candidate
         retainedConfirmationText = text
         retainedConfirmationPasteContext = pasteContext
@@ -292,31 +295,30 @@ extension AppState {
         retainedConfirmationMic = mic
     }
 
-    /// Fired by the flow bar's "Bu benim sesimdi" tap. It delivers the retained transcript once
-    /// and then explicitly appends the retained coherent candidate to the active profile.
+    /// The explicit identity confirmation routes the retained transcript once and independently
+    /// teaches the coherent sample to the active profile, keeping the original destination.
     func confirmRetainedRecordingWasTargetSpeaker() {
         owLog("[TargetSpeaker] confirmRetainedRecordingWasTargetSpeaker called: offerActive=\(targetSpeakerAppendOfferActive), inFlight=\(isConfirmationInFlight), hasCandidate=\(retainedConfirmationCandidate != nil), textLength=\(retainedConfirmationText?.count ?? 0)")
         guard !isConfirmationInFlight,
               targetSpeakerAppendOfferActive,
               let candidate = retainedConfirmationCandidate,
-              let textToPaste = retainedConfirmationText,
-              let profile = targetSpeakerProfile(for: retainedConfirmationMic) else {
+              let textToPaste = retainedConfirmationText else {
             owLog("[TargetSpeaker] confirmRetainedRecordingWasTargetSpeaker guard failed")
             return
         }
 
+        let profile = targetSpeakerProfile(for: retainedConfirmationMic)
+        let sourceSession = retainedConfirmationSession
         let pasteContext = retainedConfirmationPasteContext
         let targetApp = retainedConfirmationTargetApp
         let mic = retainedConfirmationMic
         confirmationOperationID &+= 1
         let operationID = confirmationOperationID
         isConfirmationInFlight = true
-        confirmationPasteOutcome = nil
-        confirmationPasteCompleted = false
+        confirmationRoutingCompleted = false
         confirmationAppendCompleted = false
         confirmationAppendSucceeded = false
         confirmationAppendError = nil
-        confirmationTextBeingDelivered = textToPaste
 
         // Deactivate the chip before starting either asynchronous operation. Keep the retained
         // triple alive until both delivery and append complete; the in-flight flag prevents a
@@ -327,25 +329,40 @@ extension AppState {
         flowBarMessage = "Onay işleniyor…"
         syncFlowBarVisibility()
 
-        // Start delivery before the profile append, using the exact retained PasteContext.
-        owLog("[TargetSpeaker] Starting paste delivery and profile append for confirmed candidate...")
-        textInjector?.pasteTextResult(
-            textToPaste,
-            targetApp: targetApp,
-            context: pasteContext
-        ) { [weak self] outcome in
-            Task { @MainActor in
-                guard let self, self.confirmationOperationID == operationID else { return }
-                owLog("[TargetSpeaker] Confirmed candidate paste outcome: \(outcome)")
-                self.confirmationPasteOutcome = outcome
-                self.confirmationPasteCompleted = true
-                self.finishConfirmationOperationIfReady(operationID: operationID)
-            }
+        // Re-enter the ordinary router with the original trigger and destination. The tap
+        // changes identity trust, not the meaning of the transcript or its original cursor.
+        nextTranscriptionID &+= 1
+        let replay = RecordingTranscriptionSession(
+            id: nextTranscriptionID, targetApp: targetApp,
+            targetSpeakerEnabled: false, targetSpeakerProfile: nil, pasteContext: pasteContext)
+        replay.trigger = sourceSession?.trigger ?? .fnHold
+        replay.isVoiceCommand = sourceSession?.isVoiceCommand ?? false
+        replay.speakerConfirmedByUser = true
+        replay.isConversationFollowUp = sourceSession?.isConversationFollowUp ?? false
+        replay.isGreetingFollowUp = sourceSession?.isGreetingFollowUp ?? false
+        replay.addresseeClarification = sourceSession?.addresseeClarification
+        replay.segmentTexts = [textToPaste]
+        replay.allSegmentTexts = [textToPaste]
+        replay.queuedSampleCount = max(6400, sourceSession?.queuedSampleCount ?? candidate.samples.count)
+        replay.continuation.finish()
+        pendingTranscriptionCount += 1
+        owLog("[TargetSpeaker] Routing user-confirmed transcript (trigger=\(replay.trigger), voice=\(replay.isVoiceCommand))")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.finishTranscription(replay)
+            guard self.confirmationOperationID == operationID else { return }
+            self.confirmationRoutingCompleted = true
+            self.finishConfirmationOperationIfReady(operationID: operationID)
         }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                guard let profile else {
+                    self.confirmationAppendCompleted = true
+                    self.finishConfirmationOperationIfReady(operationID: operationID)
+                    return
+                }
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     candidate,
                     to: profile,
@@ -363,7 +380,6 @@ extension AppState {
                 guard self.confirmationOperationID == operationID else { return }
                 self.confirmationAppendSucceeded = false
                 self.confirmationAppendError = error.localizedDescription
-                self.lastError = error.localizedDescription
                 owLog("[TargetSpeaker] Confirmed candidate append failed: \(error)")
             }
             guard self.confirmationOperationID == operationID else { return }
@@ -375,41 +391,19 @@ extension AppState {
     func finishConfirmationOperationIfReady(operationID: UInt64) {
         guard isConfirmationInFlight,
               confirmationOperationID == operationID,
-              confirmationPasteCompleted,
+              confirmationRoutingCompleted,
               confirmationAppendCompleted else { return }
 
-        let pasteOutcome = confirmationPasteOutcome ?? .clipboardOnly(.targetApplicationUnavailable)
-        let appendSucceeded = confirmationAppendSucceeded
-        let appendError = confirmationAppendError
+        // Routing owns its own command/delivery result. Profile training must never hide it.
         isConfirmationInFlight = false
-        if !appendSucceeded, let appendError {
-            lastError = appendError
+        if !confirmationAppendSucceeded, let error = confirmationAppendError {
+            owLog("[TargetSpeaker] Profile append failed after confirmation; transcript was routed: \(error)")
         }
 
-        owLog("[TargetSpeaker] finishConfirmationOperationIfReady: pasteOutcome=\(pasteOutcome), appendSucceeded=\(appendSucceeded), appendError=\(appendError ?? "none")")
-
-        switch (pasteOutcome, appendSucceeded) {
-        case (.pastedVerified, true), (.pastedUnverified, true):
-            swapPair = nil
-            swapPasteContext = nil
-            hotkey?.setSwapAvailable(false)
-            lastInjectedIsCleaned = true
-            lastInjectedText = confirmationTextBeingDelivered
-            showFlowBarMessage("Ses profiline eklendi")
-        case (.clipboardOnly(_), true):
-            showFlowBarMessage("Metin panoda, ses profiline eklendi")
-        case (.pastedVerified, false), (.pastedUnverified, false):
-            dismissFlowBarMessage()
-        case (.clipboardOnly(let reason), false):
-            showFlowBarMessage(clipboardOnlyMessage(for: reason))
-        }
-
-        confirmationPasteOutcome = nil
-        confirmationPasteCompleted = false
+        confirmationRoutingCompleted = false
         confirmationAppendCompleted = false
         confirmationAppendSucceeded = false
         confirmationAppendError = nil
-        confirmationTextBeingDelivered = ""
         dismissTargetSpeakerAppendOffer()
     }
 

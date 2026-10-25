@@ -11,7 +11,8 @@ extension AppState {
     /// only reads its date, time and title. Nil when SetFit is off, unsure, or says otherwise:
     /// the sentence is then dictated or chatted as before.
     func calendarEventRequest(_ text: String, now: Date = Date()) async -> CalendarRequest? {
-        guard let decision = await SetFitDecider.decide(.calendarIntent, text: text),
+        guard CalendarEventParser.isCreationRequest(text),
+              let decision = await SetFitDecider.decide(.calendarIntent, text: text),
               decision.confident, decision.label == "add_event" else { return nil }
         return Self.calendarRequest(text, now: now)
     }

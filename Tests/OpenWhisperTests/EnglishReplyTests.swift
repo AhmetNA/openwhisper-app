@@ -61,6 +61,7 @@ final class EnglishReplyTests: XCTestCase {
             }
         }
         XCTAssertEqual(ReplyTranslator.fixedEnglish("Tamamdır, patron."), "Right away, sir.")
+        XCTAssertEqual(ReplyTranslator.fixedEnglish("Hallettim, emrinizdeyim."), "Done, at your service.")
         XCTAssertNil(ReplyTranslator.fixedEnglish("Saat 14:05, patron."))
     }
 

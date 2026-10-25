@@ -62,11 +62,12 @@ extension WhisperTranscriptionService {
 final class WhisperTranscriber: @unchecked Sendable {
     private var whisperKit: WhisperKit?
 
-    private struct DecodePass: Sendable {
+    struct DecodePass: Sendable {
         let text: String
         let words: [WhisperTimedWord]
         let averageLogprob: Float?
         let needsRecovery: Bool
+        let isForeign: Bool
 
         var confidenceScore: Float {
             averageLogprob ?? -Float.greatestFiniteMagnitude
@@ -157,32 +158,19 @@ final class WhisperTranscriber: @unchecked Sendable {
         // parallel (`async let`) and dropping it when the primary was confident cancelled a live
         // decode mid-flight; with both on one model that crashed the app (EXC_BAD_ACCESS in an
         // autorelease pool pop, 25–26 Sep 2026, three times). Recovery now runs only when needed.
-        var selectedPass = try await runDecode(
-            whisperKit: whisperKit,
-            audioData: audioData,
-            language: language,
-            promptTokens: promptTokens,
-            isRecovery: false
-        )
-
-        if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence decode; running recovery pass")
-            let recoveryPass = try await runDecode(
+        let selectedPass = try await Self.decodeWithRecovery(audioData: audioData, language: language) {
+            samples, decodeLanguage, isRecovery in
+            try await self.runDecode(
                 whisperKit: whisperKit,
-                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-                language: language,
-                promptTokens: nil,
-                isRecovery: true
+                audioData: samples,
+                language: decodeLanguage,
+                promptTokens: promptTokens,
+                isRecovery: isRecovery
             )
-            if Self.isBetter(recoveryPass, than: selectedPass) {
-                owLog("[Whisper] Recovery decode selected text=\(recoveryPass.text)")
-                selectedPass = recoveryPass
-            } else {
-                owLog("[Whisper] Primary decode retained text=\(selectedPass.text)")
-            }
         }
 
         var text = selectedPass.text
+        defer { SpeechDiagnostics.text("asr.sanitized", text, previous: selectedPass.text) }
 
         // This subtitle-credit hallucination is a hard-denied output artifact. Strip it
         // regardless of position, capitalization, punctuation, or decoder/provider path.
@@ -203,9 +191,11 @@ final class WhisperTranscriber: @unchecked Sendable {
             "Bye.", "Bye bye.", "Bye-bye.", "The end.",
             "Thanks.", "Thank you so much.", "See you next time.",
         ]
-        if hallucinations.contains(text) { return "" }
-        if text.hasPrefix("[") || text.hasPrefix("(") { return "" }  // [BLANK_AUDIO], (silence), etc.
-        if text.count < 3 { return "" }  // Too short to be meaningful
+        if hallucinations.contains(text) || text.hasPrefix("[") || text.hasPrefix("(") || text.count < 3 {
+            SpeechDiagnostics.event("asr.discard", ["reason": "hallucination_blank_or_too_short", "text": text])
+            text = ""
+            return ""
+        }
 
         return text
     }
@@ -253,29 +243,20 @@ final class WhisperTranscriber: @unchecked Sendable {
 
         owLog("[Whisper] Timed transcription samples=\(audioData.count) overlap=\(overlapSampleCount)")
         // Sequential for the same reason as `transcribe(audioData:language:)`.
-        var selectedPass = try await runDecode(
-            whisperKit: whisperKit,
-            audioData: audioData,
-            language: language,
-            promptTokens: nil,
-            wordTimestamps: true
-        )
-
-        if selectedPass.needsRecovery {
-            owLog("[Whisper] Low-confidence timed decode; running recovery pass")
-            let recoveryPass = try await runDecode(
+        let selectedPass = try await Self.decodeWithRecovery(audioData: audioData, language: language) {
+            samples, decodeLanguage, isRecovery in
+            try await self.runDecode(
                 whisperKit: whisperKit,
-                audioData: AudioSignalProcessor.recoverySamples(from: audioData),
-                language: language,
+                audioData: samples,
+                language: decodeLanguage,
                 promptTokens: nil,
-                wordTimestamps: true
+                wordTimestamps: true,
+                isRecovery: isRecovery
             )
-            if Self.isBetter(recoveryPass, than: selectedPass) {
-                selectedPass = recoveryPass
-            }
         }
 
         var text = selectedPass.text
+        defer { SpeechDiagnostics.text("asr.sanitized", text, previous: selectedPass.text) }
         var words = selectedPass.words
         let filteredText = TranscriptSanitizer.removeForbiddenArtifacts(from: text)
         if filteredText != text {
@@ -299,6 +280,8 @@ final class WhisperTranscriber: @unchecked Sendable {
             "Thanks.", "Thank you so much.", "See you next time.",
         ]
         if hallucinations.contains(text) || text.hasPrefix("[") || text.hasPrefix("(") || text.count < 3 {
+            SpeechDiagnostics.event("asr.discard", ["reason": "hallucination_blank_or_too_short", "text": text])
+            text = ""
             return .textOnly("")
         }
 
@@ -397,11 +380,26 @@ final class WhisperTranscriber: @unchecked Sendable {
             chunkingStrategy: ChunkingStrategy.none
         )
 
+        let decodeStarted = Date()
+        SpeechDiagnostics.event("decode.begin", ["pass": isRecovery ? "recovery" : "primary",
+            "language": language, "audioSeconds": String(Double(audioData.count) / 16000),
+            "wordTimestamps": String(wordTimestamps), "sampleLength": "224", "promptTokens": String(promptTokens?.count ?? 0)])
         let results = try await whisperKit.transcribe(
             audioArray: audioData,
             decodeOptions: options
         )
 
+        SpeechDiagnostics.event("decode.finished", ["pass": isRecovery ? "recovery" : "primary",
+            "elapsedMs": String(Int(Date().timeIntervalSince(decodeStarted) * 1000)), "results": String(results.count)])
+        for (resultIndex, result) in results.enumerated() {
+            for (index, segment) in result.segments.enumerated() {
+                SpeechDiagnostics.event("decode.segment", ["pass": isRecovery ? "recovery" : "primary",
+                    "result": String(resultIndex), "segment": String(index), "language": result.language,
+                    "startSeconds": String(segment.start), "endSeconds": String(segment.end),
+                    "tokens": String(segment.tokens.count), "avgLogprob": String(segment.avgLogprob),
+                    "noSpeech": String(segment.noSpeechProb), "compression": String(segment.compressionRatio), "text": segment.text])
+            }
+        }
         // Log detected language and confidence metrics from results. The metrics let the caller
         // retry only weak passes instead of blindly decoding every recording twice.
         for (i, result) in results.enumerated() {
@@ -437,12 +435,65 @@ final class WhisperTranscriber: @unchecked Sendable {
         let weakLogprob = averageLogprob.map { $0 < -0.72 } ?? true
         let suspiciousCompression = segments.contains { $0.compressionRatio > 2.2 }
 
+        // Forced language metadata alone cannot catch a decoder that emits another language.
+        // Inspect the actual words too, using the same conservative guard as final delivery.
+        let isForeign = await MainActor.run {
+            ForeignTranscriptGuard.requiresTurkishRetry(
+                text,
+                detectedLanguages: results.map(\.language),
+                misheardCount: MisheardWordDetector.find(in: text).count
+            )
+        }
+
         return DecodePass(
             text: text,
             words: words,
             averageLogprob: averageLogprob,
-            needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression
+            needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression,
+            isForeign: isForeign
         )
+    }
+
+    /// At most two sequential passes. Language validity takes priority over decoder confidence.
+    /// Shared by plain and timed transcription so recovered words retain their own timestamps.
+    static func decodeWithRecovery(
+        audioData: [Float],
+        language: String,
+        decode: ([Float], String, Bool) async throws -> DecodePass
+    ) async throws -> DecodePass {
+        try await SpeechDiagnostics.$decodeID.withValue(UUID().uuidString) {
+            do {
+                try Task.checkCancellation()
+                var selected = try await decode(audioData, language, false)
+                SpeechDiagnostics.text("decode.primary", selected.text)
+                var chosenPass = "primary"
+                if selected.isForeign || selected.needsRecovery {
+                    try Task.checkCancellation()
+                    let recoveryLanguage = selected.isForeign ? "tr" : language
+                    owLog("[Whisper] Recovery requested: foreign=\(selected.isForeign), language=\(recoveryLanguage)")
+                    let recovery = try await decode(
+                        AudioSignalProcessor.recoverySamples(from: audioData), recoveryLanguage, true
+                    )
+                    SpeechDiagnostics.text("decode.recovery", recovery.text)
+                    let takeRecovery = !recovery.isForeign && (selected.isForeign || isBetter(recovery, than: selected))
+                    SpeechDiagnostics.event("decode.comparison", ["primaryScore": String(selected.confidenceScore),
+                        "recoveryScore": String(recovery.confidenceScore), "primaryForeign": String(selected.isForeign),
+                        "recoveryForeign": String(recovery.isForeign), "primaryNeedsRecovery": String(selected.needsRecovery),
+                        "chosen": takeRecovery ? "recovery" : "primary", "policy": "language_validity_then_confidence_or_length"])
+                    if takeRecovery {
+                        chosenPass = "recovery"
+                        selected = recovery
+                    }
+                }
+                try Task.checkCancellation()
+                SpeechDiagnostics.event("decode.selected", ["pass": chosenPass, "foreign": String(selected.isForeign), "text": selected.text])
+                guard !selected.isForeign else { throw TranscriberError.unsupportedTranscriptLanguage }
+                return selected
+            } catch {
+                SpeechDiagnostics.event("decode.error", ["error": String(describing: error), "cancelled": String(Task.isCancelled)])
+                throw error
+            }
+        }
     }
 
     private static func isBetter(_ candidate: DecodePass, than current: DecodePass) -> Bool {
@@ -498,10 +549,12 @@ extension WhisperTranscriber: WhisperTranscriptionService {}
 
 enum TranscriberError: LocalizedError {
     case modelNotLoaded
+    case unsupportedTranscriptLanguage
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded: "Whisper model is not loaded."
+        case .unsupportedTranscriptLanguage: "Ses Türkçe veya İngilizce olarak çözülemedi. Tekrar söyler misin?"
         }
     }
 }

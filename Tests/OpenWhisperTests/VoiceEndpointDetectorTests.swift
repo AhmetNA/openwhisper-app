@@ -25,6 +25,40 @@ final class VoiceEndpointDetectorTests: XCTestCase {
         return nil
     }
 
+    func testGreetingClosesAfterSixSecondsOfSilence() {
+        var config = VoiceEndpointDetector.Config()
+        config.noSpeechTimeout = AppState.greetingFollowUpWindow
+        let result = run([(-72, 8)], config: config)
+        XCTAssertEqual(result?.0, .cancelNoSpeech)
+        XCTAssertEqual(result?.1 ?? 0, 6, accuracy: 0.06)
+    }
+
+    func testGreetingSpeechKeepsMicOpenPastInitialWindow() {
+        var config = VoiceEndpointDetector.Config()
+        config.noSpeechTimeout = AppState.greetingFollowUpWindow
+        let result = run([(-72, 5), (-55, 9), (-72, 4)], config: config)
+        XCTAssertEqual(result?.0, .stop)
+        XCTAssertGreaterThan(result?.1 ?? 0, 14)
+    }
+
+    func testUnreadRecapClosesAtTwoSecondsWithoutSpeech() {
+        let result = run([(-72, 4)], config: VoiceEndpointDetector.Config().afterUnreadRecap)
+        XCTAssertEqual(result?.0, .cancelNoSpeech)
+        XCTAssertEqual(result?.1 ?? 0, 2, accuracy: 0.06)
+    }
+
+    func testUnreadRecapSpeechContinuesBeyondTwoAndSixSeconds() {
+        let result = run([(-72, 0.5), (-55, 9), (-72, 3)], config: VoiceEndpointDetector.Config().afterUnreadRecap)
+        XCTAssertEqual(result?.0, .stop)
+        XCTAssertEqual(result?.1 ?? 0, 11, accuracy: 0.2)
+    }
+
+    func testUnreadRecapSpeechStartingJustBeforeDeadlineContinues() {
+        let result = run([(-72, 1.9), (-55, 4), (-72, 3)], config: VoiceEndpointDetector.Config().afterUnreadRecap)
+        XCTAssertEqual(result?.0, .stop)
+        XCTAssertEqual(result?.1 ?? 0, 7.4, accuracy: 0.2)
+    }
+
     func testQuietMicrophoneSpeechIsDetectedAndEndsAfterPause() {
         // This mic's real range: floor around -72, normal speech around -63 dBFS.
         let result = run([(-72, 0.5), (-63, 3), (-72, 3)])

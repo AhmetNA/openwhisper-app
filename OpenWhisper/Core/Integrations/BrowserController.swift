@@ -71,7 +71,11 @@ enum BrowserController {
             return status == YouTubeList.notFound ? searching : status
         case .youtubeHome:
             guard let url = URL(string: "https://www.youtube.com/") else { return "Adres açılamadı" }
-            return await YouTubeList.read(url, path: "/") { await open($0, done: "YouTube açıldı") }
+            return await YouTubeList.read(url, path: "/") { await openYouTubeHome($0) }
+        case .youtubeVisible:
+            return await YouTubeVoice.readVisible()
+        case .youtubeTitle(let title):
+            return await YouTubeVoice.openTitle(title)
         case .youtubeMore:
             return YouTubeList.more()
         case .youtubePick(let number):
@@ -79,6 +83,19 @@ enum BrowserController {
         case .summarize:
             return await summarizeCurrentPage()
         }
+    }
+
+    private static func openYouTubeHome(_ url: URL) async -> String {
+        let script = YouTubeList.replaceTabScript(url.absoluteString)
+        let result = await Task.detached { OSAScriptRunner.run(["-e", script], timeout: 4) }.value
+        if result != "ok" {
+            let status = await open(url, done: "YouTube açıldı")
+            guard !failures.contains(status) else { return status }
+        }
+        // Reusing a tab must bring its window forward before the recommendations are read.
+        guard let safari = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+              await AgentAppActivator.bringToFront(safari), isFront else { return notFront }
+        return "YouTube açıldı"
     }
 
     /// `.urlQueryAllowed` leaves "&", "+" and "=" in, which would split the query.

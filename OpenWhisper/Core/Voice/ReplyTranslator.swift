@@ -30,13 +30,13 @@ enum ReplyTranslator {
     static func fixedEnglish(_ text: String) -> String? {
         var body = text.trimmingCharacters(in: .whitespaces)
         while let last = body.last, ".!".contains(last) { body.removeLast() }
-        var address = false
-        for who in JarvisReply.addresses where body.hasSuffix(", \(who)") {
+        var ending = ""
+        for who in JarvisReply.ackEndings where body.hasSuffix(", \(who)") {
             body.removeLast(who.count + 2)
-            address = true
+            ending = who == "emrinizdeyim" ? ", at your service" : ", sir"
         }
         guard let english = fixedBodies[body] else { return nil }
-        return address ? "\(english), sir." : "\(english)."
+        return "\(english)\(ending)."
     }
 
     // MARK: - Language of a sentence

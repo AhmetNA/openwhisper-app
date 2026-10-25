@@ -57,6 +57,28 @@ struct MenuBarContentView: View {
             .padding(10)
             .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
 
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Dinleme süresi")
+                    .font(.subheadline.weight(.semibold))
+                Picker("Dinleme süresi", selection: Binding(
+                    get: { appState.listeningMode },
+                    set: { appState.listeningMode = $0 }
+                )) {
+                    ForEach(ListeningMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .disabled(appState.recordingState == .recording)
+                Text(appState.listeningMode.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(10)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
             HStack(spacing: 10) {
                 Image(systemName: appState.systemAudioEnabled ? "speaker.wave.2.fill" : "speaker.wave.2")
                     .font(.system(size: 15, weight: .semibold))

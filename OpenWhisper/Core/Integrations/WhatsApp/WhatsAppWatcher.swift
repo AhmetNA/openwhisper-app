@@ -33,6 +33,7 @@ final class WhatsAppWatcher {
         timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.poll() }
         }
+        Task { @MainActor [weak self] in await self?.poll() }
         owLog("[WhatsApp] watching for new messages")
     }
 
@@ -44,15 +45,16 @@ final class WhatsAppWatcher {
     }
 
     private func poll() async {
-        guard !polling else { return }
+        guard isRunning, !polling else { return }
         polling = true
         defer { polling = false }
         do {
-            guard let seen = lastSeen else {
-                // Only what arrives from now on is news.
+            if lastSeen == nil {
+                // Capture the baseline BEFORE launch so newly synced messages are not lost.
                 lastSeen = try await Task.detached(priority: .utility) { try WhatsAppStore.newestMessageID() }.value
-                return
             }
+            try await WhatsAppBackground.ensureRunning()
+            guard isRunning, let seen = lastSeen else { return }
             let new = try await Task.detached(priority: .utility) { try WhatsAppStore.arrivals(after: seen) }.value
             if let last = new.last { lastSeen = last.messageID }
             let now = Date()

@@ -14,6 +14,7 @@ final class PermissionsManager {
         case granted
         case denied
         case notDetermined
+        case needsSettings, restricted, writeOnly, unavailable
         /// Automation target that isn't running, so macOS can't answer yet.
         case unknown(String)
 
@@ -22,6 +23,10 @@ final class PermissionsManager {
             case .granted: "Verildi"
             case .denied: "Reddedildi"
             case .notDetermined: "Henüz sorulmadı"
+            case .needsSettings: "İzin gerekli"
+            case .unavailable: "Uygulama yüklü değil"
+            case .restricted: "Sistem tarafından kısıtlı"
+            case .writeOnly: "Yalnızca yazma"
             case .unknown(let why): why
             }
         }
@@ -107,17 +112,23 @@ final class PermissionsManager {
     }
 
     private(set) var statuses: [Kind: Status] = [:]
+    private(set) var requesting: Kind?
+    private(set) var messages: [Kind: String] = [:]
+    private var refreshVersion = 0
     private let eventStore = EKEventStore()
     private var bluetoothProbe: BluetoothProbe?
 
     func refresh() async {
+        refreshVersion += 1
+        let version = refreshVersion
         statuses[.microphone] = Self.status(AVCaptureDevice.authorizationStatus(for: .audio))
-        statuses[.accessibility] = AXIsProcessTrusted() ? .granted : .notDetermined
-        statuses[.screenRecording] = CGPreflightScreenCaptureAccess() ? .granted : .notDetermined
+        statuses[.accessibility] = AXIsProcessTrusted() ? .granted : .needsSettings
+        statuses[.screenRecording] = CGPreflightScreenCaptureAccess() ? .granted : .needsSettings
         statuses[.calendars] = Self.status(EKEventStore.authorizationStatus(for: .event))
         statuses[.reminders] = Self.status(EKEventStore.authorizationStatus(for: .reminder))
         statuses[.bluetooth] = Self.status(CBManager.authorization)
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard version == refreshVersion else { return }
         statuses[.notifications] = switch settings.authorizationStatus {
         case .authorized, .provisional: .granted
         case .denied: .denied
@@ -125,82 +136,139 @@ final class PermissionsManager {
         }
         for kind in Kind.allCases {
             guard let bundleID = kind.automationBundleID else { continue }
-            statuses[kind] = await Self.automationStatus(bundleID, ask: false)
+            let status: Status
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) == nil {
+                status = .unavailable
+            } else {
+                status = await Self.automationStatus(bundleID, ask: false)
+            }
+            guard version == refreshVersion else { return }
+            statuses[kind] = status
+        }
+        for kind in Kind.allCases where statuses[kind] == .granted {
+            messages[kind] = nil
         }
     }
 
     /// Shows the macOS prompt when the permission was never asked; otherwise (already
     /// denied, or one macOS only grants in Settings) opens its System Settings page.
     func request(_ kind: Kind) async {
-        switch kind {
-        case .microphone:
-            if statuses[kind] == .notDetermined { _ = await AVCaptureDevice.requestAccess(for: .audio) } else { openSettings(kind) }
-        case .accessibility:
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            if !AXIsProcessTrustedWithOptions(options) { openSettings(kind) }
-        case .screenRecording:
-            if !CGRequestScreenCaptureAccess() { openSettings(kind) }
-        case .calendars:
-            if statuses[kind] == .notDetermined { _ = try? await eventStore.requestFullAccessToEvents() } else { openSettings(kind) }
-        case .reminders:
-            if statuses[kind] == .notDetermined { _ = try? await eventStore.requestFullAccessToReminders() } else { openSettings(kind) }
-        case .bluetooth:
-            if statuses[kind] == .notDetermined {
-                // Creating a central manager is what shows the Bluetooth prompt.
+        guard requesting == nil else { return }
+        requesting = kind
+        messages[kind] = nil
+        defer { requesting = nil }
+        await refresh()
+        let current = statuses[kind]
+        if current == .restricted {
+            messages[kind] = "Bu izin sistem politikası tarafından kısıtlanmış. Sistem yöneticinizle görüşün."
+            return
+        }
+        if current == .granted || current == .denied {
+            openSettings(kind)
+            return
+        }
+        do {
+            switch kind {
+            case .microphone:
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+            case .accessibility:
+                let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                _ = AXIsProcessTrustedWithOptions(options)
+                openSettings(kind)
+            case .screenRecording:
+                _ = CGRequestScreenCaptureAccess()
+                openSettings(kind)
+                messages[kind] = "Sistem Ayarları'nda Jarvis'i etkinleştirin. macOS isterse Jarvis'i yeniden başlatın."
+            case .calendars:
+                _ = try await eventStore.requestFullAccessToEvents()
+            case .reminders:
+                _ = try await eventStore.requestFullAccessToReminders()
+            case .bluetooth:
                 bluetoothProbe = BluetoothProbe()
-                try? await Task.sleep(for: .seconds(1))
-            } else {
-                openSettings(kind)
+                // Keep the manager alive and wait for authorization, not a fixed one-second delay.
+                for _ in 0..<120 {
+                    if CBManager.authorization != .notDetermined { break }
+                    try await Task.sleep(for: .milliseconds(500))
+                }
+                if CBManager.authorization == .notDetermined {
+                    messages[kind] = "Bluetooth izni henüz yanıtlanmadı. macOS izin penceresini kontrol edin veya Sistem Ayarları'nı açın."
+                }
+            case .notifications:
+                _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            case .automationSpotify, .automationMail, .automationSystemEvents:
+                guard let bundleID = kind.automationBundleID,
+                      let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+                    messages[kind] = "İzin istenemedi: ilgili uygulama bu Mac'te yüklü değil."
+                    return
+                }
+                if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+                    let configuration = NSWorkspace.OpenConfiguration()
+                    configuration.activates = false
+                    configuration.hides = true
+                    _ = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                }
+                let result = await Self.automationStatus(bundleID, ask: true)
+                if case .unknown(let reason) = result {
+                    messages[kind] = "İzin istenemedi: \(reason). Uygulamayı açıp yeniden deneyin."
+                } else if result == .notDetermined {
+                    messages[kind] = "macOS izin isteğini tamamlamadı. İlgili uygulamayı açıp yeniden deneyin."
+                }
             }
-        case .notifications:
-            if statuses[kind] == .notDetermined {
-                _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-            } else {
-                openSettings(kind)
-            }
-        case .automationSpotify, .automationMail, .automationSystemEvents:
-            guard let bundleID = kind.automationBundleID else { return }
-            if case .denied = statuses[kind] { openSettings(kind); break }
-            // macOS only asks while the target app runs; launch it hidden first.
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
-               NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.activates = false
-                configuration.hides = true
-                _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-                try? await Task.sleep(for: .seconds(1.5))
-            }
-            _ = await Self.automationStatus(bundleID, ask: true)
+        } catch {
+            messages[kind] = "İzin istenemedi: \(error.localizedDescription)"
         }
         await refresh()
+        if statuses[kind] == .denied {
+            messages[kind] = "İzin verilmedi. Yeniden izin vermek için Sistem Ayarları'nda Jarvis'i etkinleştirin."
+        }
+    }
+
+    func actionTitle(for kind: Kind) -> String {
+        if requesting == kind { return "Yanıt bekleniyor…" }
+        guard let status = statuses[kind] else { return "Kontrol ediliyor…" }
+        switch status {
+        case .granted, .denied, .needsSettings, .restricted: return "Ayarları aç"
+        case .unavailable: return "Yüklü değil"
+        case .writeOnly: return "Tam erişim iste"
+        case .unknown: return "Uygulamayı aç ve izin iste"
+        case .notDetermined: return "İzin iste"
+        }
     }
 
     func openSettings(_ kind: Kind) {
-        if let url = kind.settingsURL { NSWorkspace.shared.open(url) }
+        guard let url = kind.settingsURL, NSWorkspace.shared.open(url) else {
+            messages[kind] = "Sistem Ayarları açılamadı. Gizlilik ve Güvenlik bölümünden bu izni açın."
+            return
+        }
+        messages[kind] = "Sistem Ayarları'nda Jarvis'in iznini kontrol edin. Durum bu sayfada otomatik güncellenir."
     }
 
     // MARK: - Status mapping
 
-    private static func status(_ status: AVAuthorizationStatus) -> Status {
+    static func status(_ status: AVAuthorizationStatus) -> Status {
         switch status {
         case .authorized: .granted
-        case .denied, .restricted: .denied
+        case .denied: .denied
+        case .restricted: .restricted
         default: .notDetermined
         }
     }
 
-    private static func status(_ status: EKAuthorizationStatus) -> Status {
+    static func status(_ status: EKAuthorizationStatus) -> Status {
         switch status {
         case .fullAccess: .granted
-        case .denied, .restricted, .writeOnly: .denied
+        case .denied: .denied
+        case .restricted: .restricted
+        case .writeOnly: .writeOnly
         default: .notDetermined
         }
     }
 
-    private static func status(_ status: CBManagerAuthorization) -> Status {
+    static func status(_ status: CBManagerAuthorization) -> Status {
         switch status {
         case .allowedAlways: .granted
-        case .denied, .restricted: .denied
+        case .denied: .denied
+        case .restricted: .restricted
         default: .notDetermined
         }
     }
@@ -218,7 +286,7 @@ final class PermissionsManager {
             case noErr: return .granted
             case OSStatus(errAEEventNotPermitted): return .denied
             case OSStatus(errAEEventWouldRequireUserConsent): return .notDetermined
-            case OSStatus(procNotFound): return .unknown("Uygulama kapalı — sormak için İzin iste")
+            case OSStatus(procNotFound): return .unknown("Uygulama kapalı")
             default: return .unknown("Bilinmiyor (\(status))")
             }
         }.value

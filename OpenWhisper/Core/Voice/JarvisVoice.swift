@@ -38,6 +38,21 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private var finished: CheckedContinuation<Void, Never>?
     /// Bumped by `stop()` so a reply still being synthesized doesn't start playing afterwards.
     private var generation: UInt64 = 0
+    /// Covers synthesis and gaps between streamed sentences as well as playback.
+    private var activeReplyGeneration: UInt64?
+    private var lastPlaybackEndedAt: TimeInterval = -.infinity
+    var wakeGeneration: UInt64 { generation }
+
+    func acceptsWakeWord(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                         generation expected: UInt64? = nil) -> Bool {
+        activeReplyGeneration == nil && player == nil
+            && uptime - lastPlaybackEndedAt >= 0.6
+            && (expected == nil || expected == generation)
+    }
+
+    nonisolated static func playbackTimeout(duration: TimeInterval) -> TimeInterval {
+        duration + 1
+    }
     private var synthesis: Task<Data?, Never>?
     private var sentenceProducer: Task<Void, Never>?
     private var lastWarmUp = Date.distantPast
@@ -220,7 +235,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         var phrases = JarvisReply.acks + JarvisReply.fixedPhrases
         for ack in JarvisReply.acks + JarvisReply.fixedPhrases {
             let body = ack.hasSuffix(".") ? String(ack.dropLast()) : ack
-            phrases += JarvisReply.addresses.map { "\(body), \($0)." }
+            phrases += (JarvisReply.acks.contains(ack) ? JarvisReply.ackEndings : JarvisReply.addresses).map { "\(body), \($0)." }
         }
         var made = 0
         for phrase in phrases where cachedAudio(for: phrase, identity: identity) == nil {
@@ -249,6 +264,10 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         guard !text.isEmpty else { return false }
         stop()
         let myGeneration = generation
+        activeReplyGeneration = myGeneration
+        defer {
+            if activeReplyGeneration == myGeneration { activeReplyGeneration = nil }
+        }
         let started = Date()
         guard let audio = await audio(for: text) else { return false }
         return await play(audio, text: text, started: started, generation: myGeneration, volume: volume, onStart: onStart)
@@ -262,6 +281,10 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     func speak(sentences: AsyncStream<String>, onStart: () -> Void = {}) async -> Bool {
         stop()
         let myGeneration = generation
+        activeReplyGeneration = myGeneration
+        defer {
+            if activeReplyGeneration == myGeneration { activeReplyGeneration = nil }
+        }
         let started = Date()
         let (clips, clipsContinuation) = AsyncStream<(String, Data)>.makeStream()
         let producer = Task { @MainActor [weak self] in
@@ -315,7 +338,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             onStart()
             // Safety net: if the finish callback never comes (output device switched mid-reply),
             // don't keep the command — and the paused music — waiting forever.
-            let limit = min(player.duration + 1, 20)
+            let limit = Self.playbackTimeout(duration: player.duration)
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(limit))
                 guard let self, myGeneration == self.generation, self.player === player else { return }
@@ -337,6 +360,8 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         synthesis = nil
         sentenceProducer?.cancel()
         sentenceProducer = nil
+        if player != nil { lastPlaybackEndedAt = ProcessInfo.processInfo.systemUptime }
+        activeReplyGeneration = nil
         player?.stop()
         player = nil
         finished?.resume()
@@ -359,6 +384,7 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
 
     private func playerFinished(_ id: ObjectIdentifier) {
         guard let player, ObjectIdentifier(player) == id else { return }
+        lastPlaybackEndedAt = ProcessInfo.processInfo.systemUptime
         self.player = nil
         finished?.resume()
         finished = nil

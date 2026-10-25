@@ -48,7 +48,7 @@ final class JarvisContextTests: XCTestCase {
     func testSystemPromptUsesContextOnlyWhenGiven() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let plain = JarvisChat.systemPrompt(now: now)
-        XCTAssertTrue(plain.contains("takvime erişimin yok"))
+        XCTAssertTrue(plain.contains("Bu turda canlı durum bilgisi sağlanmadı"))
         XCTAssertFalse(plain.contains("Durum:"))
         let withContext = JarvisChat.systemPrompt(now: now, context: ["Bugün kalan takvim etkinlikleri: 15:30 Toplantı"])
         XCTAssertFalse(withContext.contains("takvime erişimin yok"))

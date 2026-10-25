@@ -493,7 +493,7 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
     /// clipboard currently holds -- during the 8s offer window the user may have copied
     /// something else entirely, and reading the clipboard back at click time would silently
     /// paste the wrong text (and the user would lose track of what they'd just copied).
-    func testPasteUsesRetainedTextEvenWhenClipboardWasOverwrittenDuringOfferWindow() async throws {
+    func testConfirmationUsesRetainedTextEvenWhenClipboardWasOverwrittenDuringOfferWindow() async throws {
         let store = InMemoryTargetSpeakerProfileStore()
         let originalProfile = try TargetSpeakerProfile(
             modelIdentifier: FluidAudioTargetSpeakerModel.identifier,
@@ -527,11 +527,11 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
 
         appState.confirmRetainedRecordingWasTargetSpeaker()
 
-        XCTAssertEqual(
-            injector.pasteCalls.map(\.text),
-            ["test transcript"],
-            "must paste the retained transcript, not whatever is currently on the clipboard"
-        )
+        try await waitUntil { !appState.isConfirmationInFlight }
+        XCTAssertTrue(injector.pasteCalls.isEmpty, "There was no cursor when recording began")
+        XCTAssertEqual(injector.clipboardContents, "test transcript")
+        XCTAssertTrue(appState.flowBarMessage?.contains("Panoya kopyalandı") == true,
+                      "Profile append failure must not hide the delivery result")
     }
 
     /// Requirement (d), part 1: starting a new dictation clears the retained rejection samples
@@ -629,6 +629,108 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         XCTAssertNil(appState.flowBarMessage)
     }
 
+    private func offerConfirmedTranscript(_ text: String, focus: TextFocusStatus,
+                                          voice: Bool = false) -> (AppState, RecordingTextInjector) {
+        let injector = RecordingTextInjector()
+        let state = AppState(profileStore: InMemoryTargetSpeakerProfileStore(),
+                             targetSpeakerModel: IntegrationSpeakerModel(),
+                             transcriptionService: RecordingWhisperService(), textInjector: injector)
+        state.autoPasteEnabled = true
+        state.llmCleanupEnabled = false
+        state.voiceRepliesEnabled = false
+        state.ollamaAvailable = false
+        let context = PasteContext(targetPID: nil, bundleIdentifier: nil, applicationName: nil,
+                                   focusedElement: nil, focusStatus: focus, valueAtCapture: nil,
+                                   selectedRangeAtCapture: nil, selectedTextAtCapture: nil)
+        let session = RecordingTranscriptionSession(id: 900, targetApp: nil,
+            targetSpeakerEnabled: true, targetSpeakerProfile: nil, pasteContext: context)
+        session.isVoiceCommand = voice
+        session.trigger = voice ? .wakeWord : .fnHold
+        state.retainConfirmation(candidate: TargetSpeakerConfirmationCandidate(
+            samples: [0.2], windows: [], internalCoherence: 0.5, anchorProfileScore: 0.5,
+            separation: nil, separationReason: "test"), text: text,
+            pasteContext: context, targetApp: nil, session: session)
+        state.showTargetSpeakerAppendOffer(message: "")
+        return (state, injector)
+    }
+
+    func testConfirmedCommandRunsInsteadOfPastingEvenWithoutProfile() async throws {
+        let (state, injector) = offerConfirmedTranscript("Saat kaç?", focus: .editable)
+        state.confirmRetainedRecordingWasTargetSpeaker()
+        state.confirmRetainedRecordingWasTargetSpeaker() // double tap must not rerun it
+        try await waitUntil { !state.isConfirmationInFlight }
+        XCTAssertEqual(state.confirmationOperationID, 1)
+        XCTAssertEqual(state.lastTranscription, "Saat kaç?")
+        XCTAssertTrue(injector.pasteCalls.isEmpty)
+        XCTAssertTrue(injector.clipboardCalls.isEmpty)
+        XCTAssertFalse(state.flowBarMessage?.contains("Onay işleniyor") == true)
+    }
+
+    func testConfirmedDictationPastesToCapturedCursorOnce() async throws {
+        let (state, injector) = offerConfirmedTranscript("Buraya yaz bugün güzel bir gün", focus: .editable)
+        state.confirmRetainedRecordingWasTargetSpeaker()
+        state.confirmRetainedRecordingWasTargetSpeaker()
+        try await waitUntil { !state.isConfirmationInFlight }
+        XCTAssertEqual(injector.pasteCalls.map(\.text), ["bugün güzel bir gün"])
+        XCTAssertEqual(injector.pasteContexts.first?.focusStatus, .editable)
+    }
+
+    func testConfirmedDictationWithoutOriginalCursorCopiesAndShowsResult() async throws {
+        for focus: TextFocusStatus in [.notEditable, .unknown] {
+            let (state, injector) = offerConfirmedTranscript("Buraya yaz bugün güzel bir gün", focus: focus)
+            state.confirmRetainedRecordingWasTargetSpeaker()
+            try await waitUntil { !state.isConfirmationInFlight }
+            XCTAssertTrue(injector.pasteCalls.isEmpty)
+            XCTAssertEqual(injector.clipboardContents, "bugün güzel bir gün")
+            XCTAssertTrue(state.flowBarMessage?.contains("Panoya kopyalandı") == true)
+        }
+    }
+
+    func testDestinationClarificationTypesOriginalRequestAtOriginalCursorWithoutSending() async throws {
+        let (state, injector) = offerConfirmedTranscript("test", focus: .editable)
+        let originalContext = try XCTUnwrap(state.retainedConfirmationPasteContext)
+        state.dismissTargetSpeakerAppendOffer()
+        let session = RecordingTranscriptionSession(id: 42, targetApp: nil,
+            targetSpeakerEnabled: false, targetSpeakerProfile: nil,
+            pasteContext: PasteContext.initial(targetApp: nil))
+        session.trigger = .followUp
+        session.isVoiceCommand = true
+        session.isConversationFollowUp = true
+        session.addresseeClarification = .init(text: "yarın toplantıya geç kalacağım",
+            targetApp: nil, pasteContext: originalContext)
+        session.segmentTexts = ["Bunu yaz"]
+        session.allSegmentTexts = session.segmentTexts
+        session.queuedSampleCount = 16000
+        session.continuation.finish()
+        state.nextTranscriptionID = session.id
+        await state.finishTranscription(session)
+        XCTAssertEqual(injector.pasteCalls.map(\.text), ["yarın toplantıya geç kalacağım"])
+        XCTAssertEqual(injector.pasteContexts.first?.focusStatus, .editable)
+        XCTAssertNil(state.pendingAddresseeClarification)
+        XCTAssertFalse(state.pendingConversationFollowUp)
+    }
+
+    func testDestinationClarificationCancelDoesNotPasteOrContinueListening() async throws {
+        let (state, injector) = offerConfirmedTranscript("test", focus: .editable)
+        let context = try XCTUnwrap(state.retainedConfirmationPasteContext)
+        state.dismissTargetSpeakerAppendOffer()
+        let session = RecordingTranscriptionSession(id: 43, targetApp: nil,
+            targetSpeakerEnabled: false, targetSpeakerProfile: nil)
+        session.trigger = .followUp
+        session.isVoiceCommand = true
+        session.isConversationFollowUp = true
+        session.addresseeClarification = .init(text: "ilk istek", targetApp: nil, pasteContext: context)
+        session.segmentTexts = ["İptal"]
+        session.allSegmentTexts = session.segmentTexts
+        session.queuedSampleCount = 16000
+        session.continuation.finish()
+        state.nextTranscriptionID = session.id
+        await state.finishTranscription(session)
+        XCTAssertTrue(injector.pasteCalls.isEmpty)
+        XCTAssertFalse(state.pendingConversationFollowUp)
+        XCTAssertNil(state.pendingAddresseeClarification)
+    }
+
     private func validEnrollmentSamples() -> [Float] {
         Array(repeating: Float(0.2), count: 48 * TargetSpeakerFilterConfiguration.vadFrameSamples)
     }
@@ -683,6 +785,15 @@ private final class RecordingTextInjector: TextInjecting {
 
     func pasteText(_ text: String, targetApp: NSRunningApplication?, onPasted: (() -> Void)?) {
         pasteCalls.append(PasteCall(text: text, targetApp: targetApp))
+    }
+
+    private(set) var pasteContexts: [PasteContext] = []
+
+    func pasteTextResult(_ text: String, targetApp: NSRunningApplication?, context: PasteContext?,
+                         onOutcome: ((PasteOutcome) -> Void)?) {
+        pasteCalls.append(PasteCall(text: text, targetApp: targetApp))
+        if let context { pasteContexts.append(context) }
+        onOutcome?(.pastedUnverified)
     }
 
     func replaceInjectedText(

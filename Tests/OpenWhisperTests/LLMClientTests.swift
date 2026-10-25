@@ -35,6 +35,16 @@ private final class FakeLLMClient: LLMClient, @unchecked Sendable {
 }
 
 final class LLMClientTests: XCTestCase {
+    func testCloudModeReleasesLocalFallbackAfterRequest() {
+        XCTAssertEqual(LLMCleanup.keepAlive(for: .cloud), "0s")
+        XCTAssertEqual(LLMCleanup.keepAlive(for: .ollama), "30m")
+        let request = LLMChatRequest(model: "m", messages: [], timeout: 10, temperature: 0, maxTokens: 20)
+        for stream in [true, false] {
+            XCTAssertEqual(OllamaClient.chatBody(request, stream: stream)["keep_alive"] as? String,
+                           LLMCleanup.keepAlive)
+        }
+    }
+
     // MARK: - Wire format: the same bodies the call sites built by hand
 
     func testGenerateBodySendsOnlyWhatIsSet() {

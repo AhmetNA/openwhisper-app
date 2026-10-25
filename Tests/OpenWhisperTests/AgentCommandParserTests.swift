@@ -4,6 +4,12 @@ import XCTest
 /// Pure parsing tests — no app activation or keystrokes.
 final class AgentCommandParserTests: XCTestCase {
 
+    func testApproximateClaudeNameDoesNotSendMessages() {
+        XCTAssertEqual(AgentCommandParser.agentApp(named: "Kılaat kodu"), .claudeCode)
+        XCTAssertNil(AgentCommandParser.agentApp(named: "Kılaat"))
+        XCTAssertNil(AgentCommandParser.parse("Kılaat kodu şunu gönder: merhaba"))
+    }
+
     func testClaudeCodeTargetWithSend() {
         let result = AgentCommandParser.parse("Claude Code'a şunu yaz: testleri çalıştır ve hataları düzelt. Gönder.")
         XCTAssertEqual(result, AgentDictation(target: .claudeCode, body: "testleri çalıştır ve hataları düzelt", send: true))

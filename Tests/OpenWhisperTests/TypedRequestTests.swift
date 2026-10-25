@@ -33,6 +33,19 @@ final class TypedRequestTests: XCTestCase {
         }
     }
 
+    func testApplicationCommandsRequireNonTextFocusAndExcludeAgents() {
+        for bundle in ["com.apple.Safari", "com.apple.finder", "com.apple.mail"] {
+            XCTAssertTrue(JarvisAddressee.usesApplicationCommands(acceptsCommands: true, focus: .notEditable, bundleID: bundle))
+            for focus: TextFocusStatus in [.editable, .unknown] {
+                XCTAssertFalse(JarvisAddressee.usesApplicationCommands(acceptsCommands: true, focus: focus, bundleID: bundle))
+            }
+        }
+        for bundle in AgentApp.sendCapableBundleIdentifiers {
+            XCTAssertFalse(JarvisAddressee.usesApplicationCommands(acceptsCommands: true, focus: .notEditable, bundleID: bundle))
+        }
+        XCTAssertFalse(JarvisAddressee.usesApplicationCommands(acceptsCommands: false, focus: .notEditable, bundleID: "com.apple.Safari"))
+    }
+
     func testTypedRequestIsNeverRoutedAsDictation() {
         XCTAssertEqual(RecordingTranscriptionSession.routingFocus(trigger: .typed, captured: .editable, simulated: nil),
                        .notEditable)
