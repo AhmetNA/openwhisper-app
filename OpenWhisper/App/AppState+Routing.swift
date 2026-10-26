@@ -715,7 +715,12 @@ extension AppState {
                         let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: request)
                         let speaksResult = SpotifyManager.speaksResult(afterCommand: request)
                         let speaksFailure = SpotifyManager.speaksFailure(afterCommand: request)
-                        let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
+                        let handled: Bool
+                        if let execute = self.spotifyCommandExecutor {
+                            handled = await execute(request, stepTargetApp)
+                        } else {
+                            handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
+                        }
                         let message = SpotifyManager.shared.takeResultMessage(for: request)
                         SpeechDiagnostics.event("action.result", ["result": "[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'"])
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
@@ -1129,7 +1134,12 @@ extension AppState {
                     guard !session.isCancelled, !Task.isCancelled, self.nextTranscriptionID == session.id else { return }
                     session.latency.finishDecision(route: "bulut planı uygulanmadı")
                     SpeechDiagnostics.event("cloud.plan.rejected", ["reason": String(describing: error)])
-                    await say("İsteği güvenle planlayamadım; işlem yapmadım. Tekrar söyler misin?", durationMs: 6000)
+                    let retry = "İsteği güvenle planlayamadım; işlem yapmadım. Tekrar söyler misin?"
+                    let heard = await self.speakReply(retry)
+                    self.showFlowBarMessage(retry, durationMs: 6000)
+                    if self.listenForReplyAnswer(retry, heard: heard, after: session) {
+                        holdMediaForReplyAnswer = true
+                    }
                     return
                 }
             }

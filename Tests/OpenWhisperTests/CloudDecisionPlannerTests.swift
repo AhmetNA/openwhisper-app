@@ -3,8 +3,8 @@ import XCTest
 
 @MainActor
 final class CloudDecisionPlannerTests: XCTestCase {
-    func context(_ text: String, focus: TextFocusStatus = .notEditable, commandsOnly: Bool = false) -> CloudDecisionPlanner.Context {
-        .init(requestID: "session-42", transcript: text, trigger: "jarvisKey", app: "Codex", bundleID: "com.openai.codex",
+    func context(_ text: String, focus: TextFocusStatus = .notEditable, commandsOnly: Bool = false, trigger: String = "jarvisKey") -> CloudDecisionPlanner.Context {
+        .init(requestID: "session-42", transcript: text, trigger: trigger, app: "Codex", bundleID: "com.openai.codex",
               focus: focus.rawValue, caret: focus == .editable ? 12 : nil, selectionLength: 0,
               conversationFollowUp: false, commandsOnly: commandsOnly, lastCommand: "music", lastReply: "",
               hasWorkRecap: true, installedApps: ["Safari", "Spotify"], localTime: "2026-10-26T00:00:00+03:00")
@@ -235,6 +235,68 @@ final class CloudDecisionPlannerTests: XCTestCase {
         XCTAssertTrue(agent.send)
     }
 
+    func testObservedWakeArtifactsDoNotRejectTwoCommandPlan() throws {
+        let transcript = "Gece Ars Ses kıs ve müzik başlat Evet."
+        let steps: [CloudDecisionPlanner.Step] = [
+            .init(kind: .command, source: "Ses kıs", text: "sesi kıs"),
+            .init(kind: .command, source: "müzik başlat", text: "müzik başlat")]
+        guard case .routes(let routes) = try CloudDecisionPlanner.resolve(json(steps),
+            context: context(transcript, trigger: "wakeWord"), facts: facts()),
+              case .commands(let commands) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(commands.count, 2)
+        for (command, expected) in zip(commands, ["sesi kıs", "müzik başlat"]) {
+            guard case .spotify(let request) = command.command else { return XCTFail() }
+            XCTAssertEqual(SpotifyManager.explicitIntent(in: request), SpotifyManager.explicitIntent(in: expected))
+        }
+    }
+    func testWakeWordsCanBeInsideSourcesInsteadOfGaps() throws {
+        let text = "Gece Ars Ses kıs ve müzik başlat Evet."
+        let steps: [CloudDecisionPlanner.Step] = [
+            .init(kind: .command, source: "Gece Ars Ses kıs", text: "sesi kıs"),
+            .init(kind: .command, source: "müzik başlat Evet.", text: "müzik başlat")]
+        guard case .routes(let routes) = try CloudDecisionPlanner.resolve(json(steps),
+            context: context(text, trigger: "wakeWord"), facts: facts()),
+              case .commands(let commands) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(commands.count, 2)
+    }
+    func testKnownWakePaddingCanBeExplicitIgnoreSteps() throws {
+        let text = "Gece Ars Ses kıs ve müzik başlat Evet."
+        let steps: [CloudDecisionPlanner.Step] = [
+            .init(kind: .ignore, source: "Gece Ars", text: ""),
+            .init(kind: .command, source: "Ses kıs", text: "sesi kıs"),
+            .init(kind: .command, source: "müzik başlat", text: "müzik başlat"),
+            .init(kind: .ignore, source: "Evet.", text: "")]
+        guard case .routes(let routes) = try CloudDecisionPlanner.resolve(json(steps),
+            context: context(text, trigger: "wakeWord"), facts: facts()),
+              case .commands(let commands) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(commands.count, 2)
+    }
+    func testWakePaddingNeverDropsNegationNumbersOrAnAdditionalRequest() throws {
+        let steps: [CloudDecisionPlanner.Step] = [.init(kind: .command, source: "sesi kıs", text: "sesi kıs")]
+        for text in ["sesi kıs 50", "sesi kıs hayır", "hayır sesi kıs", "gece sesi kıs", "sesi kıs ve Bluetooth'u aç"] {
+            XCTAssertThrowsError(try CloudDecisionPlanner.resolve(json(steps),
+                context: context(text, trigger: "wakeWord"), facts: facts()), text)
+        }
+        XCTAssertThrowsError(try CloudDecisionPlanner.resolve(json(steps),
+            context: context("Gece Ars sesi kıs Evet.", trigger: "fnHold"), facts: facts()))
+        XCTAssertThrowsError(try resolve("sesi kıs 50", steps))
+    }
+    func testCaseFoldedCommandSpansUseOriginalTranscriptText() throws {
+        let text = "Gece Ars Ses kıs ve Müzik başlat Evet."
+        let steps: [CloudDecisionPlanner.Step] = [
+            .init(kind: .command, source: "ses kıs", text: "sesi kıs"),
+            .init(kind: .command, source: "müzik başlat", text: "müzik başlat")]
+        guard case .routes(let routes) = try CloudDecisionPlanner.resolve(json(steps),
+            context: context(text, trigger: "wakeWord"), facts: facts()),
+              case .commands(let commands) = routes[0].route else { return XCTFail() }
+        XCTAssertEqual(commands.map(\.text), ["Ses kıs", "Müzik başlat"])
+        XCTAssertThrowsError(try resolve("Merhaba", [.init(kind: .dictation, source: "merhaba", text: "merhaba")], focus: .editable))
+    }
+    func testDictationNeverDropsWakeLikeMessageContent() throws {
+        let text = "Gece Ars merhaba Evet."
+        XCTAssertThrowsError(try CloudDecisionPlanner.resolve(json([.init(kind: .dictation, source: "merhaba", text: "merhaba")]),
+            context: context(text, focus: .editable, trigger: "wakeWord"), facts: facts(.editable)))
+    }
     func testStructuredCloudBodyIsNotStreamed() {
         let body = CloudReasoningClient.body(.init(model: "test", messages: [], timeout: 25, temperature: 0, maxTokens: 1800),
                                              schema: CloudDecisionPlanner.schema, thinkingOff: false)

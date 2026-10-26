@@ -45,7 +45,7 @@ enum CloudDecisionPlanner {
         let route: VoiceRouter.Route
     }
     enum Result { case routes([Resolved]), clarify(String), cancel }
-    enum Invalid: Error { case protocolViolation, unsupported }
+    enum Invalid: Error { case protocolViolation, sourceMismatch, sourceCoverage, unsupported }
 
     static let schema: [String: Any] = [
         "type": "object", "additionalProperties": false,
@@ -133,6 +133,13 @@ enum CloudDecisionPlanner {
     clarify: tek adım, source=tüm transcript, text=kısa Türkçe açıklama sorusu.
     cancel: tek adım, source=tüm transcript, text="". command modundaki HER adımda send=false.
 
+    Uyandırma kaydında ASR "Hey Jarvis" yerine başta "Gece Ars" / "Hey Jars", sonda tek başına
+    "Evet" / "Tamam" yazabilir. Yalnız trigger=wakeWord ve açık cihaz komutu bağlamında bunlar
+    yeni bir istek değildir. İlk/son komutun source aralığında bu kenar sözlerini de tutabilirsin;
+    bunları chat/dictation adımına çevirme. Örnek "Gece Ars Ses kıs ve müzik başlat Evet." ->
+    iki command: source="Gece Ars Ses kıs",text="sesi kıs" ve source="müzik başlat Evet.",text="müzik başlat".
+    Olumsuzluk, sayı ve gerçek bir üçüncü isteği asla kenar sözü sayma. Dikte metnini bu yolla değiştirme.
+
     PROTOKOL: {"version":2,"mode":"command|dictation","requestID":"gelen kimlik","steps":[
     {"kind":"...","source":"...","text":"...","send":false}]}. Ek alan yok. En çok 8 adım.
     Dictation örnekleri:
@@ -159,6 +166,7 @@ enum CloudDecisionPlanner {
         let answer = try await client.generate(.init(model: "", prompt: input,
             timeout: 25, temperature: 0, maxTokens: 1800, schema: schema, systemPrompt: instructions))
         try Task.checkCancellation()
+        SpeechDiagnostics.text("cloud.plan.proposed", String(answer.prefix(24_000)))
         return try resolve(answer, context: context, facts: facts)
     }
 
@@ -177,14 +185,21 @@ enum CloudDecisionPlanner {
         } else {
             guard plan.steps.allSatisfy({ $0.kind != .dictation && !$0.send }) else { throw Invalid.protocolViolation }
         }
+        let allowsWakePadding = plan.mode == .command && facts.isVoiceCommand && context.trigger == "wakeWord"
+            && plan.steps.allSatisfy { $0.kind == .command || $0.kind == .ignore }
         var cursor = context.transcript.startIndex
         var routes: [Resolved] = []
         let nativeContext = facts.commandContext()
         for step in plan.steps {
+            // Commands may arrive case-folded by the model. Message bodies remain exact.
+            let matching: String.CompareOptions = step.kind == .command || step.kind == .ignore ? .caseInsensitive : []
             guard !step.source.isEmpty, step.text.count <= 12_000,
-                  let span = context.transcript.range(of: step.source, range: cursor..<context.transcript.endIndex),
-                  isConnector(String(context.transcript[cursor..<span.lowerBound])) else { throw Invalid.protocolViolation }
+                  let span = context.transcript.range(of: step.source, options: matching,
+                    range: cursor..<context.transcript.endIndex, locale: Locale(identifier: "tr_TR")) else { throw Invalid.sourceMismatch }
+            guard isSourceGap(String(context.transcript[cursor..<span.lowerBound]),
+                wakeEdge: allowsWakePadding && cursor == context.transcript.startIndex ? .leading : nil) else { throw Invalid.sourceCoverage }
             cursor = span.upperBound
+            let source = String(context.transcript[span])
             let route: VoiceRouter.Route
             switch step.kind {
             case .clarify:
@@ -194,19 +209,22 @@ enum CloudDecisionPlanner {
                 guard plan.steps.count == 1 else { throw Invalid.protocolViolation }
                 return .cancel
             case .ignore:
-                guard step.text.isEmpty, isNonAction(step.source) else { throw Invalid.unsupported }
+                let wakePadding = allowsWakePadding && (
+                    (span.lowerBound == context.transcript.startIndex && isSourceGap(source, wakeEdge: .leading))
+                    || (isConnector(String(context.transcript[span.upperBound...])) && isSourceGap(source, wakeEdge: .trailing)))
+                guard step.text.isEmpty, isNonAction(source) || wakePadding else { throw Invalid.unsupported }
                 continue
             case .dictation:
-                guard !context.commandsOnly, step.source == context.transcript,
-                      !step.text.isEmpty, step.source.contains(step.text) else { throw Invalid.unsupported }
-                let addressed = AgentCommandParser.parseAfterSwitch(step.source) ?? AgentCommandParser.parse(step.source)
+                guard !context.commandsOnly, source == context.transcript,
+                      !step.text.isEmpty, source.contains(step.text) else { throw Invalid.unsupported }
+                let addressed = AgentCommandParser.parseAfterSwitch(source) ?? AgentCommandParser.parse(source)
                 let named = addressed.flatMap { $0.target != nil || $0.project != nil ? $0 : nil }
-                let explicitWrite = JarvisAddressee.leadingTypeCommand(step.source) != nil
-                    || JarvisAddressee.trailingTypeCommand(step.source) != nil
+                let explicitWrite = JarvisAddressee.leadingTypeCommand(source) != nil
+                    || JarvisAddressee.trailingTypeCommand(source) != nil
                 let safeField = facts.focus == .editable || (explicitWrite && context.targetFocus == "editable")
                 guard named != nil || (safeField && facts.hasTargetApp) else { throw Invalid.unsupported }
                 if step.send {
-                    guard CloudDictationDelivery.hasExplicitSend(source: step.source, body: step.text) else { throw Invalid.unsupported }
+                    guard CloudDictationDelivery.hasExplicitSend(source: source, body: step.text) else { throw Invalid.unsupported }
                 }
                 if var agent = named {
                     agent = AgentDictation(target: agent.target, body: step.text, send: step.send,
@@ -218,8 +236,8 @@ enum CloudDecisionPlanner {
                     route = .typed(step.text)
                 }
             case .chat:
-                guard !context.commandsOnly, step.text == step.source else { throw Invalid.unsupported }
-                route = .chat(step.source)
+                guard !context.commandsOnly, step.text == source else { throw Invalid.unsupported }
+                route = .chat(source)
             case .greeting:
                 guard !context.commandsOnly, facts.isVoiceCommand else { throw Invalid.unsupported }
                 let greetings: [String: JarvisReply.Greeting] = ["hello": .hello, "goodMorning": .goodMorning,
@@ -232,40 +250,40 @@ enum CloudDecisionPlanner {
                 guard let action = actions[step.text] else { throw Invalid.protocolViolation }
                 route = .workResume(action)
             case .command:
-                guard facts.acceptsCommands, !facts.commandAmongPlayback, !isNonAction(step.source) else { throw Invalid.unsupported }
+                guard facts.acceptsCommands, !facts.commandAmongPlayback, !isNonAction(source) else { throw Invalid.unsupported }
                 // An exact native request may carry dates/slots. A cloud rephrase is restricted
                 // to the established safe rewrite allowlist; never use it to grant send/delete.
-                if let exact = CommandRegistry.step(step.source, context: nativeContext) {
+                if let exact = CommandRegistry.step(source, context: nativeContext) {
                     route = .command(exact)
-                } else if CalendarEventParser.isCreationRequest(step.source),
-                          let event = CalendarEventParser.extract(step.source, now: nativeContext.now) {
+                } else if CalendarEventParser.isCreationRequest(source),
+                          let event = CalendarEventParser.extract(source, now: nativeContext.now) {
                     route = .command(.system(.calendarEvent(event)))
-                } else if preservesNumbers(source: step.source, proposed: step.text),
+                } else if preservesNumbers(source: source, proposed: step.text),
                           let safe = CommandRewriter.safeCommand(step.text, context: nativeContext) {
                     route = .command(safe)
-                } else if let timer = TimerCommandParser.parse(step.source, ringing: nativeContext.ringing,
+                } else if let timer = TimerCommandParser.parse(source, ringing: nativeContext.ringing,
                                                               active: nativeContext.timerActive, now: nativeContext.now) {
                     route = .command(.timer(timer))
                 } else { throw Invalid.unsupported }
             case .request:
-                guard step.text == step.source, !context.commandsOnly else { throw Invalid.unsupported }
-                if let selection = UnreadSessionRecap.selection(step.source) {
-                    route = .unreadSessionRecap(step.source, selection)
-                } else if CloudSessionNavigation.isRequest(step.source) {
-                    route = .sessionNavigation(step.source)
+                guard step.text == source, !context.commandsOnly else { throw Invalid.unsupported }
+                if let selection = UnreadSessionRecap.selection(source) {
+                    route = .unreadSessionRecap(source, selection)
+                } else if CloudSessionNavigation.isRequest(source) {
+                    route = .sessionNavigation(source)
                 } else {
-                    route = VoiceRouter.route(step.source, facts: facts)
+                    route = VoiceRouter.route(source, facts: facts)
                 }
                 switch route {
                 case .spotifyOrConversation, .deletionConfirmation, .whatsAppConfirmation: throw Invalid.unsupported
                 case .command, .commands:
-                    guard !isNonAction(step.source) else { throw Invalid.unsupported }
+                    guard !isNonAction(source) else { throw Invalid.unsupported }
                 default: break
                 }
             }
-            routes.append(.init(source: step.source, route: route))
+            routes.append(.init(source: source, route: route))
         }
-        guard isConnector(String(context.transcript[cursor...])) else { throw Invalid.protocolViolation }
+        guard isSourceGap(String(context.transcript[cursor...]), wakeEdge: allowsWakePadding ? .trailing : nil) else { throw Invalid.sourceCoverage }
         if routes.isEmpty { return .cancel }
         // Text insertion is tied to the original caret; navigation and a second insertion can
         // invalidate it. Confirmations and work recaps own their next-turn continuation.
@@ -302,7 +320,25 @@ enum CloudDecisionPlanner {
                            options: .regularExpression) != nil
     }
 
+    private enum WakeEdge { case leading, trailing }
+
+    /// Exact wake-ASR artifacts only at the outside of a verified wake-command plan.
+    /// Never a generic license to drop words, numbers, negations or message content.
+    private static func isSourceGap(_ text: String, wakeEdge: WakeEdge?) -> Bool {
+        if isConnector(text) { return true }
+        guard let wakeEdge, text.rangeOfCharacter(from: .decimalDigits) == nil else { return false }
+        let words = text.lowercased(with: Locale(identifier: "tr_TR"))
+            .components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        switch wakeEdge {
+        case .leading:
+            return [["gece", "ars"], ["hey", "jars"], ["hey", "jarvis"], ["hey", "jervis"], ["jarvis"], ["jars"]].contains(words)
+        case .trailing:
+            return [["evet"], ["tamam"]].contains(words)
+        }
+    }
+
     private static func isConnector(_ text: String) -> Bool {
+        guard text.rangeOfCharacter(from: .decimalDigits) == nil else { return false }
         let words = text.lowercased(with: Locale(identifier: "tr_TR"))
             .components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
         return words.allSatisfy { ["ve", "sonra", "ardından", "ayrıca", "bir", "de", "hem", "lütfen"].contains($0) }

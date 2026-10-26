@@ -152,6 +152,9 @@ final class AppState {
         let question: String
         let createdAt: Date
     }
+    /// Hardware boundaries used by replay tests; nil uses the real app/media/microphone.
+    @ObservationIgnored var spotifyCommandExecutor: ((String, NSRunningApplication?) async -> Bool)?
+    @ObservationIgnored var followUpListeningOverride: ((CommandFollowUp.Domain?) -> Bool)?
     @ObservationIgnored var cloudPlanningClient: any LLMClient = CloudReasoningClient()
     var pendingCloudClarification: CloudClarification?
 

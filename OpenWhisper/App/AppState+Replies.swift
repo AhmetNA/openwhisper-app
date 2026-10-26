@@ -184,7 +184,9 @@ extension AppState {
         // calls this method. A newer recording must not inherit a late reply's context.
         guard !session.isCancelled, let reply, !reply.isEmpty,
               nextTranscriptionID == session.id, !Task.isCancelled,
-              recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
+              recordingState != .recording else { return false }
+        if let listen = followUpListeningOverride { return listen(nil) }
+        guard hotkey?.isIdle == true, microphoneGranted else { return false }
         let chain = session.trigger == .followUp ? replyFollowUpChain + 1 : 1
         guard chain <= Self.maxReplyFollowUps else {
             owLog("[FollowUp] \(Self.maxReplyFollowUps) follow-ups in a row; not listening again")
@@ -267,7 +269,9 @@ extension AppState {
     func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession,
                             overReply: Bool = false) -> Bool {
         guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled, recordingState != .recording,
-              hotkey?.isIdle == true, microphoneGranted else { return false }
+              nextTranscriptionID == session.id, !Task.isCancelled else { return false }
+        if let listen = followUpListeningOverride { return listen(domain) }
+        guard hotkey?.isIdle == true, microphoneGranted else { return false }
         // Opening the buds' mic puts them in call mode, which would break the reply playing in
         // them: there the window opens after the reply (the caller's fallback).
         if overReply, Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .followUp)) {

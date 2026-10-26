@@ -123,3 +123,48 @@ extension CloudRoutingIntegrationTests {
         }
     }
 }
+
+extension CloudRoutingIntegrationTests {
+    func wakeSession(_ text: String) -> RecordingTranscriptionSession {
+        let capture = RecordingTranscriptionSession(id: 100, targetApp: nil, targetSpeakerEnabled: false, targetSpeakerProfile: nil)
+        capture.trigger = .wakeWord
+        capture.isVoiceCommand = true
+        capture.wakeSpeakerVerified = true
+        capture.enqueue(.init(samples: Array(repeating: Float(0.1), count: 16_000), overlapSampleCount: 0))
+        capture.segmentTexts = [text]
+        capture.allSegmentTexts = [text]
+        return capture
+    }
+    func testTwoSpotifyCommandsExecuteInOrderAndReopenMusicFollowUp() async throws {
+        try await withCloud {
+            let state = AppState()
+            state.nextTranscriptionID = 100
+            state.voiceRepliesEnabled = false
+            var calls: [String] = []
+            var followUps: [CommandFollowUp.Domain?] = []
+            state.spotifyCommandExecutor = { text, _ in calls.append(text); return true }
+            state.followUpListeningOverride = { domain in followUps.append(domain); return true }
+            state.cloudPlanningClient = PlanClient(answer: #"{"version":2,"mode":"command","requestID":"100","steps":[{"kind":"command","source":"Ses kıs","text":"sesi kıs","send":false},{"kind":"command","source":"müzik başlat","text":"müzik başlat","send":false}]}"#)
+            await state.finishTranscription(wakeSession("Gece Ars Ses kıs ve müzik başlat Evet."))
+            XCTAssertEqual(calls.count, 2)
+            XCTAssertEqual(calls.map { SpotifyManager.explicitIntent(in: $0) }, [SpotifyManager.explicitIntent(in: "sesi kıs"), SpotifyManager.explicitIntent(in: "müzik başlat")])
+            XCTAssertEqual(followUps, [.music])
+        }
+    }
+    func testRejectedVoicePlanAsksAndReopensListeningWithoutRunningCommands() async throws {
+        try await withCloud {
+            let state = AppState()
+            state.nextTranscriptionID = 100
+            state.voiceRepliesEnabled = false
+            var commands = 0
+            var followUps = 0
+            state.spotifyCommandExecutor = { _, _ in commands += 1; return true }
+            state.followUpListeningOverride = { _ in followUps += 1; return true }
+            state.cloudPlanningClient = PlanClient(answer: "invalid JSON")
+            await state.finishTranscription(wakeSession("Ses kıs ve müzik başlat"))
+            XCTAssertEqual(commands, 0)
+            XCTAssertEqual(followUps, 1)
+            XCTAssertTrue(state.flowBarMessage?.contains("Tekrar söyler misin?") == true)
+        }
+    }
+}
