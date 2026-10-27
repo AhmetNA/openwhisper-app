@@ -68,9 +68,9 @@ final class AppState {
     var audioProcessingMode: AudioProcessingMode {
         didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
     }
-    var bypassAudioProcessing = UserDefaults.standard.bool(forKey: "bypassAudioProcessing") {
-        didSet { UserDefaults.standard.set(bypassAudioProcessing, forKey: "bypassAudioProcessing") }
-    }
+    /// Legacy: to be removed. Always starts off and is not persisted, because it also skips
+    /// `AudioSignalProcessor.inputGain` and the quiet raw mic then decodes to hallucinations.
+    var bypassAudioProcessing = false
     var deepFilterSetting: DeepFilterSetting {
         didSet {
             UserDefaults.standard.set(deepFilterSetting.rawValue, forKey: "deepFilterSetting")
