@@ -17,6 +17,16 @@ enum CodexSessionNavigator {
         UserDefaults.standard.set([id, title], forKey: lastThreadKey)
     }
 
+    /// After a send: the chat on screen becomes "son sohbet". A brand-new chat has no id yet,
+    /// so the old one is forgotten rather than kept as "son".
+    static func rememberThread(shownIn app: NSRunningApplication) {
+        if let shown = RecordedConversation.capture(app: app), shown.agent == .codex, shown.draft == nil {
+            rememberThread(id: shown.sessionID, title: shown.title)
+        } else {
+            UserDefaults.standard.removeObject(forKey: lastThreadKey)
+        }
+    }
+
     /// `codex://threads/new`, with `?path=` to start it in that project.
     static func openNewThread(_ app: NSRunningApplication, folder: String?) async -> Bool {
         var components = URLComponents(string: "codex://threads/new")!

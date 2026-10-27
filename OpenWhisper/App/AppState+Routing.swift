@@ -1096,6 +1096,7 @@ extension AppState {
                             return
                         }
                         if agent.send, projectAgent == .claudeCode { ClaudeSessionNavigator.rememberSession(app, wasNew: isNew) }
+                        if agent.send, projectAgent != .claudeCode { CodexSessionNavigator.rememberThread(shownIn: app) }
                         if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
                     }
                     return
@@ -1163,6 +1164,9 @@ extension AppState {
                 if agent.send, let app = targetApp,
                    app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false {
                     ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
+                } else if agent.send, let app = targetApp,
+                          app.bundleIdentifier.map(AgentApp.codex.bundleIdentifiers.contains) ?? false {
+                    CodexSessionNavigator.rememberThread(shownIn: app)
                 }
                 if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
 
@@ -1352,11 +1356,13 @@ extension AppState {
                     await say(self.jarvisReply.failure("\(chat.agent.displayName) açılamadı"), durationMs: 4000)
                     return
                 }
-                let opened = chat.agent == .claudeCode
+                let navigated = chat.agent == .claudeCode
                     ? await ClaudeSessionNavigator.openSession(app, id: chat.id, title: chat.title)
                     : await CodexSessionNavigator.openThread(app, id: chat.id, title: chat.title)
-                guard opened else {
-                    await say(self.jarvisReply.failure("sohbeti açamadım"), durationMs: 4000)
+                // A changed title is not proof: the open mic must never write into another chat.
+                guard navigated, RecordedConversation.capture(app: app)?.sessionID == chat.id else {
+                    owLog("[Agent] Finished chat: could not verify \"\(chat.title)\" opened")
+                    await say("Sohbetin açıldığını doğrulayamadım.", durationMs: 4000)
                     return
                 }
                 if session.isVoiceCommand { conversationContinuationApp = app }

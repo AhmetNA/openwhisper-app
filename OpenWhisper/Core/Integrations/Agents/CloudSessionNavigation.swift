@@ -25,7 +25,7 @@ enum CloudSessionNavigation {
         let verb = ["aç", "geç", "git", "dön", "bul", "başlat"]
         // "Biten sohbete geç" has its own local route (`AgentFinishedChat`).
         return subject.contains(where: t.contains) && verb.contains(where: t.contains)
-            && AgentCommandParser.finishedChatRequest(text) == nil
+            && AgentCommandParser.finishedChatRequest(text) == nil && !AgentCommandParser.isSessionSummaryRequest(text)
     }
 
     static func decision(_ text: String, candidates: [Candidate], currentID: String?) -> Decision? {
