@@ -110,7 +110,8 @@ enum AgentCommandParser {
     private static let newSession = #"(?<new>(?:yeni|new)(?:\s+bir)?)"#
     // "Sağ seçeneğine" was Whisper's "son session'ına"; only counts before a session word.
     private static let lastSession = #"(?<last>(?:en\s+)?(?:son|sağ)|bir\s+önceki|önceki|last|previous)"#
-    private static let openVerb = #"(?:aç|açıp|açın|açtır|başlat)\p{L}*"#
+    // Whisper writes "başlat" as "başladı" (voice test 2026-10-27).
+    private static let openVerb = #"(?:aç|açıp|açın|açtır|başlat|başladı|başlasın)\p{L}*"#
     /// `bare` also accepts "new session" / "yeni sohbet" with no ending; only used where the
     /// verb has to follow right after, so nothing of the message can be swallowed.
     private static func sessionQualifier(bare: Bool, spotify: Bool) -> String {
