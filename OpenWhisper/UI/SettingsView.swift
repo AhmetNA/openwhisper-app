@@ -1120,6 +1120,21 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if appState.targetSpeakerEnrollmentIsRecording,
+                   AppState.targetSpeakerEnrollmentReadingTexts.indices.contains(appState.targetSpeakerEnrollmentStep) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Sesli oku:")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(AppState.targetSpeakerEnrollmentReadingTexts[appState.targetSpeakerEnrollmentStep])
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                }
+
                 if let progress = appState.targetSpeakerPreparationProgress {
                     ProgressView(value: progress)
                 } else if appState.targetSpeakerEnrollmentIsProcessing {

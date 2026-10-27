@@ -743,6 +743,13 @@ final class AppState {
         "Şimdi pozisyonunu değiştirip, mümkünse yatarak doğal biçimde konuş."
     ]
 
+    /// Text read aloud during each enrollment recording: covers every Turkish sound, the wake
+    /// word, statements, questions, numbers and commands, so the profile hears the whole voice.
+    static let targetSpeakerEnrollmentReadingTexts = [
+        "Jarvis, bugün hava biraz serin ama güneşli. Sabah yedide kalkıp çayımı içtim, ardından işe yürüyerek gittim. Öğleden sonra üç toplantım var; akşam eve dönünce kitap okuyup erkenden yatacağım.",
+        "Jarvis, yarın saat dokuz buçukta bana hatırlatır mısın? Müzik çal, sesi biraz kıs ve son mesajı oku. Kaç derece olacak, yağmur yağar mı? Garajın kapısını da kapat, fatura yüz kırk beş lira mıydı? Teşekkürler, görüşürüz."
+    ]
+
     // MARK: - Setup
 
     var activeTranscriptionService: WhisperTranscriptionService? {
