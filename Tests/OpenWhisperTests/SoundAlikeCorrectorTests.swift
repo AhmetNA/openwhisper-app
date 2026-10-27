@@ -26,6 +26,16 @@ final class SoundAlikeCorrectorTests: XCTestCase {
         XCTAssertEqual(fix(text), text)
     }
 
+    func testPageIsNotSpotify() {
+        // 27 Oct 2026: "Bu sayfayı özetle" became "Bu Spotify'ı özetle" and was typed instead.
+        let text = "Bu sayfayı özetle. Sayfada, sayfaya, sayfanın, sayfası, sayfalar, sofaya, safaya"
+        XCTAssertEqual(fix(text), text)
+        // A name already right is not glued to the next word: "Spotify 5" kept its 5.
+        for text in ["Spotify 5 dakika sonra kapansın", "Spotify vs. Apple Music", "Spotify ile aç"] {
+            XCTAssertEqual(fix(text), text)
+        }
+    }
+
     func testOtherEntries() {
         XCTAssertEqual(fix("vatsapı aç"), "WhatsApp'ı aç")
         XCTAssertEqual(fix("Blututu kapat"), "Bluetooth'u kapat")

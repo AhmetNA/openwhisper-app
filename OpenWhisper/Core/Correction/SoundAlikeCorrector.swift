@@ -99,8 +99,10 @@ enum SoundAlikeCorrector {
                 }
             }
             // Two words first: Whisper often splits the name ("pöt fayda"). Not when the first
-            // word already ends the name ("Cloud'a sor", "Spotify, aç").
+            // word already ends the name ("Cloud'a sor", "Spotify, aç") or already is it
+            // ("Spotify 5" lost the 5).
             if index + 1 < words.count, !words[index].contains(where: { $0 == "'" || $0 == "’" || ($0.isPunctuation) }),
+               !entries.contains(where: { fold($0.canonical) == fold(words[index]) }),
                let fixed = replacement(for: words[index] + words[index + 1], entries: entries) {
                 applied.append((words[index] + " " + words[index + 1], fixed))
                 output.append(fixed)
@@ -153,9 +155,11 @@ enum SoundAlikeCorrector {
         // that a near miss can't be an everyday Turkish word.
         guard let spoken = entry.spoken, !entry.canonical.contains(" "), candidate.count >= 5 else { return false }
         let target = fold(spoken).replacingOccurrences(of: " ", with: "")
-        // A short spoken form is only one letter away from everyday words at 40%: "bulut(ta)"
+        // A short spoken form is only one letter away from everyday words: "bulut(ta)"
         // → Bluetooth'ta and "varsa" → WhatsApp (Oct 2026). Below 7 letters, one edit at most.
-        let allowed = target.count < 7 ? 1 : Int(Double(target.count) * 0.4)
+        // At 40% a long one was too loose as well: "sayfay(ı)" is three edits from "spotifay"
+        // and "Bu sayfayı özetle" became "Bu Spotify'ı özetle" (Oct 2026).
+        let allowed = target.count < 7 ? 1 : Int(Double(target.count) * 0.3)
         return WakeWordVerifier.editDistance(candidate, target) <= allowed
     }
 
