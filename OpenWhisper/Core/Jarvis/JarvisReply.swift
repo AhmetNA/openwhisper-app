@@ -195,7 +195,15 @@ struct JarvisReply {
 
     // MARK: - About Jarvis himself
 
-    enum Meta: Equatable, Sendable { case repeatLast, help }
+    enum Meta: Equatable, Sendable {
+        case repeatLast, help
+        /// "Burada ne diyebilirim?": a few commands for the app in front.
+        case whatCanISay
+        /// "Ne duydun?": the last transcript, read back.
+        case whatDidYouHear
+        /// "Son komutu geri al".
+        case undoLastCommand
+    }
 
     static func meta(in text: String) -> Meta? {
         let locale = Locale(identifier: "tr_TR")
@@ -210,6 +218,16 @@ struct JarvisReply {
         case "ne yapabilirsin", "neler yapabilirsin", "sen ne yapabilirsin", "sen neler yapabilirsin",
              "neler yapabiliyorsun", "hangi komutları biliyorsun", "yardım", "yardım et", "nasıl kullanılıyorsun":
             return .help
+        case "ne diyebilirim", "neler diyebilirim", "burada ne diyebilirim", "burada neler diyebilirim",
+             "şimdi ne diyebilirim", "ne söyleyebilirim", "neler söyleyebilirim", "burada ne yapabilirim",
+             "burada neler yapabilirim", "burada ne yapabilirsin", "burada neler yapabilirsin", "hangi komutları söyleyebilirim":
+            return .whatCanISay
+        case "ne duydun", "ne anladın", "beni nasıl duydun", "ne dediğimi duydun", "son ne dedim", "en son ne dedim",
+             "ne dedim", "neyi duydun", "son söylediğimi oku":
+            return .whatDidYouHear
+        case "son komutu geri al", "son komutunu geri al", "komutu geri al", "son yaptığını geri al",
+             "az önce yaptığını geri al", "yaptığını geri al", "son işlemi geri al", "son komutu iptal et":
+            return .undoLastCommand
         default: return nil
         }
     }
@@ -218,6 +236,28 @@ struct JarvisReply {
         + "Zamanlayıcı, alarm, hatırlatıcı ve takvim etkinliği kurarım, günün özetini veririm, mailleri okur, cevap taslağı hazırlarım. "
         + "Safari'de arama yapar, sayfayı özetler, videoyu yönetirim, Claude Code'a mesaj yazarım. "
         + "Bana bir şeyi hatırlamamı söyleyebilir ya da sadece sohbet edebilirsiniz."
+
+    /// "Burada ne diyebilirim?": what fits the app in front, or the text field.
+    static func whatCanISay(frontBundleID: String?, inTextField: Bool) -> String {
+        let anywhere = "Ekrandaki bir şeyi anlatman da yeter, örneğin 'kaydet' ya da 'izin ver'; 'son komutu geri al' da diyebilirsin."
+        if inTextField {
+            return "Söylediğini buraya yazarım. Sonra 'sil', 'son kelimeyi sil', 'Ahmed'i Ahmet yap' ya da 'enter'a bas' diyebilirsin."
+        }
+        switch frontBundleID {
+        case "com.apple.Safari":
+            return "Burada 'bu sayfayı özetle', 'YouTube'da lofi ara', 'yeni sekme aç' ya da 'geri git' diyebilirsin. " + anywhere
+        case "com.spotify.client":
+            return "Burada 'şarkıyı durdur', 'sonraki şarkı', 'Tarkan çal' ya da 'sesi kıs' diyebilirsin."
+        case "com.apple.mail":
+            return "Burada 'son maili oku', 'okunmamış mailleri oku' ya da 'bu maili özetle' diyebilirsin. " + anywhere
+        case "net.whatsapp.WhatsApp", "desktop.WhatsApp":
+            return "Burada 'WhatsApp'ta okunmamış var mı' ya da 'Ali'ye WhatsApp'tan yaz akşam geliyorum' diyebilirsin."
+        case "com.anthropic.claudefordesktop", "com.openai.codex":
+            return "Burada 'yeni session aç', 'son session'ı özetle', 'Bitirme projesine geç' ya da 'Claude'a yaz … gönder' diyebilirsin."
+        default:
+            return "'Safari'ye geç', 'Wi-Fi'yi kapat', '10 dakikalık zamanlayıcı kur' ya da 'bunu özetle' diyebilirsin. " + anywhere
+        }
+    }
 
     // MARK: - Memory
 
@@ -375,9 +415,9 @@ struct JarvisReply {
         case .briefing:
             return status.count > 140 ? (status.components(separatedBy: " — ").first ?? status) : status
         case .browser(.summarize):
-            // The whole summary is in the notification; three sentences are enough to hear.
+            // The whole summary is in the notification; two sentences are enough to hear.
             let sentences = status.components(separatedBy: ". ")
-            return sentences.count > 3 ? sentences.prefix(3).joined(separator: ". ") + "." : status
+            return sentences.count > 2 ? sentences.prefix(2).joined(separator: ". ") + "." : status
         default:
             return status
         }

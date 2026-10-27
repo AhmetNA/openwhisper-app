@@ -689,7 +689,7 @@ enum SystemCommandParser {
     /// "sayfayı yenile", "geri git", "sonraki sekme", "bu sayfayı özetle".
     private static func parseBrowserTab(_ text: String) -> BrowserAction? {
         let text = text.replacingOccurrences(of: #"^safari'?(?:de|da|yi)? "#, with: "", options: .regularExpression)
-        let page = #"(?:bu |şu )?(?:sayfayı|sayfa|siteyi|makaleyi|yazıyı|sekmeyi|haberi)"#
+        let page = #"(?:bu |şu )?(?:sayfayı|sayfa|siteyi|makaleyi|yazıyı|sekmeyi|haberi|metni|belgeyi|dosyayı|maili|ekranı|bunu)"#
         if matches(text, #"^\#(page) (?:özetle|özetler misin|özetleyebilir misin|özetle bana|bana özetle)(?: lütfen)?$"#)
             || matches(text, #"^(?:bu |şu )?(?:sayfa|sayfada|makale|makalede|yazı|yazıda|haber|haberde) ne (?:anlatıyor|yazıyor|diyor)$"#)
             || matches(text, #"^(?:bu |şu )?sayfanın özeti(?:ni)?(?: ver| çıkar)?$"#) { return .summarize }

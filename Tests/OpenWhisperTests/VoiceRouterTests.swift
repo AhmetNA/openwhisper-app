@@ -31,6 +31,14 @@ final class VoiceRouterTests: XCTestCase {
                           lastDictation: lastDictation)
     }
 
+    func testPendingScreenPressTakesTheAnswer() {
+        var pending = facts(focus: .notEditable)
+        pending.pendingScreenPress = true
+        guard case .screenPressConfirmation = VoiceRouter.route("evet", facts: pending) else {
+            return XCTFail("a pending press gets the answer")
+        }
+    }
+
     func testDictationEditsActOnTheLastDictation() {
         let typing = facts(voice: false, focus: .editable, lastDictation: "Ahmed geldi")
         guard case .dictationEdit(.deleteAll) = VoiceRouter.route("Sil.", facts: typing) else {

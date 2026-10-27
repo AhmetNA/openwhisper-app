@@ -24,6 +24,8 @@ enum VoiceRouter {
         var pendingDeletion = false
         /// A WhatsApp message waits for "evet" / "hayır" (`WhatsAppSender`).
         var pendingWhatsAppSend = false
+        /// "Gönder'e basayım mı?" waits for "evet" / "hayır" (`ScreenActions`).
+        var pendingScreenPress = false
         /// Test mode reads TODO items aloud; "geçti" / "kaldı" / "atla" answer it.
         var voiceTestActive = false
         /// The words came from audio the profile rejected while the Mac played a song or video
@@ -64,6 +66,8 @@ enum VoiceRouter {
         /// The answer to a pending WhatsApp message; like `deletionConfirmation`, the app
         /// routes again without `pendingWhatsAppSend` when it is no answer.
         case whatsAppConfirmation
+        /// The answer to "… basayım mı?"; like `whatsAppConfirmation`, routed again when it is none.
+        case screenPressConfirmation
         /// Several commands at once: "sesi kıs ve Bluetooth'u kapat".
         case commands([MultiCommandSplitter.Step<VoiceCommand>])
         case command(VoiceCommand)
@@ -124,6 +128,7 @@ enum VoiceRouter {
         if voice {
             // First: "evet" / "tamam" would otherwise read as a greeting or a meta answer.
             if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
+            if facts.pendingScreenPress { return .screenPressConfirmation }
             if AgentCommandParser.isSessionSummaryRequest(trimmed) { return .claudeSessionRecap }
             // An editable field normally routes to dictation. This explicit phrase lets the
             // user talk to Jarvis without first clicking away from the field.

@@ -707,6 +707,7 @@ extension AppState {
                         owLog("[Route] agent dictation reached the command runner; skipped")
                     }
                 }
+                self.lastCommandUndo = CommandUndo.steps(undoing: ran)
                 session.latency.record(.action, since: actionStartedAt, detail: output)
                 session.latency.markOutput("\(output) tamamlandı")
                 let summary = statuses.joined(separator: " · ")
@@ -772,6 +773,7 @@ extension AppState {
                     self.openTypedRequestPanel(prompt: prompt) { [weak self] in
                         self?.reminderManager?.cancelPendingDeletion()
                         self?.whatsAppSender.cancel()
+                        self?.pendingScreenPress = nil
                     }
                     return
                 }
@@ -787,6 +789,55 @@ extension AppState {
                     self.showFlowBarMessage(prompt, durationMs: 6000)
                 }
                 self.startVoiceSession(trigger: .confirmation)
+            }
+
+            /// "Kaydet", "izin ver", "sağ üstteki çarpıya bas": something in the front window,
+            /// named as the user would to a friend. Not in a text field, unless clicking is said
+            /// outright (there "tamam" is dictation), and never from a mic left open after a
+            /// command or over playing media, where a TV's "tamam" must not press anything.
+            @MainActor func screenAction() async -> Bool {
+                guard session.acceptsCommands, !session.takesOnlyCommands, !session.heardOnlyOverPlayback,
+                      !RemoteControl.screenIsLocked, let app = session.targetApp, !app.isTerminated,
+                      app.bundleIdentifier != Bundle.main.bundleIdentifier,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
+                // Fn types unless the focus is known not to be a text field (Electron composers
+                // report it unknown); a Jarvis session only stays out of a known text field.
+                let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
+                if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
+                guard ScreenActions.worthLooking(trimmed) else { return false }
+                let elements = ScreenActions.elements(of: app)
+                guard !elements.isEmpty else { return false }
+                let labels = elements.map(\.label)
+                var pick: Int?
+                let exact = ScreenActions.exactMatches(trimmed, labels: labels)
+                if exact.count == 1 {
+                    pick = exact[0]
+                } else if exact.count > 1, exact.filter({ elements[$0].inDialog }).count == 1 {
+                    pick = exact.first { elements[$0].inDialog }
+                } else if !exact.isEmpty || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
+                    self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
+                    pick = await ScreenActions.modelPick(trimmed, elements: elements)
+                    if pick == nil { self.dismissFlowBarMessage() }
+                }
+                guard let pick else { return false }
+                let target = elements[pick]
+                session.latency.finishDecision(route: "ekran eylemi")
+                owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(exact.isEmpty ? " by the model" : "")")
+                self.lastTranscription = text
+                self.lastCommandUndo = []
+                if ScreenActions.isRisky(target.label) {
+                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
+                    let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
+                    let heard = await self.speakReply(prompt)
+                    askFollowUp(prompt, heard: heard)
+                    return true
+                }
+                let pressed = ScreenActions.perform(target)
+                self.showFlowBarMessage(pressed ? "“\(target.label)” ✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
+                if session.isVoiceCommand {
+                    await self.speakReply(pressed ? self.jarvisReply.ack() : self.jarvisReply.failure("Basamadım"))
+                }
+                return true
             }
 
             // For a Jarvis session that is not a command, keyboard focus is the primary signal:
@@ -851,6 +902,7 @@ extension AppState {
 
             // The rules decide where the transcript goes (`VoiceRouter`, in their order); this
             // runs the decision.
+            if let pending = self.pendingScreenPress, pending.expiresAt <= Date() { self.pendingScreenPress = nil }
             var facts = VoiceRouter.Facts(
                 isVoiceCommand: session.isVoiceCommand,
                 acceptsCommands: session.acceptsCommands,
@@ -859,6 +911,7 @@ extension AppState {
                 targetBundleID: session.targetApp?.bundleIdentifier,
                 pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
                 pendingWhatsAppSend: self.whatsAppSender.hasPending,
+                pendingScreenPress: self.pendingScreenPress != nil,
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 lastDictation: self.editableDictation(in: session.targetApp),
@@ -918,6 +971,31 @@ extension AppState {
                     return
                 }
                 facts.pendingWhatsAppSend = false
+                route = VoiceRouter.route(text, facts: facts)
+            }
+
+            if case .screenPressConfirmation = route {
+                if let pending = self.pendingScreenPress, let approved = ScreenActions.confirmation(trimmed) {
+                    self.pendingScreenPress = nil
+                    session.latency.finishDecision(route: "ekran onayı")
+                    owLog("[Route] screen press confirmation: \(approved)")
+                    self.lastTranscription = text
+                    guard approved else {
+                        await say("Tamam, basmadım.", durationMs: 2500)
+                        return
+                    }
+                    guard pending.expiresAt > Date(),
+                          NSWorkspace.shared.frontmostApplication?.processIdentifier == pending.app.processIdentifier else {
+                        await say("Ekran değişti, basmadım.", durationMs: 3000)
+                        return
+                    }
+                    let pressed = ScreenActions.perform(pending.target)
+                    self.showFlowBarMessage(pressed ? "“\(pending.target.label)” ✓" : "Basılamadı", durationMs: 1500)
+                    if !pressed { await self.speakReply(self.jarvisReply.failure("Basamadım")) }
+                    return
+                }
+                self.pendingScreenPress = nil
+                facts.pendingScreenPress = false
                 route = VoiceRouter.route(text, facts: facts)
             }
 
@@ -1104,12 +1182,31 @@ extension AppState {
             case .meta(let meta):
                 session.latency.finishDecision(route: "Jarvis hakkında")
                 owLog("[Route] meta (\(meta))")
-                self.lastTranscription = text
+                let heard = self.lastTranscription
                 let reply: String
                 switch meta {
                 case .repeatLast: reply = self.lastSpokenReply ?? "Henüz bir şey söylemedim."
                 case .help: reply = JarvisReply.helpText
+                case .whatCanISay:
+                    reply = JarvisReply.whatCanISay(frontBundleID: session.targetApp?.bundleIdentifier,
+                                                    inTextField: session.routingFocus == .editable)
+                case .whatDidYouHear:
+                    // Not a transcript of its own: asked twice, it still reads the request before.
+                    reply = heard.isEmpty ? "Henüz bir şey duymadım." : "“\(heard)” diye duydum."
+                    await say(reply, durationMs: 8000)
+                    return
+                case .undoLastCommand:
+                    self.lastTranscription = text
+                    let undo = self.lastCommandUndo
+                    guard !undo.isEmpty else {
+                        await say("Geri alabileceğim bir komut yok.", durationMs: 3000)
+                        return
+                    }
+                    owLog("[Route] undo last command: \(undo)")
+                    await runCommands(undo.map { MultiCommandSplitter.Step(text: trimmed, command: $0) }, output: "komut geri alma")
+                    return
                 }
+                self.lastTranscription = text
                 await say(reply, durationMs: 8000)
 
             // "Bunu hatırla: …", "benim adım …", "hakkımda ne biliyorsun?", "… unut".
@@ -1186,7 +1283,7 @@ extension AppState {
                 await self.speakReply(summary)
                 if self.listenForClaudeMessage(summary, after: session) { holdMediaForReplyAnswer = true }
 
-            case .deletionConfirmation, .whatsAppConfirmation:
+            case .deletionConfirmation, .whatsAppConfirmation, .screenPressConfirmation:
                 // Answered above; a non-answer was routed again without it.
                 break
 
@@ -1281,6 +1378,8 @@ extension AppState {
                 }
                 owLog("[Route] \(isSpotifyCommand ? "spotify" : "dictation")")
                 guard isSpotifyCommand else {
+                    // After Spotify: "Tarkan çal" must not pick a row that says Tarkan.
+                    if await screenAction() { return }
                     await dictateOrChat()
                     return
                 }

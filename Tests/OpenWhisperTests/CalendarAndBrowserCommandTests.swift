@@ -159,6 +159,8 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Önceki sekme"), .browser(.previousTab))
         XCTAssertEqual(SystemCommandParser.parse("Bu sayfayı özetle"), .browser(.summarize))
         XCTAssertEqual(SystemCommandParser.parse("Bu makale ne anlatıyor?"), .browser(.summarize))
+        XCTAssertEqual(SystemCommandParser.parse("Bu maili özetle"), .browser(.summarize))
+        XCTAssertEqual(SystemCommandParser.parse("Bunu özetler misin?"), .browser(.summarize))
         XCTAssertEqual(SystemCommandParser.parse("Sayfayı aşağı kaydır"), .scroll(up: false, large: false))
     }
 
@@ -167,7 +169,7 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
         reply.addressChance = 0
         let summary = "Sayfa yeni bir telefonu tanıtıyor. Kulaklık girişi yok. Fiyatı 999 dolar. Ekim'de satışa çıkacak."
         XCTAssertEqual(reply.system(.browser(.summarize), status: summary),
-                       "Sayfa yeni bir telefonu tanıtıyor. Kulaklık girişi yok. Fiyatı 999 dolar.")
+                       "Sayfa yeni bir telefonu tanıtıyor. Kulaklık girişi yok.")
         XCTAssertEqual(reply.system(.browser(.summarize), status: BrowserController.summaryFailed), "Maalesef, sayfa özetlenemedi.")
         XCTAssertTrue(JarvisReply.acks.contains(reply.system(.browser(.search(.google, "yok")), status: "Google'da aranıyor: yok") ?? ""))
     }

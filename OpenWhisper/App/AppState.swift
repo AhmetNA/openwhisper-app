@@ -608,6 +608,10 @@ final class AppState {
     /// The exact string currently injected (post-trim, matching what TextInjector actually
     /// pasted) — its `count` drives how many backspaces a swap sends.
     var lastInjectedText: String = ""
+    /// What undoes the last command ("son komutu geri al"); empty when it can't be undone.
+    @ObservationIgnored var lastCommandUndo: [VoiceCommand] = []
+    /// A risky on-screen button waiting for a spoken yes ("Gönder'e basayım mı?").
+    @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date)?
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     var swapTargetApp: NSRunningApplication?

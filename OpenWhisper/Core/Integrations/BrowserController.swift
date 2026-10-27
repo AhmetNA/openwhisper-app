@@ -102,11 +102,23 @@ enum BrowserController {
     static let maxPageCharacters = 5000
 
     private static func summarizeCurrentPage() async -> String {
+        // Another app in front: its window is "this page" (a PDF, a mail, a note).
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != bundleID, front.bundleIdentifier != Bundle.main.bundleIdentifier,
+           let window = ScreenReader.windowText(of: front, limit: maxPageCharacters),
+           window.text.count >= 80 {
+            return await summarize(title: window.title, text: window.text)
+        }
         guard hasWindow() else { return noPage }
         guard let page = currentPage() else { return unreadable }
         let text = page.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.count >= 80 else { return unreadable }
-        owLog("[Browser] Summarizing '\(page.title)' (\(text.count) chars)")
+        return await summarize(title: page.title, text: text)
+    }
+
+    private static func summarize(title: String, text: String) async -> String {
+        owLog("[Browser] Summarizing '\(title)' (\(text.count) chars)")
+        let page = (title: title, text: text)
         guard let summary = await ollamaSummary(title: page.title, text: String(text.prefix(maxPageCharacters))) else {
             return summaryFailed
         }
@@ -131,7 +143,7 @@ enum BrowserController {
 
     private static func ollamaSummary(title: String, text: String) async -> String? {
         let prompt = """
-            Aşağıda bir web sayfasının metni var. Sayfanın ne anlattığını Türkçe, en fazla 3 kısa \
+            Aşağıda bir sayfanın metni var. Sayfanın ne anlattığını Türkçe, en fazla 2 kısa \
             cümleyle özetle. Sadece özeti yaz; giriş cümlesi, başlık, madde işareti kullanma.
 
             Sayfa başlığı: \(title)
