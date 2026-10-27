@@ -40,7 +40,9 @@ extension AppState {
     /// Whisper.
     func handleDirectWake(audio: [Float], score: Float) {
         guard wakeWordEnabled else { return }
-        if whisperSuspendedForIdle || pendingWhisperWake != nil {
+        // A cold Whisper doesn't hold the call back: the recording starts now and loads the
+        // model itself (the deferred path cost ~1.5 s and dropped clear calls, 27 Oct 2026).
+        if pendingWhisperWake != nil {
             beginPendingWhisperWake(audio: audio, score: score, isDirect: true)
             return
         }
@@ -97,13 +99,15 @@ extension AppState {
     /// A weak direct detection: the session is already recording (no added latency) while
     /// Whisper checks the clip for "Jarvis"; without it the recording is dropped untranscribed.
     func confirmDirectWake(audio: [Float], score: Float, clipID: UUID?) {
-        guard modelLoaded, let transcriber = activeTranscriptionService else { return }
-        activeWhisperWakeChecks += 1
         wakeConfirmationID &+= 1
         let id = wakeConfirmationID
         let started = Date()
         Task { [weak self] in
             guard let self else { return }
+            // After a cold wake the check waits for the model the recording is loading.
+            await self.resumeIdleWhisperIfNeeded()
+            guard self.modelLoaded, let transcriber = self.activeTranscriptionService else { return }
+            self.activeWhisperWakeChecks += 1
             defer { self.activeWhisperWakeChecks -= 1 }
             let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
@@ -158,9 +162,11 @@ extension AppState {
     /// heard the word is only recorded (`shadow:` in the wake clip log), never acted on, until the
     /// clips show that enforcing it doesn't drop the user's own calls (WAKE-SPEAKER-PLANI.md).
     func shadowWakeWordCheck(audio: [Float], clipID: UUID?) {
-        guard modelLoaded, clipID != nil, let transcriber = activeTranscriptionService else { return }
-        activeWhisperWakeChecks += 1
+        guard clipID != nil else { return }
         Task {
+            await resumeIdleWhisperIfNeeded()
+            guard modelLoaded, let transcriber = activeTranscriptionService else { return }
+            activeWhisperWakeChecks += 1
             defer { activeWhisperWakeChecks -= 1 }
             let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             WakeClipLog.shared.update(clipID) { $0.wordCheck = "shadow " + Self.wakeClipWordCheck(verdict) }
