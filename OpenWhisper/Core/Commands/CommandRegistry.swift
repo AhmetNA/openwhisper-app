@@ -92,6 +92,25 @@ enum CommandRegistry {
     ]
 
     /// The first entry, among `domains`, that reads `text` as its command.
+    /// A whole command the rules run without a model and without free text: timers, video,
+    /// Mac controls and direct playback/volume. Agent messages, mail replies, web searches
+    /// and song searches may go on after a pause, so they never qualify.
+    static func isClearCommand(_ text: String, context: Context) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        if let command = match(trimmed, in: [.timer, .video, .system], context: context) {
+            switch command {
+            case .system(.whatsAppSearch), .system(.calendarEvent), .system(.browser),
+                 .system(.mailReplyDraft): return false
+            default: return true
+            }
+        }
+        let request = SpotifyManager.commandModeText(
+            SpotifyManager.repairPlayVerbMishearing(SpotifyManager.repairVolumeMishearing(trimmed)))
+        return SpotifyManager.explicitIntent(in: request)?.isDirectControl == true
+            || SpotifyManager.directVolumeIntent(request) != nil
+    }
+
     static func match(_ text: String, in domains: Set<Domain> = Set(Domain.allCases),
                       context: Context) -> VoiceCommand? {
         match(text, where: { domains.contains($0.domain) }, context: context)

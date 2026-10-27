@@ -11,13 +11,17 @@ extension AppState {
               let transcriber = activeTranscriptionService else { return }
         let now = CACurrentMediaTime()
         let speechTime = session.doneLastSpeechTime
-        guard speechTime > session.doneCheckedSpeechTime,
-              now - speechTime >= 0.20, now - speechTime < 1.5,
-              now - session.doneLastCheckTime >= 0.75 else { return }
         let endpoint = smartTurnEndpointDetector?.lastEndpoint
         if smartTurnEndpointDetector != nil {
-            // One decode per VAD pause, not a new expensive call for every level fluctuation.
-            guard let endpoint, endpoint.time > session.doneCheckedEndpointTime else { return }
+            // One decode per fresh VAD pause, not a new expensive call for every level
+            // fluctuation. Timed by the pause itself: the level meter can miss quiet speech
+            // entirely, and Silero reports the pause up to ~1.7 s after the level drops.
+            guard let endpoint, endpoint.time > session.doneCheckedEndpointTime,
+                  now - endpoint.time < 1.5 else { return }
+        } else {
+            guard speechTime > session.doneCheckedSpeechTime,
+                  now - speechTime >= 0.20, now - speechTime < 1.5,
+                  now - session.doneLastCheckTime >= 0.75 else { return }
         }
         let whole = endpoint != nil && session.queuedSampleCount == 0 && session.nextSegmentNumber == 0
             ? audioEngine.previewSamples(maximumCount: 20 * 16_000) : nil
@@ -53,8 +57,10 @@ extension AppState {
                 guard let text = await previewTask.value else { return }
                 guard let self, self.recordingState == .recording,
                       self.activeTranscriptionSession === session, !session.isCancelled,
-                      session.doneLastSpeechTime == speechTime,
-                      SpokenDoneEndpoint.removingSuffix(from: text) != nil else { return }
+                      session.doneLastSpeechTime == speechTime else { return }
+                let spokenDone = SpokenDoneEndpoint.removingSuffix(from: text) != nil
+                guard spokenDone || self.isFinishedClearCommand(text, session: session, endpoint: endpoint,
+                                                                previewSampleCount: whole?.count) else { return }
                 // Respect the enrolled-speaker gate before accepting a spoken control word.
                 if session.targetSpeakerEnabled, let profile = session.targetSpeakerProfile {
                     let score = try await self.targetSpeakerFilter.wakeSpeakerScore(samples: samples, profile: profile)
@@ -62,6 +68,15 @@ extension AppState {
                 }
                 guard self.recordingState == .recording, self.activeTranscriptionSession === session,
                       !session.isCancelled, session.doneLastSpeechTime == speechTime else { return }
+                if !spokenDone {
+                    // Re-check after the speaker score: the user may have gone on meanwhile.
+                    guard self.isFinishedClearCommand(text, session: session, endpoint: endpoint,
+                                                      previewSampleCount: whole?.count) else { return }
+                    owLog("[FastStop] Clear command '\(text)'; processing recording without the remaining silence")
+                    self.hotkey?.externalCancelHandsFree()
+                    self.stopRecording()
+                    return
+                }
                 owLog("[SpokenDone] Final done detected; processing recording immediately")
                 self.hotkey?.externalCancelHandsFree()
                 self.stopRecording()
@@ -69,5 +84,22 @@ extension AppState {
                 owLog("[SpokenDone] Tail check failed: \(error)")
             }
         }
+    }
+
+    /// A Jarvis command the rules alone run, whose whole audio the preview covered, with Smart
+    /// Turn certain it is complete and no speech since: waiting out the rest of the silence
+    /// only delays it. Anything else keeps the normal endpoint, so a pause mid-sentence never
+    /// ends the recording here.
+    private func isFinishedClearCommand(_ text: String, session: RecordingTranscriptionSession,
+                                        endpoint: SmartTurnEndpointDetector.Endpoint?,
+                                        previewSampleCount: Int?) -> Bool {
+        guard session.isVoiceCommand, let endpoint, let previewSampleCount,
+              let detector = smartTurnEndpointDetector,
+              endpoint.probability >= 0.97, detector.lastEndpoint == endpoint,
+              detector.previewCoverage.lastSpeechSample <= previewSampleCount else { return false }
+        let timers = TimerManager.shared
+        let context = CommandRegistry.Context(ringing: timers.ringing != nil, timerActive: !timers.timers.isEmpty,
+                                              installedApps: SystemController.installedApps())
+        return CommandRegistry.isClearCommand(WakeWordVerifier.strippingLeadingWakeWord(text), context: context)
     }
 }

@@ -177,4 +177,17 @@ final class VoiceRouterTests: XCTestCase {
             return XCTFail("the command first, then the video")
         }
     }
+
+    /// Only these may end a Jarvis recording before the usual silence (FastStop).
+    func testClearCommandsForFastStop() {
+        let context = CommandRegistry.Context()
+        for text in ["Saat kaç?", "Müziği durdur.", "Müziği devam ettir.", "Sesi biraz kıs.",
+                     "Zamanlayıcı ne kadar kaldı?", "Videoyu durdur"] {
+            XCTAssertTrue(CommandRegistry.isClearCommand(text, context: context), text)
+        }
+        for text in ["", "Müziği", "Ses çok yüksek", "Google'da hava durumu ara",
+                     "Claude Code'a yaz merhaba", "Spotify'da Tarkan çal", "Bugün hava çok güzel"] {
+            XCTAssertFalse(CommandRegistry.isClearCommand(text, context: context), text)
+        }
+    }
 }
