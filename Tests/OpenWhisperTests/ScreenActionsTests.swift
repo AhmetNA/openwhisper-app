@@ -76,4 +76,26 @@ final class ScreenActionsTests: XCTestCase {
         XCTAssertEqual(JarvisReply.meta(in: "Son komutu geri al."), .undoLastCommand)
         XCTAssertEqual(JarvisReply.meta(in: "Ne yapabilirsin?"), .help)
     }
+
+    /// 27 Oct 2026: "New tuşuna basar mısın" was heard as "Niv" and "Nil" in the Claude app.
+    func testMisheardEnglishLabelSoundsLikeTheButton() {
+        let labels = ["Hide sidebar", "Back", "Forward", "New", "Artifacts", "Customize", "Claude Code"]
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Niv tuşuna basar mısın?", labels: labels), [3])
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Nil tuşuna basar mısın?", labels: labels), [3])
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Sent'e bas", labels: ["Send", "Cancel"]), [0])
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Kensıl'a tıkla", labels: ["Send", "Cancel"]), [1])
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Tarkan'a bas", labels: labels), [])
+    }
+
+    /// The model pressed "Claude Code" for "Nil tuşuna basar mısın?".
+    func testModelPickMustBeTiedToWhatWasSaid() {
+        XCTAssertFalse(ScreenActions.isGrounded("Nil tuşuna basar mısın?", label: "Claude Code"))
+        XCTAssertTrue(ScreenActions.isGrounded("Nil tuşuna basar mısın?", label: "New"))
+        XCTAssertTrue(ScreenActions.isGrounded("Yeni sohbet butonuna bas", label: "New chat"))
+        XCTAssertTrue(ScreenActions.isGrounded("İzin ver", label: "Allow"))
+        XCTAssertTrue(ScreenActions.isGrounded("Kaydet'e tıkla", label: "Save"))
+        XCTAssertTrue(ScreenActions.isGrounded("Sağ üstteki çarpıya bas", label: "Close"))
+        XCTAssertTrue(ScreenActions.isGrounded("İkinci videoyu aç", label: "Lofi beats to study"))
+        XCTAssertFalse(ScreenActions.isGrounded("Gönder butonuna bas", label: "Delete"))
+    }
 }

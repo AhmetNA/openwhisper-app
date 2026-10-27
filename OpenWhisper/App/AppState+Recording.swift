@@ -54,6 +54,11 @@ extension AppState {
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
         guard recordingState != .recording else { return }
+        // Music stays quiet while the mic listens right after Jarvis spoke.
+        if recordingTrigger == .followUp, !followUpHoldsSpotifyDuck {
+            followUpHoldsSpotifyDuck = true
+            SpotifyDuck.shared.hold()
+        }
         clearFlowBarMessage()
         // The recap stays readable while the user words the message.
         if let claudeRecap { showFlowBarMessage(claudeRecap, durationMs: Self.flowBarDuration(ofRecap: claudeRecap)) }
@@ -411,6 +416,7 @@ extension AppState {
     }
 
     func stopRecording() {
+        releaseFollowUpSpotifyDuck()
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
@@ -909,8 +915,15 @@ extension AppState {
         }
     }
 
+    func releaseFollowUpSpotifyDuck() {
+        guard followUpHoldsSpotifyDuck else { return }
+        followUpHoldsSpotifyDuck = false
+        SpotifyDuck.shared.release()
+    }
+
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     func discardActiveRecording(reason: String) {
+        releaseFollowUpSpotifyDuck()
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil

@@ -52,14 +52,22 @@ enum CommandFollowUp {
     private static let maxWords = 5
 
     /// The command a bare answer means after a `domain` command, or nil when it is none.
-    static func resolve(_ text: String, after domain: Domain) -> VoiceCommand? {
+    /// `listed`: the YouTube list just read, for "Barış Soydan'ı aç".
+    static func resolve(_ text: String, after domain: Domain, listed: [YouTubeList.Video] = []) -> VoiceCommand? {
         if domain == .youtubeList {
-            if let number = YouTubeList.pick(in: text, requireVerb: false) { return .system(.browser(.youtubePick(number))) }
-            if YouTubeList.isBarePlay(text) { return .system(.browser(.youtubePick(1))) }
-            if YouTubeList.isMore(text) { return .system(.browser(.youtubeMore)) }
-            // "Orkun'un videosunu aç": by channel or title.
-            if case .youtubeTitle(let title) = SystemCommandParser.parseBrowserRequest(text) {
-                return .system(.browser(.youtubeTitle(title)))
+            // The mic opened over the list being read, so the request is often the last
+            // sentence after an echo Whisper misheard ("… Barış Soy'dan açabilir miyiz. Evet.").
+            let sentences = text.split(whereSeparator: { ".!?".contains($0) })
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            for part in [text] + sentences.reversed() {
+                if let number = YouTubeList.pick(in: part, requireVerb: false) { return .system(.browser(.youtubePick(number))) }
+                if YouTubeList.isBarePlay(part) { return .system(.browser(.youtubePick(1))) }
+                if YouTubeList.isMore(part) { return .system(.browser(.youtubeMore)) }
+                if let name = YouTubeList.named(in: part, listed: listed) { return .system(.browser(.youtubeTitle(name))) }
+                // "Orkun'un videosunu aç": by channel or title, even one not read aloud.
+                if case .youtubeTitle(let title) = SystemCommandParser.parseBrowserRequest(part) {
+                    return .system(.browser(.youtubeTitle(title)))
+                }
             }
             return nil
         }

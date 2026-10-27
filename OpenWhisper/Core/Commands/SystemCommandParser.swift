@@ -526,7 +526,7 @@ enum SystemCommandParser {
 
         // A named video is a selection, even when Jarvis has not read a list yet.
         if parseVideoRequest(raw) == nil,
-           let title = group(#"^(?:(?:\#(youtube)\#(at)|ekrandaki|sağdaki|sayfadaki) )?(.+?) (?:videosunu|videoyu|başlıklı videoyu|isimli videoyu|adlı videoyu) (?:aç|oynat|başlat|açar mısın)\#(polite)"#, in: raw) {
+           let title = group(#"^(?:(?:\#(youtube)\#(at)|ekrandaki|sağdaki|sayfadaki) )?(.+?) (?:videosunu|videoyu|başlıklı videoyu|isimli videoyu|adlı videoyu) (?:aç|oynat|başlat|açar mısın|açabilir misin|açabilir miyiz|açalım)\#(polite)"#, in: raw) {
             return .youtubeTitle(title)
         }
         if let title = group(#"^\#(youtube)\#(at) (.+?) (?:aç|oynat|başlat)\#(polite)"#, in: raw)

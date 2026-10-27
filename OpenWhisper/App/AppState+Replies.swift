@@ -109,6 +109,8 @@ extension AppState {
         guard let reply, voiceRepliesEnabled, recordingState != .recording else { return false }
         owLog("[Voice] Reply: '\(reply)'")
         lastSpokenReply = reply
+        SpotifyDuck.shared.hold()
+        defer { SpotifyDuck.shared.release() }
         let heard = await JarvisVoice.shared.speak(reply, volume: volume) { [weak self] in
             self?.jarvisActivity = .speaking
             onStart()
@@ -140,7 +142,9 @@ extension AppState {
         )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
+            SpotifyDuck.shared.hold()
             heard = await JarvisVoice.shared.speak(sentences: sentences) { [weak self] in self?.jarvisActivity = .speaking }
+            SpotifyDuck.shared.release()
         } else {
             for await _ in sentences {}
         }

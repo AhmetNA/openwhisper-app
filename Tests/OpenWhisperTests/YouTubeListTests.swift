@@ -73,6 +73,19 @@ final class YouTubeListTests: XCTestCase {
         XCTAssertEqual(YouTubeList.bestMatch("barış özcanın", in: channels)?.id, "b")
         XCTAssertEqual(SystemCommandParser.parse("Orkun'un videosunu aç"), .browser(.youtubeTitle("orkun'un")))
         XCTAssertEqual(CommandFollowUp.resolve("Orkun'un videosunu aç", after: .youtubeList), .system(.browser(.youtubeTitle("orkun'un"))))
+        // 2026-10-27 voice test: the echo of the list, then the request.
+        let home: [YouTubeList.Video] = [
+            .init(id: "k", title: "Koç nereye? | Fonlarda ödeme planı", channel: "Barış Soydan"),
+            .init(id: "r", title: "Exploring the Most Remote Island on Earth", channel: "Ruhi Çenet Documentaries"),
+            .init(id: "o", title: "KENDİ YAPAY ZEKA ARAÇLARIMI SİZLERE ÜCRETSİZ AÇIYORUM!", channel: "Orkun v2")
+        ]
+        let heard = "Soy'dan bir video atmış. Koç nereye. Ruli Cennet Dokumentarist'e bir video atmış. Exploring the Most Remote Island on Earth. Orkun Viki'de bir video atmış. Kendi yapay zeka araçlarımı sizlere ücretsiz açıyorum. Barış Soy'dan açabilir miyiz. Evet."
+        XCTAssertEqual(CommandFollowUp.resolve(heard, after: .youtubeList, listed: home), .system(.browser(.youtubeTitle("barış soy'dan"))))
+        XCTAssertEqual(YouTubeList.bestMatch("barış soy'dan", in: home)?.id, "k")
+        XCTAssertEqual(CommandFollowUp.resolve("Orkun'u aç", after: .youtubeList, listed: home), .system(.browser(.youtubeTitle("orkun'u"))))
+        XCTAssertNil(CommandFollowUp.resolve("Safari'yi aç", after: .youtubeList, listed: home))
+        XCTAssertNil(CommandFollowUp.resolve(heard, after: .youtubeList))
+        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, Barış Soydan'ın videosunu açabilir misin"), .browser(.youtubeTitle("barış soydan'ın")))
     }
 
     func testLivePageIncludesVisibleSidebarAndSkipsOffscreen() throws {

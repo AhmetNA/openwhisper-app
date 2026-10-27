@@ -561,6 +561,8 @@ final class AppState {
     @ObservationIgnored var commandFollowUpOverReply = false
     /// That follow-up is recording while the reply plays: its window starts when the reply ends.
     @ObservationIgnored var commandFollowUpAwaitingReplyEnd = false
+    /// A follow-up recording holds `SpotifyDuck` until it stops.
+    @ObservationIgnored var followUpHoldsSpotifyDuck = false
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

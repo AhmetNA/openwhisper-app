@@ -69,17 +69,29 @@ enum ScreenActions {
             visited += 1
             let role = ScreenReader.string(node, kAXRoleAttribute) ?? ""
             let inDialog = inDialog || role == "AXSheet"
-            if actionableRoles.contains(role) || (role != "AXWindow" && hasPress(node)),
+            let control = actionableRoles.contains(role)
+            // Electron puts a whole window's content under one press-able AXGroup (Claude: 16
+            // nodes read, "New" never seen, its children's texts pressed as one "button"). Such a
+            // container counts only by its own name, and the walk always goes inside it.
+            let pressOnly = !control && role != "AXWindow" && hasPress(node)
+            if control || pressOnly,
                isEnabled(node), let elementFrame = frame(of: node), elementFrame.width > 1, elementFrame.height > 1,
-               windowFrame.intersects(elementFrame), let label = label(of: node, role: role) {
+               windowFrame.intersects(elementFrame), let label = control ? label(of: node, role: role) : ownLabel(of: node) {
                 found.append(ScreenElement(element: node, role: role, label: label,
                                            region: region(of: elementFrame, in: windowFrame), inDialog: inDialog))
                 // A row's label already holds its texts; its buttons still count.
-                if role != "AXRow" && role != "AXLink" { return }
+                if control && role != "AXRow" && role != "AXLink" { return }
             }
             for child in ScreenReader.children(node) { walk(child, depth: depth + 1, inDialog: inDialog) }
         }
         walk(window, depth: 0, inDialog: windowIsDialog)
+        // An Electron app asked for its tree a moment ago may still be building it.
+        if visited < 30, ScreenReader.isElectron(app) {
+            Thread.sleep(forTimeInterval: 0.4)
+            found = []
+            visited = 0
+            walk(window, depth: 0, inDialog: windowIsDialog)
+        }
         owLog("[Screen] \(found.count) elements in \(app.localizedName ?? "?") (\(visited) nodes)")
         return found
     }
@@ -110,6 +122,13 @@ enum ScreenActions {
         collect(node, depth: 0)
         let joined = texts.joined(separator: " · ")
         return joined.isEmpty ? nil : String(joined.prefix(80))
+    }
+
+    private static func ownLabel(of node: AXUIElement) -> String? {
+        for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
+            if let text = ScreenReader.string(node, attribute).map(flat), !text.isEmpty { return String(text.prefix(80)) }
+        }
+        return nil
     }
 
     private static func flat(_ text: String) -> String {
@@ -205,6 +224,105 @@ enum ScreenActions {
         forms = forms.map { $0.replacingOccurrences(of: "'", with: "") }
         return labels.indices.filter { forms.contains(normalized(labels[$0])) }
     }
+
+    /// The name said, in its forms with and without a case ending.
+    private static func nameForms(_ text: String) -> [String] {
+        let said = spokenName(text)
+        guard !said.isEmpty else { return [] }
+        var forms = [said]
+        for ending in caseEndings where said.hasSuffix(ending) && said.count > ending.count + 1 {
+            forms.append(String(said.dropLast(ending.count)))
+        }
+        return forms.map { $0.replacingOccurrences(of: "'", with: "") }
+    }
+
+    /// A word as it sounds, so an English label matches Whisper's Turkish spelling of it:
+    /// "Niv"/"Nyu" → "New", "Sent" → "Send", "Kensıl" → "Cancel".
+    static func soundKey(_ text: String) -> String {
+        var key = normalized(text).replacingOccurrences(of: "'", with: "").replacingOccurrences(of: " ", with: "")
+        for (from, to) in [("ph", "f"), ("th", "t"), ("ck", "k"), ("x", "ks"), ("w", "v"), ("q", "k"), ("c", "k")] {
+            key = key.replacingOccurrences(of: from, with: to)
+        }
+        let letters: [Character: Character] = ["ı": "i", "e": "i", "y": "i", "ö": "u", "ü": "u", "o": "u", "ş": "s", "ç": "c", "ğ": "g", "j": "c"]
+        var out = ""
+        for character in key {
+            let mapped = letters[character] ?? character
+            if out.last != mapped { out.append(mapped) }
+        }
+        return out
+    }
+
+    /// Labels that sound like the name said ("Niv tuşuna bas" → "New"), closest first. Only
+    /// short labels, and only the closest ones: the list is what is on screen, nothing more.
+    static func soundAlikeMatches(_ text: String, labels: [String]) -> [Int] {
+        let keys = nameForms(text).map(soundKey).filter { $0.count >= 3 }
+        guard !keys.isEmpty else { return [] }
+        var best = Int.max
+        var matches: [Int] = []
+        for index in labels.indices where normalized(labels[index]).split(separator: " ").count <= 3 {
+            let label = soundKey(labels[index])
+            guard label.count >= 3 else { continue }
+            let distance = keys.map { editDistance($0, label) }.min() ?? Int.max
+            guard distance <= (min(label.count, 5) <= 4 ? 1 : 2) else { continue }
+            if distance < best { best = distance; matches = [index] } else if distance == best { matches.append(index) }
+        }
+        return matches
+    }
+
+    private static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        guard !a.isEmpty, !b.isEmpty else { return max(a.count, b.count) }
+        var row = Array(0...b.count)
+        for i in 1...a.count {
+            var previous = row[0]
+            row[0] = i
+            for j in 1...b.count {
+                let current = row[j]
+                row[j] = a[i - 1] == b[j - 1] ? previous : 1 + min(previous, row[j], row[j - 1])
+                previous = current
+            }
+        }
+        return row[b.count]
+    }
+
+    /// Turkish names of common English labels, so a model's pick can be checked against them.
+    private static let labelTranslations: [String: [String]] = [
+        "yeni": ["new"], "gönder": ["send", "submit"], "iptal": ["cancel"], "vazgeç": ["cancel"],
+        "kaydet": ["save"], "kapat": ["close"], "çarpı": ["close"], "aç": ["open"], "devam": ["continue", "next"],
+        "tamam": ["ok", "done"], "bitti": ["done"], "sil": ["delete", "remove"], "düzenle": ["edit"],
+        "paylaş": ["share"], "ara": ["search", "find"], "ayar": ["settings", "preferences"], "geri": ["back"],
+        "ileri": ["forward", "next"], "sonraki": ["next"], "önceki": ["previous", "back"], "izin": ["allow"],
+        "reddet": ["deny", "decline", "reject"], "kopyala": ["copy"], "yapıştır": ["paste"], "indir": ["download"],
+        "yükle": ["upload", "install"], "yenile": ["refresh", "reload"], "onayla": ["confirm", "approve"],
+        "kabul": ["accept", "agree"], "giriş": ["sign in", "log in", "login"], "çıkış": ["sign out", "log out", "logout"],
+        "durdur": ["stop", "pause"], "oynat": ["play"], "başlat": ["start", "play"], "atla": ["skip"],
+        "evet": ["yes"], "hayır": ["no"], "güncelle": ["update"], "ekle": ["add"], "tekrar": ["retry"],
+    ]
+
+    /// Whether the model's pick is tied to what was said: a shared word or stem, a sound-alike,
+    /// a known translation, or a request by place or order ("sağ üstteki", "ikinci"). Stops a
+    /// misheard name ("Nil tuşuna bas") from pressing whatever the model guessed.
+    static func isGrounded(_ text: String, label: String) -> Bool {
+        let words = normalized(text).replacingOccurrences(of: "'", with: " ").split(separator: " ").map(String.init)
+        if words.contains(where: placeWords.contains) { return true }
+        let said = words.filter { !fillers.contains($0) && $0.count >= 2 }
+        let labelText = normalized(label)
+        let labelWords = labelText.replacingOccurrences(of: "'", with: " ").split(separator: " ").map(String.init)
+        return said.contains { word in
+            labelWords.contains { other in
+                word == other || (min(word.count, other.count) >= 4 && word.prefix(4) == other.prefix(4))
+                    || (word.count >= 3 && other.count >= 3 && editDistance(soundKey(word), soundKey(other)) <= 1)
+            } || labelTranslations.contains { turkish, english in
+                word.hasPrefix(turkish) && english.contains { labelText.contains($0) }
+            }
+        }
+    }
+
+    private static let placeWords: Set<String> = [
+        "sağ", "sağdaki", "sol", "soldaki", "üst", "üstteki", "alt", "alttaki", "ortadaki", "ilk", "ilkine", "ikinci",
+        "ikinciye", "üçüncü", "dördüncü", "sonuncu", "sonuncuya", "son", "mavi", "kırmızı", "yeşil", "aşağıdaki",
+        "yukarıdaki",
+    ]
 
     /// Whether the model should look at the screen: the words name something there, or talk
     /// about clicking, a place or an order. Plain chat ("bugün hava nasıl") never pays for it.

@@ -7,9 +7,18 @@ enum ScreenReader {
     /// Electron apps show their web content only with this set (see ClaudeSessionNavigator).
     private static let electronBundleIDs: Set<String> = ["com.anthropic.claudefordesktop", "com.openai.codex"]
 
+    /// Electron apps (Claude, Codex, Slack, VS Code, Discord…) build their accessibility tree
+    /// only once asked through `AXManualAccessibility`; recognized by the framework they ship.
+    static func isElectron(_ app: NSRunningApplication) -> Bool {
+        if electronBundleIDs.contains(app.bundleIdentifier ?? "") { return true }
+        guard let url = app.bundleURL else { return false }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
+    }
+
     static func focusedWindow(of app: NSRunningApplication) -> AXUIElement? {
         let root = AXUIElementCreateApplication(app.processIdentifier)
-        if electronBundleIDs.contains(app.bundleIdentifier ?? "") {
+        if isElectron(app) {
             AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         }
         AXUIElementSetMessagingTimeout(root, 0.5)

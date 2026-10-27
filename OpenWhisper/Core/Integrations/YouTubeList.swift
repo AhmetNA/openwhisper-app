@@ -115,9 +115,9 @@ enum YouTubeList {
     /// Equal scores keep the on-screen order, rather than selecting randomly.
     static func bestMatch(_ query: String, in candidates: [Video]) -> Video? {
         func tokens(_ text: String) -> [String] {
-            // "Orkun'un" → "orkun": the case ending would count as a word of its own.
+            // "Orkun'un" → "orkunun", "Soy'dan" → "soydan": one word, as the name is written.
             words(text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale)
-                .replacingOccurrences(of: #"['’]\p{L}+"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: #"['’]"#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: "ı", with: "i"))
                 .filter { !["video", "videosu", "videoyu", "videosunu", "olan", "bir", "bu", "şu"].contains($0) }
         }
@@ -152,6 +152,24 @@ enum YouTubeList {
             }
         }
         return best
+    }
+
+    /// The list read last, while "ikinciyi aç" still refers to it.
+    @MainActor static var listed: [Video] { isFresh ? videos : [] }
+
+    /// "Barış Soydan'ı açabilir miyiz", "Orkun'un videosunu aç": the name or title said, when
+    /// it is one of `listed`. Anything else ("Safari'yi aç") is left to the other commands.
+    static func named(in text: String, listed: [Video]) -> String? {
+        let raw = text.lowercased(with: locale)
+            .replacingOccurrences(of: #"[.,!?;"“”]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let pattern = #"^(?:(?:hey )?jarvis )?(.+?) (?:videosunu |videoyu )?(?:aç|açar mısın|açabilir misin|açabilir miyiz|açalım|oynat|oynatır mısın|izleyelim|izleyebilir miyiz)(?: lütfen)?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
+              let range = Range(match.range(at: 1), in: raw) else { return nil }
+        let name = String(raw[range])
+        return bestMatch(name, in: listed) == nil ? nil : name
     }
 
     @MainActor private static var isFresh: Bool {

@@ -212,7 +212,7 @@ extension AppState {
             // start with "Hey Jarvis," (voice test 2026-10-22).
             let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined)
                 : session.followsCommand
-                    ? WakeWordVerifier.strippingLeadingWakeWord(CommandFollowUp.removingEcho(of: session.precedingReply, from: joined))
+                    ? WakeWordVerifier.strippingLeadingWakeWord(JarvisEchoFilter.removingEcho(of: session.precedingReply, from: joined))
                 : joined
             if spoken != joined { owLog("[WakeWord] Removed the wake word from the transcript start: \(joined)") }
             // The app in front comes first: its ses-benzerleri.txt section ("cloud" → Claude in
@@ -805,24 +805,49 @@ extension AppState {
                 let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
                 if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
                 guard ScreenActions.worthLooking(trimmed) else { return false }
+                // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
+                let saysClick = ScreenActions.saysClick(trimmed)
+                // Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
+                @MainActor func notFound() async -> Bool {
+                    guard saysClick, session.isVoiceCommand else { return false }
+                    let name = ScreenActions.spokenName(trimmed)
+                    owLog("[Screen] Nothing on screen matches '\(name)'")
+                    session.latency.finishDecision(route: "ekran eylemi, bulunamadı")
+                    self.lastTranscription = text
+                    self.showFlowBarMessage("Ekranda “\(name)” bulamadım", durationMs: 4000)
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure("Bulamadım")) }
+                    return true
+                }
                 let elements = ScreenActions.elements(of: app)
-                guard !elements.isEmpty else { return false }
+                guard !elements.isEmpty else { return await notFound() }
                 let labels = elements.map(\.label)
                 var pick: Int?
+                var byModel = false
                 let exact = ScreenActions.exactMatches(trimmed, labels: labels)
+                // Only when pressing was said: "bak" alone must not press "Back".
+                let soundAlike = exact.isEmpty && saysClick ? ScreenActions.soundAlikeMatches(trimmed, labels: labels) : []
                 if exact.count == 1 {
                     pick = exact[0]
                 } else if exact.count > 1, exact.filter({ elements[$0].inDialog }).count == 1 {
                     pick = exact.first { elements[$0].inDialog }
-                } else if !exact.isEmpty || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
+                } else if soundAlike.count == 1 {
+                    pick = soundAlike[0]
+                    owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
+                } else if !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
                     pick = await ScreenActions.modelPick(trimmed, elements: elements)
+                    byModel = true
+                    if let chosen = pick, exact.isEmpty, !soundAlike.contains(chosen),
+                       !ScreenActions.isGrounded(trimmed, label: labels[chosen]) {
+                        owLog("[Screen] Model's pick '\(labels[chosen])' has nothing to do with '\(trimmed)'; not pressed")
+                        pick = nil
+                    }
                     if pick == nil { self.dismissFlowBarMessage() }
                 }
-                guard let pick else { return false }
+                guard let pick else { return await notFound() }
                 let target = elements[pick]
                 session.latency.finishDecision(route: "ekran eylemi")
-                owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(exact.isEmpty ? " by the model" : "")")
+                owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(byModel ? " by the model" : "")")
                 self.lastTranscription = text
                 self.lastCommandUndo = []
                 if ScreenActions.isRisky(target.label) {
@@ -1007,7 +1032,7 @@ extension AppState {
                     switch route { case .command, .commands: true; default: false }
                 }
                 if !isCommand, let domain = session.commandFollowUpDomain,
-                   let fix = CommandFollowUp.resolve(trimmed, after: domain) {
+                   let fix = CommandFollowUp.resolve(trimmed, after: domain, listed: YouTubeList.listed) {
                     owLog("[FollowUp] '\(trimmed)' after a \(domain.rawValue) command → \(fix)")
                     route = .command(fix)
                 }
