@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class PendingWhisperWakeTests: XCTestCase {
     func testDirectSpeakerMatchSurvivesWrongWhisperWakeText() async {
-        let result = await PendingWhisperWake.verifyWake(isDirect: true, speakerMatched: true) {
+        let result = await PendingWhisperWake.verifyWake(isDirect: true, speakerMatched: true, score: 0.3) {
             XCTFail("A matched direct wake must not be vetoed by the cold-model transcript")
             return false
         }
@@ -14,13 +14,31 @@ final class PendingWhisperWakeTests: XCTestCase {
     func testCandidateAndUnmatchedDirectWakeStillRequireWords() async {
         for (direct, matched) in [(false, true), (true, false), (false, false)] {
             var verified = false
-            let result = await PendingWhisperWake.verifyWake(isDirect: direct, speakerMatched: matched) {
+            let result = await PendingWhisperWake.verifyWake(isDirect: direct, speakerMatched: matched, score: 0.3) {
                 verified = true
                 return false
             }
             XCTAssertTrue(verified)
             XCTAssertFalse(result)
         }
+    }
+
+    func testStrongDirectWakeSkipsColdWordCheck() async {
+        let result = await PendingWhisperWake.verifyWake(isDirect: true, speakerMatched: false, score: 0.65) {
+            XCTFail("A strong direct wake must not be vetoed by the cold-model transcript")
+            return false
+        }
+        XCTAssertTrue(result)
+    }
+
+    func testStrongCandidateStillRequiresWords() async {
+        var verified = false
+        let result = await PendingWhisperWake.verifyWake(isDirect: false, speakerMatched: false, score: 0.65) {
+            verified = true
+            return false
+        }
+        XCTAssertTrue(verified)
+        XCTAssertFalse(result)
     }
 
     func testLoadsBeforeVerificationAndAcceptsOnlyAfterBoth() async {

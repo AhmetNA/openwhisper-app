@@ -23,12 +23,18 @@ final class PendingWhisperWake {
 
     func cancel() { cancelled = true; accepted = false }
 
-    /// Match the warm-model direct-wake policy: a detected call plus an enrolled
-    /// speaker match is sufficient. Grey-zone candidates still need word verification.
-    static func verifyWake(isDirect: Bool, speakerMatched: Bool,
+    /// Match the warm-model direct-wake policy: a detected call plus an enrolled speaker match,
+    /// or a score at `WakeWordListener.confirmedScore`, is sufficient (the warm path starts those
+    /// without a word check too; the cold model wrote a clear 0.65 "Jarvis" as "Hairs", 27 Oct
+    /// 2026). Weak direct wakes and grey-zone candidates still need word verification.
+    static func verifyWake(isDirect: Bool, speakerMatched: Bool, score: Float,
                            verifyWords: () async -> Bool) async -> Bool {
         if isDirect && speakerMatched {
             owLog("[WhisperWake] Direct wake accepted by speaker match")
+            return true
+        }
+        if isDirect && score >= WakeWordListener.confirmedScore {
+            owLog(String(format: "[WhisperWake] Direct wake accepted by score %.2f", score))
             return true
         }
         return await verifyWords()

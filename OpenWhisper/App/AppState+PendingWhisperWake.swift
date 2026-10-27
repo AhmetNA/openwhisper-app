@@ -36,7 +36,7 @@ extension AppState {
                 speakerMatched = self.targetSpeakerGuardsWakeWord
                     ? await self.wakeSpeakerMatches(audio: audio, clipID: clipID) : false
                 guard request.isValid(), !Task.isCancelled else { return false }
-                return await PendingWhisperWake.verifyWake(isDirect: isDirect, speakerMatched: speakerMatched) {
+                return await PendingWhisperWake.verifyWake(isDirect: isDirect, speakerMatched: speakerMatched, score: score) {
                     self.activeWhisperWakeChecks += 1
                     defer { self.activeWhisperWakeChecks -= 1 }
                     let verdict = await WakeWordVerifier.verify(audio: audio, transcriber: transcriber,
