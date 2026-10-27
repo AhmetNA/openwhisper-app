@@ -388,6 +388,7 @@ extension AppState {
                 self.enqueueCompletedAudioSegments()
                 self.checkOwnVoiceEndpoint()
                 self.checkSpokenDoneEndpoint()
+                self.checkCommandOverReply()
             }
         }
 

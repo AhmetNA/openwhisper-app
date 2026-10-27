@@ -94,6 +94,7 @@ final class RecordingTranscriptionSession {
     var doneCheckedSpeechTime: TimeInterval = 0
     var doneLastCheckTime: TimeInterval = 0
     var doneCheckedEndpointTime: TimeInterval = 0
+    var overReplyLastCheckTime: TimeInterval = 0
     var speechPreview: SpeechPreview?
     var previewEndpointDetector: SmartTurnEndpointDetector?
 

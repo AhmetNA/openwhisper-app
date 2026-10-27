@@ -86,6 +86,42 @@ extension AppState {
         }
     }
 
+    /// While Jarvis still reads a YouTube list, "Barış Soydan'ı açabilir misin" is a request
+    /// for one of it: the reading stops and the recording is processed now, instead of after
+    /// the list and the follow-up window. Only a request that names a listed video, a place
+    /// in the list or "başka" counts, so Jarvis's own voice on the mic doesn't stop him.
+    func checkCommandOverReply() {
+        guard recordingState == .recording, recordingInputReady, modelLoaded,
+              commandFollowUpAwaitingReplyEnd,
+              let session = activeTranscriptionSession, !session.isCancelled,
+              session.commandFollowUpDomain == .youtubeList,
+              !session.doneCheckInFlight, let audioEngine,
+              let transcriber = activeTranscriptionService else { return }
+        let now = CACurrentMediaTime()
+        guard now - session.overReplyLastCheckTime >= 1.5 else { return }
+        let samples = audioEngine.recentSamples(count: 64_000)
+        guard samples.count >= 16_000 else { return }
+        session.overReplyLastCheckTime = now
+        session.doneCheckInFlight = true
+        let language = self.language
+        let bypass = session.bypassAudioProcessing
+        let listed = YouTubeList.listed
+        Task { [weak self] in
+            defer { session.doneCheckInFlight = false }
+            let text = try? await AudioSignalProcessor.$bypassProcessing.withValue(bypass) {
+                try await transcriber.previewTranscription(audioData: samples, language: language)
+            }
+            guard let text = text ?? nil,
+                  let command = CommandFollowUp.resolve(text, after: .youtubeList, listed: listed),
+                  let self, self.recordingState == .recording, self.commandFollowUpAwaitingReplyEnd,
+                  self.activeTranscriptionSession === session, !session.isCancelled else { return }
+            owLog("[FollowUp] '\(text)' while the list was read → \(command); stopping the reply")
+            JarvisVoice.shared.stop()
+            self.hotkey?.externalCancelHandsFree()
+            self.stopRecording()
+        }
+    }
+
     /// A Jarvis command the rules alone run, whose whole audio the preview covered, with Smart
     /// Turn certain it is complete and no speech since: waiting out the rest of the silence
     /// only delays it. Anything else keeps the normal endpoint, so a pause mid-sentence never
