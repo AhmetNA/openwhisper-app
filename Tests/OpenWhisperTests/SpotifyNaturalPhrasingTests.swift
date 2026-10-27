@@ -57,6 +57,20 @@ final class SpotifyNaturalPhrasingTests: XCTestCase {
         XCTAssertFalse(SpotifyManager.isNaturalCandidate("Sesim bugün çok kısık"))
     }
 
+    func testDirectVolumeCommandsNeedNoModel() {
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi biraz kıs."), .adjustVolume(-10))
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi biraz kısar mısın?"), .adjustVolume(-10))
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi azalt"), .adjustVolume(-20))
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi aç"), .adjustVolume(20))
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi baya yükselt"), .adjustVolume(30))
+        // Complaints, numbers, the speaker's own voice and negations keep the usual path.
+        XCTAssertNil(SpotifyManager.directVolumeIntent("Ses çok yüksek"))
+        XCTAssertNil(SpotifyManager.directVolumeIntent("Sesi 40 yap"))
+        XCTAssertNil(SpotifyManager.directVolumeIntent("Sesimi kıs"))
+        XCTAssertNil(SpotifyManager.directVolumeIntent("Sesi kısma"))
+        XCTAssertNil(SpotifyManager.directVolumeIntent("Müziği biraz kıs"))
+    }
+
     /// Whisper wrote "Sesi baya bir kız." for "sesi baya bi kıs".
     func testKizMishearingIsRepairedNextToVolume() {
         XCTAssertEqual(SpotifyManager.repairVolumeMishearing("Sesi baya bir kız."), "Sesi baya bir kıs.")

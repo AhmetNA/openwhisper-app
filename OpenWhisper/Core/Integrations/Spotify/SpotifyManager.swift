@@ -727,6 +727,24 @@ final class SpotifyManager: @unchecked Sendable {
     }
 
     /// A volume noun or a loudness cue: worth asking Ollama about even with no music on.
+    /// A short Jarvis command naming the volume and an adjustment verb ("sesi biraz kıs",
+    /// "sesi aç", "sesi yükseltir misin") needs no model. Complaints ("ses çok yüksek")
+    /// and numbers still go through the usual path.
+    static func directVolumeIntent(_ text: String) -> ExplicitSpotifyIntent? {
+        let normalized = normalize(text)
+        let cues = cueWords(normalized)
+        let cueSet = Set(cues)
+        guard spokenWordCount(normalized) <= 6, !hasNumber(text),
+              !volumeNouns.isDisjoint(with: cueSet),
+              mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized))) else { return nil }
+        let down = !cueSet.isDisjoint(with: quieterWords.subtracting(["yukseldi"]))
+            || cues.contains { word in ["azalt", "dusur", "indir"].contains { word.hasPrefix($0) } }
+        let up = !cueSet.isDisjoint(with: openWords)
+            || cues.contains { word in ["yukselt", "artir", "arttir"].contains { word.hasPrefix($0) } }
+        guard up != down else { return nil }
+        return .adjustVolume(up ? volumeStep(in: text) : -volumeStep(in: text))
+    }
+
     static func mentionsVolume(_ text: String) -> Bool {
         !volumeNouns.isDisjoint(with: cueWords(normalize(text)))
             || relativeVolumeCueDirection(in: text, up: true)
@@ -854,6 +872,7 @@ final class SpotifyManager: @unchecked Sendable {
         let text = commandMode ? commandModeText(heard) : heard
         var rules = explicitIntent(in: text)
         // Only a Jarvis session: with the dictation keys "konuyu sıraya ekle" is text to type.
+        if rules == nil, commandMode { rules = directVolumeIntent(text) }
         if rules == nil, commandMode, let candidate = runtimeCandidate(text) {
             rules = await confirm(candidate)
         }
