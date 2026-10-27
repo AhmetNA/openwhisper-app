@@ -1015,6 +1015,20 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if appState.targetSpeakerSampleIsRecording, !appState.targetSpeakerSampleReadingText.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Sesli oku:")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(appState.targetSpeakerSampleReadingText)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                }
+
                 if appState.targetSpeakerSampleIsProcessing {
                     ProgressView()
                 }

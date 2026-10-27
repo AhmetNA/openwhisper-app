@@ -368,6 +368,7 @@ final class AppState {
     var targetSpeakerSampleIsRecording = false
     var targetSpeakerSampleIsProcessing = false
     var targetSpeakerSampleStatus: String = ""
+    var targetSpeakerSampleReadingText: String = ""
 
     var canCaptureTargetSpeakerSample: Bool {
         hasStoredTargetSpeakerProfile
@@ -748,6 +749,14 @@ final class AppState {
     static let targetSpeakerEnrollmentReadingTexts = [
         "Jarvis, bugün hava biraz serin ama güneşli. Sabah yedide kalkıp çayımı içtim, ardından işe yürüyerek gittim. Öğleden sonra üç toplantım var; akşam eve dönünce kitap okuyup erkenden yatacağım.",
         "Jarvis, yarın saat dokuz buçukta bana hatırlatır mısın? Müzik çal, sesi biraz kıs ve son mesajı oku. Kaç derece olacak, yağmur yağar mı? Garajın kapısını da kapat, fatura yüz kırk beş lira mıydı? Teşekkürler, görüşürüz."
+    ]
+
+    /// Text read aloud while adding one sample; one is picked at random, none repeats enrollment.
+    static let targetSpeakerSampleReadingTexts = [
+        "Jarvis, bu akşam yemekte ne pişirsem? Buzdolabında biraz peynir, iki domates ve yumurta var. Belki hızlıca bir omlet yaparım, yanına da ılık bir ıhlamur içerim.",
+        "Jarvis, hafta sonu için İzmir'e otobüs bileti bakar mısın? Cuma günü öğleden sonra, saat dörtten sonra çıkan olsun. Fiyat altı yüz liranın altındaysa hemen ayır.",
+        "Jarvis, şu sayfayı aşağı kaydır ve ilk başlığı oku. Çok uzunsa kısaca özetle, sonra bağlantıyı Zeynep'e gönder. Bir de yarınki toplantıyı on beş dakika ertele.",
+        "Jarvis, dışarıda rüzgâr çok sert esiyor, pencereyi kapattım. Kahvemi aldım, müziğin sesini biraz aç. Öğlene kadar şu raporu bitirmem gerek, beni rahatsız etme."
     ]
 
     // MARK: - Setup

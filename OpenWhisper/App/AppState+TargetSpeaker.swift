@@ -462,6 +462,7 @@ extension AppState {
 
         targetSpeakerSampleIsRecording = true
         targetSpeakerSampleStatus = "Kaydediliyor — tanınmadığın koşulda konuş (en fazla 30 sn)."
+        targetSpeakerSampleReadingText = Self.targetSpeakerSampleReadingTexts.randomElement() ?? ""
         recordingState = .recording
         recordingDuration = 0
         audioLevel = 0
