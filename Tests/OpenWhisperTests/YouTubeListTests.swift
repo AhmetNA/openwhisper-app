@@ -64,6 +64,15 @@ final class YouTubeListTests: XCTestCase {
         XCTAssertEqual(YouTubeList.bestMatch("çernobil", in: [.init(id: "x", title: "Chernobyl Documentary")])?.id, "x")
         XCTAssertNil(YouTubeList.bestMatch("makarna tarifi", in: videos))
         XCTAssertNil(YouTubeList.bestMatch("", in: videos))
+        let channels: [YouTubeList.Video] = [
+            .init(id: "o", title: "Kendi Yapay Zekamı Yaptım", channel: "Orkun Işıtmak"),
+            .init(id: "b", title: "Koç Nereye", channel: "Barış Özcan")
+        ]
+        XCTAssertEqual(YouTubeList.bestMatch("orkun'un", in: channels)?.id, "o")
+        XCTAssertEqual(YouTubeList.bestMatch("orkunun", in: channels)?.id, "o")
+        XCTAssertEqual(YouTubeList.bestMatch("barış özcanın", in: channels)?.id, "b")
+        XCTAssertEqual(SystemCommandParser.parse("Orkun'un videosunu aç"), .browser(.youtubeTitle("orkun'un")))
+        XCTAssertEqual(CommandFollowUp.resolve("Orkun'un videosunu aç", after: .youtubeList), .system(.browser(.youtubeTitle("orkun'un"))))
     }
 
     func testLivePageIncludesVisibleSidebarAndSkipsOffscreen() throws {
@@ -123,9 +132,17 @@ final class YouTubeListTests: XCTestCase {
     func testListingAndDecode() {
         let videos = YouTubeList.decode(#"[{"id":"a","title":"  Lofi\n radio  "},{"id":"b","title":"12:34"},{"id":"c","title":"Kahve"},{"id":"d","title":"Dört"},{"id":"e","title":"Beş"}]"#)
         XCTAssertEqual(videos.map(\.id), ["a", "c", "d", "e"])
-        XCTAssertEqual(YouTubeList.listing(videos, from: 0), "Bir: Lofi radio. İki: Kahve. Üç: Dört.")
-        XCTAssertEqual(YouTubeList.listing(videos, from: 3), "Dört: Beş.")
-        XCTAssertTrue(YouTubeList.isListing("Bir: Lofi radio."))
+        XCTAssertEqual(YouTubeList.listing(videos, from: 0), "Şu video var: Lofi radio. Bir de şu var: Kahve. Bir de şu var: Dört.")
+        XCTAssertEqual(YouTubeList.listing(videos, from: 3), "Şu video var: Beş.")
+        XCTAssertTrue(YouTubeList.isListing("Şu video var: Lofi radio."))
+        let named = YouTubeList.decode(#"[{"id":"a","title":"Kendi Yapay Zekamı Yaptım","channel":"Orkun Işıtmak"},{"id":"b","title":"Koç Nereye?","channel":" Barış Özcan "},{"id":"c","title":"Lofi","channel":"Lofi Girl"},{"id":"d","title":"Kahve","channel":""}]"#)
+        XCTAssertEqual(named.map(\.channel), ["Orkun Işıtmak", "Barış Özcan", "Lofi Girl", nil])
+        let spoken = YouTubeList.listing(named, from: 0)
+        XCTAssertEqual(spoken, "Orkun Işıtmak bir video atmış: Kendi Yapay Zekamı Yaptım. Barış Özcan da bir video atmış: Koç Nereye? Lofi Girl de bir video atmış: Lofi.")
+        XCTAssertTrue(YouTubeList.isListing(spoken))
+        let oneChannel = [YouTubeList.Video(id: "x", title: "Backrooms Efsanesi", channel: "Barış Özcan"),
+                          YouTubeList.Video(id: "y", title: "Neden Sürekli Yorgunuz?", channel: "Barış Özcan")]
+        XCTAssertEqual(YouTubeList.listing(oneChannel, from: 0), "Barış Özcan bir video atmış: Backrooms Efsanesi. Bir de şu var: Neden Sürekli Yorgunuz?")
         XCTAssertFalse(YouTubeList.isListing("YouTube'da aranıyor: lofi"))
         XCTAssertEqual(YouTubeList.decode("jsoff"), [])
     }

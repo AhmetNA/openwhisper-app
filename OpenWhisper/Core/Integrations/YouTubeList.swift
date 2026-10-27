@@ -1,12 +1,21 @@
 import Foundation
 
 /// "YouTube'da ne var?" / "YouTube'da lofi ara": reads the first three videos of the home page
-/// or the results aloud, shortened, and keeps them so "ikinciyi aç" opens one. The page is read
+/// or the results aloud with their channels ("Barış Özcan bir video atmış: Koç nereye"), and
+/// keeps them so "ikinciyi aç" or "Barış Özcan'ın videosunu aç" opens one. The page is read
 /// through `do JavaScript`, never by clicking, so it also works from across the room.
 enum YouTubeList {
     struct Video: Equatable, Sendable, Decodable {
         let id: String
         let title: String
+        /// The channel's name as the page shows it; nil where the page has none.
+        let channel: String?
+
+        init(id: String, title: String, channel: String? = nil) {
+            self.id = id
+            self.title = title
+            self.channel = channel
+        }
     }
 
     /// How many are read at once; "başka" reads the next ones.
@@ -106,13 +115,17 @@ enum YouTubeList {
     /// Equal scores keep the on-screen order, rather than selecting randomly.
     static func bestMatch(_ query: String, in candidates: [Video]) -> Video? {
         func tokens(_ text: String) -> [String] {
+            // "Orkun'un" → "orkun": the case ending would count as a word of its own.
             words(text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale)
+                .replacingOccurrences(of: #"['’]\p{L}+"#, with: "", options: .regularExpression)
                 .replacingOccurrences(of: "ı", with: "i"))
                 .filter { !["video", "videosu", "videoyu", "videosunu", "olan", "bir", "bu", "şu"].contains($0) }
         }
         func similarity(_ a: String, _ b: String) -> Double {
             if a == b { return 1 }
             guard a.count >= 4, b.count >= 4 else { return 0 }
+            // "orkunun" / "özcan'ın": a name with a case ending.
+            if a.hasPrefix(b) { return 0.95 }
             let left = Array(a), right = Array(b)
             var row = Array(0...right.count)
             for (i, x) in left.enumerated() {
@@ -130,7 +143,7 @@ enum YouTubeList {
         var best: Video?
         var bestScore = 0.64
         for video in candidates {
-            let titleWords = tokens(video.title)
+            let titleWords = tokens(video.title + " " + (video.channel ?? ""))
             let coverage = queryWords.map { q in titleWords.map { similarity(q, $0) }.max() ?? 0 }
                 .reduce(0, +) / Double(queryWords.count)
             if coverage > bestScore {
@@ -148,21 +161,35 @@ enum YouTubeList {
 
     // MARK: - Text
 
-    private static let numberWords = ["Bir", "İki", "Üç", "Dört", "Beş", "Altı", "Yedi", "Sekiz", "Dokuz", "On",
-                                      "On bir", "On iki", "On üç", "On dört", "On beş"]
-
-    /// "Bir: Lofi hip hop radio. İki: …": numbered from the top of the whole list, the way
-    /// "dördüncüyü aç" counts.
+    /// "Orkun Işıtmak bir video atmış: Kendi yapay zekamı yaptım. Barış Özcan da bir video
+    /// atmış: Koç nereye. Bir de şu var: Lofi radio." The order stays, so "ikinciyi aç" still
+    /// counts from the top of the whole list.
     static func listing(_ videos: [Video], from start: Int) -> String {
-        videos.indices.dropFirst(start).prefix(pageSize).map { index in
-            let number = index < numberWords.count ? numberWords[index] : String(index + 1)
-            return "\(number): \(shortTitle(videos[index].title))."
+        videos.indices.dropFirst(start).prefix(pageSize).enumerated().map { place, index in
+            var title = shortTitle(videos[index].title)
+            if !title.hasSuffix("?") { title += "." }
+            let channel = videos[index].channel.map(shortTitle) ?? ""
+            // Search results are often one channel; its name is said once.
+            let repeated = place > 0 && videos[index - 1].channel.map(shortTitle) == channel
+            guard !channel.isEmpty, !repeated else {
+                return place == 0 ? "\(firstUnnamed)\(title)" : "Bir de şu var: \(title)"
+            }
+            return place == 0 ? "\(channel)\(postedMarker)\(title)" : "\(channel) \(also(channel))\(postedMarker)\(title)"
         }.joined(separator: " ")
+    }
+
+    private static let postedMarker = " bir video atmış: "
+    private static let firstUnnamed = "Şu video var: "
+
+    /// "da" or "de" after a name, by its last vowel.
+    private static func also(_ name: String) -> String {
+        let last = name.lowercased(with: locale).last { "aeıioöuü".contains($0) }
+        return last.map { "eiöü".contains($0) } == true ? "de" : "da"
     }
 
     /// Whether `status` is a list read by `listing`, said in full rather than acked.
     static func isListing(_ status: String) -> Bool {
-        numberWords.contains { status.hasPrefix("\($0): ") }
+        status.hasPrefix(firstUnnamed) || status.contains(postedMarker)
     }
 
     /// Titles are long and loud: "🔥 SEZEN AKSU - Gidiyorum (Official Video) | 4K #pop" →
@@ -280,7 +307,9 @@ enum YouTubeList {
                 .trimmingCharacters(in: .whitespaces)
             // A thumbnail's "12:34" badge is no title.
             guard title.contains(where: \.isLetter) else { return nil }
-            return Video(id: video.id, title: title)
+            let channel = video.channel?.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+            return Video(id: video.id, title: title, channel: channel?.isEmpty == false ? channel : nil)
         }
     }
 
@@ -302,7 +331,10 @@ enum YouTubeList {
         if(u.pathname!=='/watch'||u.searchParams.get('start_radio'))continue;\
         var id=u.searchParams.get('v');if(!id||seen[id])continue;\
         var t=(a.getAttribute('title')||a.textContent||'').trim();if(!t)continue;\
-        seen[id]=1;out.push({id:id,title:t})}\
+        var c='',box=a.closest('ytd-rich-item-renderer,ytd-video-renderer,ytd-compact-video-renderer,ytd-grid-video-renderer,yt-lockup-view-model');\
+        if(box){var cs=box.querySelectorAll('a');for(var j=0;j<cs.length&&!c;j++){\
+        var h=cs[j].getAttribute('href')||'';if(h.indexOf('/@')===0||h.indexOf('/channel/')===0)c=(cs[j].textContent||'').trim()}}\
+        seen[id]=1;out.push({id:id,title:t,channel:c})}\
         return JSON.stringify(out)})()
         """
     }

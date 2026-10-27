@@ -57,6 +57,10 @@ enum CommandFollowUp {
             if let number = YouTubeList.pick(in: text, requireVerb: false) { return .system(.browser(.youtubePick(number))) }
             if YouTubeList.isBarePlay(text) { return .system(.browser(.youtubePick(1))) }
             if YouTubeList.isMore(text) { return .system(.browser(.youtubeMore)) }
+            // "Orkun'un videosunu aç": by channel or title.
+            if case .youtubeTitle(let title) = SystemCommandParser.parseBrowserRequest(text) {
+                return .system(.browser(.youtubeTitle(title)))
+            }
             return nil
         }
         guard let action = action(in: text) else { return nil }
