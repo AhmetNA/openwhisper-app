@@ -19,7 +19,7 @@ enum CommandFollowUp {
         case .spotify: .music
         case .system(.browser(.youtubeHome)), .system(.browser(.youtubeMore)),
              .system(.browser(.search(.youtube, _))): .youtubeList
-        case .system(.video), .system(.browser(.youtubePick)): .video
+        case .system(.video), .system(.browser(.youtubePick)), .system(.browser(.youtubeTitle)): .video
         default: nil
         }
     }

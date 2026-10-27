@@ -81,6 +81,66 @@ enum YouTubeList {
         return BrowserController.failures.contains(status) ? status : done
     }
 
+    /// Read the live page, including the right-hand recommendations on /watch. Never
+    /// choose from the old spoken-list cache: the user may have navigated or scrolled.
+    @MainActor static func playTitle(_ title: String) async -> String? {
+        let tab = await Task.detached {
+            OSAScriptRunner.run(["-e", BrowserController.youTubeTabScript], timeout: 4)
+        }.value
+        guard tab != "missing" else { return nil }
+        guard tab == "found" else { return "Safari'ye ulaşılamadı" }
+        let script = readScript(path: nil, visibleOnly: true)
+        let output = await Task.detached { OSAScriptRunner.run(["-e", script], timeout: 4) }.value
+        if output == "jsoff" { return jsOff }
+        guard let video = bestMatch(title, in: decode(output ?? "")) else { return nil }
+        let address = "https://www.youtube.com/watch?v=\(video.id)"
+        let result = await Task.detached {
+            OSAScriptRunner.run(["-e", replaceTabScript(address)], timeout: 4)
+        }.value
+        guard result == "ok" else { return "Adres açılamadı" }
+        owLog("[YouTube] Title match '\(title)' → '\(video.title)'")
+        return "Açılıyor: \(shortTitle(video.title))"
+    }
+
+    /// Query-word coverage favors partial titles; edit distance tolerates ASR spelling.
+    /// Equal scores keep the on-screen order, rather than selecting randomly.
+    static func bestMatch(_ query: String, in candidates: [Video]) -> Video? {
+        func tokens(_ text: String) -> [String] {
+            words(text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale)
+                .replacingOccurrences(of: "ı", with: "i"))
+                .filter { !["video", "videosu", "videoyu", "videosunu", "olan", "bir", "bu", "şu"].contains($0) }
+        }
+        func similarity(_ a: String, _ b: String) -> Double {
+            if a == b { return 1 }
+            guard a.count >= 4, b.count >= 4 else { return 0 }
+            let left = Array(a), right = Array(b)
+            var row = Array(0...right.count)
+            for (i, x) in left.enumerated() {
+                var next = [i + 1] + Array(repeating: 0, count: right.count)
+                for (j, y) in right.enumerated() {
+                    next[j + 1] = min(next[j] + 1, row[j + 1] + 1, row[j] + (x == y ? 0 : 1))
+                }
+                row = next
+            }
+            let score = 1 - Double(row[right.count]) / Double(max(left.count, right.count))
+            return score >= 0.65 ? score : 0
+        }
+        let queryWords = tokens(query)
+        guard !queryWords.isEmpty else { return nil }
+        var best: Video?
+        var bestScore = 0.64
+        for video in candidates {
+            let titleWords = tokens(video.title)
+            let coverage = queryWords.map { q in titleWords.map { similarity(q, $0) }.max() ?? 0 }
+                .reduce(0, +) / Double(queryWords.count)
+            if coverage > bestScore {
+                bestScore = coverage
+                best = video
+            }
+        }
+        return best
+    }
+
     @MainActor private static var isFresh: Bool {
         guard let listedAt, !videos.isEmpty else { return false }
         return Date().timeIntervalSince(listedAt) < lifetime
@@ -227,11 +287,13 @@ enum YouTubeList {
     /// The `/watch` links of the page in order, one per video, as JSON. Ads, Shorts, side
     /// shelves and the miniplayer are skipped; a link around a thumbnail carries no title.
     /// No double quotes or backslashes: it goes inside `do JavaScript "…"`.
-    static func readJavaScript(path: String) -> String {
-        """
-        (function(){if(location.pathname!=='\(path)')return '[]';var out=[],seen={};\
+    static func readJavaScript(path: String?, visibleOnly: Bool = false) -> String {
+        let pageGuard = path.map { "if(location.pathname!=='\($0)')return '[]';" } ?? ""
+        let visibility = visibleOnly ? "var r=a.getBoundingClientRect();if(r.width<=0||r.height<=0||r.bottom<=0||r.top>=innerHeight||r.right<=0||r.left>=innerWidth)continue;" : ""
+        return """
+        (function(){if(location.hostname!=='youtube.com'&&!location.hostname.endsWith('.youtube.com'))return '[]';\(pageGuard)var out=[],seen={};\
         var as=document.querySelectorAll('a[href*=watch]');\
-        for(var i=0;i<as.length&&out.length<15;i++){var a=as[i];\
+        for(var i=0;i<as.length&&out.length<\(visibleOnly ? 100 : 15);i++){var a=as[i];\(visibility)\
         if(a.closest('ytd-ad-slot-renderer,ytd-in-feed-ad-layout-renderer,ytd-promoted-video-renderer,\
         ytd-reel-shelf-renderer,ytd-rich-shelf-renderer,ytd-shelf-renderer,ytd-horizontal-card-list-renderer,\
         ytd-miniplayer,ytd-guide-renderer'))continue;\
@@ -246,11 +308,11 @@ enum YouTubeList {
     }
 
     /// Error 8 = "Allow JavaScript from Apple Events" is off.
-    static func readScript(path: String) -> String {
+    static func readScript(path: String?, visibleOnly: Bool = false) -> String {
         """
         tell application id "com.apple.Safari"
             try
-                return (do JavaScript "\(readJavaScript(path: path))" in current tab of front window) as text
+                return (do JavaScript "\(readJavaScript(path: path, visibleOnly: visibleOnly))" in current tab of front window) as text
             on error errText number errNum
                 if errNum is 8 then return "jsoff"
                 return "[]"

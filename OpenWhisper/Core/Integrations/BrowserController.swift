@@ -74,6 +74,9 @@ enum BrowserController {
             return await YouTubeList.read(url, path: "/") { await open($0, done: "YouTube açıldı") }
         case .youtubeMore:
             return YouTubeList.more()
+        case .youtubeTitle(let title):
+            if let status = await YouTubeList.playTitle(title) { return status }
+            return await perform(.search(.youtube, title))
         case .youtubePick(let number):
             return await YouTubeList.play(number) { await open($0, done: "Video açıldı") }
         case .summarize:
@@ -168,6 +171,44 @@ enum BrowserController {
             return "Adres açılamadı"
         }
     }
+
+    /// An explicitly named YouTube player must not fall back to unrelated media when
+    /// YouTube is closed. Open its home page and let the user choose a video first.
+    nonisolated static let youTubeNeedsVideo = "YouTube açıldı; önce bir video seçmelisin"
+
+    static func prepareYouTubeVideo() async -> String? {
+        let result = await Task.detached {
+            OSAScriptRunner.run(["-e", youTubeTabScript], timeout: 4)
+        }.value
+        if result == "found" { return nil }
+        if result != "missing" { return "Safari'ye ulaşılamadı" }
+        return await open(URL(string: "https://www.youtube.com/")!, done: youTubeNeedsVideo)
+    }
+
+    nonisolated static let youTubeTabScript = """
+        if application "Safari" is not running then return "missing"
+        tell application "Safari"
+            if (count of windows) > 0 then
+                set u to URL of current tab of front window
+                if u starts with "https://www.youtube.com/" or u starts with "https://youtube.com/" or u starts with "https://m.youtube.com/" then
+                    activate
+                    return "found"
+                end if
+            end if
+            repeat with w in windows
+                repeat with t in tabs of w
+                    set u to URL of t
+                    if u starts with "https://www.youtube.com/" or u starts with "https://youtube.com/" or u starts with "https://m.youtube.com/" then
+                        set current tab of w to t
+                        set index of w to 1
+                        activate
+                        return "found"
+                    end if
+                end repeat
+            end repeat
+        end tell
+        return "missing"
+        """
 
     private static var isFront: Bool {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID

@@ -61,6 +61,9 @@ final class WhisperKitTranscriptionProvider: @unchecked Sendable {
 }
 
 extension WhisperKitTranscriptionProvider: TranscriptionModelProvider {
+    func previewTranscription(audioData: [Float], language: String) async throws -> String? {
+        try await transcriber.previewTranscription(audioData: audioData, language: language)
+    }
     func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String {
         try await transcriber.transcribe(
             audioData: audioData,

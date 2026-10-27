@@ -8,18 +8,32 @@ import QuartzCore
 import os
 
 extension AppState {
+    /// An explicit recording must not look successful when recognition produced no usable text.
+    /// Passive command follow-ups may legitimately contain only silence or playback.
+    func reportUnrecognizedRecording(_ session: RecordingTranscriptionSession) async {
+        session.latency.markOutput("konuşma anlaşılamadı; gönderilmedi")
+        guard !session.isCancelled, !session.takesOnlyCommands else { return }
+        let message = "Konuşmanı anlayamadım; metin çıkarılamadı. Mikrofonu kontrol edip tekrar dene."
+        lastError = message
+        showFlowBarMessage(message, durationMs: 8000)
+        owLog("[Result] Recognition failed; user notified, nothing pasted or copied")
+        if session.isVoiceCommand, recordingState != .recording {
+            await speakReply(message)
+        }
+    }
+
     func finishTranscription(_ session: RecordingTranscriptionSession) async {
         guard !session.hasFinished else { return }
         session.hasFinished = true
         // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
         // first so it runs last, once the media and recording state below are settled.
         var commandFollowUp: CommandFollowUp.Domain?? = nil
-        // A new, empty Claude Code / Codex chat was opened: keep listening for its first message.
-        var developerSessionApp: NSRunningApplication?
+        // An agent app or a new chat was opened: listen for commands or dictation there.
+        var conversationContinuationApp: NSRunningApplication?
         // Opened already as Jarvis's reply started (`speakAfterCommand`).
         var followUpOpenedOverReply = false
         defer {
-            if let app = developerSessionApp, !session.isCancelled,
+            if let app = conversationContinuationApp, !session.isCancelled,
                NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                recordingState != .recording, hotkey?.isIdle == true, microphoneGranted {
                 pendingCommandFollowUp = nil
@@ -91,6 +105,8 @@ extension AppState {
             // Break the session ↔ worker reference cycle once the worker has drained the
             // session's stream and the final output step is complete.
             session.task = nil
+            session.speechPreview = nil
+            session.previewEndpointDetector = nil
             pendingTranscriptionCount = max(0, pendingTranscriptionCount - 1)
             if transcriptionQueueTailID == session.id {
                 transcriptionQueueTail = nil
@@ -186,7 +202,12 @@ extension AppState {
             // Mangled names ("Sputfayda" → "Spotify'da") fixed before routing, so a command is
             // still recognized; the list is the user's ses-benzerleri.txt.
             // Wake sessions now start at the wake itself, so the tail of "Jarvis" can be heard.
-            let joined = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            let rawJoined = AudioSegmentation.joinTranscripts(session.segmentTexts)
+            let joined = session.appliesSpeechChecks
+                ? SpokenDoneEndpoint.removingSuffix(from: rawJoined) ?? rawJoined : rawJoined
+            // A bare finish word closes the microphone without creating an empty request.
+            if session.appliesSpeechChecks, joined.isEmpty,
+               SpokenDoneEndpoint.removingSuffix(from: rawJoined) != nil { return }
             // A follow-up opened over Jarvis's reply heard the reply first, and may itself
             // start with "Hey Jarvis," (voice test 2026-10-22).
             let spoken = session.trigger == .wakeWord ? WakeWordVerifier.strippingLeadingWakeWord(joined)
@@ -208,10 +229,12 @@ extension AppState {
                   !trimmed.hasPrefix("[BLANK"),
                   !trimmed.hasPrefix("(BLANK") else {
                 owLog("[OpenWhisper] Empty/blank transcription, skipping")
+                await reportUnrecognizedRecording(session)
                 return
             }
             guard !session.appliesSpeechChecks || !AudioSegmentation.isRepetitionHallucination(trimmed) else {
                 owLog("[OpenWhisper] Repeated-word hallucination, skipping: \(trimmed)")
+                await reportUnrecognizedRecording(session)
                 return
             }
             guard !session.appliesSpeechChecks
@@ -222,10 +245,12 @@ extension AppState {
                 } else {
                     // A voice session that asks "tekrar söyler misin?" must also listen for it.
                     let ask = "Anlaşılamadı, tekrar söyler misin?"
+                    lastError = ask
+                    session.latency.markOutput("konuşma anlaşılamadı; gönderilmedi")
                     if listenForReplyAnswer(ask, heard: false, after: session) {
                         holdMediaForReplyAnswer = true
                     } else {
-                        showFlowBarMessage(ask)
+                        showFlowBarMessage(ask, durationMs: 8000)
                     }
                 }
                 return
@@ -592,7 +617,7 @@ extension AppState {
                         statuses.append(status)
                         replies.append(self.jarvisReply.timer(timerCommand, status: status))
                     case .system(let command):
-                        if step.command.endsSession {
+                        if step.command.endsSession && command != .disableWakeWord {
                             // Say everything before the Mac stops listening.
                             if session.isVoiceCommand {
                                 await self.speakReply(self.jarvisReply.combined(replies + ["Görüşürüz."]))
@@ -601,11 +626,28 @@ extension AppState {
                         }
                         // The local model takes several seconds on a long page.
                         if command == .browser(.summarize) { self.showFlowBarMessage("Sayfa özetleniyor…", durationMs: 30000) }
-                        var status = await SystemController.perform(command)
+                        var youTubeStatus: String?
+                        if case .video = command, SystemCommandParser.mentionsYouTube(step.text) {
+                            youTubeStatus = await BrowserController.prepareYouTubeVideo()
+                        }
+                        var status: String
+                        if let youTubeStatus {
+                            status = youTubeStatus
+                        } else if case .video(let action) = command, SystemCommandParser.mentionsYouTube(step.text) {
+                            status = await VideoController.perform(action, onlyYouTube: true)
+                        } else {
+                            status = await SystemController.perform(command, disableWakeWord: {
+                                self.wakeWordEnabled = false
+                            })
+                        }
+                        if command == .disableWakeWord {
+                            commandFollowUp = nil
+                            conversationContinuationApp = nil
+                        }
                         if command == .developerMode {
                             if let app = await AgentAppActivator.activate(.claudeCode),
                                await ClaudeSessionNavigator.openNewSession(app) {
-                                developerSessionApp = app
+                                conversationContinuationApp = app
                                 status += " · Claude Code’da yeni sohbet hazır"
                             } else {
                                 status += " · Claude Code’da yeni sohbet açılamadı"
@@ -618,13 +660,23 @@ extension AppState {
                         if case .video(let action) = command, action.changesPlayback,
                            !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
                         switch command {
-                        case .switchToApp, .switchToAgent: stepTargetApp = NSWorkspace.shared.frontmostApplication
+                        case .switchToAgent(let agent):
+                            stepTargetApp = NSWorkspace.shared.frontmostApplication
+                            // Opening an agent invites a message, not just a short command fix.
+                            // Continue only after a successful final step into the expected app.
+                            if session.isVoiceCommand, steps.last?.command == step.command,
+                               status == "\(agent.displayName) önde",
+                               let app = stepTargetApp,
+                               agent.bundleIdentifiers.contains(app.bundleIdentifier ?? "") {
+                                conversationContinuationApp = app
+                            }
+                        case .switchToApp: stepTargetApp = NSWorkspace.shared.frontmostApplication
                         default: break
                         }
                         owLog("[Result] System command: \(status)")
                         ran.append(step.command)
                         statuses.append(status)
-                        if !step.command.endsSession { replies.append(self.jarvisReply.system(command, status: status)) }
+                        if !step.command.endsSession || command == .disableWakeWord { replies.append(self.jarvisReply.system(command, status: status)) }
                     case .spotify(let request):
                         let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
                         let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: request)
@@ -657,7 +709,7 @@ extension AppState {
                     self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : lone ? 2500 : 3500)
                 }
                 // The Mac stops listening after sleep / lock; developer mode is a whole setup.
-                if !ran.isEmpty, !ran.contains(where: { $0.endsSession || $0 == .system(.developerMode) }) {
+                if conversationContinuationApp == nil, !ran.isEmpty, !ran.contains(where: { $0.endsSession || $0 == .system(.developerMode) }) {
                     commandFollowUp = .some(ran.reversed().lazy.compactMap(CommandFollowUp.domain(of:)).first)
                 }
                 if session.isVoiceCommand { await speakAfterCommand(self.jarvisReply.combined(replies)) }
@@ -816,7 +868,7 @@ extension AppState {
                 session.latency.finishDecision(route: "bulut sohbet geçişi")
                 self.lastTranscription = text
                 if reply == CloudSessionNavigation.newChatOpened, session.isVoiceCommand {
-                    developerSessionApp = NSWorkspace.shared.frontmostApplication
+                    conversationContinuationApp = NSWorkspace.shared.frontmostApplication
                 }
                 await say(reply, durationMs: 5000)
                 return
@@ -920,7 +972,7 @@ extension AppState {
                         await fail(status, spoken: spoken)
                     case .opened(let app, let projectAgent, let found, let isNew):
                         guard !agent.body.isEmpty else {
-                            if isNew, session.isVoiceCommand { developerSessionApp = app }
+                            if isNew, session.isVoiceCommand { conversationContinuationApp = app }
                             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agentProject(found.name, isNew: isNew)) }
                             return
                         }
@@ -981,7 +1033,7 @@ extension AppState {
                     }
                     pasteContext = PasteContext.capture(targetApp: app)
                     if agent.body.isEmpty {
-                        if agent.session == .new, session.isVoiceCommand { developerSessionApp = app }
+                        if agent.session == .new, session.isVoiceCommand { conversationContinuationApp = app }
                         if session.isVoiceCommand { await self.speakReply(self.jarvisReply.newAgentSession()) }
                         return
                     }

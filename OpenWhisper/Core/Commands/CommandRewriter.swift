@@ -73,7 +73,7 @@ enum CommandRewriter {
 
     private static func isSafe(_ command: SystemCommand) -> Bool {
         switch command {
-        case .quitApp, .forceQuitApp, .sleep, .displaySleep, .lockScreen, .screenSaver, .mailMarkAllRead,
+        case .disableWakeWord, .quitApp, .forceQuitApp, .sleep, .displaySleep, .lockScreen, .screenSaver, .mailMarkAllRead,
              .developerMode, .runShortcut, .calendarEvent, .headset, .mailReplyDraft:
             return false
         default:

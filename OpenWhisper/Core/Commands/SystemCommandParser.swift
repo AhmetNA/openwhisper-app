@@ -13,6 +13,8 @@ enum SystemCommand: Equatable, Sendable {
     /// Scroll the content under the pointer in the frontmost app.
     case scroll(up: Bool, large: Bool)
     case lockScreen
+    /// Disable only Hey Jarvis activation; keyboard dictation remains available.
+    case disableWakeWord
     case displaySleep
     /// "Ekranı aç / uyandır": lights the display from sleep (the lock screen shows if locked).
     case displayWake
@@ -92,6 +94,8 @@ enum BrowserAction: Equatable, Sendable {
     case youtubeMore
     /// "İkinciyi aç": a video of the list just read, counted from its top; 0 = the last one read.
     case youtubePick(Int)
+    /// Try the visible page before falling back to a YouTube search.
+    case youtubeTitle(String)
 }
 
 /// A video by voice: "videoyu durdur", "başa sar", "10 saniye ileri sar", "hızı 1.5 yap".
@@ -165,6 +169,9 @@ enum SystemCommandParser {
         cleaned = cleaned.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         guard !cleaned.isEmpty else { return nil }
+        if matches(cleaned, #"^(?:(?:beni )?dinlemeyi (?:bırak|bırakır mısın|kapat|kapatır mısın|durdur|kes)|(?:beni )?dinleme|mikrofonu (?:kapat|kapatır mısın|kapa|sustur)|(?:sesle (?:başlatmayı|uyandırmayı)|sesli uyandırmayı|hey jarvis(?: ile)? uyandırmayı) (?:kapat|kapatır mısın|devre dışı bırak))(?: lütfen)?$"#) {
+            return .disableWakeWord
+        }
         if isDeveloperMode(cleaned) { return .developerMode }
         // First, and with a longer limit: shortcut names are free text ("Wi-Fi ile Sabah Özeti")
         // that would otherwise read as a Wi-Fi or app command.
@@ -204,6 +211,7 @@ enum SystemCommandParser {
 
     /// "Bugün ne var", "bugün neyimiz var", "programımız ne", "yarın planım ne", "günün özeti".
     private static func parseBriefing(_ text: String) -> SystemCommand? {
+        guard !mentionsYouTube(text) else { return nil }
         let day = #"(?:bugün|bugünkü|bu gün|yarın|yarınki)"#
         // Bound the roots so a word like "toplantı" cannot match the "plan" substring.
         let ask = #"\b(?:ne var|neler var|neyim var|neyimiz var|nelerimiz var|program\w*|plan\w*|ajanda\w*|takvim\w*)\b"#
@@ -480,6 +488,10 @@ enum SystemCommandParser {
     // MARK: - Safari
 
     private static let youtube = #"(?:youtube|you tube|yutub|yutup|yutyub)"#
+    static func mentionsYouTube(_ text: String) -> Bool {
+        matches(text.lowercased(with: locale), #"(?:^|\s)\#(youtube)(?=$|[\s’'.,!?]|[dtuüay])"#)
+    }
+
     private static let google = #"(?:google|gugıl|gugul|internet|web)"#
     /// "…'da", "… da", "…'ta", "…te": where to search.
     private static let at = #"\s?'?(?:da|de|ta|te)"#
@@ -502,12 +514,24 @@ enum SystemCommandParser {
         if let number = YouTubeList.pick(in: raw, requireVerb: true) { return .youtubePick(number) }
         // "YouTube'u aç", "YouTube'da ne var", "YouTube önerilerini oku", "YouTube'a gir".
         if matches(raw, #"^\#(youtube)(?:'?y?[uü]|'?y?a)? (?:aç|açar mısın|gir|git)\#(polite)"#)
-            || matches(raw, #"^\#(youtube)\#(at) (?:ne|neler) (?:var|önerili?yor|izlesem)(?: bakalım)?\#(polite)"#)
+            || matches(raw, #"^(?:(?:bugün|bu gün|şimdi) )?\#(youtube)\#(at) (?:(?:bugün|bu gün|şimdi) )?(?:ne|neler) (?:var|önerili?yor|izlesem|izleyebilirim)(?: bakalım| bana söyle| söyle| oku)?\#(polite)"#)
+            || matches(raw, #"^\#(youtube)\#(at) (?:(?:bugün|bu gün|şimdi) )?(?:hangi videolar var|neler varmış|ne varmış|ne izleyeyim|neler öneriliyor)\#(polite)"#)
+            || matches(raw, #"^\#(youtube)(?:'?(?:daki|da|de))? (?:(?:bugünkü|yeni) )?(?:videoları|önerileri|önerilerini|video başlıklarını)(?: bana)? (?:oku|söyle|göster|listele)\#(polite)"#)
             || matches(raw, #"^\#(youtube)(?:'?n?[uü]n)? (?:önerileri|önerilerini|ana ?sayfası|ana ?sayfasını)(?: oku| söyle| aç| neler)?\#(polite)"#) {
             return .youtubeHome
         }
         if matches(raw, #"^(?:başka|diğer|sonraki) (?:öneri|video|sonuç)\p{L}*(?: (?:oku|söyle|var mı))?\#(polite)"#) {
             return .youtubeMore
+        }
+
+        // A named video is a selection, even when Jarvis has not read a list yet.
+        if parseVideoRequest(raw) == nil,
+           let title = group(#"^(?:(?:\#(youtube)\#(at)|ekrandaki|sağdaki|sayfadaki) )?(.+?) (?:videosunu|videoyu|başlıklı videoyu|isimli videoyu|adlı videoyu) (?:aç|oynat|başlat|açar mısın)\#(polite)"#, in: raw) {
+            return .youtubeTitle(title)
+        }
+        if let title = group(#"^\#(youtube)\#(at) (.+?) (?:aç|oynat|başlat)\#(polite)"#, in: raw)
+            ?? group(#"^(.+?) \#(youtube)\#(at) (?:aç|oynat|başlat)\#(polite)"#, in: raw) {
+            return .youtubeTitle(searchQuery(title))
         }
 
         for (engine, site) in [(BrowserAction.Engine.youtube, youtube), (.google, google)] {
@@ -690,8 +714,15 @@ enum SystemCommandParser {
     /// "Safari'yi aç", "Chrome'u kapat", "Notlar uygulamasını aç",
     /// "Chrome'u zorla kapat", "Slack'i öldür", "Xcode'u kill et".
     private static func parseApp(_ text: String, installedApps: [String]) -> SystemCommand? {
-        guard !installedApps.isEmpty else { return nil }
         if let command = parseAppPhrase(text, installedApps: installedApps) { return command }
+        // Whisper can join the entire agent command: "Kodeksyaç", "Codexiaç".
+        // Recover only known agents and opening verbs, never arbitrary apps or closing actions.
+        if let name = group(#"^(.+?)\s*(?:aç|ac|başlat)$"#, in: text) {
+            let spoken = name.replacingOccurrences(of: #"['’`]?\s*y$"#, with: "", options: .regularExpression)
+            if case .switchToAgent(let agent)? = parseAppPhrase("\(spoken) aç", installedApps: []) {
+                return .switchToAgent(agent)
+            }
+        }
         // Whisper glues the case ending onto the verb: "Saferi Yaç", "Safer iyaç" (Safari'yi aç).
         // Move it back onto the name; the buffer "y" goes.
         let unglued = text.replacingOccurrences(
@@ -710,6 +741,14 @@ enum SystemCommandParser {
         let spoken = String(text[nameRange])
         let verb = String(text[verbRange])
         let forced = match.range(at: 2).location != NSNotFound
+        // "Cloud kodu aç", "Claude Code'u aç", "Cılat'ı aç": the agent names Whisper bends
+        // ("cloud kod" is no installed app) open the agent like "… geç" does.
+        if ["aç", "başlat"].contains(verb), !forced {
+            let bare = spoken.replacingOccurrences(of: #"['’`]?\s*n?[yn]?[ıiuü]$"#, with: "", options: .regularExpression)
+            if let agent = AgentCommandParser.agentApp(named: spoken) ?? AgentCommandParser.agentApp(named: bare) {
+                return .switchToAgent(agent)
+            }
+        }
         guard let app = resolveApp(spoken, in: installedApps) else { return nil }
         if ["aç", "başlat"].contains(verb) { return forced ? nil : .openApp(app) }
         if forced || ["öldür", "sonlandır", "kill et", "killle", "kille"].contains(verb) { return .forceQuitApp(app) }

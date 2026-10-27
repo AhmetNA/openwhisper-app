@@ -12,10 +12,33 @@ final class InputDeviceWatcher {
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain
     )
+    private var defaultInputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var pendingDefaultInput: DispatchWorkItem?
     private var listener: AudioObjectPropertyListenerBlock?
     private var pending: DispatchWorkItem?
 
-    func start(onChange: @escaping () -> Void) {
+    func start(onDefaultInputChange: @escaping () -> Void, onChange: @escaping () -> Void) {
+        if defaultInputListener == nil {
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+                guard let self else { return }
+                self.pendingDefaultInput?.cancel()
+                let work = DispatchWorkItem(block: onDefaultInputChange)
+                self.pendingDefaultInput = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            }
+            let status = AudioObjectAddPropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &defaultInputAddress, DispatchQueue.main, block)
+            if status == noErr {
+                defaultInputListener = block
+            } else {
+                owLog("[Input] Could not listen for default input changes: \(status)")
+            }
+        }
         guard listener == nil else { return }
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }

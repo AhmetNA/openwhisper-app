@@ -35,6 +35,13 @@ extension AppState {
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
         armVoiceAutoStopForNextRecording = false
         let recordingTrigger = hotkey?.trigger ?? .fnHold
+        let deferredWake = recordingTrigger == .wakeWord ? pendingWhisperWake : nil
+        if recordingTrigger != .wakeWord { cancelPendingWhisperWake(reason: "manual recording took over") }
+        if recordingTrigger == .wakeWord && (!wakeWordEnabled || deferredWake.map({ !$0.accepted || !$0.isValid() }) == true) {
+            cancelPendingWhisperWake(reason: "wake cancelled before recording")
+            hotkey?.externalCancelHandsFree()
+            return
+        }
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
         let claudeRecap = recordingTrigger == .followUp ? pendingClaudeMessage : nil
@@ -50,10 +57,11 @@ extension AppState {
         clearFlowBarMessage()
         // The recap stays readable while the user words the message.
         if let claudeRecap { showFlowBarMessage(claudeRecap, durationMs: Self.flowBarDuration(ofRecap: claudeRecap)) }
-        guard modelLoaded else {
+        guard modelLoaded || whisperSuspendedForIdle else {
             owLog("[OpenWhisper] Cannot record — model not loaded yet")
             return
         }
+        if whisperSuspendedForIdle { Task { await resumeIdleWhisperIfNeeded() } }
         let sessionStart = CACurrentMediaTime()
         // A reply follow-up behaves like "Hey Jarvis" once the user speaks (full command,
         // Smart Turn endpoint); only its no-speech window is short.
@@ -65,9 +73,11 @@ extension AppState {
         let isReplyFollowUp = armVoiceAutoStop && recordingTrigger == .followUp
         var smartTurnConfig = SmartTurnEndpointDetector.Config()
         // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
-        let ignoredLeadingSeconds: TimeInterval = mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
+        let ignoredLeadingSeconds: TimeInterval = deferredWake != nil ? 0 : mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
         recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
-        let recordingInputDeviceUID = resolvedInputDeviceUID(for: recordingTrigger)
+        // A deferred wake keeps the listener's microphone for this session: changing to a
+        // preferred Bluetooth mic here would discard the words spoken during model loading.
+        let recordingInputDeviceUID = deferredWake?.inputUID ?? resolvedInputDeviceUID(for: recordingTrigger)
         let recordingInputIsBluetooth = Self.inputIsBluetooth(uid: recordingInputDeviceUID)
         let recordingMic = TargetSpeakerMic(device: AudioEngine.availableInputDevices().first { $0.uid == recordingInputDeviceUID })
         if ![.confirmation, .followUp].contains(recordingTrigger) {
@@ -136,7 +146,7 @@ extension AppState {
         let sessionProfile = Self.sessionTargetSpeakerProfile(
             mic: recordingMic, mac: targetSpeakerProfile, buds: budsTargetSpeakerProfile, external: externalTargetSpeakerProfile
         )
-        let targetSpeakerFiltersSession = targetSpeakerEnabled && sessionProfile != nil
+        let targetSpeakerFiltersSession = !bypassAudioProcessing && targetSpeakerEnabled && sessionProfile != nil
         if targetSpeakerEnabled && recordingMic != .mac {
             owLog(sessionProfile == nil
                 ? "[TargetSpeaker] \(recordingMic) input: speaker filter off (no \(recordingMic) profile)"
@@ -144,7 +154,7 @@ extension AppState {
         }
         // Mac mic only: the gate scores against the Mac profile every 0.5 s and cuts the session
         // after ~2 s of "someone else", too risky before the other profiles were checked in noise.
-        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && recordingMic == .mac
+        ownVoiceStopGate = !bypassAudioProcessing && armVoiceAutoStop && wakeLikeSession && recordingMic == .mac
             && (targetSpeakerFiltersSession || watchesPlayback) && targetSpeakerProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
@@ -171,19 +181,26 @@ extension AppState {
         // dispatch itself has zero main-thread work between it and the guards above.
         // Apple voice processing needs AVAudioEngine, which falls back to the wrong mic around
         // Bluetooth buds; their in-ear mic has no speaker echo and call mode already denoises.
-        var processingMode: AudioProcessingMode = recordingInputIsBluetooth && audioProcessingMode == .appleVoiceProcessing
+        var processingMode: AudioProcessingMode = (recordingInputIsBluetooth || deferredWake != nil) && audioProcessingMode == .appleVoiceProcessing
             ? .off : audioProcessingMode
         if processingMode != audioProcessingMode {
             owLog("[AudioEngine] Bluetooth input: recording without Apple voice processing")
         }
-        let echoCancellation = recordingEchoCancellationWanted(mic: recordingMic)
+        let bypassProcessing = bypassAudioProcessing
+        let echoCancellation = !bypassProcessing && recordingEchoCancellationWanted(mic: recordingMic)
         // Decided once here for the whole recording, never switched while it runs.
-        if processingMode != .appleVoiceProcessing {
+        if bypassProcessing {
+            processingMode = .off
+            activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "unprocessed")
+        } else if processingMode != .appleVoiceProcessing {
             processingMode = decideDeepFilter(
                 inputDeviceUID: recordingInputDeviceUID,
                 inputIsBluetooth: recordingInputIsBluetooth,
                 echoCancellation: echoCancellation
             ) ? .deepFilterNet : .off
+        }
+        if processingMode == .appleVoiceProcessing {
+            activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "apple processing")
         }
         let sessionID = nextTranscriptionID &+ 1
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
@@ -206,6 +223,16 @@ extension AppState {
                 wakePreroll: recordingTrigger == .wakeWord,
                 echo: echoCancellation)
             : nil
+        if let deferredWake {
+            guard captureHandoff != nil, audioEngineRef != nil else {
+                captureHandoff?.capture.stop()
+                captureHandoff?.echo?.release()
+                cancelPendingWhisperWake(reason: "buffered microphone unavailable", retryDelay: 10)
+                hotkey?.externalCancelHandsFree()
+                return
+            }
+            consumePendingWhisperWake(deferredWake)
+        }
         if audioEngineRef == nil {
             captureHandoff?.capture.stop()
             captureHandoff?.echo?.release()
@@ -215,6 +242,7 @@ extension AppState {
             let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
                 audioProcessingMode: processingMode,
+                bypassAudioProcessing: bypassProcessing,
                 sampleCallback: endpointSampleCallback,
                 echoCancellation: echoCancellation,
                 playbackHeard: playbackHeard,
@@ -242,6 +270,9 @@ extension AppState {
             // can never delay the Fn->audio path -- it only informs the user after the fact.
             if didFallBackFromDeepFilter {
                 Task { @MainActor in
+                    if self?.nextTranscriptionID == sessionID {
+                        self?.activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "model unavailable")
+                    }
                     self?.showFlowBarMessage("Gürültü engelleme henüz hazır değildi, bu kayıt engelsiz işlendi")
                 }
             }
@@ -273,7 +304,7 @@ extension AppState {
         let session = RecordingTranscriptionSession(
             id: nextTranscriptionID,
             targetApp: targetApp,
-            targetSpeakerEnabled: targetSpeakerFiltersTranscription && sessionProfile != nil,
+            targetSpeakerEnabled: !bypassProcessing && targetSpeakerFiltersTranscription && sessionProfile != nil,
             targetSpeakerProfile: sessionProfile,
             pasteContext: initialContext
         )
@@ -286,6 +317,9 @@ extension AppState {
                 session?.pasteContext = capturedContext
             }
         }
+        session.bypassAudioProcessing = bypassProcessing
+        session.previewEndpointDetector = smartTurnEndpointDetector
+        owLog("[AudioProcessing] session=\(session.id) unprocessed=\(bypassProcessing)")
         session.isVoiceCommand = armVoiceAutoStop
         session.trigger = recordingTrigger
         session.mediaWasPlaying = mediaPlaying
@@ -348,6 +382,7 @@ extension AppState {
                 self.recordingDuration += 0.25
                 self.enqueueCompletedAudioSegments()
                 self.checkOwnVoiceEndpoint()
+                self.checkSpokenDoneEndpoint()
             }
         }
 
@@ -398,6 +433,10 @@ extension AppState {
             return
         }
         let segments = audioEngine.stopRecording()
+        if session.queuedSampleCount == 0, segments.count == 1,
+           let segment = segments.first, segment.overlapSampleCount == 0 {
+            session.previewEndpointDetector?.finishForPreview(with: segment.samples)
+        }
         noteRecordingNoiseFloor(audioEngine)
         session.latency.markRecordingStopped()
         // A voice command keeps media paused until it has run (see finishTranscription).
@@ -441,12 +480,31 @@ extension AppState {
         _ segment: CompletedAudioSegment,
         session: RecordingTranscriptionSession
     ) async {
+        await AudioSignalProcessor.$bypassProcessing.withValue(session.bypassAudioProcessing) {
+            await transcribeStreamingSegmentWithSessionSettings(segment, session: session)
+        }
+    }
+
+    private func transcribeStreamingSegmentWithSessionSettings(
+        _ segment: CompletedAudioSegment,
+        session: RecordingTranscriptionSession
+    ) async {
         guard !session.isCancelled else { return }
+        lastWhisperActivity = Date()
         let transcriptionStartedAt = session.latency.timestamp()
         defer { session.latency.record(.transcription, since: transcriptionStartedAt) }
         session.nextSegmentNumber += 1
         let segmentNumber = session.nextSegmentNumber
 
+        if whisperSuspendedForIdle {
+            await resumeIdleWhisperIfNeeded()
+            guard !session.isCancelled, modelLoaded else {
+                session.isCancelled = true
+                lastError = "Konuşma modeli yüklenemedi. Kaydı yeniden deneyin."
+                return
+            }
+        }
+        guard !session.isCancelled else { return }
         guard let transcriber = activeTranscriptionService else {
             owLog("[OpenWhisper] No transcriber for background batch \(segmentNumber)")
             return
@@ -798,16 +856,28 @@ extension AppState {
                 // Fail-closed and below-threshold results transcribe the original only in their
                 // established fallback paths. Normal accepted output uses identity-masked audio.
                 let samplesToTranscribe: [Float]
-                if isFailClosedPassthrough || isBelowThresholdRejection {
+                if session.bypassAudioProcessing || isFailClosedPassthrough || isBelowThresholdRejection {
                     samplesToTranscribe = segment.samples
                 } else {
                     samplesToTranscribe = TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples
                 }
-                segmentText = try await transcriber.transcribe(
-                    audioData: samplesToTranscribe,
-                    language: language,
-                    overlapSampleCount: segment.overlapSampleCount
-                )
+                if let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
+                   let detector = session.previewEndpointDetector,
+                   preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
+                                   speechTime: session.doneLastSpeechTime, coverage: await detector.completedPreviewCoverage()),
+                   let prepared = await preview.task.value,
+                   !session.isCancelled,
+                   preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
+                                   speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
+                    segmentText = prepared
+                    owLog("[SpeechPreview] Reused confident decode; final speaker-filtered audio matched")
+                } else {
+                    segmentText = try await transcriber.transcribe(
+                        audioData: samplesToTranscribe,
+                        language: language,
+                        overlapSampleCount: segment.overlapSampleCount
+                    )
+                }
             }
             guard !session.isCancelled else { return }
             owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
@@ -907,6 +977,9 @@ extension AppState {
     }
 
     func feedVoiceEndpoint(rawRMS: Float, at time: TimeInterval) {
+        if recordingState == .recording, rawRMS >= 0.008 {
+            activeTranscriptionSession?.doneLastSpeechTime = time
+        }
         guard recordingState == .recording, var detector = voiceEndpointDetector else { return }
         let levelDecision = detector.process(rms: rawRMS, at: time)
         voiceEndpointDetector = detector
@@ -1040,6 +1113,7 @@ extension AppState {
         let floorText = floor.map { String(format: "%.1f dBFS (%.1f s, %.0f s ago)", $0.dbfs, $0.seconds, Date().timeIntervalSince($0.measuredAt)) } ?? "none"
         owLog("[DeepFilterAuto] \(decision.enabled ? "ON" : "OFF") (\(decision.reason)) | setting=\(deepFilterSetting.rawValue) device=\(device) bluetooth=\(inputIsBluetooth) media=\(mediaPlaying) aec=\(echoCancellation) floor=\(floorText)"
             + String(format: " thresholds off<%.0f on>=%.0f", DeepFilterAutoDecider.cleanBelowDBFS, DeepFilterAutoDecider.noisyFromDBFS))
+        activeDeepFilterDecision = decision
         return decision.enabled
     }
 

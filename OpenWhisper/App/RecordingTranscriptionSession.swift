@@ -24,6 +24,7 @@ final class RecordingTranscriptionSession {
     var targetSpeakerMic: TargetSpeakerMic = .mac
     /// Started by voice ("Jarvis", Vocal Shortcuts, openwhisper://start) rather than Fn:
     /// the user is giving a command, so Spotify intents are read less strictly.
+    var bypassAudioProcessing = false
     var isVoiceCommand = false
     /// How the recording was started; upgraded to `.fnSpace` when Space locks a Fn hold.
     var trigger: RecordingTrigger = .fnHold
@@ -86,6 +87,15 @@ final class RecordingTranscriptionSession {
         Self.routingFocus(trigger: trigger, captured: pasteContext.focusStatus,
                           simulated: VoiceTestInjector.shared.simulatedFocus)
     }
+
+    // Session-scoped so an old decode can never stop a newer microphone session.
+    var doneCheckInFlight = false
+    var doneLastSpeechTime: TimeInterval = 0
+    var doneCheckedSpeechTime: TimeInterval = 0
+    var doneLastCheckTime: TimeInterval = 0
+    var doneCheckedEndpointTime: TimeInterval = 0
+    var speechPreview: SpeechPreview?
+    var previewEndpointDetector: SmartTurnEndpointDetector?
 
     var task: Task<Void, Never>?
     var segmentTexts: [String] = []

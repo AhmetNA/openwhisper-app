@@ -23,6 +23,7 @@ enum ReplyTranslator {
         "Not ettim": "Noted",
         "Gönderdim": "Sent",
         "Yazdım": "Written",
+        "Sesle uyandırmayı kapattım": "Voice wake-up is off",
     ]
 
     /// The ack or fixed phrase in English, with "patron"/"efendim"/"sör" as "sir"; nil for any other

@@ -144,8 +144,14 @@ fi
 # The venv and the trained models come from decision_model/install.sh (retrain.sh runs it).
 DECIDER_DEST="$HOME/Library/Application Support/OpenWhisper/decider"
 if [ -x "$DECIDER_DEST/.venv/bin/python" ]; then
-    cp ../decision_model/server.py "$DECIDER_DEST/"
-    echo "==> Updated SetFit decision server in $DECIDER_DEST"
+    # main may predate the shared encoder installation. Never replace its server with
+    # a legacy-only server, which silently loads five encoders instead of the chosen one.
+    if [ -d "$DECIDER_DEST/shared/current" ] && ! grep -q 'shared_encoder' ../decision_model/server.py; then
+        echo "==> Preserved installed shared SetFit server (source is legacy-only)"
+    else
+        cp ../decision_model/server.py "$DECIDER_DEST/"
+        echo "==> Updated SetFit decision server in $DECIDER_DEST"
+    fi
 else
     echo "NOTE: SetFit decision models not installed; 'Karar motoru: SetFit' needs decision_model/install.sh"
 fi

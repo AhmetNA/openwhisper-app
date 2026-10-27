@@ -69,7 +69,7 @@ voice	Karadelik kısaca anlat.	none
 voice	Kilitli	none
 voice	Kontyakı başlayın.	none
 voice	Kısırsız	none
-voice	Müziğe devam et.	spotify:play
+voice	Müziğe devam et.	spotify-step:Müziğe devam et.
 voice	Ne haber nasıl?	none
 voice	Ne yap, bilmiyorum yani.	none
 voice	Neyilde hapize İran hocadan gelen mehilleri buyur.	none
@@ -138,12 +138,12 @@ voice	Sesi%30 seviyesine çıkar.	none
 voice	Sesi%30 yapabilir misin?	none
 voice	Sesi%80 'e çıkar.	none
 voice	Sonraki şarkı	none
-voice	Spotify kapat.	spotify:pause
+voice	Spotify kapat.	spotify-step:Spotify kapat.
 voice	Spotify'da Tarkan zilli düdük çalabilir misin?	spotify:search(tarkan zilli düdük)
 voice	Spotify'da aşkımız eski bir roman aç.	spotify:search(aşkımız eski bir roman)
 voice	Spotify'da beğendiğim şarkıları aç.	spotify:playLikedSongs
 voice	Spotify'da beğenilen şarkıları aç.	spotify:playLikedSongs
-voice	Spotify'da bir sonraki şarkıya aç.	spotify:next
+voice	Spotify'da bir sonraki şarkıya aç.	spotify-step:Spotify'da bir sonraki şarkıya aç.
 voice	Spotify'da bir şeyler çalsana.	spotify:search(bir şeyler)
 voice	Spotify'da bir şeyler çeğe sun.	none
 voice	Spotify'da daha eğlenceli şeyler açsana.	spotify:search(daha eğlenceli)
@@ -151,7 +151,7 @@ voice	Spotify'da eğlenceli bir şeyler çal.	spotify:search(eğlenceli)
 voice	Spotify'da müzik çal, piyanolu.	spotify:search(piyanolu)
 voice	Spotify'da şarkı aç	spotify:playLikedSongs
 voice	Spotify'da şarkı aç.	spotify:playLikedSongs
-voice	Spotify'da şarkıyı durdur.	spotify:pause
+voice	Spotify'da şarkıyı durdur.	spotify-step:Spotify'da şarkıyı durdur.
 voice	Spotify'daki şarkıyı durdurur musun?	none
 voice	Spotify'daki şarkıyı son ses alabilir misin?	none
 voice	Tarkan Dudu Aç	none
@@ -164,7 +164,7 @@ voice	Şarkı etsana Spotify'dan.	none
 voice	Şarkıya başlat.	spotify:playLikedSongs
 voice	Şarkıyı başlat	spotify:playLikedSongs
 voice	Şarkıyı başlat.	spotify:playLikedSongs
-voice	Şarkıyı durdur.	spotify:pause
+voice	Şarkıyı durdur.	spotify-step:Şarkıyı durdur.
 voice	Şarkıyı durdurur musun?	none
 voice	Şu anda ne çalıyor?	none
 voice	Bluetooth'u aç.	system:bluetooth(on: true)

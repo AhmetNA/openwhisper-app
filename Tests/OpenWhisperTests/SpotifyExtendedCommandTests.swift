@@ -125,7 +125,8 @@ final class SpotifyExtendedCommandTests: XCTestCase {
         XCTAssertTrue(SpotifyManager.speaksResult(afterCommand: "Sıradaki şarkı ne"))
         XCTAssertFalse(SpotifyManager.speaksResult(afterCommand: "Karışık çal"))
         XCTAssertTrue(SpotifyManager.speaksFailure(afterCommand: "Karışık çal"))
-        XCTAssertFalse(SpotifyManager.speaksFailure(afterCommand: "Müziği durdur"))
+        // Pause now reports the verified player state, including a failure to stop it.
+        XCTAssertTrue(SpotifyManager.speaksFailure(afterCommand: "Müziği durdur"))
     }
 
     func testPlaylistNamesMatchWholeWords() {

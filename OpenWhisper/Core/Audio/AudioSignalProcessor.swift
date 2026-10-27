@@ -3,6 +3,9 @@ import Foundation
 /// Small, speech-preserving gain stage used before Whisper receives microphone samples.
 /// It intentionally has no noise gate: low-volume speech must not be classified as noise.
 enum AudioSignalProcessor {
+    /// Scoped to a transcription session, so toggling settings cannot alter queued recordings.
+    @TaskLocal static var bypassProcessing = false
+
     /// Sized from measured recordings, not guessed. Across nine dictations the raw microphone
     /// level ran -63.0 to -43.0 dBFS mean with peaks never above -22.4 dBFS, and the outcome
     /// split cleanly: every recording at -47.3 dBFS or louder transcribed correctly, while
@@ -42,8 +45,8 @@ enum AudioSignalProcessor {
 
     /// Applies a fixed gain followed by a gentle soft-knee-like compressor in place. This is
     /// allocation-free because it runs on the audio callback path.
-    static func process(_ samples: UnsafeMutablePointer<Float>, count: Int, gain: Float = inputGain) {
-        guard count > 0 else { return }
+    static func process(_ samples: UnsafeMutablePointer<Float>, count: Int, gain: Float = inputGain, enabled: Bool = true) {
+        guard enabled, count > 0 else { return }
 
         for index in 0..<count {
             let boosted = samples[index] * gain
@@ -65,6 +68,7 @@ enum AudioSignalProcessor {
     /// intentionally stronger than the live path, so a second decode can recover quiet words
     /// without permanently making every recording louder.
     static func recoverySamples(from source: [Float]) -> [Float] {
+        guard !bypassProcessing else { return source }
         guard !source.isEmpty else { return [] }
         var samples = source
         samples.withUnsafeMutableBufferPointer { buffer in

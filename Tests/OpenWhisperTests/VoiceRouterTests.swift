@@ -4,6 +4,24 @@ import XCTest
 /// The session facts `RouteCorpusTests` keeps fixed: focus, a pending deletion, no app in front.
 @MainActor
 final class VoiceRouterTests: XCTestCase {
+    func testExplicitPlaybackControlsBypassModelRouting() {
+        for text in ["Şarkıyı durdur", "Spotify'da devam et", "Sonraki şarkıya geç"] {
+            guard case .command(.spotify) = VoiceRouter.route(text, facts: facts()) else {
+                XCTFail("Expected local Spotify route: \(text)"); continue
+            }
+        }
+        guard case .typed = VoiceRouter.route("Buraya yaz şarkıyı durdur", facts: facts()) else {
+            return XCTFail("Explicit dictation must retain precedence")
+        }
+        guard case .deletionConfirmation = VoiceRouter.route("Şarkıyı durdur", facts: facts(pendingDeletion: true)) else {
+            return XCTFail("Pending confirmation must retain precedence")
+        }
+        for text in ["Şarkıyı durdurma", "Şarkıyı durdur demedim", "Tarkan'ın Şımarık şarkısını çal"] {
+            if case .command(.spotify) = VoiceRouter.route(text, facts: facts()) {
+                XCTFail("Must retain existing interpretation: \(text)")
+            }
+        }
+    }
     private func facts(voice: Bool = true, focus: TextFocusStatus = .unknown, hasTargetApp: Bool = true,
                        targetBundleID: String? = nil, pendingDeletion: Bool = false,
                        overPlayback: Bool = false) -> VoiceRouter.Facts {
@@ -50,6 +68,46 @@ final class VoiceRouterTests: XCTestCase {
         }
         guard case .command = VoiceRouter.route("Wi-Fi'yi kapat", facts: on) else {
             return XCTFail("commands still run while testing")
+        }
+    }
+
+    func testOpenMisheardClaudeOutsideClaude() {
+        for text in ["Claude kodu aç", "Cloud kodu aç", "Cılat aç", "culud başlat", "cılade aç", "kılavu aç", "Kılavu aç.", "kılavuyaç"] {
+            guard case .command(.system(.switchToAgent(.claudeCode))) = VoiceRouter.route(
+                text, facts: facts(focus: .notEditable, hasTargetApp: false)
+            ) else { return XCTFail("\(text) must open Claude without Claude in front") }
+        }
+    }
+
+    func testOpenCodexAndChatGPTFromVoice() {
+        for (text, agent): (String, AgentApp) in [
+            ("Kodeksi Aç", .codex), ("Kodeksi aç.", .codex),
+            ("Kodeksyaç", .codex), ("Codexiaç", .codex), ("ChatGPTyiaç", .chatGPT),
+            ("Codex'i aç", .codex), ("ChatGPT'yi aç", .chatGPT),
+            ("ChatGPT aç", .chatGPT), ("Chat GPT'yi aç", .chatGPT),
+        ] {
+            for focus: TextFocusStatus in [.editable, .notEditable] {
+                guard case .command(.system(.switchToAgent(let target))) = VoiceRouter.route(
+                    text, facts: facts(focus: focus, hasTargetApp: false)
+                ) else { XCTFail("\(text) must open the app"); continue }
+                XCTAssertEqual(target, agent, text)
+            }
+        }
+    }
+
+    func testAgentContinuationAcceptsTypingDictationAndCommands() {
+        let context = facts(focus: .editable, targetBundleID: "com.anthropic.claudefordesktop")
+        for text in ["Şimdi naber nasılsın yaz", "Şimdi selamlar, ben nasılsın yaz."] {
+            guard case .typed(let body) = VoiceRouter.route(text, facts: context) else {
+                return XCTFail("Explicit writing must survive agent continuation: \(text)")
+            }
+            XCTAssertFalse(body.hasSuffix("yaz"))
+        }
+        guard case .spotifyOrConversation = VoiceRouter.route("Bu projedeki hataları birlikte inceleyelim", facts: context) else {
+            return XCTFail("Plain speech must reach the dictation fallback")
+        }
+        guard case .command(.system(.time)) = VoiceRouter.route("Saat kaç", facts: context) else {
+            return XCTFail("Commands must still work")
         }
     }
 

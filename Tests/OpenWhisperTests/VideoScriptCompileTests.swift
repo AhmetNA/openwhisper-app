@@ -22,8 +22,24 @@ final class VideoScriptCompileTests: XCTestCase {
         return process.terminationStatus == 0 ? "" : message
     }
 
+    func testVisibleYouTubeScriptCompiles() throws {
+        XCTAssertEqual(try compile(YouTubeList.readScript(path: nil, visibleOnly: true)), "")
+    }
+
+    func testYouTubeTabScriptCompiles() throws {
+        XCTAssertEqual(try compile(BrowserController.youTubeTabScript), "")
+    }
+
+    func testSpotifyPauseScriptCompiles() throws {
+        XCTAssertEqual(try compile(SpotifyController.pauseScript), "")
+    }
+
     func testFullscreenScriptCompiles() throws {
         XCTAssertEqual(try compile(VideoController.fullscreenScript), "")
+    }
+
+    func testYouTubeOnlyVideoScriptCompiles() throws {
+        XCTAssertEqual(try compile(VideoController.bestTabScript("(function(){return 'ok';})()", onlyYouTube: true)), "")
     }
 
     func testBestTabScriptCompiles() throws {

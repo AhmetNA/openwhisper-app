@@ -190,6 +190,10 @@ struct SettingsView: View {
             transcriptionModelSection
             if appState.modelLoading {
                 ProgressView("Model yükleniyor…")
+            } else if appState.whisperSuspendedForIdle {
+                Text("Konuşma modeli beklemede · seslenince veya kayıt başlayınca yüklenir.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else if !appState.modelLoaded {
                 Label("Model hazır değil", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
@@ -319,6 +323,19 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: 7) {
             Label("Ses işleme", systemImage: "waveform.and.mic")
 
+            Toggle("Sese işlem uygulama", isOn: $appState.bypassAudioProcessing)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(appState.recordingState != .idle)
+
+            HStack {
+                Text("DeepFilter")
+                Spacer()
+                Text(appState.displayedDeepFilterDecision.enabled ? "Açık" : "Kapalı")
+                    .foregroundStyle(appState.displayedDeepFilterDecision.enabled ? Color.green : Color.secondary)
+            }
+            .font(.caption)
+
             Picker("DeepFilter", selection: $appState.deepFilterSetting) {
                 Text("Otomatik").tag(DeepFilterSetting.automatic)
                 Text("Açık").tag(DeepFilterSetting.on)
@@ -326,19 +343,37 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .controlSize(.small)
-            .disabled(appState.recordingState != .idle)
+            .disabled(appState.recordingState != .idle || appState.bypassAudioProcessing)
 
-            Text(appState.recordingState == .idle
-                 ? deepFilterSettingDescription
-                 : "Kayıt sürerken değiştirilemez.")
+            Text(deepFilterSettingDescription)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
     }
 
     private var deepFilterSettingDescription: String {
+        let decision = appState.displayedDeepFilterDecision
+        if decision.reason == "unprocessed" {
+            return "Filtre, ses yükseltme ve konuşmacı eleme kapalı."
+        }
+        if decision.reason == "model unavailable" {
+            return "Model hazır değil; kapalı."
+        }
+        if decision.reason == "apple processing" {
+            return "Apple ses işleme etkin."
+        }
         switch appState.deepFilterSetting {
-        case .automatic: return "Ortam sessizse kapanır, gürültüde açılır."
+        case .automatic:
+            let reason: String
+            switch decision.reason {
+            case "clean": reason = "Son kayıtta ortam sessiz; kapalı."
+            case "noisy": reason = "Son kayıtta ortam gürültülü; açık."
+            case "in band, kept": reason = "Ortam sesi benzer; durum korundu."
+            case "media playing", "echo cancellation": reason = "Medya sesi var; açık."
+            case "floor stale": reason = "Ölçüm eski; şimdilik açık."
+            default: reason = "Ölçüm bekleniyor; açık."
+            }
+            return reason
         case .on: return "Gürültü her kayıtta temizlenir."
         case .off: return "Gürültü temizlenmez."
         }

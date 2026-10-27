@@ -28,9 +28,9 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         /// Confidence-aware debounce after the actual speech end. A borderline endpoint gets
         /// more time for a thinking pause to resume. Smart Turn rates even a short command
         /// ("devmodu aç") ~0.97 complete, so 1.2 s cut users off mid-thought; 2 s leaves room.
-        /// At ≥0.97 (most finished commands score ~0.98–0.99) 1.5 s is enough: every voice
-        /// command waited a median 1.8 s after its last word (15 Oct 2026).
-        var certainSilence: TimeInterval = 1.5
+        /// At ≥0.97, use one second; keep the longer thinking allowances for lower scores.
+        /// The minimum listening window still protects a wake word followed by a pause.
+        var certainSilence: TimeInterval = 1
         var veryHighConfidenceSilence: TimeInterval = 2
         var highConfidenceSilence: TimeInterval = 2.5
         var lowConfidenceSilence: TimeInterval = 3
@@ -68,6 +68,7 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
 
     private enum Item: Sendable {
         case samples([Float])
+        case finalSamples([Float])
         case finish
     }
 
@@ -78,6 +79,8 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         var terminalDecision: Decision?
         var lastProbability: Float?
         var lastEndpoint: Endpoint?
+        var previewCoverage = SpeechPreviewCoverage()
+        var previewInputFinished = false
     }
 
     /// The newest pause Silero found and Smart Turn's verdict on it. Kept when speech starts
@@ -92,13 +95,16 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     private var startTime: TimeInterval
     private let config: Config
     private let status = OSAllocatedUnfairLock(initialState: Status())
+    // Fixed-size batches keep the entire bounded wake preroll while the VAD is loading,
+    // independently of the microphone callback size (20 s = 625 batches at 16 kHz).
+    private let inputBatch = OSAllocatedUnfairLock(initialState: [Float]())
     private let continuation: AsyncStream<Item>.Continuation
     private var consumer: Task<Void, Never>?
 
     init(startTime: TimeInterval, config: Config = Config(), ignoredLeadingSeconds: TimeInterval = 0) {
         self.startTime = startTime
         self.config = config
-        let (stream, continuation) = AsyncStream<Item>.makeStream(bufferingPolicy: .bufferingNewest(128))
+        let (stream, continuation) = AsyncStream<Item>.makeStream(bufferingPolicy: .bufferingNewest(768))
         self.continuation = continuation
 
         let status = status
@@ -125,11 +131,21 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                 var pendingEndpoint: (speechEndSample: Int, probability: Float)?
                 var processedSamples = 0
                 let ignoredSamples = samplesToIgnore
+                var finalSampleCount: Int?
 
                 itemLoop: for await item in stream {
                     switch item {
                     case .finish:
                         break itemLoop
+                    case .finalSamples(let samples):
+                        // All live feed items precede this one. Add only the unqueued
+                        // sub-batch and converter/echo tail from the stopped recording.
+                        let received = processedSamples + ignoredSamples + pending.count
+                        guard samplesToIgnore == 0, samples.count >= received else { break itemLoop }
+                        pending.append(contentsOf: samples.dropFirst(received))
+                        finalSampleCount = samples.count
+                        let padding = (VadManager.chunkSize - pending.count % VadManager.chunkSize) % VadManager.chunkSize
+                        pending.append(contentsOf: repeatElement(Float(0), count: padding))
                     case .samples(var samples):
                         if samplesToIgnore > 0 {
                             let dropped = min(samplesToIgnore, samples.count)
@@ -155,12 +171,21 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                             config: segmentation
                         )
                         streamState = result.state
+                        status.withLock {
+                            let classified = min(processedSamples + ignoredSamples, finalSampleCount ?? Int.max)
+                            $0.previewCoverage.processedSamples = classified
+                            // Lower than the endpoint threshold: a quiet continuation must
+                            // invalidate a preview even before it becomes a speechStart event.
+                            if result.probability >= 0.15 {
+                                $0.previewCoverage.lastSpeechSample = classified
+                            }
+                        }
 
                         if result.event?.kind == .speechStart {
                             // The user resumed during the thinking allowance. Any previous endpoint
                             // verdict belonged to the partial sentence and must be discarded.
                             pendingEndpoint = nil
-                            status.withLock { $0.speechDetected = true }
+                            status.withLock { $0.speechDetected = true; $0.terminalDecision = nil }
                         } else if let event = result.event, event.kind == .speechEnd {
                             let probability = try turnModel.probability(for: recent)
                             let endpoint = Endpoint(probability: probability, time: CACurrentMediaTime())
@@ -188,10 +213,12 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                                 config: config
                             ) {
                                 status.withLock { $0.terminalDecision = endpointDecision }
-                                break itemLoop
+                                // Continue classifying buffered audio for preview validation
+                                // until capture releases this detector.
                             }
                         }
                     }
+                    if finalSampleCount != nil { break itemLoop }
                 }
             } catch {
                 let message = String(describing: error)
@@ -209,7 +236,13 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
 
     /// Audio-thread safe. Work is queued to the detached consumer; the caller never runs ML.
     func feed(_ samples: [Float]) {
-        continuation.yield(.samples(samples))
+        inputBatch.withLock { pending in
+            pending.append(contentsOf: samples)
+            while pending.count >= 512 {
+                continuation.yield(.samples(Array(pending.prefix(512))))
+                pending.removeFirst(512)
+            }
+        }
     }
 
     /// Starts the timeouts over at `time`: used once a Bluetooth mic actually delivers audio,
@@ -242,6 +275,22 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
 
     var lastEndpoint: Endpoint? {
         status.withLock { $0.lastEndpoint }
+    }
+
+    var previewCoverage: SpeechPreviewCoverage {
+        status.withLock { $0.previewCoverage }
+    }
+
+    /// Called after capture and its converter have stopped, only for a whole first batch.
+    func finishForPreview(with samples: [Float]) {
+        status.withLock { $0.previewInputFinished = true }
+        continuation.yield(.finalSamples(samples))
+        continuation.finish()
+    }
+
+    func completedPreviewCoverage() async -> SpeechPreviewCoverage {
+        if status.withLock({ $0.previewInputFinished }) { await consumer?.value }
+        return previewCoverage
     }
 
     func requiredSilence(after endpoint: Endpoint) -> TimeInterval {

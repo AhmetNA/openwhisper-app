@@ -39,6 +39,11 @@ extension AppState {
     /// recording's own speaker filter decides, and a weak "Jarvis" must still be confirmed by
     /// Whisper.
     func handleDirectWake(audio: [Float], score: Float) {
+        guard wakeWordEnabled, ProcessInfo.processInfo.systemUptime >= whisperWakeRetryAfter else { return }
+        if whisperSuspendedForIdle || pendingWhisperWake != nil {
+            beginPendingWhisperWake(audio: audio, score: score, isDirect: true)
+            return
+        }
         owLog("[OpenWhisper] Voice session requested (wake word)")
         pendingWakeSpeakerVerified = false
         let clipID = beginWakeClip(audio: audio, score: score, kind: "direct")
@@ -92,13 +97,15 @@ extension AppState {
     /// A weak direct detection: the session is already recording (no added latency) while
     /// Whisper checks the clip for "Jarvis"; without it the recording is dropped untranscribed.
     func confirmDirectWake(audio: [Float], score: Float, clipID: UUID?) {
-        guard let transcriber = activeTranscriptionService else { return }
+        guard modelLoaded, let transcriber = activeTranscriptionService else { return }
+        activeWhisperWakeChecks += 1
         wakeConfirmationID &+= 1
         let id = wakeConfirmationID
         let started = Date()
         Task { [weak self] in
-            let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             guard let self else { return }
+            defer { self.activeWhisperWakeChecks -= 1 }
+            let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             let ms = Int(Date().timeIntervalSince(started) * 1000)
             WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(verdict) }
             switch verdict {
@@ -151,8 +158,10 @@ extension AppState {
     /// heard the word is only recorded (`shadow:` in the wake clip log), never acted on, until the
     /// clips show that enforcing it doesn't drop the user's own calls (WAKE-SPEAKER-PLANI.md).
     func shadowWakeWordCheck(audio: [Float], clipID: UUID?) {
-        guard clipID != nil, let transcriber = activeTranscriptionService else { return }
+        guard modelLoaded, clipID != nil, let transcriber = activeTranscriptionService else { return }
+        activeWhisperWakeChecks += 1
         Task {
+            defer { activeWhisperWakeChecks -= 1 }
             let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
             WakeClipLog.shared.update(clipID) { $0.wordCheck = "shadow " + Self.wakeClipWordCheck(verdict) }
         }
@@ -195,7 +204,12 @@ extension AppState {
     /// Grey-zone wake score: Whisper must hear "Jarvis" and the LLM must judge it a call rather
     /// than a song or talk about Jarvis (`WakeWordVerifier`). One check at a time.
     func verifyWakeCandidate(audio: [Float], peak: Float) {
-        guard !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
+        guard wakeWordEnabled, ProcessInfo.processInfo.systemUptime >= whisperWakeRetryAfter else { return }
+        if whisperSuspendedForIdle || pendingWhisperWake != nil {
+            beginPendingWhisperWake(audio: audio, score: peak)
+            return
+        }
+        guard modelLoaded, !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
               let hotkey, hotkey.isIdle else { return }
         wakeCandidateVerifying = true
         // Not yet a session: opened directly, handed to one only if the candidate is accepted.
@@ -270,7 +284,11 @@ extension AppState {
         let busy = recordingState == .recording || targetSpeakerEnrollmentIsRecording || systemAudioEnabled
         let paused = systemAsleep || (screensAsleep && !mediaPlaying && !remoteControl.isHoldingAwake)
         updateDisplayAsleepWork()
-        let shouldRun = wakeWordEnabled && modelLoaded && !busy && !paused
+        if !wakeWordEnabled || busy || paused || listener.problem != nil {
+            cancelPendingWhisperWake(reason: "listener unavailable")
+        }
+        let speechAvailable = modelLoaded || whisperSuspendedForIdle
+        let shouldRun = wakeWordEnabled && speechAvailable && !busy && !paused
         if shouldRun && !listener.isRunning {
             listener.start()
         } else if !shouldRun && listener.isRunning {
@@ -286,12 +304,13 @@ extension AppState {
             else if problem == .bluetoothOnly { "Yalnızca Bluetooth mikrofon var — Mac'in kendi mikrofonu gerekli" }
             else if problem == .micUnavailable { "Mikrofon açılamadı — başka bir uygulama kullanıyor olabilir, tekrar deneniyor" }
             else if problem == .noAudio { "Mikrofondan ses gelmiyor — tekrar deneniyor" }
-            else if !listener.isRunning && !busy && !paused && modelLoaded { "Mikrofon açılamadı" }
+            else if !listener.isRunning && !busy && !paused && speechAvailable { "Mikrofon açılamadı" }
             else if systemAudioEnabled { "“Bilgisayar sesini yazıya dök” açık — kapatınca dinler" }
             else { nil }
         wakeWordBlocked = blocked != nil
         wakeWordStatus = if !wakeWordEnabled { "Kapalı" }
             else if let blocked { blocked }
+            else if pendingWhisperWake != nil { "Uyandırma doğrulanıyor — konuşmaya devam edebilirsiniz" }
             else if listener.isRunning && mediaPlaying { "Dinliyor — müzik çalarken daha yüksek sesle söyleyin" }
             else if listener.isRunning { "“Jarvis” deyince dinlemeye başlar" }
             else if paused { "Mac uykuda — duraklatıldı" }

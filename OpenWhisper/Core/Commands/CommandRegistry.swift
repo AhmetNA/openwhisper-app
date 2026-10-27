@@ -13,7 +13,7 @@ enum VoiceCommand: Equatable {
     /// Sleep and lock stop the Mac listening, so nothing can run after them.
     var endsSession: Bool {
         guard case .system(let command) = self else { return false }
-        return ([.sleep, .displaySleep, .lockScreen] as [SystemCommand]).contains(command)
+        return ([.sleep, .displaySleep, .lockScreen, .disableWakeWord] as [SystemCommand]).contains(command)
     }
 }
 

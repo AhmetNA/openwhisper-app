@@ -148,6 +148,12 @@ enum VoiceRouter {
                 return .command(command)
             }
             if let deletion = ReminderManager.deletionRequest(trimmed) { return .reminderDeletion(deletion) }
+            // Explicit playback controls bypass calendar/model classification. Keep this
+            // after the target, dictation, confirmation and system-command rules above.
+            if case .spotify(let request)? = CommandRegistry.match(trimmed, in: [.spotify], context: context),
+               SpotifyManager.explicitIntent(in: request)?.isDirectControl == true {
+                return .command(.spotify(request))
+            }
         }
         if ReminderManager.isReminder(text) { return .reminder }
         return .spotifyOrConversation(firstSentence: firstSentence)

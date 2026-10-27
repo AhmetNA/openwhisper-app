@@ -20,7 +20,7 @@ struct JarvisReply {
                        "Derhal.", "Emredersiniz.", "Başüstüne.", "Elbette.", "Hemen hallediyorum."]
     static let addresses = ["patron", "efendim", "sör"]
     /// Replies that aren't in `acks` but repeat word for word, so they're worth pre-synthesizing.
-    static let fixedPhrases = ["Not ettim.", "Gönderdim.", "Yazdım."]
+    static let fixedPhrases = ["Not ettim.", "Gönderdim.", "Yazdım.", "Sesle uyandırmayı kapattım."]
 
     /// Endings of `SystemController` statuses that mean it didn't work: "değiştirilemedi",
     /// "çalıştırılamadı", "bulunamadı", "Bağlı kulaklık yok".
@@ -37,6 +37,8 @@ struct JarvisReply {
              .mailReadLatest, .mailFrom, .mailReplyDraft, .whatsAppUnread, .whatsAppFrom,
              .whatsAppConversation, .whatsAppSearch:
             return answer(Self.speakable(Self.shortened(status, for: command)))
+        case .disableWakeWord:
+            return Self.isFailure(status) ? failure(Self.speakable(status)) : answer("Sesle uyandırmayı kapattım.")
         case .unlockRequest:
             return answer(Self.speakable(status))
         case .displayWake:
@@ -50,6 +52,7 @@ struct JarvisReply {
             if BrowserController.failures.contains(status) || YouTubeList.failures.contains(status) {
                 return failure(Self.speakable(status))
             }
+            if case .youtubeTitle = action, status.hasPrefix("Açılıyor:") { return answer(status) }
             if YouTubeList.isListing(status) { return answer(status) }
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
@@ -58,6 +61,7 @@ struct JarvisReply {
             // next command of the chain starts.
             return Self.isFailure(status) ? failure(Self.speakable(status)) : nil
         case .video(let action):
+            if status == BrowserController.youTubeNeedsVideo { return answer(status) }
             if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") || status == "Tam ekran yapılamadı" { return failure(Self.speakable(status)) }
             switch action {
             case .remaining: return answer(Self.speakable(status))

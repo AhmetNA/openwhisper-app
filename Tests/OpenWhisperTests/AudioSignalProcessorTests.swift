@@ -2,6 +2,29 @@ import XCTest
 @testable import OpenWhisper
 
 final class AudioSignalProcessorTests: XCTestCase {
+    func testBypassPreservesQuietAndLoudSamplesExactly() {
+        let original: [Float] = [0, 0.00001, -0.00001, 0.2, -0.2, 0.99, -0.99, 1.0, -1.0]
+        var samples = original
+        samples.withUnsafeMutableBufferPointer { buffer in
+            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count, enabled: false)
+        }
+        XCTAssertEqual(samples, original)
+    }
+
+    func testUnprocessedSessionDoesNotApplyRecoveryGain() async {
+        let source: [Float] = [0.001, -0.5, 0.99]
+        await AudioSignalProcessor.$bypassProcessing.withValue(true) {
+            // Child transcription work inherits this recording's setting across suspension.
+            let result = await Task {
+                await Task.yield()
+                return AudioSignalProcessor.recoverySamples(from: source)
+            }.value
+            XCTAssertEqual(result, source)
+        }
+        XCTAssertFalse(AudioSignalProcessor.bypassProcessing)
+        XCTAssertNotEqual(AudioSignalProcessor.recoverySamples(from: source), source)
+    }
+
     func testQuietSamplesAreBoostedWithoutBeingGated() {
         var samples: [Float] = [0.1, -0.1, 0]
 

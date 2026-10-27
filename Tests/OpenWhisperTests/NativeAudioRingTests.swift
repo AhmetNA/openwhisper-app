@@ -36,4 +36,20 @@ final class NativeAudioRingTests: XCTestCase {
         let out = ring.buffers(since: 0)
         XCTAssertEqual(out.map { $0.0.floatChannelData![0][0] }, [3, 4])
     }
+    @MainActor
+    func testDeferredWakeRetainsCommandThroughLongModelLoadWithoutDuplicates() {
+        let ring = NativeAudioRing(seconds: WakeWordListener.bufferedWakeSeconds)
+        ring.reset(sampleRate: 1000)
+        let origin = AVAudioTime.hostTime(forSeconds: 100)
+        for second in 0..<18 {
+            ring.append(buffer((0..<1000).map { Float(second * 1000 + $0) }),
+                time: AVAudioTime(hostTime: origin + AVAudioTime.hostTime(forSeconds: Double(second))))
+        }
+        // A candidate takes 1.5 s to mature, then model/verification may take up to 15 s.
+        let out = ring.buffers(since: origin + AVAudioTime.hostTime(forSeconds: 1.5))
+        let samples = out.flatMap { Array(UnsafeBufferPointer(start: $0.0.floatChannelData![0], count: Int($0.0.frameLength))) }
+        XCTAssertEqual(samples, (1500..<18000).map(Float.init))
+        XCTAssertGreaterThan(WakeWordListener.bufferedWakeSeconds, PendingWhisperWake.timeout + 1.5)
+    }
+
 }

@@ -19,6 +19,7 @@ extension AppState {
         availableInputDevices = AudioEngine.availableInputDevices()
         systemDefaultInputIsBluetooth = AudioEngine.systemDefaultInputIsBluetooth()
         updateInputPriority(wasConnected: previous)
+        updateMicrophoneFlowNotice(initialize: true)
         let added = availableInputDevices.filter { device in !previous.contains { $0.uid == device.uid } }
         let removed = previous.filter { device in !availableInputDevices.contains { $0.uid == device.uid } }
         guard !previous.isEmpty, !(added.isEmpty && removed.isEmpty) else { return }
@@ -34,9 +35,59 @@ extension AppState {
             hotkey?.externalCancelHandsFree()
             stopRecording()
         }
+        if let pending = pendingWhisperWake, removed.contains(where: { $0.uid == pending.inputUID }) {
+            cancelPendingWhisperWake(reason: "wake microphone disconnected", retryDelay: 10)
+        }
         syncWakeWordInput()
         let next = resolvedInputDeviceUID(for: nil)
         owLog("[Input] Next recording uses \(availableInputDevices.first { $0.uid == next }?.name ?? "system default")")
+    }
+
+    /// Track the selected input, not every device-list event (outputs change too).
+    func updateMicrophoneFlowNotice(initialize: Bool = false) {
+        guard microphoneNoticeInitialized || initialize else { return }
+        let device = MicPriority.top(inputPriorityUIDs, devices: availableInputDevices)
+            ?? availableInputDevices.first { $0.isBuiltIn }
+            ?? availableInputDevices.first { $0.uid == AudioEngine.defaultInputDeviceUID() }
+        let uid = device?.uid
+        defer {
+            lastNotifiedMicrophoneUID = uid
+            microphoneNoticeInitialized = true
+        }
+        guard microphoneNoticeInitialized, uid != lastNotifiedMicrophoneUID else { return }
+        if let device {
+            let prefix = recordingState == .recording ? "Sonraki kayıt" : "Mikrofon"
+            microphoneFlowNotice = "\(prefix): \(device.name)"
+        } else {
+            microphoneFlowNotice = "Mikrofon bağlantısı yok"
+        }
+        presentMicrophoneFlowNotice(microphoneFlowNotice ?? "Mikrofon bağlantısı yok")
+    }
+
+    func systemInputDeviceChanged() {
+        refreshInputDevices()
+        let systemUID = AudioEngine.defaultInputDeviceUID()
+        let systemName = availableInputDevices.first { $0.uid == systemUID }?.name ?? "Bağlı mikrofon yok"
+        let jarvisUID = resolvedInputDeviceUID(for: nil)
+        var message = "Sistem mikrofonu: \(systemName)"
+        if jarvisUID != systemUID,
+           let jarvisName = availableInputDevices.first(where: { $0.uid == jarvisUID })?.name {
+            message += " · Jarvis: \(jarvisName)"
+        }
+        owLog("[Input] \(message)")
+        presentMicrophoneFlowNotice(message)
+    }
+
+    private func presentMicrophoneFlowNotice(_ message: String) {
+        microphoneFlowNoticeTask?.cancel()
+        microphoneFlowNotice = message
+        syncFlowBarVisibility()
+        microphoneFlowNoticeTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(4)) } catch { return }
+            guard let self else { return }
+            self.microphoneFlowNotice = nil
+            self.syncFlowBarVisibility()
+        }
     }
 
     /// Stamps the mics connected until now, forgets the ones unseen for three days and puts newly

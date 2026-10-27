@@ -71,9 +71,36 @@ final class SpotifyController: @unchecked Sendable {
                 try await SpotifyWebAPI.shared.pausePlayback()
                 return "Müzik durduruldu"
             },
-            appleScript: { self.runSpotifyCommand("pause").map { _ in "Müzik durduruldu" } }
+            appleScript: {
+                self.runAppleScript(Self.pauseScript).flatMap { output in
+                    guard let message = Self.pauseMessage(output) else {
+                        return .failure(.other(errorNumber: -1, message: "Pause was not confirmed"))
+                    }
+                    return .success(message)
+                }
+            }
         )
     }
+
+    static func pauseMessage(_ state: String?) -> String? {
+        switch state {
+        case "alreadyPaused": return "Müzik zaten duraklatılmış"
+        case "paused": return "Müzik durduruldu"
+        default: return nil
+        }
+    }
+
+    static let pauseScript = """
+        tell application "Spotify"
+            if player state is not playing then return "alreadyPaused"
+            pause
+            repeat 10 times
+                if player state is not playing then return "paused"
+                delay 0.05
+            end repeat
+            return "failed"
+        end tell
+        """
 
     func nextTrack() async -> SpotifyActionResult {
         await perform(
@@ -130,10 +157,14 @@ final class SpotifyController: @unchecked Sendable {
         if !wasRunning { await launchInBackground() }
         if webAPIConnected {
             do {
-                let context = SpotifyWebAPI.likedSongsContextURI(userID: try await SpotifyWebAPI.shared.fetchUserID())
-                let deviceID = try await waitForDevice(timeout: wasRunning ? 2 : 8)
                 let shuffle = Self.likedSongsShuffle
-                let before = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying()
+                async let userID = SpotifyWebAPI.shared.fetchUserID()
+                async let availableDevice = waitForDevice(timeout: wasRunning ? 2 : 8)
+                async let currentPlayer = try? SpotifyWebAPI.shared.fetchCurrentlyPlaying()
+                async let randomStart = likedSongsStart(shuffle: shuffle)
+                let context = SpotifyWebAPI.likedSongsContextURI(userID: try await userID)
+                let deviceID = try await availableDevice
+                let before = await currentPlayer
                 // Setting it again could drop the user's Smart Shuffle.
                 if before?.shuffle != shuffle {
                     do {
@@ -143,7 +174,7 @@ final class SpotifyController: @unchecked Sendable {
                     }
                 }
                 // A shuffled context still opens on its first track; start somewhere random.
-                let start = shuffle ? (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement() : nil
+                let start = await randomStart
                 try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
                 if await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
                     owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "")")
@@ -158,15 +189,21 @@ final class SpotifyController: @unchecked Sendable {
         return .failure("beğenilen şarkılar açıldı ama çalınamadı")
     }
 
-    /// Polls the player for up to `timeout` seconds until `likedSongsStarted` holds.
+    private func likedSongsStart(shuffle: Bool) async -> String? {
+        guard shuffle else { return nil }
+        return (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement()
+    }
+
+    /// Polls immediately, then at 500 ms intervals; never reports success from an HTTP ack alone.
     private func waitForLikedSongs(context: String, before: SpotifyWebAPI.CurrentlyPlaying?, timeout: TimeInterval = 4) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            try? await Task.sleep(for: .milliseconds(500))
+            if Task.isCancelled { return false }
             if let after = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(),
                Self.likedSongsStarted(context: context, before: before, after: after) {
                 return true
             }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return false }
         } while Date() < deadline
         return false
     }
@@ -324,6 +361,8 @@ final class SpotifyController: @unchecked Sendable {
     /// When nothing can be played, opens Spotify's own search (or item) screen instead of
     /// starting whatever happens to be queued — never plays something unrelated.
     func searchAndPlay(_ request: SpotifySearchRequest) async -> SpotifyActionResult {
+        let started = Date()
+        defer { owLog(String(format: "[SpotifyLatency] search/play total %.0f ms", Date().timeIntervalSince(started) * 1000)) }
         let queries = request.searchQueries
         guard !queries.isEmpty else {
             return .failure("Arama sorgusu boş olamaz")
@@ -336,16 +375,25 @@ final class SpotifyController: @unchecked Sendable {
 
         // "Spotify'da Tarkan çal": the words alone can't say whether "Tarkan" is an artist
         // or a song. If Spotify has an artist with exactly that name, play the artist.
-        if request.kind == .freeText,
-           let artist = try? await SpotifyWebAPI.shared.searchTopItem(query: request.freeText, type: .artist),
-           SpotifyRequestParser.foldedWords(artist.name) == SpotifyRequestParser.foldedWords(request.freeText) {
-            owLog("[SpotifyController] '\(request.freeText)' is an artist name → artist context")
-            let result = await playContext(artist, type: .artist)
-            if result.succeeded { return result }
+        var prefetchedTrack: SpotifyWebAPI.TrackResult?
+        if request.kind == .freeText {
+            // These are read-only catalog lookups. Preserve exact-artist precedence, but
+            // don't make every song search wait for the artist lookup first.
+            let candidates = await Self.searchCandidates(
+                artist: { try? await SpotifyWebAPI.shared.searchTopItem(query: request.freeText, type: .artist) },
+                track: { await self.firstSearchHit(queries: queries, type: .track) }
+            )
+            prefetchedTrack = candidates.track
+            if let artist = candidates.artist,
+               SpotifyRequestParser.foldedWords(artist.name) == SpotifyRequestParser.foldedWords(request.freeText) {
+                owLog("[SpotifyController] '\(request.freeText)' is an artist name → artist context")
+                let result = await playContext(artist, type: .artist)
+                if result.succeeded { return result }
+            }
         }
 
         var type = request.catalogType
-        var item = await firstSearchHit(queries: queries, type: type)
+        var item = request.kind == .freeText ? prefetchedTrack : await firstSearchHit(queries: queries, type: type)
         if item == nil, type != .track, !request.freeText.isEmpty {
             type = .track
             item = await firstSearchHit(queries: [request.freeText], type: .track)
@@ -374,9 +422,20 @@ final class SpotifyController: @unchecked Sendable {
         )
     }
 
+    static func searchCandidates(
+        artist: @Sendable () async -> SpotifyWebAPI.TrackResult?,
+        track: @Sendable () async -> SpotifyWebAPI.TrackResult?
+    ) async -> (artist: SpotifyWebAPI.TrackResult?, track: SpotifyWebAPI.TrackResult?) {
+        async let artistResult = artist()
+        async let trackResult = track()
+        return await (artistResult, trackResult)
+    }
+
     /// First result across `queries`. Stops early on errors other than "no results":
     /// credentials or network problems won't be fixed by a different query string.
     private func firstSearchHit(queries: [String], type: SpotifyWebAPI.SearchType) async -> SpotifyWebAPI.TrackResult? {
+        let started = Date()
+        defer { owLog(String(format: "[SpotifyLatency] %@ lookup %.0f ms", type.rawValue, Date().timeIntervalSince(started) * 1000)) }
         for query in queries {
             do {
                 let item = type == .track
@@ -554,6 +613,8 @@ final class SpotifyController: @unchecked Sendable {
         web: () async throws -> String,
         appleScript: () -> Result<String, SpotifyScriptError>
     ) async -> SpotifyActionResult {
+        let started = Date()
+        defer { owLog(String(format: "[SpotifyLatency] %@ action %.0f ms", action, Date().timeIntervalSince(started) * 1000)) }
         var webFailure: String?
         if webAPIConnected, readOnly || !webAPIPlayerUnavailable {
             do {

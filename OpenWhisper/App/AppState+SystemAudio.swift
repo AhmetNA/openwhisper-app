@@ -13,10 +13,11 @@ extension AppState {
     func startSystemAudioListening() {
         guard !systemAudioEnabled else { return }
         recordingPreviewTask?.cancel()
-        guard modelLoaded else {
+        guard modelLoaded || whisperSuspendedForIdle else {
             systemAudioStatus = "Önce konuşma modeli yüklensin."
             return
         }
+        if whisperSuspendedForIdle { Task { await resumeIdleWhisperIfNeeded() } }
         systemAudioGeneration &+= 1
         let generation = systemAudioGeneration
         let capture = SystemAudioCapture()

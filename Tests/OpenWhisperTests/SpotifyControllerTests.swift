@@ -4,6 +4,37 @@ import XCTest
 /// Only input-validation paths are exercised: each returns before any Web API request or
 /// AppleScript runs, so these tests never touch the real Spotify app or account.
 final class SpotifyControllerTests: XCTestCase {
+    func testCatalogLookupsOverlapWithoutPlaybackSideEffects() async {
+        let artistStarted = expectation(description: "artist read started")
+        let trackStarted = expectation(description: "track read started")
+        let results = await SpotifyController.searchCandidates(artist: {
+            artistStarted.fulfill()
+            await self.fulfillment(of: [trackStarted], timeout: 2)
+            return .init(uri: "spotify:artist:abc", name: "Artist", artist: "")
+        }, track: {
+            trackStarted.fulfill()
+            await self.fulfillment(of: [artistStarted], timeout: 2)
+            return .init(uri: "spotify:track:def", name: "Track", artist: "Artist")
+        })
+        XCTAssertEqual(results.artist?.name, "Artist")
+        XCTAssertEqual(results.track?.name, "Track")
+    }
+
+    func testMissingArtistDoesNotDiscardTrackResult() async {
+        let results = await SpotifyController.searchCandidates(artist: { nil }, track: {
+            .init(uri: "spotify:track:def", name: "Track", artist: "Artist")
+        })
+        XCTAssertNil(results.artist)
+        XCTAssertEqual(results.track?.name, "Track")
+    }
+    func testPauseReportsStateInsteadOfAnImmediateAck() {
+        XCTAssertEqual(SpotifyController.pauseMessage("alreadyPaused"), "Müzik zaten duraklatılmış")
+        XCTAssertEqual(SpotifyController.pauseMessage("paused"), "Müzik durduruldu")
+        XCTAssertNil(SpotifyController.pauseMessage("failed"))
+        XCTAssertNil(SpotifyController.pauseMessage(nil))
+        XCTAssertTrue(SpotifyManager.speaksResult(afterCommand: "Şarkıyı durdur"))
+    }
+
     func testTrackURIValidationRejectsAppleScriptInjection() {
         XCTAssertTrue(SpotifyController.isValidTrackURI("spotify:track:4uLU6hMCjMI75M1A2tKUQC"))
 

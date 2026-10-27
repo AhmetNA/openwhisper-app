@@ -22,7 +22,7 @@ extension AppState {
             flowBarController?.hide()
             return
         }
-        if recordingState == .idle && flowBarMessage == nil && jarvisActivity == .none {
+        if recordingState == .idle && flowBarMessage == nil && microphoneFlowNotice == nil && jarvisActivity == .none {
             flowBarController?.hide()
         } else {
             flowBarController?.show()

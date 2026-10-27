@@ -93,11 +93,21 @@ final class SpotifyManager: @unchecked Sendable {
             }
         }
 
+        /// A complete, explicit playback control needs no model refinement. Searches and
+        /// implicit requests still use the existing grounded interpretation path.
+        var isDirectControl: Bool {
+            switch self {
+            case .pause, .play, .next, .previous, .setVolume, .adjustVolume, .currentTrack:
+                return true
+            default: return false
+            }
+        }
+
         /// What Jarvis says is the command's own result ("3 dakika 20 saniye kaldı"), not
         /// a plain ack; and when it fails he says why instead of typing the words out.
         var speaksResult: Bool {
             switch self {
-            case .currentTrack, .question, .sleepTimer, .cancelSleepTimer, .queue, .addCurrentTrackToPlaylist,
+            case .pause, .currentTrack, .question, .sleepTimer, .cancelSleepTimer, .queue, .addCurrentTrackToPlaylist,
                  .unlikeCurrentTrack, .transferPlayback:
                 return true
             default:
@@ -847,7 +857,7 @@ final class SpotifyManager: @unchecked Sendable {
         if rules == nil, commandMode, let candidate = runtimeCandidate(text) {
             rules = await confirm(candidate)
         }
-        if let rules, rules.isRuleOnly || rules == .playLikedSongs {
+        if let rules, rules.isRuleOnly || rules == .playLikedSongs || rules.isDirectControl {
             owLog("[Spotify] Rules alone: '\(text)' → \(rules)")
             decisionCache.store(rules, for: transcript)
             return true

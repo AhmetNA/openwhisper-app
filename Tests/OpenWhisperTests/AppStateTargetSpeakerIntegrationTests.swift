@@ -4,6 +4,44 @@ import XCTest
 
 @MainActor
 final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
+    func testValidatedPreviewReplacesOnlyTheFinalDecode() async throws {
+        let whisper = RecordingWhisperService()
+        let app = AppState(profileStore: InMemoryTargetSpeakerProfileStore(),
+                           targetSpeakerModel: IntegrationSpeakerModel(), transcriptionService: whisper)
+        let session = RecordingTranscriptionSession(id: 9001, targetApp: nil,
+                                                     targetSpeakerEnabled: false, targetSpeakerProfile: nil)
+        let samples = [Float](repeating: 0, count: 8433)
+        let detector = SmartTurnEndpointDetector(startTime: ProcessInfo.processInfo.systemUptime)
+        detector.feed(Array(samples.prefix(8200)))
+        detector.finishForPreview(with: samples) // includes the converter's final 233 samples
+        let coverage = await detector.completedPreviewCoverage()
+        XCTAssertEqual(coverage.processedSamples, samples.count)
+        session.previewEndpointDetector = detector
+        session.speechPreview = SpeechPreview(samples: Array(samples.prefix(4096)), language: app.language,
+                                              modelID: app.transcriptionModel, speechTime: 0,
+                                              task: Task { "Sesi kıs" })
+        await app.transcribeStreamingSegment(.init(samples: samples, overlapSampleCount: 0), session: session)
+        XCTAssertTrue(whisper.requests.isEmpty, "Do not decode the same command a second time")
+        XCTAssertEqual(session.segmentTexts, ["Sesi kıs"])
+        XCTAssertFalse(session.hasFinished, "Preparing text must not route or execute it")
+    }
+
+    func testPreviewCannotReplaceAudioAfterUserContinues() async {
+        let whisper = RecordingWhisperService()
+        let app = AppState(profileStore: InMemoryTargetSpeakerProfileStore(),
+                           targetSpeakerModel: IntegrationSpeakerModel(), transcriptionService: whisper)
+        let session = RecordingTranscriptionSession(id: 9002, targetApp: nil,
+                                                     targetSpeakerEnabled: false, targetSpeakerProfile: nil)
+        session.previewEndpointDetector = SmartTurnEndpointDetector(startTime: ProcessInfo.processInfo.systemUptime)
+        session.doneLastSpeechTime = 20
+        session.speechPreview = SpeechPreview(samples: [0.1], language: app.language,
+                                              modelID: app.transcriptionModel, speechTime: 10,
+                                              task: Task { "Eski komut" })
+        await app.transcribeStreamingSegment(.init(samples: [0.1, 0.2], overlapSampleCount: 0), session: session)
+        XCTAssertEqual(whisper.requests.count, 1)
+        XCTAssertEqual(session.segmentTexts, ["test transcript"])
+    }
+
     func testEnrollmentCanRetryFromStepZeroAndDeleteResetsWizardState() throws {
         let appState = AppState(
             profileStore: InMemoryTargetSpeakerProfileStore(),

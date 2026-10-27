@@ -68,13 +68,34 @@ final class AppState {
     var audioProcessingMode: AudioProcessingMode {
         didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
     }
+    var bypassAudioProcessing = UserDefaults.standard.bool(forKey: "bypassAudioProcessing") {
+        didSet { UserDefaults.standard.set(bypassAudioProcessing, forKey: "bypassAudioProcessing") }
+    }
     var deepFilterSetting: DeepFilterSetting {
         didSet {
             UserDefaults.standard.set(deepFilterSetting.rawValue, forKey: "deepFilterSetting")
             audioProcessingMode = deepFilterSetting.profileMode
         }
     }
-    @ObservationIgnored var deepFilterAuto = DeepFilterAutoDecider()
+    var deepFilterAuto = DeepFilterAutoDecider()
+    var activeDeepFilterDecision: DeepFilterDecision?
+
+    var displayedDeepFilterDecision: DeepFilterDecision {
+        if recordingState != .idle, let activeDeepFilterDecision {
+            return activeDeepFilterDecision
+        }
+        if bypassAudioProcessing {
+            return DeepFilterDecision(enabled: false, reason: "unprocessed")
+        }
+        // Preview without changing the active recording's device or hysteresis state.
+        var preview = deepFilterAuto
+        return preview.decide(
+            setting: deepFilterSetting,
+            device: resolvedInputDeviceUID ?? AudioEngine.defaultInputDeviceUID() ?? "default",
+            mediaPlaying: mediaPlaying,
+            echoCancellation: false
+        )
+    }
     var llmCleanupEnabled: Bool {
         didSet { UserDefaults.standard.set(llmCleanupEnabled, forKey: "llmCleanupEnabled") }
     }
@@ -246,6 +267,7 @@ final class AppState {
             guard oldValue.map(\.uid) != inputPriority.map(\.uid) else { return }
             owLog("[Input] Mic priority: \(inputPriority.map(\.name).joined(separator: " > "))")
             syncWakeWordInput()
+            updateMicrophoneFlowNotice()
         }
     }
     @ObservationIgnored var inputPriorityExpiryTask: Task<Void, Never>?
@@ -287,6 +309,16 @@ final class AppState {
     var modelLoaded: Bool = false {
         didSet { updateWakeWordListener() }
     }
+    @ObservationIgnored var activeWhisperWakeChecks = 0
+    var whisperSuspendedForIdle = false
+    @ObservationIgnored var pendingWhisperWake: PendingWhisperWake?
+    @ObservationIgnored var whisperWakeTask: Task<Void, Never>?
+    @ObservationIgnored var whisperWakeTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored var whisperWakeRetryAfter: TimeInterval = 0
+    @ObservationIgnored var lastWhisperActivity = Date.distantPast
+    @ObservationIgnored var whisperIdleTask: Task<Void, Never>?
+    @ObservationIgnored var whisperUnloadTask: Task<Void, Never>?
+    @ObservationIgnored var transcriptionModelLoadTask: Task<Void, Never>?
     var modelLoading: Bool = false
     var modelLoadProgress: Double = 0.0
     var modelIsDownloading: Bool = false
@@ -307,6 +339,10 @@ final class AppState {
     }
     var targetSpeakerEnrollmentIsProcessing = false
     var targetSpeakerEnrollmentStatus: String = ""
+    var microphoneFlowNotice: String?
+    @ObservationIgnored var microphoneFlowNoticeTask: Task<Void, Never>?
+    @ObservationIgnored var microphoneNoticeInitialized = false
+    @ObservationIgnored var lastNotifiedMicrophoneUID: String?
     var flowBarMessage: String?
     /// True while the flow bar shows the "bu benim sesimdi" confirmation offer. Distinct from
     /// `flowBarMessage`'s normal 1.5s auto-dismiss timer (`showFlowBarMessage`) -- this state
@@ -441,6 +477,7 @@ final class AppState {
     var wakeWordEnabled = UserDefaults.standard.object(forKey: "wakeWordEnabled") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(wakeWordEnabled, forKey: "wakeWordEnabled")
+            if !wakeWordEnabled { cancelPendingWhisperWake(reason: "wake disabled") }
             updateWakeWordListener()
             updateRemoteControl()
         }

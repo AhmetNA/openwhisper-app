@@ -95,6 +95,7 @@ final class AudioEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var sampleChunks: [SampleChunk] = []
     private var capturedSampleCount = 0
+    private var appliesSignalProcessing = true
     private var converter: AVAudioConverter?
     /// Voice-processing I/O can expose a multichannel input (for example 9 channels on a
     /// built-in microphone). Downmix it explicitly before the 16 kHz converter; letting
@@ -261,15 +262,19 @@ final class AudioEngine: @unchecked Sendable {
     @discardableResult
     func startRecording(
         deviceUID: String?,
-        audioProcessingMode: AudioProcessingMode,
+        audioProcessingMode requestedProcessingMode: AudioProcessingMode,
+        bypassAudioProcessing: Bool = false,
         sampleCallback: (([Float]) -> Void)? = nil,
-        echoCancellation: Bool = false,
+        echoCancellation requestedEchoCancellation: Bool = false,
         playbackHeard: OSAllocatedUnfairLock<Bool>? = nil,
         handoff: WakeCaptureHandoff? = nil,
         waitsForLinkAudio: Bool = false,
         onInputReady: (() -> Void)? = nil,
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
+        let audioProcessingMode: AudioProcessingMode = bypassAudioProcessing ? .off : requestedProcessingMode
+        let echoCancellation = !bypassAudioProcessing && requestedEchoCancellation
+        appliesSignalProcessing = !bypassAudioProcessing
         hasLoggedFirstBuffer = false
         hasLoggedFirstAudibleBuffer = false
         hasLoggedInputTruncation = false
@@ -711,6 +716,15 @@ final class AudioEngine: @unchecked Sendable {
         return trailingSamples(count: min(count, capturedSampleCount))
     }
 
+    /// A bounded whole first batch, never a suffix masquerading as the full command.
+    func previewSamples(maximumCount: Int) -> [Float]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard leadingOverlapSampleCount == 0, completedSegments.isEmpty,
+              capturedSampleCount > 0, capturedSampleCount <= maximumCount else { return nil }
+        return flattenedSamples()
+    }
+
     // MARK: - Streaming conversion and storage
 
     /// Runs the one converter instance throughout a recording so resampling filter state is
@@ -869,7 +883,7 @@ final class AudioEngine: @unchecked Sendable {
         // Preserve quiet speech before storing the Whisper input. There is deliberately no
         // noise gate here: a gate would erase exactly the low-volume syllables this path is
         // intended to recover. The compressor prevents the modest gain from clipping.
-        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength))
+        AudioSignalProcessor.process(output, count: Int(convertedBuffer.frameLength), enabled: appliesSignalProcessing)
         if let sampleCallback {
             sampleCallback(Array(UnsafeBufferPointer(
                 start: output,
@@ -888,7 +902,7 @@ final class AudioEngine: @unchecked Sendable {
         // converter tail lands at a different level than the body of the same recording.
         // That tail is exactly where trailing words sit.
         tail.withUnsafeMutableBufferPointer { buffer in
-            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count)
+            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count, enabled: appliesSignalProcessing)
             appendSamples(buffer.baseAddress!, count: buffer.count)
         }
     }
@@ -933,7 +947,7 @@ final class AudioEngine: @unchecked Sendable {
         reportLevel(rms)
         var samples = cleaned
         samples.withUnsafeMutableBufferPointer { buffer in
-            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count)
+            AudioSignalProcessor.process(buffer.baseAddress!, count: buffer.count, enabled: appliesSignalProcessing)
         }
         sampleCallback?(samples)
         lock.lock()

@@ -106,6 +106,21 @@ final class EnglishReplyTests: XCTestCase {
     }
 
     @MainActor
+    func testWakeDisableReplySkipsTranslationAndReusesAudio() async {
+        let provider = RecordingProvider("phonon", language: .english)
+        let voice = makeVoice(provider)
+        var translations = 0
+        voice.translator = { _ in translations += 1; return "unexpected translation" }
+        for _ in 0..<2 {
+            let heard = await voice.speak("Sesle uyandırmayı kapattım, sör.")
+            XCTAssertTrue(heard)
+        }
+        XCTAssertEqual(translations, 0)
+        XCTAssertEqual(provider.spoken, ["Voice wake-up is off, sir."])
+        XCTAssertEqual(cachedClips, 1)
+    }
+
+    @MainActor
     func testEnglishVoiceTranslatesStatusWithItsDigitsAndDoesNotCacheIt() async {
         let piper = RecordingProvider("piper", language: .english)
         let voice = makeVoice(piper)

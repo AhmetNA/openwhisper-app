@@ -88,7 +88,7 @@ enum AgentCommandParser {
 
     // "claude code'a", "cloud code'a", "cloudco'da", "klod koda", "claude'a", "codex'e", "kodekse" …
     // followed by an optional "şunu/şöyle/bunu" and a required verb, then an optional ":".
-    private static let claudeName = #"(?:claude|cloud|clod|klod|klot|clot|klaud|claud|kılık|kilik|klık|kılod|kılot|kulod)(?:\s*(?:code|kodu|kod|kot|co|ko))?"#
+    private static let claudeName = #"(?:claude|cloud|clod|klod|klot|clot|klaud|claud|kılık|kilik|klık|kılod|kılot|kulod|culud|kulud|cılat|cılad|cılade|kılat|kılad|klat|klaat|clade|kılavu|kilavu)(?:\s*(?:code|kodu|kod|kot|co|ko))?"#
     private static let codexName = #"(?:codex|kodeks|kodex|codeks|codecs|kodaks|kadex|kadexe|kadeks)"#
     // Whisper often writes the spoken English name as "chatypti" / "chatypt".
     private static let chatGPTName = #"(?:chat\s*gpt|chatgpt|chat\s*y?pti|chatypti|chatypt|çet\s*citi\s*piti|çetypti|çetypt)"#

@@ -53,7 +53,7 @@ final class WakeWordListener {
     /// Runs on the main queue; the listener keeps running meanwhile.
     var onCandidate: (([Float], Float) -> Void)?
     private var recentAudio: [Float] = []
-    private var pendingCandidate: (audio: [Float], remaining: Int, peak: Float)?
+    private var pendingCandidate: (audio: [Float], remaining: Int, peak: Float, commandStart: UInt64)?
     private var lastCandidate = Date.distantPast
     private let queue = DispatchQueue(label: "com.openwhisper.wakeword", qos: .utility)
     private var engine: AVAudioEngine?
@@ -113,7 +113,9 @@ final class WakeWordListener {
     /// Native-rate channel-0 audio of the last `nativeRingSeconds`, host-timed, filled on the audio
     /// thread. Touched only inside the capture's handler lock (the callback, and the handoff's
     /// `beforeSwap`), so it needs no lock of its own.
-    private let nativeRing = NativeAudioRing(seconds: 1.5)
+    static let bufferedWakeSeconds: TimeInterval = 20
+    private let nativeRing = NativeAudioRing(seconds: bufferedWakeSeconds)
+    private let waitingForWhisper = OSAllocatedUnfairLock(initialState: false)
     /// Host time where the command after the last direct wake begins (see `score`).
     private let wakeAudioHostTime = OSAllocatedUnfairLock<UInt64?>(initialState: nil)
     /// Uptime of the last buffer from the tap: the only reliable sign the mic is still flowing.
@@ -317,6 +319,7 @@ final class WakeWordListener {
         watchdog = nil
         stopEngine()
         isRunning = false
+        waitingForWhisper.withLock { $0 = false }
         clearMicProblem()
     }
 
@@ -340,7 +343,7 @@ final class WakeWordListener {
             // The held mic the filter carries must be audio the recording replays (the preroll);
             // otherwise it would put sound from before the session into it.
             let prerollStart = since.flatMap { since in
-                mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: 3)
+                mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: Self.bufferedWakeSeconds)
                     ? Int((AVAudioTime.seconds(forHostTime: since) * Double(EchoCanceller.sampleRate)).rounded())
                     : nil
             }
@@ -350,13 +353,37 @@ final class WakeWordListener {
         }
         // A wake older than the ring (or none) has nothing left worth prepending.
         let handoff = WakeCaptureHandoff(capture: capture, echo: echoHandoff) {
-            guard let since, mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: 3) else { return [] }
+            guard let since, mach_absolute_time() - since < AVAudioTime.hostTime(forSeconds: Self.bufferedWakeSeconds) else { return [] }
             return ring.buffers(since: since)
         }
         self.capture = nil
         stop()
         owLog("[WakeWord] Handed the microphone stream to the recording")
         return handoff
+    }
+
+    /// Keep capturing into the bounded native ring, but do not emit another activation.
+    /// A cold wake must continue on this same microphone to preserve its buffered words.
+    func holdAudioForWhisper() -> String? {
+        guard isRunning, let capture,
+              wakeAudioHostTime.withLock({ $0 }) != nil,
+              let uid = AudioEngine.availableInputDevices().first(where: { $0.id == capture.deviceID })?.uid else { return nil }
+        waitingForWhisper.withLock { $0 = true }
+        return uid
+    }
+
+    func releaseAudioForWhisper() {
+        waitingForWhisper.withLock { $0 = false }
+        queue.async { [weak self] in
+            self?.pendingCandidate = nil
+            self?.lastWake = Date()
+            try? self?.detector?.reset()
+        }
+    }
+
+    var heldInputUID: String? {
+        guard isRunning, waitingForWhisper.withLock({ $0 }), let capture else { return nil }
+        return AudioEngine.availableInputDevices().first(where: { $0.id == capture.deviceID })?.uid
     }
 
     /// Model problems outlive a restart; microphone ones don't.
@@ -614,6 +641,8 @@ final class WakeWordListener {
         if recentAudio.count > Self.preRollSamples { recentAudio.removeFirst(recentAudio.count - Self.preRollSamples) }
         pendingCandidate?.audio.append(contentsOf: raw)
         pendingCandidate?.remaining -= raw.count
+        // The audio-thread native ring still receives every buffer while inference is paused.
+        guard !waitingForWhisper.withLock({ $0 }) else { return }
 
         guard let detector else { return }
         // Media counts only while it is audible; with no reference (other mic, no Screen
@@ -682,7 +711,9 @@ final class WakeWordListener {
                 pendingCandidate?.peak = max(peak, s)
             } else if s >= Self.candidateThreshold, onCandidate != nil,
                       now.timeIntervalSince(lastWake) > cooldown, now.timeIntervalSince(lastCandidate) > cooldown {
-                pendingCandidate = (recentAudio, Self.postRollSamples, s)
+                let end = scoredEndHostIndex.map { AVAudioTime.hostTime(forSeconds: Double($0) / Double(EchoCanceller.sampleRate)) } ?? mach_absolute_time()
+                let padding = AVAudioTime.hostTime(forSeconds: 0.08 + Double(EchoCanceller.lookahead) / Double(EchoCanceller.sampleRate))
+                pendingCandidate = (recentAudio, Self.postRollSamples, s, end > padding ? end - padding : end)
                 owLog(String(format: "[WakeWord] Candidate (score %.2f, level %.0f dB) — collecting audio to verify",
                              s, detector.lastLevelDB))
             }
@@ -695,6 +726,7 @@ final class WakeWordListener {
                              pending.peak, speakerScore))
                 return
             }
+            wakeAudioHostTime.withLock { $0 = pending.commandStart }
             let audio = Self.normalizedForWhisper(pending.audio)
             DispatchQueue.main.async { [weak self] in self?.onCandidate?(audio, pending.peak) }
         }

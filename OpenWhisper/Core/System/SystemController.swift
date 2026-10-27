@@ -7,8 +7,12 @@ import IOKit.ps
 /// Carries out a `SystemCommand` and returns the short status shown in the flow bar.
 @MainActor
 enum SystemController {
-    static func perform(_ command: SystemCommand) async -> String {
+    static func perform(_ command: SystemCommand, disableWakeWord: (() -> Void)? = nil) async -> String {
         switch command {
+        case .disableWakeWord:
+            guard let disableWakeWord else { return "Sesle uyandırma kapatılamadı" }
+            disableWakeWord()
+            return "Sesle uyandırmayı kapattım. Yeniden açmak için Jarvis ayarlarını kullanabilirsin."
         case .wifi(let on): return setWiFi(on)
         case .bluetooth(let on): return await setBluetooth(on)
         case .headset(let connect): return await setHeadset(connected: connect)

@@ -128,7 +128,7 @@ final class CalendarAndBrowserCommandTests: XCTestCase {
 
     func testSearches() {
         XCTAssertEqual(SystemCommandParser.parse("YouTube'da lofi hip hop ara."), .browser(.search(.youtube, "lofi hip hop")))
-        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, lofi'yi YouTube'da aç"), .browser(.search(.youtube, "lofi")))
+        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, lofi'yi YouTube'da aç"), .browser(.youtubeTitle("lofi")))
         XCTAssertEqual(SystemCommandParser.parse("Google'da İstanbul hava durumu ara"), .browser(.search(.google, "istanbul hava durumu")))
         XCTAssertEqual(SystemCommandParser.parse("İnternette kara delik nedir diye ara"), .browser(.search(.google, "kara delik nedir")))
         XCTAssertEqual(SystemCommandParser.parse("Kara delik nedir google'la"), .browser(.search(.google, "kara delik nedir")))

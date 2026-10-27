@@ -7,12 +7,12 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
 
         XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 1.49,
+            silenceDuration: 0.99,
             config: config
         ))
         XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.985,
-            silenceDuration: 1.5,
+            silenceDuration: 1.0,
             config: config
         ), .stop(probability: 0.985))
     }

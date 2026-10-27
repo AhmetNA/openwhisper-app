@@ -13,24 +13,24 @@ enum VideoController {
     static let unreachable = "Safari'ye ulaşılamadı"
     static let noButton = "Bu videoda o düğme yok"
     static let outOfRange = "Video o kadar uzun değil"
-    static let failures: Set<String> = [notFound, javaScriptOff, unreachable, noButton, outOfRange, BrowserController.notFront]
+    static let failures: Set<String> = [notFound, javaScriptOff, unreachable, noButton, outOfRange, BrowserController.notFront, BrowserController.youTubeNeedsVideo]
 
-    static func perform(_ action: VideoAction) async -> String {
-        await Task.detached(priority: .userInitiated) { performBlocking(action) }.value
+    static func perform(_ action: VideoAction, onlyYouTube: Bool = false) async -> String {
+        await Task.detached(priority: .userInitiated) { performBlocking(action, onlyYouTube: onlyYouTube) }.value
     }
 
-    private static func performBlocking(_ action: VideoAction) -> String {
+    private static func performBlocking(_ action: VideoAction, onlyYouTube: Bool) -> String {
         if action == .fullscreen { return fullscreen() }
         let running = !NSRunningApplication.runningApplications(withBundleIdentifier: safariBundleID).isEmpty
-        let result = running ? runInBestTab(javaScript(for: action)) : "none"
+        let result = running ? runInBestTab(javaScript(for: action), onlyYouTube: onlyYouTube) : "none"
         owLog("[Video] \(action) → \(result ?? "script failed")")
         switch result {
         case "jsoff":
-            return mediaRemoteFallback(action) ?? javaScriptOff
+            return (onlyYouTube ? nil : mediaRemoteFallback(action)) ?? javaScriptOff
         case "denied", nil:
-            return mediaRemoteFallback(action) ?? unreachable
+            return (onlyYouTube ? nil : mediaRemoteFallback(action)) ?? unreachable
         case "none":
-            return mediaRemoteFallback(action) ?? notFound
+            return (onlyYouTube ? nil : mediaRemoteFallback(action)) ?? notFound
         case "nobutton":
             return noButton
         case "range":
@@ -119,14 +119,16 @@ enum VideoController {
     /// Probes every tab and runs `javaScript` in the best one; the current tab of the front
     /// window wins a tie. Error 8 = "Allow JavaScript from Apple Events" is off, -1743 = no
     /// Automation permission for Safari.
-    private static func runInBestTab(_ javaScript: String) -> String? {
-        OSAScriptRunner.run(["-e", bestTabScript(javaScript)], timeout: 8)
+    private static func runInBestTab(_ javaScript: String, onlyYouTube: Bool) -> String? {
+        OSAScriptRunner.run(["-e", bestTabScript(javaScript, onlyYouTube: onlyYouTube)], timeout: 8)
     }
 
-    static func bestTabScript(_ javaScript: String) -> String {
-        """
+    static func bestTabScript(_ javaScript: String, onlyYouTube: Bool = false) -> String {
+        let scope = onlyYouTube ? "if(location.hostname!=='youtube.com'&&!location.hostname.endsWith('.youtube.com'))return 0;" : ""
+        let scopedProbe = onlyYouTube ? "(function(){\(scope)return \(probe)})()" : probe
+        return """
             on probe(t)
-                tell application id "com.apple.Safari" to return (do JavaScript "\(probe)" in t)
+                tell application id "com.apple.Safari" to return (do JavaScript "\(scopedProbe)" in t)
             end probe
             tell application id "com.apple.Safari"
                 set best to missing value

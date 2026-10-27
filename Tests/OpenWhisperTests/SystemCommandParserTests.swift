@@ -288,6 +288,56 @@ final class AppSwitchParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Spotify'a geç", installedApps: apps), .switchToApp("Spotify"))
     }
 
+    func testOpenClaudeWithWhisperSpellings() {
+        for name in ["Claude kodu", "Cloud kodu", "Claude Code'u", "Cılat", "Cılat'ı", "culud", "culudu", "cılade", "Cılade'yi", "Kılavu", "kılavu’yu", "kilavu"] {
+            for verb in ["aç", "başlat"] {
+                for installed in [apps, []] {
+                    let text = "\(name) \(verb)"
+                    XCTAssertEqual(SystemCommandParser.parse(text, installedApps: installed), .switchToAgent(.claudeCode), text)
+                }
+            }
+        }
+        for text in ["Claude kodu aç demedim", "Cılat hakkında yaz", "Cloud depolama aç", "Cılat zorla aç", "Kılavu açma", "Kılavu aç demedim", "Kılavuzu aç"] {
+            XCTAssertNil(SystemCommandParser.parse(text), text)
+        }
+    }
+
+    func testOpenCodexAndChatGPTWithTurkishEndings() {
+        let examples: [(AgentApp, [String])] = [
+            (.codex, ["Codex", "Codex'i", "codexi", "Kodeks", "Kodeksi", "Kodeks’i", "Kodex'i"]),
+            (.chatGPT, ["ChatGPT", "ChatGPT'yi", "ChatGPTyi", "Chat GPT'yi", "chatypti", "çetyptiyi"]),
+        ]
+        for (agent, names) in examples {
+            for name in names {
+                for installed in [apps, []] {
+                    XCTAssertEqual(SystemCommandParser.parse("\(name) aç.", installedApps: installed),
+                                   .switchToAgent(agent), name)
+                }
+            }
+        }
+        for text in ["Codex'i aç demedim", "ChatGPT'yi açma", "Codex hakkında yaz"] {
+            XCTAssertNil(SystemCommandParser.parse(text), text)
+        }
+    }
+
+    func testJoinedAgentOpeningCommands() {
+        let examples: [(AgentApp, [String])] = [
+            (.codex, ["Kodeksyaç", "kodeksiaç", "kodeks aç", "kodeksiac", "Codexiaç",
+                      "Codex’i aç", "kodexyaç", "codeksyaç", "kadeksiaç", "kodeks yaç", "kodeks y aç"]),
+            (.chatGPT, ["ChatGPTyiaç", "ChatGPTyaç", "chatgptyi ac", "çetyptiyaç"]),
+            (.claudeCode, ["ClaudeCodeuaç", "cloudkoduyaç", "cılatyaç"]),
+        ]
+        for (agent, texts) in examples {
+            for text in texts {
+                XCTAssertEqual(SystemCommandParser.parse(text), .switchToAgent(agent), text)
+            }
+        }
+        for text in ["kodeksyaçma", "kodeksyaç demedim", "kodeksyaç hakkında yaz",
+                     "kodeksikapat", "bilinmeyenyaç", "Codex zorla aç", "ilaç", "ağaç"] {
+            XCTAssertNil(SystemCommandParser.parse(text), text)
+        }
+    }
+
     func testSwitchToAgentApp() {
         XCTAssertEqual(SystemCommandParser.parse("Claude Code'a geç", installedApps: apps), .switchToAgent(.claudeCode))
         XCTAssertEqual(SystemCommandParser.parse("Cloud koda geç", installedApps: apps), .switchToAgent(.claudeCode))

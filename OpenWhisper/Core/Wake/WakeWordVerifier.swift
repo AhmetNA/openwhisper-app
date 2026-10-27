@@ -86,13 +86,16 @@ enum WakeWordVerifier {
         }
         var rest = Substring(text)
         guard var next = nextWord(rest) else { return text }
-        if heyForms.contains(fold(String(next.word))) {
+        let hasHey = heyForms.contains(fold(String(next.word)))
+        if hasHey {
             guard let after = nextWord(next.rest) else { return text }
             next = after
         }
         let word = String(next.word)
+        let folded = fold(word)
         guard !word.contains("'"), !word.contains("’"),
-              isWakeWord(fold(word)) && fold(word).count <= target.count + 1 || isHeyNearMiss(fold(word)) && fold(word).hasPrefix("haj")
+              (isWakeWord(folded) && folded.count <= target.count + 1
+               || isHeyNearMiss(folded) && (hasHey || folded.hasPrefix("haj")))
         else { return text }
         rest = next.rest.drop(while: { !$0.isLetter && !$0.isNumber })
         guard let first = rest.first else { return "" }

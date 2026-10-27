@@ -40,6 +40,17 @@ final class WakeWordVerifierTests: XCTestCase {
         }
     }
 
+    func testVerifiedNearMissIsRemovedBeforeCommandRouting() {
+        for call in ["Hey Jars", "Hey Jaws", "Hey Jairz", "Hey Jairus", "Hecaviz"] {
+            XCTAssertTrue(WakeWordVerifier.containsWakeWord(call))
+            XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord("\(call), Spotify'da şarkı başlat."),
+                           "Spotify'da şarkı başlat.")
+        }
+        for kept in ["Jairus şarkısı aç", "Hey Jairus'un şarkısını aç", "Hey canım şarkı aç"] {
+            XCTAssertEqual(WakeWordVerifier.strippingLeadingWakeWord(kept), kept)
+        }
+    }
+
     func testBareCallNeedsNoLLM() {
         XCTAssertTrue(WakeWordVerifier.isBareCall("Jarvis."))
         XCTAssertTrue(WakeWordVerifier.isBareCall("Hey, Cervis!"))

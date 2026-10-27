@@ -34,6 +34,8 @@ struct TimedTranscriptionResult: Sendable, Equatable {
 }
 
 protocol WhisperTranscriptionService: Sendable {
+    /// Optional preview. Whisper overrides this with a single-pass, confidence-gated decode.
+    func previewTranscription(audioData: [Float], language: String) async throws -> String?
     func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String
     /// Timed output is an additive requirement with a default implementation. Existing test
     /// fakes and integrations that only implement the long-standing String API therefore remain
@@ -46,6 +48,11 @@ protocol WhisperTranscriptionService: Sendable {
 }
 
 extension WhisperTranscriptionService {
+    // Preserve spoken-done support for other providers; only Whisper can skip recovery.
+    func previewTranscription(audioData: [Float], language: String) async throws -> String? {
+        let text = try await transcribe(audioData: audioData, language: language, overlapSampleCount: 0)
+        return text.isEmpty ? nil : text
+    }
     func transcribeTimed(
         audioData: [Float],
         language: String,
@@ -61,6 +68,7 @@ extension WhisperTranscriptionService {
 
 final class WhisperTranscriber: @unchecked Sendable {
     private var whisperKit: WhisperKit?
+    private let workGate = TranscriptionWorkGate()
 
     private struct DecodePass: Sendable {
         let text: String
@@ -82,6 +90,10 @@ final class WhisperTranscriber: @unchecked Sendable {
 
     /// Load a Whisper model by name (e.g., "tiny", "base", "small", "small.en")
     func loadModel(name: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        try await workGate.run { try await self.loadModelExclusively(name: name, progress: progress) }
+    }
+
+    private func loadModelExclusively(name: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         // Store models in Application Support (persistent) instead of Caches (macOS purges Caches)
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let modelBase = appSupport.appendingPathComponent("OpenWhisper/Models")
@@ -126,6 +138,10 @@ final class WhisperTranscriber: @unchecked Sendable {
     /// Frees the loaded model (~1.5 GB) when another speech model takes over. `loadModel`
     /// loads it again when a Whisper variant is picked.
     func unloadModel() async {
+        await workGate.run { await self.unloadModelExclusively() }
+    }
+
+    private func unloadModelExclusively() async {
         guard let whisperKit else { return }
         self.whisperKit = nil
         await whisperKit.unloadModels()
@@ -134,6 +150,20 @@ final class WhisperTranscriber: @unchecked Sendable {
 
     /// Transcribe 16kHz mono Float32 audio to text
     func transcribe(audioData: [Float], language: String) async throws -> String {
+        try await workGate.run {
+            try Task.checkCancellation()
+            return try await self.transcribeExclusively(audioData: audioData, language: language)
+        }
+    }
+
+    func previewTranscription(audioData: [Float], language: String) async throws -> String? {
+        let text = try await workGate.preview {
+            try await self.transcribeExclusively(audioData: audioData, language: language, preview: true)
+        }
+        return text.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private func transcribeExclusively(audioData: [Float], language: String, preview: Bool = false) async throws -> String {
         guard let whisperKit else {
             throw TranscriberError.modelNotLoaded
         }
@@ -165,7 +195,9 @@ final class WhisperTranscriber: @unchecked Sendable {
             isRecovery: false
         )
 
-        if selectedPass.needsRecovery {
+        // A weak preview is discarded. Recovery is reserved for the final recording.
+        if preview && selectedPass.needsRecovery { return "" }
+        if selectedPass.needsRecovery && !AudioSignalProcessor.bypassProcessing {
             owLog("[Whisper] Low-confidence decode; running recovery pass")
             let recoveryPass = try await runDecode(
                 whisperKit: whisperKit,
@@ -247,6 +279,16 @@ final class WhisperTranscriber: @unchecked Sendable {
         language: String,
         overlapSampleCount: Int
     ) async throws -> TimedTranscriptionResult {
+        try await workGate.run {
+            try Task.checkCancellation()
+            return try await self.transcribeTimedExclusively(audioData: audioData, language: language,
+                                                            overlapSampleCount: overlapSampleCount)
+        }
+    }
+
+    private func transcribeTimedExclusively(
+        audioData: [Float], language: String, overlapSampleCount: Int
+    ) async throws -> TimedTranscriptionResult {
         guard let whisperKit else {
             throw TranscriberError.modelNotLoaded
         }
@@ -261,7 +303,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             wordTimestamps: true
         )
 
-        if selectedPass.needsRecovery {
+        if selectedPass.needsRecovery && !AudioSignalProcessor.bypassProcessing {
             owLog("[Whisper] Low-confidence timed decode; running recovery pass")
             let recoveryPass = try await runDecode(
                 whisperKit: whisperKit,

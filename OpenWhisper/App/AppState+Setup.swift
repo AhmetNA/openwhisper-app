@@ -63,7 +63,9 @@ extension AppState {
         // Enumerate input devices for the picker + BT detection
         refreshInputDevices()
         owLog("[OpenWhisper] Input devices: \(availableInputDevices.map(\.name).joined(separator: ", ")), default-is-BT: \(systemDefaultInputIsBluetooth), priority: \(inputPriority.map(\.name).joined(separator: " > "))")
-        InputDeviceWatcher.shared.start { [weak self] in self?.refreshInputDevices() }
+        InputDeviceWatcher.shared.start(onDefaultInputChange: { [weak self] in
+            self?.systemInputDeviceChanged()
+        }, onChange: { [weak self] in self?.refreshInputDevices() })
 
         // Check accessibility
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)
@@ -145,7 +147,12 @@ extension AppState {
 
         // Load Whisper model
         owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
-        await loadModel()
+        if transcriptionModelRegistry.provider(for: transcriptionModel) is WhisperKitTranscriptionProvider {
+            whisperSuspendedForIdle = true
+        } else {
+            await loadModel()
+        }
+        startWhisperIdleMonitoring()
         owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
 
         setupWakeWordListener()
@@ -227,6 +234,19 @@ extension AppState {
     }
 
     func loadModel() async {
+        // A record request can arrive while the idle release is still finishing.
+        if let unload = whisperUnloadTask { await unload.value }
+        if let loading = transcriptionModelLoadTask {
+            await loading.value
+            return
+        }
+        let loading = Task { await performTranscriptionModelLoad() }
+        transcriptionModelLoadTask = loading
+        await loading.value
+        transcriptionModelLoadTask = nil
+    }
+
+    private func performTranscriptionModelLoad() async {
         modelLoaded = false
         modelLoading = true
         modelLoadProgress = 0
@@ -257,7 +277,9 @@ extension AppState {
                     self?.modelLoadProgress = progress
                 }
             }
+            lastWhisperActivity = Date()
             modelLoaded = true
+            whisperSuspendedForIdle = false
             modelLoading = false
             owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
         } catch {

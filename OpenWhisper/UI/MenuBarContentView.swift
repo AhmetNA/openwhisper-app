@@ -96,7 +96,7 @@ struct MenuBarContentView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(appState.systemAudioEnabled ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini kaydetmeye başla")
-                .disabled(!appState.modelLoaded && !appState.systemAudioEnabled)
+                .disabled(!appState.modelLoaded && !appState.whisperSuspendedForIdle && !appState.systemAudioEnabled)
             }
             .padding(10)
             .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
@@ -221,7 +221,7 @@ struct MenuBarContentView: View {
             if appState.systemAudioIsRecording { return "Bilgisayar sesi kaydediliyor" }
             if appState.systemAudioIsTranscribing { return "Bilgisayar sesi işleniyor" }
             if appState.systemAudioEnabled { return "Bilgisayar sesi açılıyor" }
-            return appState.modelLoaded ? "Hazır" : "Model hazır değil"
+            return appState.whisperSuspendedForIdle ? "Hazır · konuşma modeli gerektiğinde yüklenir" : appState.modelLoaded ? "Hazır" : "Model hazır değil"
         }
     }
 
@@ -233,7 +233,7 @@ struct MenuBarContentView: View {
         case .idle:
             if appState.systemAudioIsRecording { return .red }
             if appState.systemAudioIsTranscribing { return .orange }
-            return appState.modelLoaded ? .green : .orange
+            return (appState.modelLoaded || appState.whisperSuspendedForIdle) ? .green : .orange
         }
     }
 }

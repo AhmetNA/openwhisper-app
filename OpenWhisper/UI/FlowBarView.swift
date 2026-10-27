@@ -4,50 +4,60 @@ struct FlowBarView: View {
     @Environment(AppState.self) var appState
 
     var body: some View {
-        HStack(spacing: 8) {
-            if appState.systemAudioEnabled && appState.recordingState == .idle {
-                systemAudioContent
-            } else if let message = appState.flowBarMessage {
-                if appState.targetSpeakerAppendOfferActive {
-                    rejectedRecordingOfferContent(message: message)
+        VStack(spacing: 4) {
+            HStack(spacing: 8) {
+                if appState.systemAudioEnabled && appState.recordingState == .idle {
+                    systemAudioContent
+                } else if let message = appState.flowBarMessage {
+                    if appState.targetSpeakerAppendOfferActive {
+                        rejectedRecordingOfferContent(message: message)
 
-                    if appState.recordingState == .recording {
-                        Divider()
-                            .frame(height: 14)
-                            .opacity(0.3)
-                        recordingContent
-                    } else if appState.recordingState == .transcribing {
-                        Divider()
-                            .frame(height: 14)
-                            .opacity(0.3)
-                        transcribingContent
+                        if appState.recordingState == .recording {
+                            Divider()
+                                .frame(height: 14)
+                                .opacity(0.3)
+                            recordingContent
+                        } else if appState.recordingState == .transcribing {
+                            Divider()
+                                .frame(height: 14)
+                                .opacity(0.3)
+                            transcribingContent
+                        }
+                    } else {
+                        Text(message)
+                            .font(.custom("Bradley Hand", size: 16).weight(.medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 26)
                     }
                 } else {
-                    Text(message)
-                        .font(.custom("Bradley Hand", size: 16).weight(.medium))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
-                        .frame(minHeight: 26)
-                }
-            } else {
-                switch appState.recordingState {
-                case .idle:
-                    if appState.jarvisActivity == .speaking { jarvisContent } else { idleContent }
-                case .recording:
-                    if appState.isTranscribing {
-                        transcribingContent
-                        Divider()
-                            .frame(height: 14)
-                            .opacity(0.3)
-                        recordingContent
-                    } else {
-                        recordingContent
+                    switch appState.recordingState {
+                    case .idle:
+                        if appState.jarvisActivity == .speaking { jarvisContent } else if appState.microphoneFlowNotice == nil { idleContent }
+                    case .recording:
+                        if appState.isTranscribing {
+                            transcribingContent
+                            Divider()
+                                .frame(height: 14)
+                                .opacity(0.3)
+                            recordingContent
+                        } else {
+                            recordingContent
+                        }
+                    case .transcribing:
+                        // The command already ran; while Jarvis answers, say so instead.
+                        if appState.jarvisActivity == .speaking { jarvisContent } else { transcribingContent }
                     }
-                case .transcribing:
-                    // The command already ran; while Jarvis answers, say so instead.
-                    if appState.jarvisActivity == .speaking { jarvisContent } else { transcribingContent }
                 }
+            }
+            if let notice = appState.microphoneFlowNotice {
+                Label(notice, systemImage: "mic.fill")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 4)
             }
         }
         .padding(.horizontal, 16)
@@ -67,6 +77,7 @@ struct FlowBarView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 17))
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
+        .animation(.easeInOut(duration: 0.25), value: appState.microphoneFlowNotice)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
         .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
         .animation(.easeInOut(duration: 0.15), value: appState.recordingInputReady)
