@@ -59,7 +59,10 @@ final class SpotifyDuck: @unchecked Sendable {
             owLog("[SpotifyDuck] Volume changed meanwhile (\(current)); left as it is")
             return
         }
-        if Self.setVolume(saved) { owLog("[SpotifyDuck] Spotify volume back to \(saved)") }
+        guard Self.setVolume(saved) else { return }
+        // Spotify often lands one under the value set; left alone, each reply cost 1 (74 → 73 → 72).
+        if let landed = Self.volume(), landed < saved { _ = Self.setVolume(saved + (saved - landed)) }
+        owLog("[SpotifyDuck] Spotify volume back to \(saved) (reads \(Self.volume().map(String.init) ?? "?"))")
     }
 
     /// Never launches Spotify: `tell application` would.
