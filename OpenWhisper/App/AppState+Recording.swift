@@ -232,7 +232,7 @@ extension AppState {
             guard captureHandoff != nil, audioEngineRef != nil else {
                 captureHandoff?.capture.stop()
                 captureHandoff?.echo?.release()
-                cancelPendingWhisperWake(reason: "buffered microphone unavailable", retryDelay: 10)
+                cancelPendingWhisperWake(reason: "buffered microphone unavailable", falseWake: true)
                 hotkey?.externalCancelHandsFree()
                 return
             }

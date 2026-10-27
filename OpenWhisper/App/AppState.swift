@@ -314,7 +314,6 @@ final class AppState {
     @ObservationIgnored var pendingWhisperWake: PendingWhisperWake?
     @ObservationIgnored var whisperWakeTask: Task<Void, Never>?
     @ObservationIgnored var whisperWakeTimeoutTask: Task<Void, Never>?
-    @ObservationIgnored var whisperWakeRetryAfter: TimeInterval = 0
     @ObservationIgnored var lastWhisperActivity = Date.distantPast
     @ObservationIgnored var whisperIdleTask: Task<Void, Never>?
     @ObservationIgnored var whisperUnloadTask: Task<Void, Never>?

@@ -1,11 +1,13 @@
 import Foundation
 
 extension AppState {
+    static let whisperIdleSeconds: TimeInterval = 60
+
     /// Keep a minute of warmth for follow-ups; the small wake listener no longer needs Whisper.
     /// Every actual transcription consumer must still finish before its model is released.
     var canSuspendIdleWhisper: Bool {
         modelLoaded && !modelLoading
-            && Date().timeIntervalSince(lastWhisperActivity) >= 60
+            && Date().timeIntervalSince(lastWhisperActivity) >= Self.whisperIdleSeconds
             && pendingWhisperWake == nil && whisperWakeTask == nil
             && transcriptionModelLoadTask == nil && whisperUnloadTask == nil
             && recordingState == .idle && activeTranscriptionSession == nil

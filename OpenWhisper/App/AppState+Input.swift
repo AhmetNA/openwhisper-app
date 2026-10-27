@@ -36,7 +36,7 @@ extension AppState {
             stopRecording()
         }
         if let pending = pendingWhisperWake, removed.contains(where: { $0.uid == pending.inputUID }) {
-            cancelPendingWhisperWake(reason: "wake microphone disconnected", retryDelay: 10)
+            cancelPendingWhisperWake(reason: "wake microphone disconnected")
         }
         syncWakeWordInput()
         let next = resolvedInputDeviceUID(for: nil)

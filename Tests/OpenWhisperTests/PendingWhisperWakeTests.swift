@@ -118,7 +118,7 @@ final class PendingWhisperWakeTests: XCTestCase {
         XCTAssertFalse(request.isValid())
         XCTAssertNil(app.transcriptionModelLoadTask)
     }
-    func testRejectedWakeDoesNotKeepLargeModelWarm() {
+    func testRejectedWakeKeepsLargeModelWarmOnlyBriefly() {
         let app = AppState()
         let previous = app.wakeWordEnabled
         defer { app.wakeWordEnabled = previous }
@@ -126,9 +126,12 @@ final class PendingWhisperWakeTests: XCTestCase {
         app.modelLoaded = true
         app.lastWhisperActivity = Date()
         app.pendingWhisperWake = PendingWhisperWake(inputUID: "mic", clipID: nil)
-        app.cancelPendingWhisperWake(reason: "test rejection", retryDelay: 10)
+        app.cancelPendingWhisperWake(reason: "test rejection", falseWake: true)
+        // Warm for a quick repeat of the call...
+        XCTAssertFalse(app.canSuspendIdleWhisper)
+        // ...released once the short window has passed.
+        app.lastWhisperActivity = app.lastWhisperActivity.addingTimeInterval(-AppState.rejectedWakeWarmSeconds)
         XCTAssertTrue(app.canSuspendIdleWhisper)
-        XCTAssertGreaterThan(app.whisperWakeRetryAfter, ProcessInfo.processInfo.systemUptime)
     }
 
 }

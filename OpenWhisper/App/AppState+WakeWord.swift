@@ -39,10 +39,7 @@ extension AppState {
     /// recording's own speaker filter decides, and a weak "Jarvis" must still be confirmed by
     /// Whisper.
     func handleDirectWake(audio: [Float], score: Float) {
-        // The pause after a rejected wake is for weak triggers: on 27 Oct 2026 it swallowed a
-        // 0.84 call 4 s after a rejected 0.31 one.
-        guard wakeWordEnabled, score >= WakeWordListener.confirmedScore
-                || ProcessInfo.processInfo.systemUptime >= whisperWakeRetryAfter else { return }
+        guard wakeWordEnabled else { return }
         if whisperSuspendedForIdle || pendingWhisperWake != nil {
             beginPendingWhisperWake(audio: audio, score: score, isDirect: true)
             return
@@ -207,7 +204,7 @@ extension AppState {
     /// Grey-zone wake score: Whisper must hear "Jarvis" and the LLM must judge it a call rather
     /// than a song or talk about Jarvis (`WakeWordVerifier`). One check at a time.
     func verifyWakeCandidate(audio: [Float], peak: Float) {
-        guard wakeWordEnabled, ProcessInfo.processInfo.systemUptime >= whisperWakeRetryAfter else { return }
+        guard wakeWordEnabled else { return }
         if whisperSuspendedForIdle || pendingWhisperWake != nil {
             beginPendingWhisperWake(audio: audio, score: peak)
             return

@@ -20,7 +20,7 @@ extension AppState {
         whisperWakeTimeoutTask = Task { [weak self, weak request] in
             do { try await Task.sleep(for: .seconds(PendingWhisperWake.timeout)) } catch { return }
             guard let self, let request, self.pendingWhisperWake === request else { return }
-            self.cancelPendingWhisperWake(reason: "loading/verification timed out", retryDelay: 10)
+            self.cancelPendingWhisperWake(reason: "loading/verification timed out", falseWake: true)
             self.lastError = "Konuşma modeli zamanında hazırlanamadı. Yeniden seslenebilir veya Fn ile kayıt başlatabilirsiniz."
             self.updateWakeWordListener()
         }
@@ -50,7 +50,7 @@ extension AppState {
             guard accepted, self.wakeWordEnabled, !self.systemAsleep,
                   self.hotkey?.isIdle == true, self.recordingState == .idle,
                   self.wakeWordListener?.heldInputUID == uid else {
-                self.cancelPendingWhisperWake(reason: "verification rejected or input changed", retryDelay: 10)
+                self.cancelPendingWhisperWake(reason: "verification rejected or input changed", falseWake: true)
                 self.updateWakeWordListener()
                 return
             }
@@ -62,7 +62,12 @@ extension AppState {
         }
     }
 
-    func cancelPendingWhisperWake(reason: String, retryDelay: TimeInterval = 0) {
+    /// Whisper stays loaded this long after a rejected cold wake: a missed call is repeated
+    /// within seconds and then takes the warm path, and a song's repeated "Jarvis" doesn't
+    /// load and unload the large model over and over.
+    static let rejectedWakeWarmSeconds: TimeInterval = 20
+
+    func cancelPendingWhisperWake(reason: String, falseWake: Bool = false) {
         guard let request = pendingWhisperWake else { return }
         request.cancel()
         pendingWhisperWake = nil
@@ -73,10 +78,10 @@ extension AppState {
         wakeWordListener?.releaseAudioForWhisper()
         if pendingWakeClipID == request.clipID { pendingWakeClipID = nil }
         pendingWakeSpeakerVerified = false
-        whisperWakeRetryAfter = max(whisperWakeRetryAfter, ProcessInfo.processInfo.systemUptime + retryDelay)
-        // A false TV/noise candidate is not a conversation: let the idle sweep release
-        // its model promptly instead of renewing the minute-long follow-up window.
-        lastWhisperActivity = retryDelay > 0 ? .distantPast : Date()
+        // A false TV/noise candidate is not a conversation: the idle sweep releases its model
+        // after `rejectedWakeWarmSeconds` instead of the minute-long follow-up window.
+        lastWhisperActivity = falseWake
+            ? Date().addingTimeInterval(Self.rejectedWakeWarmSeconds - Self.whisperIdleSeconds) : Date()
         WakeClipLog.shared.finish(request.clipID, outcome: reason)
         owLog("[WhisperWake] Discarded pending wake: \(reason)")
     }
