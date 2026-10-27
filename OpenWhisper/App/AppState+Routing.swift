@@ -941,28 +941,28 @@ extension AppState {
                 commandAmongPlayback: session.heardOnlyOverPlayback,
                 lastDictation: self.editableDictation(in: session.targetApp),
                 commandContext: commandContext)
-            // The mic opened after a Claude session recap: all of it is the message for that
-            // session, unless the user called it off ("boş ver", "vazgeç").
-            if session.sendsToRecappedClaudeSession, ClaudeSessionRecap.isCancel(trimmed) {
+            // The mic opened after a Claude / Codex recap: all of it is the message for that
+            // chat, unless the user called it off ("boş ver", "vazgeç").
+            if session.sendsToRecappedSession != nil, ClaudeSessionRecap.isCancel(trimmed) {
                 session.latency.finishDecision(route: "Claude mesajı iptal")
-                owLog("[Agent] Claude recap message called off: '\(trimmed)'")
+                owLog("[Agent] Recap message called off: '\(trimmed)'")
                 await say("Tamam, göndermedim.", durationMs: 3000)
                 return
             }
-            if session.acceptsCommands, !session.sendsToRecappedClaudeSession,
+            if session.acceptsCommands, session.sendsToRecappedSession == nil,
                !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
                let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
                 session.latency.finishDecision(route: "bulut sohbet geçişi")
                 self.lastTranscription = text
-                if reply == CloudSessionNavigation.newChatOpened, session.isVoiceCommand {
+                if reply == CloudSessionNavigation.newChatOpened || reply == CloudSessionNavigation.switchedChat, session.isVoiceCommand {
                     conversationContinuationApp = NSWorkspace.shared.frontmostApplication
                 }
                 await say(reply, durationMs: 5000)
                 return
             }
-            var route = session.sendsToRecappedClaudeSession
-                ? .agent(AgentDictation(target: .claudeCode, body: trimmed, send: true, session: .last))
-                : VoiceRouter.route(text, facts: facts)
+            var route = session.sendsToRecappedSession.map {
+                .agent(AgentDictation(target: $0, body: trimmed, send: true, session: .last))
+            } ?? VoiceRouter.route(text, facts: facts)
 
             // While a deletion confirmation is pending, only an explicit approval can execute the
             // already-resolved plan; any other ordinary voice response discards it without
@@ -1084,7 +1084,7 @@ extension AppState {
                         await fail(status, spoken: spoken)
                     case .opened(let app, let projectAgent, let found, let isNew):
                         guard !agent.body.isEmpty else {
-                            if isNew, session.isVoiceCommand { conversationContinuationApp = app }
+                            if session.isVoiceCommand { conversationContinuationApp = app }
                             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agentProject(found.name, isNew: isNew)) }
                             return
                         }
@@ -1100,8 +1100,8 @@ extension AppState {
                     }
                     return
                 }
-                if agent.session == .last, agent.target != .claudeCode {
-                    await fail("Son session yalnızca Claude Code'da var", spoken: "son session'ı yalnızca Claude Code'da bulabiliyorum")
+                if agent.session == .last, agent.target != .claudeCode, CodexSessionNavigator.lastThread == nil {
+                    await fail("Son sohbeti bilmiyorum", spoken: "son sohbeti bilmiyorum")
                     return
                 }
                 var targetApp = session.targetApp
@@ -1125,6 +1125,9 @@ extension AppState {
                         switched = agent.target == .claudeCode
                             ? await ClaudeSessionNavigator.openNewSession(app)
                             : await CodexSessionNavigator.openNewThread(app, folder: nil)
+                    case .last where agent.target != .claudeCode:
+                        let thread = CodexSessionNavigator.lastThread!
+                        switched = await CodexSessionNavigator.openThread(app, id: thread.id, title: thread.title)
                     case .last:
                         guard let name = ClaudeSessionNavigator.lastSessionTitle else {
                             await fail("Son session'ı bilmiyorum", spoken: "son session'ı bilmiyorum")
@@ -1284,29 +1287,80 @@ extension AppState {
                 }
                 await chat(trimmed, recalled: recalled, detail: "geçmiş sohbet")
 
-            // "Claude'da son session'ı özetle": two sentences on screen and aloud, then the mic
-            // stays open and whatever the user says goes to that session.
-            case .claudeSessionRecap:
-                session.latency.finishDecision(route: "Claude oturum özeti")
+            // "Claude'da son session'ı özetle" / "Codex'te son sohbeti özetle": two sentences on
+            // screen and aloud, then the mic stays open and whatever the user says goes there.
+            case .agentSessionRecap(let agent):
+                session.latency.finishDecision(route: "\(agent.displayName) oturum özeti")
                 self.lastTranscription = text
-                guard let recapped = ClaudeSessionRecap.latestSession() else {
-                    owLog("[Agent] Claude recap: no session found")
-                    await say("Claude'da bir oturum bulamadım.", durationMs: 4000)
+                let recapped: (id: String, title: String, storedRecap: String?, lastMessage: String?)?
+                if agent == .claudeCode {
+                    recapped = await Task.detached { () -> (String, String, String?, String?)? in
+                        guard let found = ClaudeSessionRecap.recapSession() else { return nil }
+                        return (found.id, found.title, found.storedRecap,
+                                found.transcriptID.flatMap(ClaudeSessionRecap.lastAssistantText(transcriptID:)))
+                    }.value.map { (id: $0.0, title: $0.1, storedRecap: $0.2, lastMessage: $0.3) }
+                } else {
+                    recapped = await Task.detached { ClaudeSessionRecap.codexRecapChat() }.value
+                        .map { (id: $0.chat.id, title: $0.chat.title, storedRecap: nil, lastMessage: $0.lastMessage) }
+                }
+                guard let recapped else {
+                    owLog("[Agent] \(agent.displayName) recap: no session found")
+                    await say("\(agent.locative) cevabı gelmiş bir sohbet bulamadım.", durationMs: 4000)
                     return
                 }
-                owLog("[Route] Claude recap of \"\(recapped.title)\" (stored recap: \(recapped.storedRecap != nil))")
+                owLog("[Route] \(agent.displayName) recap of \"\(recapped.title)\" (stored recap: \(recapped.storedRecap != nil))")
                 self.jarvisActivity = .thinking
-                let summary = await ClaudeSessionRecap.summary(of: recapped, ollamaModel: self.ollamaModel,
-                                                               ollamaAvailable: self.ollamaAvailable)
+                let summary = await ClaudeSessionRecap.summary(
+                    title: recapped.title, storedRecap: recapped.storedRecap, lastMessage: recapped.lastMessage,
+                    appName: agent == .claudeCode ? "Claude Code" : "Codex",
+                    ollamaModel: self.ollamaModel, ollamaAvailable: self.ollamaAvailable)
                 self.jarvisActivity = .none
                 guard let summary else {
                     await say("\(recapped.title) oturumunda özetlenecek bir şey bulamadım.", durationMs: 4000)
                     return
                 }
-                ClaudeSessionNavigator.rememberSession(id: recapped.id, title: recapped.title)
+                if agent == .claudeCode {
+                    ClaudeSessionNavigator.rememberSession(id: recapped.id, title: recapped.title)
+                } else {
+                    CodexSessionNavigator.rememberThread(id: recapped.id, title: recapped.title)
+                }
                 self.showFlowBarMessage(summary, durationMs: Self.flowBarDuration(ofRecap: summary))
                 await self.speakReply(summary)
-                if self.listenForClaudeMessage(summary, after: session) { holdMediaForReplyAnswer = true }
+                if self.listenForClaudeMessage(summary, agent: agent == .claudeCode ? .claudeCode : .codex, after: session) {
+                    holdMediaForReplyAnswer = true
+                }
+
+            // "Biten sohbete geç", "yanıtı gelene geç": opens the chat whose answer came in last;
+            // the mic then stays open there, so the next words are written without "Hey Jarvis".
+            case .finishedAgentChat(let target):
+                session.latency.finishDecision(route: "biten sohbete geçiş")
+                self.lastTranscription = text
+                guard !RemoteControl.screenIsLocked else {
+                    await say("Mac kilitli; bunu kilidi açınca yapabilirim.", durationMs: 4000)
+                    return
+                }
+                let agents: [AgentApp] = target.map { [$0 == .claudeCode ? .claudeCode : .codex] } ?? [.claudeCode, .codex]
+                let current = session.targetApp.flatMap { RecordedConversation.capture(app: $0) }?.sessionID
+                let chats = await Task.detached { agents.flatMap(AgentFinishedChat.load) }.value
+                guard let chat = AgentFinishedChat.newest(chats, excluding: current) else {
+                    owLog("[Agent] Finished chat: none in \(agents.map(\.displayName))")
+                    await say("Cevabı gelmiş başka bir sohbet bulamadım.", durationMs: 4000)
+                    return
+                }
+                owLog("[Route] finished chat → \(chat.agent.displayName) \"\(chat.title)\" (finished \(chat.finishedAt))")
+                guard let app = await AgentAppActivator.activate(chat.agent) else {
+                    await say(self.jarvisReply.failure("\(chat.agent.displayName) açılamadı"), durationMs: 4000)
+                    return
+                }
+                let opened = chat.agent == .claudeCode
+                    ? await ClaudeSessionNavigator.openSession(app, id: chat.id, title: chat.title)
+                    : await CodexSessionNavigator.openThread(app, id: chat.id, title: chat.title)
+                guard opened else {
+                    await say(self.jarvisReply.failure("sohbeti açamadım"), durationMs: 4000)
+                    return
+                }
+                if session.isVoiceCommand { conversationContinuationApp = app }
+                await say(self.jarvisReply.finishedChat(chat.title), durationMs: 4000)
 
             case .deletionConfirmation, .whatsAppConfirmation, .screenPressConfirmation:
                 // Answered above; a non-answer was routed again without it.

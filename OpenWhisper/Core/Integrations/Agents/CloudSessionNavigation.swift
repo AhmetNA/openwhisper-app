@@ -5,6 +5,8 @@ import SQLite3
 enum CloudSessionNavigation {
     /// `handle`'s reply when a new chat opened; the mic then stays open for its first message.
     static let newChatOpened = "Yeni sohbet açıldı."
+    /// `handle`'s reply after switching to an existing chat; the mic stays open there too.
+    static let switchedChat = "İstediğin sohbete geçtim."
 
     struct Candidate: Codable, Equatable, Sendable {
         let id: String
@@ -21,7 +23,9 @@ enum CloudSessionNavigation {
         let t = text.lowercased(with: Locale(identifier: "tr_TR"))
         let subject = ["chat", "çat", "çet", "sohbet", "konuşma", "session", "sesion", "oturum", "thread"]
         let verb = ["aç", "geç", "git", "dön", "bul", "başlat"]
+        // "Biten sohbete geç" has its own local route (`AgentFinishedChat`).
         return subject.contains(where: t.contains) && verb.contains(where: t.contains)
+            && AgentCommandParser.finishedChatRequest(text) == nil
     }
 
     static func decision(_ text: String, candidates: [Candidate], currentID: String?) -> Decision? {
@@ -169,7 +173,7 @@ enum CloudSessionNavigation {
                     : await CodexSessionNavigator.openThread(app, id: item.id, title: item.title)
                 opened = navigated && RecordedConversation.capture(app: app)?.sessionID == item.id
             }
-            return opened ? (chosen.action == "new" ? newChatOpened : "İstediğin sohbete geçtim.") : "Sohbetin açıldığını doğrulayamadım."
+            return opened ? (chosen.action == "new" ? newChatOpened : switchedChat) : "Sohbetin açıldığını doğrulayamadım."
         } catch {
             return "Bulut modeline ulaşamadım; sohbet geçişi yapılmadı."
         }

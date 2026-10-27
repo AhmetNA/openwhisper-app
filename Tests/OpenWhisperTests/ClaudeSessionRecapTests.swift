@@ -37,11 +37,11 @@ final class ClaudeSessionRecapTests: XCTestCase {
     func testRoutesToRecapOnlyInVoiceSessions() {
         var facts = VoiceRouter.Facts(isVoiceCommand: true, acceptsCommands: true, focus: .notEditable,
                                       hasTargetApp: false, targetBundleID: nil)
-        guard case .claudeSessionRecap = VoiceRouter.route("Claude'da son session'ı özetle", facts: facts) else {
+        guard case .agentSessionRecap(.claudeCode) = VoiceRouter.route("Claude'da son session'ı özetle", facts: facts) else {
             return XCTFail("not routed to the recap")
         }
         facts.isVoiceCommand = false
-        if case .claudeSessionRecap = VoiceRouter.route("Claude'da son session'ı özetle", facts: facts) {
+        if case .agentSessionRecap = VoiceRouter.route("Claude'da son session'ı özetle", facts: facts) {
             XCTFail("dictation must not run the recap")
         }
     }

@@ -543,6 +543,8 @@ final class AppState {
     /// The next `.followUp` recording is the message for the Claude session just recapped;
     /// the recap, shown again once the recording cleared the bar.
     @ObservationIgnored var pendingClaudeMessage: String?
+    /// The app whose chat `pendingClaudeMessage` recapped.
+    @ObservationIgnored var pendingRecapAgent: AgentApp = .claudeCode
     /// After a Claude session recap, how long the mic waits for the first word of the message.
     nonisolated static let claudeMessageWindow: TimeInterval = 6
     /// The next `.followUp` recording comes after a command (`listenAfterCommand`): the

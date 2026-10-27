@@ -50,7 +50,8 @@ final class RouteCorpusTests: XCTestCase {
         case .agent(let agent):
             if let target = agent.target { return "agent:\(target.rawValue)" }
             return agent.body.isEmpty ? "agent-send:empty" : "agent-send"
-        case .claudeSessionRecap: return "claude-recap"
+        case .agentSessionRecap(let agent): return agent == .claudeCode ? "claude-recap" : "codex-recap"
+        case .finishedAgentChat: return "finished-chat"
         case .typed: return "typed"
         case .dictationEdit(let edit): return "dictation-edit:\(edit)"
         case .chat: return "chat"

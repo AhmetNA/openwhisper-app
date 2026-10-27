@@ -65,8 +65,8 @@ final class RecordingTranscriptionSession {
         followsCommand || wakeUnconfirmed && mediaWasPlaying || heardOnlyOverPlayback
     }
     var commandFollowUpDomain: CommandFollowUp.Domain?
-    /// A `.followUp` opened after a Claude session recap: the transcript is sent to that session.
-    var sendsToRecappedClaudeSession = false
+    /// A `.followUp` opened after a Claude / Codex recap: the transcript is sent to that chat.
+    var sendsToRecappedSession: AgentApp?
     /// Jarvis's reply that was playing when this follow-up opened; its echo is cut from the text.
     var precedingReply: String?
     var acceptsCommands: Bool {

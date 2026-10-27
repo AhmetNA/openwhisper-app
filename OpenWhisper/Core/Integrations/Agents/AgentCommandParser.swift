@@ -81,6 +81,11 @@ struct AgentDictation: Equatable, Sendable {
     var targetAssumed = false
 }
 
+/// "Biten sohbete geç": switch to the chat whose answer came in last, in `target` or either app.
+struct FinishedChatRequest: Equatable, Sendable {
+    let target: AgentApp?
+}
+
 /// Pure parsing, no app or keyboard access. Works on the raw Whisper transcript, so it
 /// accepts common mishearings ("Cloud Code", "Klod", "Kodeks").
 enum AgentCommandParser {
@@ -275,10 +280,45 @@ enum AgentCommandParser {
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
-    /// "Claude'da son session'ı özetle": Jarvis reads out what the last Claude Code session did.
-    static func isSessionSummaryRequest(_ text: String) -> Bool {
+    // "Codex'te son sohbeti özetle", "ChatGPT'de son cevabı özetle": the same ask for Codex,
+    // which needs its name (a bare "son session" stays Claude's).
+    private static let codexSummaryRegex: NSRegularExpression = {
+        let session = "(?:(?:en\\s+)?(?:son|sağ)\\s+(?:\(sessionStem)|cevab|cevap|yanıt)\\p{L}*(?:['’`]\\p{L}*)?)"
+        let head = "(?:\(codexName)|\(chatGPTName))(?:['’`]?\\p{L}*)?(?:\\s+\(session))?"
+        let ask = #"(?:bana\s+)?(?:(?:bir\s+)?özet\p{L}*(?:\s+(?:ver|geç|çıkar|yap|söyle)\p{L}*)?|(?:en\s+son\s+)?ne\s+(?:yaptık|yaptın|yapmıştık|yapmıştın|yaptınız|yapıldı|oldu|dedi)|nerede\s+kal(?:dık|mıştık))(?:\s+m[ıi]s[ıi]n)?"#
+        let pattern = "^\\s*\(head)[\\s,]+\(ask)[\\s.!?]*$"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    /// "Claude'da son session'ı özetle" / "Codex'te son sohbeti özetle": the app whose last
+    /// conversation Jarvis reads out, nil when the text is no such ask.
+    static func sessionSummaryTarget(_ text: String) -> AgentApp? {
         let lowered = WakeWordVerifier.strippingLeadingWakeWord(text).lowercased(with: locale)
-        return summaryRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
+        let range = NSRange(lowered.startIndex..., in: lowered)
+        if codexSummaryRegex.firstMatch(in: lowered, range: range) != nil { return .codex }
+        return summaryRegex.firstMatch(in: lowered, range: range) != nil ? .claudeCode : nil
+    }
+
+    static func isSessionSummaryRequest(_ text: String) -> Bool {
+        sessionSummaryTarget(text) != nil
+    }
+
+    // "Biten sohbete geç", "cevabı gelen session'a geç", "yanıt gelene geç", "Codex'te işi
+    // biten sohbeti aç": the chat whose answer came in last. The whole sentence, so "biten
+    // sohbete geçmeden önce …" stays text.
+    private static let finishedChatRegex: NSRegularExpression = {
+        let finished = #"(?:(?:en\s+son\s+)?(?:(?:işi|cevabı|yanıtı)\s+)?(?:bit(?:en|miş|ti[ğg]i)|tamamlan(?:an|mış))|(?:cevab[ıi]|cevap|yanıt[ıi]?)\s+gel(?:en|miş|di[ğg]i))"#
+        let target = "(?:\\s+\(sessionStem)\\p{L}*(?:['’`]\\s*\\p{L}*)?|['’`]?(?:y?[ae]|n[ae]|y?[ıi]))"
+        let extra = #"(?:\s*,?\s*(?:şu\s+an|şimdi|hemen|lütfen))?"#
+        let pattern = "^\\s*(?:(?<app>\(names))\(suffix)\\s+)?\(extra)\\s*\(finished)\(target)?\\s+(?:geç|git|dön|aç)\\p{L}*(?:\\s+m[ıi]s[ıi]n)?\(extra)[\\s.!?,]*$"
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    /// "Biten sohbete geç": nil when the text is no such ask; `target` nil when no app was named.
+    static func finishedChatRequest(_ text: String) -> FinishedChatRequest? {
+        let lowered = WakeWordVerifier.strippingLeadingWakeWord(text).lowercased(with: locale)
+        guard let match = finishedChatRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) else { return nil }
+        return FinishedChatRequest(target: targetApp(for: match))
     }
 
     /// Returns nil when the text is neither addressed to an agent nor ends with "gönder".

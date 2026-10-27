@@ -43,8 +43,11 @@ enum VoiceRouter {
         case agentWithoutForeground
         /// "Claude Code'a yaz …", or "… gönder" into the frontmost agent app.
         case agent(AgentDictation)
-        /// "Claude'da son session'ı özetle": two spoken sentences, then the next words go there.
-        case claudeSessionRecap
+        /// "Claude'da son session'ı özetle", "Codex'te son sohbeti özetle": two spoken
+        /// sentences, then the next words go there.
+        case agentSessionRecap(AgentApp)
+        /// "Biten sohbete geç": the chat whose answer came in last, in the named app or either.
+        case finishedAgentChat(AgentApp?)
         /// "Buraya yaz …", "… bunu yaz": always typed, even if the words are a command.
         case typed(String)
         /// "Sil", "son kelimeyi sil", "Ahmed'i Ahmet yap", "enter'a bas": on the last dictation.
@@ -129,7 +132,8 @@ enum VoiceRouter {
             // First: "evet" / "tamam" would otherwise read as a greeting or a meta answer.
             if facts.pendingWhatsAppSend { return .whatsAppConfirmation }
             if facts.pendingScreenPress { return .screenPressConfirmation }
-            if AgentCommandParser.isSessionSummaryRequest(trimmed) { return .claudeSessionRecap }
+            if let agent = AgentCommandParser.sessionSummaryTarget(trimmed) { return .agentSessionRecap(agent) }
+            if let finished = AgentCommandParser.finishedChatRequest(trimmed) { return .finishedAgentChat(finished.target) }
             // An editable field normally routes to dictation. This explicit phrase lets the
             // user talk to Jarvis without first clicking away from the field.
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }

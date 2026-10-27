@@ -194,10 +194,10 @@ extension AppState {
         return true
     }
 
-    /// A Claude session was just recapped: listen `claudeMessageWindow` without the wake word;
-    /// what the user says then is sent to that session. Returns true when the mic opened, so the
-    /// caller keeps paused media paused for the message.
-    func listenForClaudeMessage(_ recap: String, after session: RecordingTranscriptionSession) -> Bool {
+    /// A Claude session or Codex chat was just recapped: listen `claudeMessageWindow` without
+    /// the wake word; what the user says then is sent to that chat. Returns true when the mic
+    /// opened, so the caller keeps paused media paused for the message.
+    func listenForClaudeMessage(_ recap: String, agent: AgentApp = .claudeCode, after session: RecordingTranscriptionSession) -> Bool {
         guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled,
               recordingState != .recording, hotkey?.isIdle == true, microphoneGranted else { return false }
         pendingWakeSpeakerVerified = session.wakeSpeakerVerified
@@ -207,10 +207,11 @@ extension AppState {
             guard let self, self.recordingState != .recording else { return }
             self.recordingMedia.end(resuming: true)
         }
-        owLog("[FollowUp] Claude recap done; listening for the message to that session")
+        owLog("[FollowUp] \(agent.displayName) recap done; listening for the message to that session")
         pendingCommandFollowUp = nil
         commandFollowUpOverReply = false
         pendingClaudeMessage = recap
+        pendingRecapAgent = agent
         startVoiceSession(trigger: .followUp)
         // Never started: a later follow-up must not be taken for the message.
         if hotkey?.isIdle == true { pendingClaudeMessage = nil }

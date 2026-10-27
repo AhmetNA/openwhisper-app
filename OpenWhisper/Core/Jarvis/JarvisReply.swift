@@ -107,6 +107,11 @@ struct JarvisReply {
         addressing("Yeni session açtım.")
     }
 
+    /// "Biten sohbete geç": which chat is open now.
+    mutating func finishedChat(_ title: String) -> String {
+        addressing(title.isEmpty ? "Cevabı gelen sohbete geçtim." : "\(title) sohbetine geçtim.")
+    }
+
     /// "Bitirme projesine geç" / "Bitirme projesinde yeni session aç" with nothing to write.
     mutating func agentProject(_ name: String, isNew: Bool) -> String {
         addressing(isNew ? "\(name) projesinde yeni session açtım." : "\(name) projesine geçtim.")

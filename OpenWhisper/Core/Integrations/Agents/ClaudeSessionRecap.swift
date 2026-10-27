@@ -50,12 +50,12 @@ enum ClaudeSessionRecap {
         return last
     }
 
-    static func prompt(title: String, storedRecap: String?, lastMessage: String?) -> String {
+    static func prompt(title: String, storedRecap: String?, lastMessage: String?, appName: String = "Claude Code") -> String {
         var lines = ["Oturum başlığı: \(title)"]
         if let storedRecap { lines.append("Uygulamanın kısa özeti: \(storedRecap)") }
         if let lastMessage { lines.append("Asistanın son mesajı:\n\(String(lastMessage.prefix(3000)))") }
         return """
-        Aşağıda bir Claude Code kodlama oturumunun son durumu var. Kullanıcıya sesli okunacak, en fazla iki kısa \
+        Aşağıda bir \(appName) kodlama oturumunun son durumu var. Kullanıcıya sesli okunacak, en fazla iki kısa \
         Türkçe cümlelik bir özet yaz: ne yapıldı, ne kaldı ya da ne bekleniyor. Kod, dosya yolu, commit kodu, \
         markdown, madde işareti kullanma; teknik adları sade söyle. Yalnızca özeti yaz.
 
@@ -89,6 +89,24 @@ enum ClaudeSessionRecap {
 
     // MARK: - Files and model
 
+    /// The session whose answer came in last; while every one is still working, the one with
+    /// the newest activity. The session being talked to right now is not the one to recap.
+    static func recapSession() -> Session? {
+        guard let finished = AgentFinishedChat.newest(AgentFinishedChat.load(.claudeCode), excluding: nil) else {
+            return latestSession()
+        }
+        let file = FileManager.default.enumerator(at: ClaudeProjectStore.sessionsDirectory, includingPropertiesForKeys: nil)?
+            .lazy.compactMap { $0 as? URL }.first { $0.lastPathComponent == finished.id + ".json" }
+        return file.flatMap { try? Data(contentsOf: $0) }.flatMap(session(fromJSON:)) ?? latestSession()
+    }
+
+    /// The Codex chat whose answer came in last, with that answer.
+    static func codexRecapChat() -> (chat: AgentFinishedChat.Chat, lastMessage: String?)? {
+        guard let chat = AgentFinishedChat.newest(AgentFinishedChat.load(.codex), excluding: nil) else { return nil }
+        let answer = chat.transcript.flatMap { AgentFinishedChat.tail(of: $0) }.flatMap(JarvisAppContext.lastCodexAnswer(inRollout:))
+        return (chat, answer)
+    }
+
     /// The session with the newest activity in the Claude desktop app.
     static func latestSession() -> Session? {
         guard let enumerator = FileManager.default.enumerator(at: ClaudeProjectStore.sessionsDirectory,
@@ -120,8 +138,14 @@ enum ClaudeSessionRecap {
     /// the stored text itself.
     static func summary(of session: Session, ollamaModel: String, ollamaAvailable: Bool) async -> String? {
         let lastMessage = session.transcriptID.flatMap(lastAssistantText(transcriptID:))
-        let fallback = fallbackSummary(storedRecap: session.storedRecap, lastMessage: lastMessage)
-        let messages = [["role": "user", "content": prompt(title: session.title, storedRecap: session.storedRecap, lastMessage: lastMessage)]]
+        return await summary(title: session.title, storedRecap: session.storedRecap, lastMessage: lastMessage,
+                             appName: "Claude Code", ollamaModel: ollamaModel, ollamaAvailable: ollamaAvailable)
+    }
+
+    static func summary(title: String, storedRecap: String?, lastMessage: String?, appName: String,
+                        ollamaModel: String, ollamaAvailable: Bool) async -> String? {
+        let fallback = fallbackSummary(storedRecap: storedRecap, lastMessage: lastMessage)
+        let messages = [["role": "user", "content": prompt(title: title, storedRecap: storedRecap, lastMessage: lastMessage, appName: appName)]]
         let client: (any ChatStreaming, String)?
         if ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() {
             client = (cloud, model)
@@ -130,16 +154,16 @@ enum ClaudeSessionRecap {
         } else {
             client = nil
         }
-        guard let (chat, model) = client, lastMessage != nil || session.storedRecap != nil else { return fallback }
+        guard let (chat, model) = client, lastMessage != nil || storedRecap != nil else { return fallback }
         let start = Date()
         do {
             var text = ""
             for try await piece in chat.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 15,
                                                                   temperature: 0.3, maxTokens: 160)) { text += piece }
-            owLog("[Agent] Claude recap (\(model), \(Int(Date().timeIntervalSince(start) * 1000)) ms): \(text)")
+            owLog("[Agent] \(appName) recap (\(model), \(Int(Date().timeIntervalSince(start) * 1000)) ms): \(text)")
             return twoSentences(text) ?? fallback
         } catch {
-            owLog("[Agent] Claude recap model failed: \(ChatFallback.describe(error)); using the stored text")
+            owLog("[Agent] \(appName) recap model failed: \(ChatFallback.describe(error)); using the stored text")
             return fallback
         }
     }

@@ -333,7 +333,7 @@ extension AppState {
             let media = recordingMedia
             session.playbackSurvivedPause = { media.playbackLeftRunning }
         }
-        session.sendsToRecappedClaudeSession = claudeMessage
+        session.sendsToRecappedSession = claudeMessage ? pendingRecapAgent : nil
         if let commandFollowUp {
             session.followsCommand = true
             session.commandFollowUpDomain = commandFollowUp

@@ -5,6 +5,18 @@ import ApplicationServices
 /// app's own codex:// links, then focuses the composer so the paste path can write there.
 @MainActor
 enum CodexSessionNavigator {
+    private static let lastThreadKey = "agent.codex.lastThread"
+
+    /// The chat just summarized, so "son sohbete yaz …" and the message after the recap go there.
+    static var lastThread: (id: String, title: String)? {
+        guard let pair = UserDefaults.standard.stringArray(forKey: lastThreadKey), pair.count == 2 else { return nil }
+        return (pair[0], pair[1])
+    }
+
+    static func rememberThread(id: String, title: String) {
+        UserDefaults.standard.set([id, title], forKey: lastThreadKey)
+    }
+
     /// `codex://threads/new`, with `?path=` to start it in that project.
     static func openNewThread(_ app: NSRunningApplication, folder: String?) async -> Bool {
         var components = URLComponents(string: "codex://threads/new")!
