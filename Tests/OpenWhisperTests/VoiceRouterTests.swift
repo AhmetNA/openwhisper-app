@@ -24,10 +24,38 @@ final class VoiceRouterTests: XCTestCase {
     }
     private func facts(voice: Bool = true, focus: TextFocusStatus = .unknown, hasTargetApp: Bool = true,
                        targetBundleID: String? = nil, pendingDeletion: Bool = false,
-                       overPlayback: Bool = false) -> VoiceRouter.Facts {
+                       overPlayback: Bool = false, lastDictation: String? = nil) -> VoiceRouter.Facts {
         VoiceRouter.Facts(isVoiceCommand: voice, acceptsCommands: true, focus: focus,
                           hasTargetApp: hasTargetApp, targetBundleID: targetBundleID,
-                          pendingDeletion: pendingDeletion, commandAmongPlayback: overPlayback)
+                          pendingDeletion: pendingDeletion, commandAmongPlayback: overPlayback,
+                          lastDictation: lastDictation)
+    }
+
+    func testDictationEditsActOnTheLastDictation() {
+        let typing = facts(voice: false, focus: .editable, lastDictation: "Ahmed geldi")
+        guard case .dictationEdit(.deleteAll) = VoiceRouter.route("Sil.", facts: typing) else {
+            return XCTFail("'sil' after a dictation deletes it")
+        }
+        guard case .dictationEdit(.replace(old: "Ahmed", new: "Ahmet")) = VoiceRouter.route("Ahmed'i Ahmet yap", facts: typing) else {
+            return XCTFail("the misheard name is replaced")
+        }
+        guard case .dictationEdit(.pressReturn) = VoiceRouter.route("Enter'a bas", facts: facts(voice: false, focus: .editable)) else {
+            return XCTFail("Enter needs no dictation before it")
+        }
+        guard case .typed = VoiceRouter.route("Buraya yaz son kelimeyi sil", facts: typing) else {
+            return XCTFail("explicit dictation keeps precedence")
+        }
+        for text in ["sil", "Ahmed'i Ahmet yap"] {
+            if case .dictationEdit = VoiceRouter.route(text, facts: facts(voice: false, focus: .editable)) {
+                XCTFail("no dictation to edit: \(text)")
+            }
+        }
+        if case .dictationEdit = VoiceRouter.route("Geri al", facts: facts(focus: .notEditable, lastDictation: "Ahmed geldi")) {
+            XCTFail("with no text field in front 'geri al' is no edit")
+        }
+        for text in ["raporu hazır yap", "videoyu biraz geri al", "yarınki hatırlatıcıyı sil"] {
+            if case .dictationEdit = VoiceRouter.route(text, facts: typing) { XCTFail("not an edit: \(text)") }
+        }
     }
 
     func testGreetingIsDictationInATextField() {

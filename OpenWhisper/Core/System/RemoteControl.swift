@@ -140,7 +140,7 @@ final class RemoteControl {
     /// Routes that type into an app or need it in front.
     static func needsUnlockedScreen(_ route: VoiceRouter.Route) -> Bool {
         switch route {
-        case .agent, .agentWithoutForeground, .typed, .whatsAppSend: return true
+        case .agent, .agentWithoutForeground, .typed, .dictationEdit, .whatsAppSend: return true
         case .command(let command): return needsUnlockedScreen(command)
         case .commands(let steps): return steps.contains { needsUnlockedScreen($0.command) }
         default: return false

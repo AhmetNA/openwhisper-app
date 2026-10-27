@@ -430,6 +430,7 @@ extension AppState {
                             owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
                             switch outcome {
                             case .pastedVerified where send, .pastedUnverified where send:
+                                self.lastInjectedText = ""
                                 self.swapPair = nil
                                 self.swapPasteContext = nil
                                 self.hotkey?.setSwapAvailable(false)
@@ -498,6 +499,12 @@ extension AppState {
                                         let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
 
                                         guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+                                        // A voice edit, an Option+Z swap or a newer dictation changed
+                                        // the field since: backspacing `initialText` would cut the wrong text.
+                                        guard self.lastInjectedText == initialText else {
+                                            owLog("[OpenWhisper] Pasted text changed before the LLM cleanup finished; not replacing")
+                                            return
+                                        }
                                         if LLMCleanup.isNoOpCleanup(original: initialText, cleaned: trimmedCleaned) {
                                             owLog("[OpenWhisper] LLM cleanup only changed spacing/punctuation style; not swapping")
                                             return
@@ -552,6 +559,7 @@ extension AppState {
                                     }
                                 }
                             case .clipboardOnly(let reason):
+                                self.lastInjectedText = ""
                                 self.swapPair = nil
                                 self.swapPasteContext = nil
                                 self.hotkey?.setSwapAvailable(false)
@@ -853,6 +861,7 @@ extension AppState {
                 pendingWhatsAppSend: self.whatsAppSender.hasPending,
                 voiceTestActive: self.voiceTest.isActive,
                 commandAmongPlayback: session.heardOnlyOverPlayback,
+                lastDictation: self.editableDictation(in: session.targetApp),
                 commandContext: commandContext)
             // The mic opened after a Claude session recap: all of it is the message for that
             // session, unless the user called it off ("boş ver", "vazgeç").
@@ -1050,6 +1059,14 @@ extension AppState {
                     ClaudeSessionNavigator.rememberSession(app, wasNew: agent.session == .new)
                 }
                 if session.isVoiceCommand { await self.speakReply(self.jarvisReply.agent(sent: agent.send)) }
+
+            case .dictationEdit(let edit):
+                session.latency.finishDecision(route: "dikte düzeltme")
+                owLog("[Route] dictation edit (\(edit))")
+                let result = await runDictationEdit(edit, targetApp: session.targetApp)
+                owLog("[Result] Dictation edit: \(result.status)")
+                self.showFlowBarMessage(result.status, durationMs: result.done ? 1000 : 3000)
+                if session.isVoiceCommand, !result.done { await self.speakReply(result.status) }
 
             case .typed(let typed):
                 owLog("[Route] explicit dictation override: '\(typed)'")

@@ -89,6 +89,7 @@ extension AppState {
             return false
         }
         owLog("[Misheard] Dictation '\(pasted)' was the command '\(corrected)'")
+        lastInjectedText = ""
         swapPair = nil
         swapPasteContext = nil
         hotkey?.setSwapAvailable(false)

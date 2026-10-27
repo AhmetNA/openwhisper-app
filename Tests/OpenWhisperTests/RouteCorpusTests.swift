@@ -52,6 +52,7 @@ final class RouteCorpusTests: XCTestCase {
             return agent.body.isEmpty ? "agent-send:empty" : "agent-send"
         case .claudeSessionRecap: return "claude-recap"
         case .typed: return "typed"
+        case .dictationEdit(let edit): return "dictation-edit:\(edit)"
         case .chat: return "chat"
         case .greeting(let greeting): return "greeting:\(greeting) (unless a text field has focus)"
         case .meta(let meta): return "meta:\(meta)"

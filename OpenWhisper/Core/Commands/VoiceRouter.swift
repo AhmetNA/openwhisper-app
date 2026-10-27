@@ -30,6 +30,8 @@ enum VoiceRouter {
         /// (`RecordingTranscriptionSession.heardOnlyOverPlayback`): the user's command can sit
         /// between the video's sentences ("… Videonun durdur. Çok yavaş …"), so any one may be it.
         var commandAmongPlayback = false
+        /// The text OpenWhisper last pasted, while "sil" / "Ahmed'i Ahmet yap" can still edit it.
+        var lastDictation: String? = nil
         /// Built only when a command rule is reached: it lists the installed apps.
         var commandContext: @MainActor () -> CommandRegistry.Context = { CommandRegistry.Context() }
     }
@@ -43,6 +45,8 @@ enum VoiceRouter {
         case claudeSessionRecap
         /// "Buraya yaz …", "… bunu yaz": always typed, even if the words are a command.
         case typed(String)
+        /// "Sil", "son kelimeyi sil", "Ahmed'i Ahmet yap", "enter'a bas": on the last dictation.
+        case dictationEdit(DictationEdit)
         /// "Jarvis, …" said while a text field has focus.
         case chat(String)
         case greeting(JarvisReply.Greeting)
@@ -106,6 +110,15 @@ enum VoiceRouter {
             ?? JarvisAddressee.trailingTypeCommand(trimmed)
             ?? AgentCommandParser.parse(trimmed).flatMap({ $0.send && !$0.body.isEmpty ? $0.body : nil }) {
             return .typed(typed)
+        }
+
+        // Edits to the dictation just pasted, said as the whole transcript. Never with a
+        // non-editable app in front, where "geri al" is about a video.
+        if facts.acceptsCommands, facts.focus != .notEditable {
+            if let dictation = facts.lastDictation, let edit = DictationEdit.parse(trimmed, dictation: dictation) {
+                return .dictationEdit(edit)
+            }
+            if facts.focus == .editable, DictationEdit.isReturn(trimmed) { return .dictationEdit(.pressReturn) }
         }
 
         if voice {
