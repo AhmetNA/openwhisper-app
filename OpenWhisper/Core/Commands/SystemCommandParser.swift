@@ -90,6 +90,8 @@ enum BrowserAction: Equatable, Sendable {
     case summarize
     /// "YouTube'da ne var?": opens the home page and reads the first three recommendations.
     case youtubeHome
+    /// "YouTube'u aç": back to the video already open in Safari, else the home page as above.
+    case youtubeOpen
     /// "Başka": the next three of the list just read.
     case youtubeMore
     /// "İkinciyi aç": a video of the list just read, counted from its top; 0 = the last one read.
@@ -512,9 +514,11 @@ enum SystemCommandParser {
         let polite = #"(?: lütfen)?$"#
 
         if let number = YouTubeList.pick(in: raw, requireVerb: true) { return .youtubePick(number) }
-        // "YouTube'u aç", "YouTube'da ne var", "YouTube önerilerini oku", "YouTube'a gir".
-        if matches(raw, #"^\#(youtube)(?:'?y?[uü]|'?y?a)? (?:aç|açar mısın|gir|git)\#(polite)"#)
-            || matches(raw, #"^(?:(?:bugün|bu gün|şimdi) )?\#(youtube)\#(at) (?:(?:bugün|bu gün|şimdi) )?(?:ne|neler) (?:var|önerili?yor|izlesem|izleyebilirim)(?: bakalım| bana söyle| söyle| oku)?\#(polite)"#)
+        if matches(raw, #"^\#(youtube)(?:'?y?[uü]|'?y?a)? (?:aç|açar mısın|gir|git)\#(polite)"#) {
+            return .youtubeOpen
+        }
+        // "YouTube'da ne var", "YouTube önerilerini oku".
+        if matches(raw, #"^(?:(?:bugün|bu gün|şimdi) )?\#(youtube)\#(at) (?:(?:bugün|bu gün|şimdi) )?(?:ne|neler) (?:var|önerili?yor|izlesem|izleyebilirim)(?: bakalım| bana söyle| söyle| oku)?\#(polite)"#)
             || matches(raw, #"^\#(youtube)\#(at) (?:(?:bugün|bu gün|şimdi) )?(?:hangi videolar var|neler varmış|ne varmış|ne izleyeyim|neler öneriliyor)\#(polite)"#)
             || matches(raw, #"^\#(youtube)(?:'?(?:daki|da|de))? (?:(?:bugünkü|yeni) )?(?:videoları|önerileri|önerilerini|video başlıklarını)(?: bana)? (?:oku|söyle|göster|listele)\#(polite)"#)
             || matches(raw, #"^\#(youtube)(?:'?n?[uü]n)? (?:önerileri|önerilerini|ana ?sayfası|ana ?sayfasını)(?: oku| söyle| aç| neler)?\#(polite)"#) {

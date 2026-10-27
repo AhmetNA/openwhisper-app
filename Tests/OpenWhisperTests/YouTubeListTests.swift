@@ -4,7 +4,10 @@ import JavaScriptCore
 
 final class YouTubeListTests: XCTestCase {
     func testHomeCommands() {
-        for text in ["YouTube'u aç", "Hey Jarvis, YouTube'da ne var?", "YouTube önerilerini oku", "YouTube'a gir",
+        for text in ["YouTube'u aç", "YouTube'a gir", "Jarvis, YouTube'u açar mısın"] {
+            XCTAssertEqual(SystemCommandParser.parse(text), .browser(.youtubeOpen), text)
+        }
+        for text in ["Hey Jarvis, YouTube'da ne var?", "YouTube önerilerini oku",
                      "YouTube'da bugün ne var?", "Bugün YouTube'da ne var?", "YouTube da bu gün neler var",
                      "YouTube'da bugün hangi videolar var", "YouTube'daki videoları oku",
                      "YouTube'da ne izleyeyim", "YouTube'da şimdi neler öneriliyor",
@@ -164,6 +167,7 @@ final class YouTubeListTests: XCTestCase {
 extension VideoScriptCompileTests {
     func testYouTubeScriptsCompile() throws {
         XCTAssertEqual(try compile(YouTubeList.readScript(path: "/results")), "")
+        XCTAssertEqual(try compile(YouTubeList.videoTabScript), "")
         XCTAssertEqual(try compile(YouTubeList.replaceTabScript("https://www.youtube.com/watch?v=x")), "")
     }
 

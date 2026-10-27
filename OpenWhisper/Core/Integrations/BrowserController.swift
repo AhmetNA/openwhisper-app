@@ -72,6 +72,9 @@ enum BrowserController {
         case .youtubeHome:
             guard let url = URL(string: "https://www.youtube.com/") else { return "Adres açılamadı" }
             return await YouTubeList.read(url, path: "/") { await open($0, done: "YouTube açıldı") }
+        case .youtubeOpen:
+            if let status = await YouTubeList.returnToVideo() { return status }
+            return await perform(.youtubeHome)
         case .youtubeMore:
             return YouTubeList.more()
         case .youtubeTitle(let title):

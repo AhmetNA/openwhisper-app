@@ -90,6 +90,57 @@ enum YouTubeList {
         return BrowserController.failures.contains(status) ? status : done
     }
 
+    /// "YouTube'u aç" with a video open in Safari: its tab comes to the front as it is, never
+    /// reloaded; a paused video plays on from where it was, a playing one is left alone.
+    /// nil when no tab has a video, so the home page opens instead.
+    static func returnToVideo() async -> String? {
+        let result = await Task.detached { OSAScriptRunner.run(["-e", videoTabScript], timeout: 4) }.value
+        owLog("[YouTube] Back to the video tab → \(result ?? "script failed")")
+        switch result {
+        case "playing": return "YouTube'daki videoya geçildi"
+        case "started": return "Video kaldığı yerden devam ediyor"
+        case "switched": return "YouTube'daki videoya geçildi"
+        default: return nil
+        }
+    }
+
+    static let videoTabScript = """
+        if application id "com.apple.Safari" is not running then return "missing"
+        tell application id "com.apple.Safari"
+            set found to missing value
+            set foundWindow to missing value
+            try
+                if URL of current tab of front window contains "youtube.com/watch" then
+                    set found to current tab of front window
+                    set foundWindow to front window
+                end if
+            end try
+            if found is missing value then
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        try
+                            if URL of t contains "youtube.com/watch" then
+                                set found to contents of t
+                                set foundWindow to contents of w
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if found is not missing value then exit repeat
+                end repeat
+            end if
+            if found is missing value then return "missing"
+            set current tab of foundWindow to found
+            set index of foundWindow to 1
+            activate
+            try
+                return (do JavaScript "(function(){var v=document.querySelector('video');if(!v)return 'switched';if(v.paused&&!v.ended){v.play();return 'started'}return 'playing'})()" in found) as text
+            on error
+                return "switched"
+            end try
+        end tell
+        """
+
     /// Read the live page, including the right-hand recommendations on /watch. Never
     /// choose from the old spoken-list cache: the user may have navigated or scrolled.
     @MainActor static func playTitle(_ title: String) async -> String? {
