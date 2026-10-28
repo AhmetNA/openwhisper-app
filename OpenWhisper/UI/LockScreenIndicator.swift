@@ -41,8 +41,8 @@ final class LockScreenIndicatorController {
         }
         let window = window ?? makeWindow(appState: appState)
         fitToScreen()
-        SkyLightSpace.shared?.add(window)
         window.orderFrontRegardless()
+        SkyLightSpace.shared?.add(window)
         owLog("[LockScreen] Indicator shown")
     }
 
@@ -92,13 +92,16 @@ private final class SkyLightSpace {
         }
         connection = unsafeBitCast(mainConnection, to: MainConnection.self)()
         space = unsafeBitCast(spaceCreate, to: SpaceCreate.self)(connection, 1, 0)
-        _ = unsafeBitCast(setLevel, to: SpaceSetLevel.self)(connection, space, 100)
-        _ = unsafeBitCast(showSpaces, to: ShowSpaces.self)(connection, [space] as CFArray)
+        // 400: the level the notification center uses over the lock screen; 100 stayed under it.
+        let levelResult = unsafeBitCast(setLevel, to: SpaceSetLevel.self)(connection, space, 400)
+        let showResult = unsafeBitCast(showSpaces, to: ShowSpaces.self)(connection, [space] as CFArray)
+        owLog("[LockScreen] SkyLight space \(space) (level \(levelResult), show \(showResult))")
         self.addWindows = unsafeBitCast(addWindows, to: AddWindows.self)
     }
 
     func add(_ window: NSWindow) {
-        _ = addWindows(connection, space, [window.windowNumber] as CFArray, 7)
+        let result = addWindows(connection, space, [window.windowNumber] as CFArray, 7)
+        owLog("[LockScreen] Window \(window.windowNumber) moved to space \(space) (\(result))")
     }
 }
 
