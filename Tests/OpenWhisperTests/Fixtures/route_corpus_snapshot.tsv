@@ -53,8 +53,8 @@ voice	Bye Fiat.	none
 voice	Ceci use the six-cent.	none
 voice	Cloud kodu kapat.	none
 voice	Daha ilan gelip şeyler açısına.	none
-voice	Developer moda aç.	system:developerMode
-voice	Devmodo Aç	system:developerMode
+voice	Developer moda aç.	system:scene("Developer modu")
+voice	Devmodo Aç	system:scene("Developer modu")
 voice	Ekranı baya bir yukarı kaydırır.	system:scroll(up: true, large: true)
 voice	Eller serbest notta	none
 voice	Evet şu anda mesela cümle ortasında bir düşüncem	none
@@ -171,8 +171,8 @@ voice	Bluetooth'u aç.	system:bluetooth(on: true)
 voice	Bluetooth'u kapat.	system:bluetooth(on: false)
 voice	Bugün ne var?	system:briefing(dayOffset: 0)
 voice	Cervis yarın saat 8'de bana toplantıyı hatırlat.	reminder
-voice	Dev Modu Aç	system:developerMode
-voice	Developer modu aç.	system:developerMode
+voice	Dev Modu Aç	system:scene("Developer modu")
+voice	Developer modu aç.	system:scene("Developer modu")
 voice	Ekran görüntüsü al.	system:screenshot
 voice	Ekranı baya bir yukarı kaydı.	system:scroll(up: true, large: true)
 voice	Ekranı baya bir yukarı kaydır.	system:scroll(up: true, large: true)

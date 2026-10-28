@@ -70,6 +70,18 @@ struct JarvisReply {
             case .pause, .mute(true): return ack()
             default: return nil
             }
+        case .openFile:
+            // The name says which file it picked, so a wrong guess is caught at once. A file
+            // name may contain "yok"; only the fixed statuses are failures.
+            guard status.hasPrefix("Açılıyor: ") else { return failure(Self.speakable(status)) }
+            let name = String(status.dropFirst("Açılıyor: ".count))
+            return answer("Açıyorum: " + Self.speakable((name as NSString).deletingPathExtension) + ".")
+        case .window, .reading(.stop):
+            // The window moving, or the voice stopping, is the answer.
+            return Self.isFailure(status) ? failure(Self.speakable(status)) : nil
+        case .reading:
+            // The reading itself follows.
+            return status.hasPrefix("Okunuyor") || status == "Okumaya devam ediliyor" ? nil : failure(Self.speakable(status))
         default:
             if Self.isFailure(status) { return failure(Self.speakable(status)) }
             // "Safari zaten kapalı": worth saying instead of a plain ack.
@@ -78,6 +90,12 @@ struct JarvisReply {
             }
             return ack()
         }
+    }
+
+    /// A scene: one sentence for all of its steps, naming the ones that didn't work.
+    mutating func scene(_ name: String, failed: [String]) -> String {
+        guard !failed.isEmpty else { return addressing("\(name) hazır.") }
+        return answer("\(name) hazır, ama şunlar olmadı: \(failed.joined(separator: ", ")).")
     }
 
     /// Spotify: a short ack, never a description of what plays. The caller holds the music

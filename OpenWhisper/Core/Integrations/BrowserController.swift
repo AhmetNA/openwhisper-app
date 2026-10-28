@@ -129,6 +129,30 @@ enum BrowserController {
         return summary
     }
 
+    /// What "bu makaleyi oku" reads: the paragraphs of the page in the front Safari tab, without
+    /// menus and links. Needs Safari's "Allow JavaScript from Apple Events"; without it the
+    /// whole page text. Another app in front: the text of its window.
+    static func articleText() -> (title: String, text: String)? {
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != bundleID, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            return ScreenReader.windowText(of: front, limit: 60000)
+        }
+        guard hasWindow() else { return nil }
+        let paragraphs = "(function(){var r=document.querySelector('article')||document.querySelector('main')||document.body;return Array.from(r.querySelectorAll('h1,h2,h3,p,li')).map(function(e){return e.innerText.trim();}).filter(function(t){return t.length>=40||/[.!?:]$/.test(t)&&t.length>=15;}).join('\\\\n');})()"
+        let script = """
+            tell application "Safari"
+                set t to current tab of front window
+                return (name of t) & linefeed & (do JavaScript "\(paragraphs)" in t)
+            end tell
+            """
+        if let result = OSAScriptRunner.run(["-e", script], timeout: 6),
+           let newline = result.firstIndex(of: "\n") {
+            let text = result[result.index(after: newline)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.count >= 80 { return (String(result[..<newline]), text) }
+        }
+        return currentPage()
+    }
+
     private static func currentPage() -> (title: String, text: String)? {
         var error: NSDictionary?
         let script = NSAppleScript(source: """

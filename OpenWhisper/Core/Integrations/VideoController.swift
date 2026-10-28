@@ -209,6 +209,14 @@ enum VideoController {
         }
     }
 
+    /// A YouTube video in the front Safari tab, with Safari in front: "tam ekran yap" is then
+    /// the video's, otherwise the front window's (`WindowManager`).
+    static func youTubeVideoInFront() -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == safariBundleID else { return false }
+        let url = OSAScriptRunner.run(["-e", #"tell application id "com.apple.Safari" to return URL of current tab of front window"#], timeout: 3)
+        return url?.contains("youtube.com/watch") == true
+    }
+
     // MARK: - Other players
 
     /// Play/pause for whatever else holds Now Playing (Chrome, Stremio, IINA, Safari without

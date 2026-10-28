@@ -42,6 +42,7 @@ extension AppState {
         llmCleanup = LLMCleanup(model: ollamaModel)
         if damgaEnabled && language == "tr" { Task { await DamgaNormalizer.shared.prepare() } }
         textInjector = TextInjector()
+        ClipboardHistory.shared.start()
         flowBarController = FlowBarController(appState: self)
         typedRequestPanel = TypedRequestPanelController(appState: self)
         lockScreenIndicator = LockScreenIndicatorController(appState: self)

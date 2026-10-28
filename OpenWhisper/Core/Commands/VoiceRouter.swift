@@ -158,17 +158,17 @@ enum VoiceRouter {
             if let steps = CommandRegistry.plan(trimmed, context: context) { return .commands(steps) }
             // A Jarvis session can run on after the command ("Şarkıyı durdur. Neden. Var
             // öyle…" when the user turns to someone else): if the whole transcript is no
-            // command, the first sentence alone may be. Developer mode opens apps and starts
-            // music: only when it is the whole transcript.
+            // command, the first sentence alone may be. A standalone command (a scene, a
+            // clipboard send) only when it is the whole transcript.
             if let command = CommandRegistry.match(trimmed, in: CommandRegistry.commandDomains, context: context)
                 ?? firstSentence.flatMap({ CommandRegistry.match($0, in: CommandRegistry.systemDomains, context: context) })
-                    .flatMap({ $0 == .system(.developerMode) ? nil : $0 }) {
+                    .flatMap({ $0.isStandalone ? nil : $0 }) {
                 return .command(command)
             }
             if facts.commandAmongPlayback,
                let command = sentences(of: trimmed).lazy
                 .compactMap({ CommandRegistry.match($0, in: CommandRegistry.systemDomains, context: context) })
-                .first(where: { $0 != .system(.developerMode) }) {
+                .first(where: { !$0.isStandalone }) {
                 return .command(command)
             }
             if let deletion = ReminderManager.deletionRequest(trimmed) { return .reminderDeletion(deletion) }

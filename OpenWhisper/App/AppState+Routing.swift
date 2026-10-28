@@ -418,8 +418,7 @@ extension AppState {
                     }
                     guard let app = targetApp, let conversation = pasteContext.conversation,
                           await conversation.restore(in: app) else {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(initialText, forType: .string)
+                        _ = ClipboardHistory.write(initialText)
                         let reason = pasteContext.conversation == nil
                             ? "Kayıt başında sohbet kimliği alınamadı"
                             : "Kaydın başladığı sohbete dönülemedi"
@@ -651,15 +650,54 @@ extension AppState {
                 CommandRegistry.Context(
                     ringing: timers.ringing != nil, timerActive: !timers.timers.isEmpty,
                     installedApps: focus.map { $0.frontFirst(SystemController.installedApps()) } ?? SystemController.installedApps(),
-                    shortcuts: SystemController.shortcutNames)
+                    shortcuts: SystemController.shortcutNames,
+                    scenes: SceneStore.load().map(\.name),
+                    readingPaused: ArticleReader.shared.isPaused,
+                    readingJustCut: ArticleReader.shared.wasJustCut)
+            }
+
+            /// A scene's steps, each parsed as if it were said on its own; the ones no rule
+            /// reads are named in the answer.
+            @MainActor func sceneSteps(_ name: String) -> (steps: [MultiCommandSplitter.Step<VoiceCommand>], unknown: [String]) {
+                let key = DailyCommandParser.sceneKey(name)
+                guard let scene = SceneStore.load().first(where: { DailyCommandParser.sceneKey($0.name) == key }) else { return ([], [name]) }
+                let context = commandContext()
+                var steps: [MultiCommandSplitter.Step<VoiceCommand>] = []
+                var unknown: [String] = []
+                for text in scene.steps {
+                    let command = CommandRegistry.match(text, context: context)
+                    // Of the agent commands only "Claude Code'da yeni session aç" runs as a step.
+                    let runs: Bool
+                    if case .agent(let dictation)? = command {
+                        runs = dictation.body.isEmpty && dictation.session == .new && dictation.project == nil
+                    } else {
+                        runs = command.map { !$0.isStandalone } ?? false
+                    }
+                    if runs, let command {
+                        steps.append(MultiCommandSplitter.Step(text: text, command: command))
+                    } else {
+                        unknown.append(text)
+                    }
+                }
+                owLog("[Scene] \(name): \(steps.map { "'\($0.text)' → \($0.command)" }.joined(separator: ", "))\(unknown.isEmpty ? "" : "; unknown: \(unknown)")")
+                return (steps, unknown)
             }
 
             /// Runs the steps in order and answers once for all of them.
             @MainActor func runCommands(_ steps: [MultiCommandSplitter.Step<VoiceCommand>], output: String) async {
                 self.lastTranscription = text
                 let actionStartedAt = session.latency.timestamp()
+                var steps = steps
                 var statuses: [String] = []
                 var replies: [String?] = []
+                // "Çalışma modu": its steps run here in its place, answered with one sentence.
+                var scene: (name: String, failed: [String])?
+                if steps.count == 1, case .system(.scene(let name)) = steps[0].command {
+                    let expanded = sceneSteps(name)
+                    steps = expanded.steps
+                    scene = (name, expanded.unknown)
+                }
+                var startsReading = false
                 // After "Safari'ye geç", later steps belong to the app switched to: Spotify gives
                 // focus back to this app if a cold launch stole it.
                 var stepTargetApp = session.targetApp
@@ -680,7 +718,16 @@ extension AppState {
                         ran.append(step.command)
                         statuses.append(status)
                         replies.append(self.jarvisReply.timer(timerCommand, status: status))
-                    case .system(let command):
+                    case .system(let parsed):
+                        var command = parsed
+                        // "Tam ekran yap": the YouTube video in front, else the window ("Claude'u tam
+                        // ekran yap" names its app).
+                        if parsed == .video(.fullscreen) {
+                            let named = DailyCommandParser.fullscreenTarget(step.text, installedApps: SystemController.installedApps())
+                            if (named != nil && named != "Safari") || !VideoController.youTubeVideoInFront() {
+                                command = .window(WindowAction(app: named, position: .fullscreen))
+                            }
+                        }
                         if step.command.endsSession && command != .disableWakeWord {
                             // Say everything before the Mac stops listening.
                             if session.isVoiceCommand {
@@ -694,7 +741,7 @@ extension AppState {
                         if case .video = command, SystemCommandParser.mentionsYouTube(step.text) {
                             youTubeStatus = await BrowserController.prepareYouTubeVideo()
                         }
-                        var status: String
+                        let status: String
                         if let youTubeStatus {
                             status = youTubeStatus
                         } else if case .video(let action) = command, SystemCommandParser.mentionsYouTube(step.text) {
@@ -708,27 +755,16 @@ extension AppState {
                             commandFollowUp = nil
                             conversationContinuationApp = nil
                         }
-                        if command == .developerMode {
-                            // ChatGPT, still launching behind Claude, can take the front while
-                            // Claude is being activated; try again once its launch has settled.
-                            var claude: NSRunningApplication?
-                            for _ in 0..<3 where claude == nil {
-                                claude = await AgentAppActivator.activate(.claudeCode)
-                            }
-                            if let app = claude,
-                               await ClaudeSessionNavigator.openNewSession(app) {
-                                conversationContinuationApp = app
-                                status += " · Claude Code’da yeni sohbet hazır"
-                            } else {
-                                status += " · Claude Code’da yeni sohbet açılamadı"
-                            }
+                        if case .reading(let action) = command, action != .stop, !JarvisReply.isFailure(status) {
+                            // Jarvis reads over nothing: the paused media stays paused.
+                            startsReading = true
+                            resumeMediaAfterCommand = false
                         }
-                        // Liked Songs now play; don't resume what the session paused over them.
-                        if command == .developerMode { resumeMediaAfterCommand = false }
                         // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
                         // lets the video the recording paused continue, and so does a failed command.
                         if case .video(let action) = command, action.changesPlayback,
                            !VideoController.failures.contains(status) { resumeMediaAfterCommand = false }
+                        if command == .video(.play) { ArticleReader.shared.forget() }
                         switch command {
                         case .switchToAgent(let agent):
                             stepTargetApp = NSWorkspace.shared.frontmostApplication
@@ -756,6 +792,7 @@ extension AppState {
                         let message = SpotifyManager.shared.takeResultMessage(for: request)
                         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
                         if handled, !resumes { resumeMediaAfterCommand = false }
+                        if handled { ArticleReader.shared.forget() }
                         if handled { ran.append(step.command) }
                         statuses.append(handled ? "Spotify: \(step.text)" : "Spotify komutu uygulanamadı")
                         if handled {
@@ -764,10 +801,32 @@ extension AppState {
                         } else {
                             replies.append(self.jarvisReply.failure(speaksFailure ? message ?? "Spotify komutunu uygulayamadım" : "Spotify komutunu uygulayamadım"))
                         }
+                    case .agent(let dictation) where dictation.body.isEmpty && dictation.session == .new && dictation.project == nil:
+                        // A scene's "Claude Code'da yeni session aç". An app still launching behind
+                        // can take the front while this one is activated; try again once it settled.
+                        let agent = dictation.target ?? .claudeCode
+                        var app: NSRunningApplication?
+                        for _ in 0..<3 where app == nil { app = await AgentAppActivator.activate(agent) }
+                        var opened = false
+                        if let app {
+                            opened = agent == .claudeCode ? await ClaudeSessionNavigator.openNewSession(app)
+                                : await CodexSessionNavigator.openNewThread(app, folder: nil)
+                        }
+                        if opened, let app, steps.last?.text == step.text { conversationContinuationApp = app }
+                        let status = opened ? "\(agent.displayName)’da yeni sohbet hazır" : "\(agent.displayName)’da yeni sohbet açılamadı"
+                        owLog("[Result] Agent new session: \(status)")
+                        ran.append(step.command)
+                        statuses.append(status)
+                        replies.append(opened ? nil : self.jarvisReply.failure(status))
                     case .agent:
                         // Never a step: `CommandRegistry` keeps agent dictation on its own route.
                         owLog("[Route] agent dictation reached the command runner; skipped")
                     }
+                }
+                if let scene {
+                    let failed = scene.failed + zip(steps, statuses).filter { JarvisReply.isFailure($0.1) }.map(\.0.text)
+                    replies = [self.jarvisReply.scene(scene.name, failed: failed)]
+                    if steps.isEmpty { statuses = ["\(scene.name) sahnesi bulunamadı"] }
                 }
                 self.lastCommandUndo = CommandUndo.steps(undoing: ran)
                 session.latency.record(.action, since: actionStartedAt, detail: output)
@@ -779,11 +838,19 @@ extension AppState {
                 if !summary.isEmpty {
                     self.showFlowBarMessage(summary, durationMs: summary.count > 40 ? 6000 : lone ? 2500 : 3500)
                 }
-                // The Mac stops listening after sleep / lock; developer mode is a whole setup.
-                if conversationContinuationApp == nil, !ran.isEmpty, !ran.contains(where: { $0.endsSession || $0 == .system(.developerMode) }) {
+                // The Mac stops listening after sleep / lock; a scene is a whole setup, and a
+                // reading talks on for minutes.
+                if conversationContinuationApp == nil, scene == nil, !startsReading, !ran.isEmpty, !ran.contains(where: \.endsSession) {
                     commandFollowUp = .some(ran.reversed().lazy.compactMap(CommandFollowUp.domain(of:)).first)
                 }
                 if session.isVoiceCommand { await speakAfterCommand(self.jarvisReply.combined(replies)) }
+                if startsReading {
+                    if self.voiceRepliesEnabled {
+                        ArticleReader.shared.start { [weak self] speaking in self?.jarvisActivity = speaking ? .speaking : .none }
+                    } else {
+                        self.showFlowBarMessage("Sesli cevap kapalı; okuyamam", durationMs: 3500)
+                    }
+                }
             }
 
             /// Says a command's reply; the follow-up window (`commandFollowUp`) opens as the
@@ -1470,6 +1537,17 @@ extension AppState {
 
             // "20 dakikalık alarm kur", "Bluetooth'u kapat", "videoyu durdur", "YouTube'da lofi
             // ara", "yarın 3'te toplantı ekle".
+            case .command(.system(.clipboard(.sendWhatsApp(let name)))):
+                // "Kopyaladığımı Ali'ye at": read back and sent only after "evet", like a dictated message.
+                owLog("[Route] clipboard to WhatsApp")
+                session.latency.finishDecision(route: "WhatsApp mesajı")
+                self.lastTranscription = text
+                guard let body = ClipboardHistory.shared.latest else {
+                    await say(self.jarvisReply.failure("Panoda metin yok"), durationMs: 3000)
+                    return
+                }
+                await sayWhatsApp(await self.whatsAppSender.prepare(WhatsAppOutgoing(recipient: name, body: body)))
+
             case .command(let command):
                 let isTimer: Bool
                 switch command {

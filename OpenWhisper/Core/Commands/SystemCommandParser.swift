@@ -63,15 +63,23 @@ enum SystemCommand: Equatable, Sendable {
     case briefing(dayOffset: Int)
     /// A Shortcuts.app shortcut by its exact name.
     case runShortcut(String)
-    /// "Developer modu aç": opens Claude and ChatGPT/Codex, sets the volume to 40% and
-    /// plays Liked Songs in Spotify (`SystemController.startDeveloperMode`).
-    case developerMode
+    /// "Çalışma modu", "developer modu aç": a scene of the scenes file, by its name there
+    /// (`SceneStore`). Its steps are voice commands, run one after the other.
+    case scene(String)
     /// "Yarın saat 3'te Mehmet'le toplantı ekle" (`CalendarEventParser`).
     case calendarEvent(CalendarEventParser.Event)
     /// Safari tabs, searches and "bu sayfayı özetle" (`BrowserController`).
     case browser(BrowserAction)
     /// The video playing in Safari: pause, seek, speed, subtitles (`VideoController`).
     case video(VideoAction)
+    /// "İndirilenlerdeki son PDF'i aç" (`FileFinder`).
+    case openFile(FileQuery)
+    /// "Safari sola", "bunu diğer ekrana at" (`WindowManager`).
+    case window(WindowAction)
+    /// "Panodaki son linki aç" (`ClipboardHistory`).
+    case clipboard(ClipboardAction)
+    /// "Bu makaleyi oku", "devam et", "dur" (`ArticleReader`).
+    case reading(ReadingAction)
 }
 
 enum BrowserAction: Equatable, Sendable {
@@ -151,8 +159,10 @@ enum SystemCommandParser {
     /// `installedApps`: app names to resolve "X'i aç / kapat" against (see `SystemController`).
     /// `shortcuts`: names from `shortcuts list`, for "X kısayolunu çalıştır".
     /// The mail reply, calendar, browser, video and Mac rules, in `CommandRegistry` order.
-    static func parse(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], now: Date = Date()) -> SystemCommand? {
-        let context = CommandRegistry.Context(installedApps: installedApps, shortcuts: { shortcuts }, now: now)
+    static func parse(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], scenes: [String] = [],
+                      readingPaused: Bool = false, readingJustCut: Bool = false, now: Date = Date()) -> SystemCommand? {
+        let context = CommandRegistry.Context(installedApps: installedApps, shortcuts: { shortcuts }, scenes: scenes,
+                                              readingPaused: readingPaused, readingJustCut: readingJustCut, now: now)
         guard case .system(let command)? = CommandRegistry.match(text, in: CommandRegistry.systemDomains, context: context)
         else { return nil }
         return command
@@ -160,7 +170,8 @@ enum SystemCommandParser {
 
     /// Everything but mail replies, calendar, browser requests and video: Wi-Fi, apps, mail,
     /// brightness, …; `CommandRegistry` runs those first.
-    static func parseMac(_ text: String, installedApps: [String] = [], shortcuts: [String] = []) -> SystemCommand? {
+    static func parseMac(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], scenes: [String] = [],
+                         readingPaused: Bool = false, readingJustCut: Bool = false) -> SystemCommand? {
         var cleaned = text.lowercased(with: locale)
             .replacingOccurrences(of: #"[.,!?;:"“”]"#, with: " ", options: .regularExpression)
         // A leading call to the assistant or a filler is not part of the command.
@@ -174,12 +185,17 @@ enum SystemCommandParser {
         if matches(cleaned, #"^(?:(?:beni )?dinlemeyi (?:bırak|bırakır mısın|kapat|kapatır mısın|durdur|kes)|(?:beni )?dinleme|mikrofonu (?:kapat|kapatır mısın|kapa|sustur)|(?:sesle (?:başlatmayı|uyandırmayı)|sesli uyandırmayı|hey jarvis(?: ile)? uyandırmayı) (?:kapat|kapatır mısın|devre dışı bırak))(?: lütfen)?$"#) {
             return .disableWakeWord
         }
-        if isDeveloperMode(cleaned) { return .developerMode }
+        if isDeveloperMode(cleaned) { return .scene(developerScene) }
         // First, and with a longer limit: shortcut names are free text ("Wi-Fi ile Sabah Özeti")
         // that would otherwise read as a Wi-Fi or app command.
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
         // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
         if cleaned.split(separator: " ").count <= 12, let search = parseWhatsAppSearch(cleaned) { return search }
+        // Before mail and WhatsApp: "kopyaladığımı WhatsApp'tan Ali'ye at" is the clipboard's.
+        if let daily = DailyCommandParser.parse(cleaned, installedApps: installedApps, scenes: scenes,
+                                                readingPaused: readingPaused, readingJustCut: readingJustCut) {
+            return daily
+        }
         guard cleaned.split(separator: " ").count <= maxWords else { return nil }
         if let briefing = parseBriefing(cleaned) { return briefing }
 
@@ -199,6 +215,9 @@ enum SystemCommandParser {
         }
         return parseApp(cleaned, installedApps: installedApps)
     }
+
+    /// The scene the developer-mode phrases below run; the scenes file holds its steps.
+    static let developerScene = "Developer modu"
 
     /// "Dev modu aç", "developer modunu başlat", "geliştirici moduna geç". It opens several apps
     /// and starts music, so the whole utterance must be the command: anything longer

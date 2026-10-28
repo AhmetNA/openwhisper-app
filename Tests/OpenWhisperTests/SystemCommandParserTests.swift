@@ -25,17 +25,17 @@ final class SystemCommandParserTests: XCTestCase {
     }
 
     func testDeveloperMode() {
-        XCTAssertEqual(SystemCommandParser.parse("Dev modu aç."), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, developer modunu aç."), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Developer mode'u aç"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Geliştirici modunu başlat"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Jarvis dev modunu açar mısın?"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Devmodo Aç"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Devmodu aç."), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Def modu aç"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Dev mod'u aç"), .developerMode)
-        XCTAssertEqual(SystemCommandParser.parse("Dev mod aç"), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Dev modu aç."), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, developer modunu aç."), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Developer mode'u aç"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Geliştirici modunu başlat"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Jarvis dev modunu açar mısın?"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Devmodo Aç"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Devmodu aç."), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Def modu aç"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Dev mod'u aç"), .scene("Developer modu"))
+        XCTAssertEqual(SystemCommandParser.parse("Dev mod aç"), .scene("Developer modu"))
         XCTAssertNil(SystemCommandParser.parse("Developer modu açınca ne oluyor"))
         XCTAssertNil(SystemCommandParser.parse("Yarın dev modu açmayı düşünüyorum"))
         XCTAssertNil(SystemCommandParser.parse("Developer modu aç ve sonra bana bir mail yaz"))
@@ -356,7 +356,7 @@ final class AppSwitchParserTests: XCTestCase {
         }
         XCTAssertEqual(SystemCommandParser.parse("Sonraki sekmeye geç", installedApps: apps), .browser(.nextTab))
         XCTAssertEqual(SystemCommandParser.parse("Sonraki videoya geç", installedApps: apps), .video(.next))
-        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç", installedApps: apps), .developerMode)
+        XCTAssertEqual(SystemCommandParser.parse("Developer moduna geç", installedApps: apps), .scene("Developer modu"))
         XCTAssertNotEqual(SpotifyManager.explicitIntent(in: "sonraki şarkıya geç"), nil)
     }
 

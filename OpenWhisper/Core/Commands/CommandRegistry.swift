@@ -15,6 +15,15 @@ enum VoiceCommand: Equatable {
         guard case .system(let command) = self else { return false }
         return ([.sleep, .displaySleep, .lockScreen, .disableWakeWord] as [SystemCommand]).contains(command)
     }
+
+    /// Only ever on its own, never one step of a chain or the first sentence of a longer
+    /// transcript: a scene opens apps and starts music, a clipboard send asks back first.
+    var isStandalone: Bool {
+        switch self {
+        case .system(.scene), .system(.clipboard(.sendWhatsApp)): return true
+        default: return false
+        }
+    }
 }
 
 /// Every rule-based command, in one table: each transcript, and each part of a
@@ -42,6 +51,12 @@ enum CommandRegistry {
         var installedApps: [String] = []
         /// Shortcuts.app names; only fetched when the text mentions a shortcut.
         var shortcuts: () -> [String] = { [] }
+        /// Scene names from the scenes file (`SceneStore`).
+        var scenes: [String] = []
+        /// A reading was cut short a moment ago, so a bare "devam et" / "dur" is about it.
+        var readingPaused = false
+        /// …and the cut was this very recording, so a bare "dur" is about it too.
+        var readingJustCut = false
         var now = Date()
     }
 
@@ -79,7 +94,9 @@ enum CommandRegistry {
         Entry(domain: .system, chains: true, sharesVerb: true) { text, context in
             let mentionsShortcut = text.range(of: SystemCommandParser.shortcutMention, options: [.regularExpression, .caseInsensitive]) != nil
             return SystemCommandParser.parseMac(text, installedApps: context.installedApps,
-                                                shortcuts: mentionsShortcut ? context.shortcuts() : [])
+                                                shortcuts: mentionsShortcut ? context.shortcuts() : [],
+                                                scenes: context.scenes, readingPaused: context.readingPaused,
+                                                readingJustCut: context.readingJustCut)
                 .map(VoiceCommand.system)
         },
         // The rule gate only (no model guess), so a song title with "ve" in it isn't cut
@@ -101,7 +118,7 @@ enum CommandRegistry {
         if let command = match(trimmed, in: [.timer, .video, .system], context: context) {
             switch command {
             case .system(.whatsAppSearch), .system(.calendarEvent), .system(.browser),
-                 .system(.mailReplyDraft): return false
+                 .system(.mailReplyDraft), .system(.openFile), .system(.clipboard(.sendWhatsApp)): return false
             default: return true
             }
         }
@@ -123,10 +140,10 @@ enum CommandRegistry {
         return nil
     }
 
-    /// One command of a chain. Developer mode opens apps and starts music: only ever on its own.
+    /// One command of a chain; never a standalone one.
     static func step(_ text: String, sharingVerb: Bool = false, context: Context) -> VoiceCommand? {
         let command = match(text, where: { $0.chains && (!sharingVerb || $0.sharesVerb) }, context: context)
-        return command == .system(.developerMode) ? nil : command
+        return command?.isStandalone == true ? nil : command
     }
 
     /// The commands in `text`, or nil for the single-command route: fewer than two, or one

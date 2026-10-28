@@ -372,9 +372,7 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
     }
 
     private func writeToClipboard(_ text: String) -> Bool {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        return pasteboard.setString(text, forType: .string)
+        ClipboardHistory.write(text)
     }
 
     private func resolveDestination(

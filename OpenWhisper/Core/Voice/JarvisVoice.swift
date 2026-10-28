@@ -256,25 +256,32 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
 
     /// Speaks sentences as they arrive, e.g. a chat reply the model is still writing: each one
     /// is synthesized while the one before it plays. Returns when all are spoken or it was
-    /// stopped. `onStart` runs when the first sentence starts playing. False when nothing
-    /// was heard (voice not ready, stopped before the first sentence).
+    /// stopped. `onStart` runs when the first sentence starts playing, `onSentence` with its
+    /// position each time one does. False when nothing was heard (voice not ready, stopped
+    /// before the first sentence).
     @discardableResult
-    func speak(sentences: AsyncStream<String>, onStart: () -> Void = {}) async -> Bool {
+    func speak(sentences: AsyncStream<String>, onStart: () -> Void = {}, onSentence: (Int) -> Void = { _ in }) async -> Bool {
         stop()
         let myGeneration = generation
         let started = Date()
-        let (clips, clipsContinuation) = AsyncStream<(String, Data)>.makeStream()
+        let (clips, clipsContinuation) = AsyncStream<(Int, String, Data)>.makeStream()
         let producer = Task { @MainActor [weak self] in
+            var position = 0
             for await sentence in sentences {
                 guard let self, !Task.isCancelled, myGeneration == self.generation else { break }
-                if let data = await self.audio(for: sentence) { clipsContinuation.yield((sentence, data)) }
+                if let data = await self.audio(for: sentence) { clipsContinuation.yield((position, sentence, data)) }
+                position += 1
             }
             clipsContinuation.finish()
         }
         sentenceProducer = producer
         var first = true
-        for await (sentence, data) in clips {
-            guard await play(data, text: sentence, started: started, generation: myGeneration, onStart: first ? onStart : {}) else { break }
+        for await (position, sentence, data) in clips {
+            let isFirst = first
+            guard await play(data, text: sentence, started: started, generation: myGeneration, onStart: {
+                if isFirst { onStart() }
+                onSentence(position)
+            }) else { break }
             first = false
         }
         producer.cancel()

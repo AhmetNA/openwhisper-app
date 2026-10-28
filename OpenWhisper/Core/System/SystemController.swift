@@ -57,61 +57,36 @@ enum SystemController {
             return summary.headline
         case .mailMarkAllRead:
             return await MailController.markAllRead() ? "Tüm mailler okundu işaretlendi" : "Mail'e erişilemedi"
-        case .developerMode: return await startDeveloperMode()
         case .calendarEvent(let event): return await CalendarController.add(event)
         case .browser(let action): return await BrowserController.perform(action)
         case .video(let action): return await VideoController.perform(action)
+        case .openFile(let query): return await FileFinder.open(query)
+        case .window(let action): return await WindowManager.perform(action)
+        case .clipboard(.openLink): return await ClipboardHistory.shared.openLatestLink()
+        case .reading(let action): return read(action)
+        // Run by the command runner, which needs the session (`AppState.runScene`, WhatsApp).
+        case .scene(let name): return "\(name) sahnesi burada çalıştırılamaz"
+        case .clipboard(.sendWhatsApp): return "Pano buradan gönderilemez"
         }
     }
 
-    // MARK: - Developer mode
+    // MARK: - Reading
 
-    /// Claude, then ChatGPT. On this Mac ChatGPT.app is the merged ChatGPT + Codex app
-    /// (bundle ID com.openai.codex); the older com.openai.chat is tried too, each app once.
-    private static let claudeBundleID = "com.anthropic.claudefordesktop"
-    private static let developerAppBundleIDs = [claudeBundleID, "com.openai.codex", "com.openai.chat"]
-    private static let developerModeVolume = 40
+    static let nothingToRead = "Okunacak metin bulunamadı"
+    static let nothingToResume = "Devam edecek bir okuma yok"
 
-    /// Volume first, so the music starts at 40%. Only Claude is activated: ChatGPT opens behind
-    /// it and Spotify stays behind both.
-    private static func startDeveloperMode() async -> String {
-        let volume = SystemVolume.set(developerModeVolume)
-        var opened: [String] = []
-        var seen = Set<URL>()
-        for bundleID in developerAppBundleIDs {
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
-                  seen.insert(url.standardizedFileURL).inserted else { continue }
-            let name = FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
-            let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = bundleID == claudeBundleID
-            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
-                if let error { owLog("[System] Developer mode: open \(name) failed: \(error)") }
-            }
-            opened.append(name)
-        }
-        let music = await SpotifyController.shared.playLikedSongs()
-        keepClaudeInFront()
-        owLog("[System] Developer mode: apps \(opened), volume \(volume.message), music \(music.message)")
-        let apps = opened.isEmpty ? "Claude ve ChatGPT bulunamadı" : opened.joined(separator: ", ") + " açıldı"
-        let sound = volume.succeeded ? "ses %\(developerModeVolume)" : volume.message
-        return "Developer modu: \(apps) · \(sound) · \(music.message)"
-    }
-
-    /// A cold-launching ChatGPT (or Spotify) can still take the front a few seconds later despite
-    /// `activates = false`, so Claude is brought back once its launch has settled.
-    private static func keepClaudeInFront() {
-        Task { @MainActor in
-            for delay: UInt64 in [1_500_000_000, 3_000_000_000] {
-                try? await Task.sleep(nanoseconds: delay)
-                // Only undo a developer-mode launch, never an app the user switched to meanwhile.
-                guard let front = NSWorkspace.shared.frontmostApplication,
-                      let frontID = front.bundleIdentifier, frontID != claudeBundleID,
-                      developerAppBundleIDs.contains(frontID) || frontID == "com.spotify.client",
-                      let claude = NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).first
-                else { continue }
-                owLog("[System] Developer mode: \(front.localizedName ?? frontID) took the front, bringing Claude back")
-                _ = await AgentAppActivator.bringToFront(claude)
-            }
+    /// Loads or checks the reading; the caller starts it after its reply (`ArticleReader.start`).
+    private static func read(_ action: ReadingAction) -> String {
+        let reader = ArticleReader.shared
+        switch action {
+        case .start:
+            guard let title = reader.load() else { return nothingToRead }
+            return "Okunuyor: \(title)"
+        case .resume:
+            return reader.isPaused ? "Okumaya devam ediliyor" : nothingToResume
+        case .stop:
+            reader.stop()
+            return "Okuma durdu"
         }
     }
 
