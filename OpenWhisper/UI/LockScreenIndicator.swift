@@ -154,17 +154,27 @@ struct LockScreenIndicatorView: View {
             .background(Capsule().fill(.black.opacity(0.45)))
             .overlay(Capsule().strokeBorder(.white.opacity(0.25 + voice * 0.6), lineWidth: 1.5))
         } else {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(statusColor.opacity(0.25))
+                    Circle()
+                        .strokeBorder(statusColor, lineWidth: 2)
+                    Image(systemName: statusIcon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                }
+                .frame(width: 44, height: 44)
+                .shadow(color: statusColor.opacity(0.6), radius: 8)
                 Text(statusText)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(.white)
             }
-            .foregroundStyle(.white.opacity(0.9))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(.black.opacity(0.35)))
+            .padding(.leading, 12)
+            .padding(.trailing, 22)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 22).fill(.black.opacity(0.5)))
+            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.2), lineWidth: 1))
         }
     }
 
@@ -172,6 +182,12 @@ struct LockScreenIndicatorView: View {
         if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "Jarvis düşünüyor" }
         if appState.jarvisActivity == .speaking { return "Jarvis konuşuyor" }
         return appState.wakeWordListening ? "Jarvis uyanık" : "Jarvis uyuyor"
+    }
+
+    private var statusIcon: String {
+        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "ellipsis" }
+        if appState.jarvisActivity == .speaking { return "speaker.wave.2.fill" }
+        return appState.wakeWordListening ? "ear" : "moon.zzz.fill"
     }
 
     private var statusColor: Color {
