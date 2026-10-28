@@ -175,9 +175,10 @@ extension AppState {
         // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
         // So does an external mic, which Mac playback must not reach either.
         // Not after a command: the user is judging the song or video it just started.
+        // A spoken "Jarvis" (often a false wake over the video) never pauses YouTube.
         let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
         if pausesMedia {
-            recordingMedia.begin(immediately: recordingMic != .mac)
+            recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord)
         }
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI

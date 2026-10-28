@@ -294,6 +294,19 @@ final class AudioDucker: @unchecked Sendable {
         }
     }
 
+    /// Lowers the volume by `fraction` of its current level (0.1 = 10% quieter), for media
+    /// that keeps playing through a voice session. `restore()` brings it back.
+    func duck(by fraction: Float) {
+        queue.async { [self] in
+            let deviceID = duckedDeviceID ?? volumeController.defaultOutputDeviceID()
+            guard let base = originalVolume ?? deviceID.flatMap({ volumeController.currentVolume(deviceID: $0) }) else {
+                owLog("[AudioDucker] duck(by:) aborted — could not read current volume")
+                return
+            }
+            performDuck(target: base * (1 - min(max(fraction, 0), 1)))
+        }
+    }
+
     /// Ramp system volume back up to its pre-dictation level over the configured duration.
     /// No-op if nothing is currently ducked.
     func restore() {

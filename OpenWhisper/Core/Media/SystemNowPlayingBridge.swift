@@ -210,6 +210,7 @@ enum OSAScriptRunner {
 
 enum ScriptedMediaPlayers {
     static let all: [ScriptedMediaPlayer] = [spotify, vlc, safari]
+    static let allSparingYouTube: [ScriptedMediaPlayer] = [spotify, vlc, safariSparingYouTube]
 
     /// The track ID is stable across pause/resume, unlike Spotify's MediaRemote content ID.
     static let spotify = AppleScriptMediaPlayer(
@@ -269,19 +270,28 @@ enum ScriptedMediaPlayers {
     /// marked ones that are still paused. Needs Safari > Settings > Advanced > "Show features
     /// for web developers", then Develop > "Allow JavaScript from Apple Events"; until then
     /// the script fails and Safari falls back to MediaRemote.
-    static let safari = AppleScriptMediaPlayer(
-        name: "Safari",
-        bundleID: "com.apple.Safari",
-        coveredBundleIDs: ["com.apple.Safari", "com.apple.WebKit.GPU"],
-        pauseSource: tabsScript(javaScript: """
-            (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused});\
-            document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused&&!m.ended){m.dataset.jarvisPaused='1';m.pause();n++}});return n})()
-            """, result: "tabs"),
-        resumeSource: tabsScript(javaScript: """
-            (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused;\
-            if(m.paused){m.play();n++}});return n})()
-            """, result: "true", otherwise: "false")
-    )
+    static let safari = safariPlayer(sparingYouTube: false)
+
+    /// For "Jarvis" wake sessions: YouTube tabs keep playing (only the volume dips), so a
+    /// false wake never stops the video. Same name, so its receipts resume through `safari`.
+    static let safariSparingYouTube = safariPlayer(sparingYouTube: true)
+
+    private static func safariPlayer(sparingYouTube: Bool) -> AppleScriptMediaPlayer {
+        let skip = sparingYouTube ? "if(location.hostname.split('.').slice(-2).join('.')==='youtube.com')return n;" : ""
+        return AppleScriptMediaPlayer(
+            name: "Safari",
+            bundleID: "com.apple.Safari",
+            coveredBundleIDs: ["com.apple.Safari", "com.apple.WebKit.GPU"],
+            pauseSource: tabsScript(javaScript: """
+                (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused});\(skip)\
+                document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused&&!m.ended){m.dataset.jarvisPaused='1';m.pause();n++}});return n})()
+                """, result: "tabs"),
+            resumeSource: tabsScript(javaScript: """
+                (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused;\
+                if(m.paused){m.play();n++}});return n})()
+                """, result: "true", otherwise: "false")
+        )
+    }
 
     /// Runs `javaScript` in every Safari tab and sums the counts it returns. A tab that can't
     /// run it is skipped, except for error 8 (JavaScript from Apple Events is off), which

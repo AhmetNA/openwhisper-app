@@ -86,6 +86,20 @@ final class AudioDuckerTests: XCTestCase {
         XCTAssertTrue(mockController.writtenVolumes.isEmpty, "Restore should be no-op when duck was skipped")
     }
 
+    // YouTube'u durdurmayan Jarvis oturumu sesi yalnızca %10 kısıyor ve geri açıyor.
+    func testDuckByFractionLowersTenPercentAndRestores() {
+        mockController.volumeToReturn = 0.5
+        ducker.duck(by: 0.1)
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(mockController.writtenVolumes.last ?? 0, 0.45, accuracy: 0.0001)
+
+        ducker.restore()
+        ducker.flushQueueForTesting()
+        for _ in 0..<100 { testScheduler.triggerTick() }
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(mockController.writtenVolumes.last ?? 0, 0.5, accuracy: 0.0001)
+    }
+
     // 2. Rampa 1.5 s'de hedefe varıyor, adım değerleri monoton artıyor.
     func testRestoreRampReachesTargetMonotonically() {
         let initialVolume: Float = 0.80

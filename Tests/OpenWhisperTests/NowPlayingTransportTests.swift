@@ -128,6 +128,15 @@ final class NowPlayingTransportTests: XCTestCase {
         }
     }
 
+    func testSparingYouTubeLeavesSafariToItsScript() {
+        let remote = Remote(listed: [playing], [paused])
+        let transport = NowPlayingTransport(remote: remote, players: [], youTubeSparingPlayers: [], wait: {})
+        let result = transport.pausePlayingItemsReportingLeftovers(sparingYouTube: true)
+        XCTAssertTrue(result.receipts.isEmpty)
+        XCTAssertTrue(result.leftPlaying)
+        XCTAssertTrue(remote.commands.isEmpty)
+    }
+
     func testRejectedPauseNeverProducesReceipt() {
         let remote = Remote(listed: [playing], [playing])
         remote.acceptsCommands = false

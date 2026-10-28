@@ -23,12 +23,18 @@ protocol RecordingMediaTransport {
     func pausePlayingItems() -> [MediaPlaybackSnapshot]
     /// Also says whether a playing item could not be paused.
     func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool)
+    /// `sparingYouTube` leaves YouTube videos playing (see `ScriptedMediaPlayers.safariSparingYouTube`).
+    func pausePlayingItemsReportingLeftovers(sparingYouTube: Bool) -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool)
     func resume(_ receipt: MediaPlaybackSnapshot)
 }
 
 extension RecordingMediaTransport {
     func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
         (pausePlayingItems(), false)
+    }
+
+    func pausePlayingItemsReportingLeftovers(sparingYouTube: Bool) -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
+        pausePlayingItemsReportingLeftovers()
     }
 }
 
@@ -41,6 +47,7 @@ final class RecordingMediaController {
     private let pauseDelay: TimeInterval
     private var active = false
     private var pendingPause: DispatchWorkItem?
+    private var duckedForYouTube = false
     private var receipts: [MediaPlaybackSnapshot] = []
     private let leftRunning = OSAllocatedUnfairLock(initialState: false)
 
@@ -55,16 +62,22 @@ final class RecordingMediaController {
 
     /// `immediately` skips the delay that lets a short Fn tap leave the music alone: for
     /// Bluetooth buds, whose mic hears the music played into the ear.
-    func begin(immediately: Bool = false) {
+    /// `sparingYouTube` (wake-word sessions) never pauses a YouTube video: the volume dips 10%
+    /// instead, so a false "Jarvis" barely disturbs it.
+    func begin(immediately: Bool = false, sparingYouTube: Bool = false) {
         queue.async { [self] in
             guard !active else { return }
             active = true
             leftRunning.withLock { $0 = true }
+            if sparingYouTube {
+                AudioDucker.shared.duck(by: 0.1)
+                duckedForYouTube = true
+            }
 
             let pause = DispatchWorkItem { [weak self] in
                 guard let self, self.active else { return }
                 self.pendingPause = nil
-                let result = self.transport.pausePlayingItemsReportingLeftovers()
+                let result = self.transport.pausePlayingItemsReportingLeftovers(sparingYouTube: sparingYouTube)
                 self.receipts = result.receipts
                 self.leftRunning.withLock { $0 = result.leftPlaying }
                 owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)" + (result.leftPlaying ? "; something is still playing" : ""))
@@ -86,6 +99,10 @@ final class RecordingMediaController {
             active = false
             pendingPause?.cancel()
             pendingPause = nil
+            if duckedForYouTube {
+                AudioDucker.shared.restore()
+                duckedForYouTube = false
+            }
             if resuming {
                 // Receipt order matters: MediaRemote players come first, while the one paused
                 // over the global route still holds it; scripted players can't steal it then.
@@ -134,15 +151,18 @@ struct NowPlayingTransport: RecordingMediaTransport {
 
     let remote: MediaRemoteAccess
     let players: [ScriptedMediaPlayer]
+    let youTubeSparingPlayers: [ScriptedMediaPlayer]
     let wait: () -> Void
 
     init(
         remote: MediaRemoteAccess = SystemNowPlayingBridge(),
         players: [ScriptedMediaPlayer] = ScriptedMediaPlayers.all,
+        youTubeSparingPlayers: [ScriptedMediaPlayer] = ScriptedMediaPlayers.allSparingYouTube,
         wait: @escaping () -> Void = { Thread.sleep(forTimeInterval: 0.1) }
     ) {
         self.remote = remote
         self.players = players
+        self.youTubeSparingPlayers = youTubeSparingPlayers
         self.wait = wait
     }
 
@@ -151,9 +171,15 @@ struct NowPlayingTransport: RecordingMediaTransport {
     }
 
     func pausePlayingItemsReportingLeftovers() -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
+        pausePlayingItemsReportingLeftovers(sparingYouTube: false)
+    }
+
+    func pausePlayingItemsReportingLeftovers(sparingYouTube: Bool) -> (receipts: [MediaPlaybackSnapshot], leftPlaying: Bool) {
         var scripted: [MediaPlaybackSnapshot] = []
-        var covered = Set<String>()
-        for player in players {
+        // Without its script, Safari's YouTube can't be told from its other tabs: MediaRemote
+        // leaves Safari alone then.
+        var covered: Set<String> = sparingYouTube ? ScriptedMediaPlayers.safari.coveredBundleIDs : []
+        for player in sparingYouTube ? youTubeSparingPlayers : players {
             switch player.pause() {
             case .unavailable:
                 continue
@@ -171,7 +197,8 @@ struct NowPlayingTransport: RecordingMediaTransport {
             $0.isPlaying && !covered.contains(Self.bundleID(of: $0)) && seen.insert($0.playerID).inserted
         }
         let paused = playing.compactMap { pause($0) }
-        return (paused + scripted, paused.count < playing.count)
+        // A spared video may still be playing.
+        return (paused + scripted, sparingYouTube || paused.count < playing.count)
     }
 
     /// Player IDs are "pid:bundle:player".
