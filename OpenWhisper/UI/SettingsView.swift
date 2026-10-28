@@ -331,8 +331,13 @@ struct SettingsView: View {
             HStack {
                 Text("DeepFilter")
                 Spacer()
-                Text(appState.displayedDeepFilterDecision.enabled ? "Açık" : "Kapalı")
-                    .foregroundStyle(appState.displayedDeepFilterDecision.enabled ? Color.green : Color.secondary)
+                if appState.bypassAudioProcessing {
+                    Text("Uygulanmıyor")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(appState.displayedDeepFilterDecision.enabled ? "Açık" : "Kapalı")
+                        .foregroundStyle(appState.displayedDeepFilterDecision.enabled ? Color.green : Color.secondary)
+                }
             }
             .font(.caption)
 
@@ -357,8 +362,8 @@ struct SettingsView: View {
 
     private var deepFilterSettingDescription: String {
         let decision = appState.displayedDeepFilterDecision
-        if decision.reason == "unprocessed" {
-            return "Filtre, ses yükseltme ve konuşmacı eleme kapalı."
+        if appState.bypassAudioProcessing || decision.reason == "unprocessed" {
+            return "Sese işlem uygulanmıyor; filtre, ses yükseltme ve konuşmacı eleme kapalı."
         }
         if decision.reason == "model unavailable" {
             return "Model hazır değil; kapalı."
