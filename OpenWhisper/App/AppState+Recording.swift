@@ -193,7 +193,7 @@ extension AppState {
         let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
         // A "Jarvis" over media whose voice hasn't matched yet pauses nothing until it does.
         let probationProfile = pausesMedia && recordingTrigger == .wakeWord && mediaPlaying
-            && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord && !bypassAudioProcessing
+            && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
             && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
         wakeProbation = probationProfile.map { WakeProbation(startTime: sessionStart, profile: $0) }
         // Scoring only, the audio is left alone: runs on the raw mic too.

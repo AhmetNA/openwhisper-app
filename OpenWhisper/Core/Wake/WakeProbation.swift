@@ -3,14 +3,15 @@ import Foundation
 /// A "Jarvis" heard over playing media whose voice didn't match the user's. Videos and songs
 /// woke Jarvis and paused them (28 Oct 2026: "people die in Mexico" at wake score 0.95, voice
 /// 0.21), so such a session pauses nothing and only turns the media down
-/// (`RecordingMediaController.begin(holdingPause:)`) until the user's voice confirms it: the
-/// wake clip's speaker check, or a window of what follows scoring at the wake threshold. Without
-/// it by `window` the session is dropped.
+/// (`RecordingMediaController.begin(holdingPause:)`) until the wake is confirmed: the wake
+/// clip's speaker check, a window of what follows scoring at the wake threshold, or Whisper
+/// hearing "Jarvis" in a weak wake. Without one by `window` the session is dropped.
 ///
 /// A plain hard reject would have lost about 1 in 15 of the user's own calls over media that day
 /// (voice 0.32–0.38 on the "Jarvis" clip); the command after it gets a second chance here.
 struct WakeProbation {
-    static let window: TimeInterval = 2
+    /// Long enough for Whisper's word check (~3 s with its second pass).
+    static let window: TimeInterval = 5
     static let checkInterval: TimeInterval = 0.5
 
     let startTime: TimeInterval

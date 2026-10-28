@@ -8,8 +8,8 @@ final class WakeProbationTests: XCTestCase {
     func testExpiresWithoutTheUsersVoice() {
         var probation = WakeProbation(startTime: 10, profile: profile)
         XCTAssertFalse(probation.record(score: 0.31, threshold: 0.4))
-        XCTAssertFalse(probation.expired(at: 11.9))
-        XCTAssertTrue(probation.expired(at: 12))
+        XCTAssertFalse(probation.expired(at: 14.9))
+        XCTAssertTrue(probation.expired(at: 15))
     }
 
     func testAWindowAtTheThresholdConfirmsOnce() {
