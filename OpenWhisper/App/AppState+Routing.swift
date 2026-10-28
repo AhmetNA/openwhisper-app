@@ -1107,6 +1107,19 @@ extension AppState {
                     }
                     return
                 }
+                // Spoken "son session'a …": the chat whose answer came in last, also one written to
+                // by hand. After a recap the recapped session stays the target.
+                if agent.session == .last, session.sendsToRecappedSession == nil, let target = agent.target {
+                    let chats = await Task.detached { AgentFinishedChat.load(target) }.value
+                    if let chat = AgentFinishedChat.newest(chats, excluding: nil) {
+                        owLog("[Agent] Last session → \"\(chat.title)\" (finished \(chat.finishedAt))")
+                        if target == .claudeCode {
+                            ClaudeSessionNavigator.rememberSession(id: chat.id, title: chat.title)
+                        } else {
+                            CodexSessionNavigator.rememberThread(id: chat.id, title: chat.title)
+                        }
+                    }
+                }
                 if agent.session == .last, agent.target != .claudeCode, CodexSessionNavigator.lastThread == nil {
                     await fail("Son sohbeti bilmiyorum", spoken: "son sohbeti bilmiyorum")
                     return
