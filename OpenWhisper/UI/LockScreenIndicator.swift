@@ -1,9 +1,11 @@
 import AppKit
+import IOKit.pwr_mgt
 import SwiftUI
 
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
 /// what Jarvis is doing; while Jarvis listens, your voice's waveform sits in the middle and a
-/// soft white glow along the screen's edges follows it.
+/// soft white glow along the screen's edges follows it. The lock screen turns the display off
+/// a few seconds after locking, so while Jarvis works on a command it is held on.
 ///
 /// Ordinary windows can't appear over the lock screen, so the window is moved into a SkyLight
 /// space with a high absolute level (private API, loaded at runtime; without it the window just
@@ -14,6 +16,7 @@ final class LockScreenIndicatorController {
     private var window: NSWindow?
     private var observers: [NSObjectProtocol] = []
     private var locked = RemoteControl.screenIsLocked
+    private var displayAssertion: IOPMAssertionID = 0
 
     init(appState: AppState) {
         self.appState = appState
@@ -23,6 +26,7 @@ final class LockScreenIndicatorController {
                 MainActor.assumeIsolated {
                     self?.locked = isLocked
                     self?.sync()
+                    self?.trackDisplayHold()
                 }
             })
         }
@@ -32,6 +36,35 @@ final class LockScreenIndicatorController {
             MainActor.assumeIsolated { self?.fitToScreen() }
         })
         sync()
+        trackDisplayHold()
+    }
+
+    /// Keeps the display on while locked and Jarvis listens, works, speaks or shows a result.
+    private func trackDisplayHold() {
+        let busy = withObservationTracking {
+            guard let appState else { return false }
+            return appState.lockScreenIndicatorEnabled
+                && (appState.recordingState != .idle || appState.jarvisActivity != .none || appState.flowBarMessage != nil)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.trackDisplayHold() }
+        }
+        holdDisplay(busy && locked)
+    }
+
+    private func holdDisplay(_ hold: Bool) {
+        guard hold != (displayAssertion != 0) else { return }
+        if hold {
+            var id: IOPMAssertionID = 0
+            guard IOPMAssertionCreateWithName(
+                kIOPMAssertPreventUserIdleDisplaySleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                "Jarvis kilit ekranında çalışıyor" as CFString, &id) == kIOReturnSuccess else { return }
+            displayAssertion = id
+            owLog("[LockScreen] Holding the display on while Jarvis works")
+        } else {
+            IOPMAssertionRelease(displayAssertion)
+            displayAssertion = 0
+            owLog("[LockScreen] Display released")
+        }
     }
 
     func sync() {
