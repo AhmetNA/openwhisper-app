@@ -1,5 +1,7 @@
 import AppKit
 import ApplicationServices
+import ScreenCaptureKit
+import Vision
 
 /// Reads the front window of an app over Accessibility: its visible text, for "bunu özetle"
 /// outside Safari.
@@ -51,6 +53,42 @@ enum ScreenReader {
         walk(window, depth: 0)
         let text = String(parts.joined(separator: "\n").prefix(limit))
         return (string(window, kAXTitleAttribute) ?? app.localizedName ?? "Pencere", text)
+    }
+
+    /// The front window read by OCR, for apps whose accessibility tree stays empty (many
+    /// Electron apps). Needs Screen Recording; nil without it or when nothing legible shows.
+    static func ocrWindowText(of app: NSRunningApplication, limit: Int = 6000) async -> (title: String, text: String)? {
+        guard CGPreflightScreenCaptureAccess() else {
+            owLog("[ScreenReader] OCR skipped: no Screen Recording permission")
+            return nil
+        }
+        let start = Date()
+        // The CG list is front to back, so the first normal window of the app is the one in front.
+        let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        guard let windowID = info.first(where: {
+                  ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
+                      && ($0[kCGWindowLayer as String] as? Int) == 0
+              })?[kCGWindowNumber as String] as? CGWindowID,
+              let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
+              let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }
+        let config = SCStreamConfiguration()
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        config.width = Int(window.frame.width * scale)
+        config.height = Int(window.frame.height * scale)
+        config.showsCursor = false
+        guard let image = try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: config) else { return nil }
+        let text = await Task.detached { () -> String in
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["tr-TR", "en-US"]
+            try? VNImageRequestHandler(cgImage: image).perform([request])
+            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            return String(lines.joined(separator: "\n").prefix(limit))
+        }.value
+        owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): \(text.count) chars in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
+        guard !text.isEmpty else { return nil }
+        return (window.title ?? app.localizedName ?? "Pencere", text)
     }
 
     // MARK: - AX helpers
