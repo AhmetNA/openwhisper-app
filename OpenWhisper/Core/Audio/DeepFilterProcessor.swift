@@ -65,8 +65,8 @@ final class DeepFilterProcessor {
         return raw
     }
 
-    init?() {
-        guard let modelPath = Bundle.main.path(forResource: "DeepFilterNet3_onnx", ofType: "tar.gz"),
+    init?(modelPath: String? = Bundle.main.path(forResource: "DeepFilterNet3_onnx", ofType: "tar.gz")) {
+        guard let modelPath,
               FileManager.default.fileExists(atPath: modelPath) else {
             owLog("[DeepFilter] Model resource not found; DeepFilterNet unavailable.")
             return nil

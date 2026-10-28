@@ -161,7 +161,6 @@ extension AppState {
         let sessionProfile = Self.sessionTargetSpeakerProfile(
             mic: recordingMic, mac: targetSpeakerProfile, buds: budsTargetSpeakerProfile, external: externalTargetSpeakerProfile
         )
-        let targetSpeakerFiltersSession = !bypassAudioProcessing && targetSpeakerEnabled && sessionProfile != nil
         if targetSpeakerEnabled && recordingMic != .mac {
             owLog(sessionProfile == nil
                 ? "[TargetSpeaker] \(recordingMic) input: speaker filter off (no \(recordingMic) profile)"
@@ -332,7 +331,9 @@ extension AppState {
         let session = RecordingTranscriptionSession(
             id: nextTranscriptionID,
             targetApp: targetApp,
-            targetSpeakerEnabled: !bypassProcessing && targetSpeakerFiltersTranscription && sessionProfile != nil,
+            // Runs on the raw mic too: on 30 raw external-mic recordings (29 Oct 2026) the profile
+            // scored the same as on their DeepFilter copies (median 0.58 vs 0.58).
+            targetSpeakerEnabled: targetSpeakerFiltersTranscription && sessionProfile != nil,
             targetSpeakerProfile: sessionProfile,
             pasteContext: initialContext
         )
@@ -890,7 +891,7 @@ extension AppState {
                 // Fail-closed and below-threshold results transcribe the original only in their
                 // established fallback paths. Normal accepted output uses identity-masked audio.
                 let samplesToTranscribe: [Float]
-                if session.bypassAudioProcessing || isFailClosedPassthrough || isBelowThresholdRejection {
+                if isFailClosedPassthrough || isBelowThresholdRejection {
                     samplesToTranscribe = segment.samples
                 } else {
                     samplesToTranscribe = TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples

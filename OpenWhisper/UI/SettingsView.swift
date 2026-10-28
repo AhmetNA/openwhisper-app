@@ -365,7 +365,7 @@ struct SettingsView: View {
     private var deepFilterSettingDescription: String {
         let decision = appState.displayedDeepFilterDecision
         if appState.bypassAudioProcessing || decision.reason == "unprocessed" {
-            return "Ses işlenmeden kullanılıyor; filtre, ses yükseltme ve konuşmacı eleme kapalı."
+            return "Ses işlenmeden kullanılıyor; gürültü filtresi ve ses yükseltme kapalı."
         }
         if decision.reason == "model unavailable" {
             return "Model hazır değil; kapalı."
