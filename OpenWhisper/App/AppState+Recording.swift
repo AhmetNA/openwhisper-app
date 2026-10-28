@@ -192,6 +192,12 @@ extension AppState {
             && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord && !bypassAudioProcessing
             && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
         wakeProbation = probationProfile.map { WakeProbation(startTime: sessionStart, profile: $0) }
+        // Scoring only, the audio is left alone: runs on the raw mic too.
+        lateWakeVoiceProfile = recordingTrigger == .wakeWord && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
+        lateWakeVoiceCheckInFlight = false
+        lastLateWakeVoiceCheck = sessionStart
+        lateWakeVoiceMatches = 0
         wakeProbationCheckInFlight = false
         lastWakeProbationCheck = sessionStart
         if wakeProbation != nil {
@@ -410,6 +416,7 @@ extension AppState {
                 self.enqueueCompletedAudioSegments()
                 self.checkOwnVoiceEndpoint()
                 self.checkWakeProbation()
+                self.checkLateWakeVoice()
                 self.checkSpokenDoneEndpoint()
                 self.checkCommandOverReply()
             }
@@ -1184,6 +1191,50 @@ extension AppState {
             }
         }
     }
+
+    /// The "Jarvis" clip is short and often scores under the threshold (0.399 against 0.40 over
+    /// music, 28 Oct 2026), so what the user says next is scored too. Two matching windows (media
+    /// once scored 0.419 against the profile) mark the wake as the user's: a weak wake Whisper didn't confirm is no longer commands-only, and a held
+    /// media pause runs. A miss changes nothing.
+    func checkLateWakeVoice() {
+        guard recordingState == .recording, let profile = lateWakeVoiceProfile, !lateWakeVoiceCheckInFlight,
+              let session = activeTranscriptionSession, session.trigger == .wakeWord else { return }
+        let now = CACurrentMediaTime()
+        if session.wakeSpeakerVerified || Date().timeIntervalSince(session.startedAt) > Self.lateWakeVoiceWindow {
+            lateWakeVoiceProfile = nil
+            return
+        }
+        guard now - lastLateWakeVoiceCheck >= Self.lateWakeVoiceCheckInterval, let audioEngine else { return }
+        let samples = audioEngine.recentSamples(count: OwnVoiceStopGate.windowSamples)
+        guard samples.count >= OwnVoiceStopGate.windowSamples else { return }
+        lastLateWakeVoiceCheck = now
+        lateWakeVoiceCheckInFlight = true
+        let filter = targetSpeakerFilter
+        Task { [weak self] in
+            let score = try? await filter.wakeSpeakerScore(samples: samples, profile: profile)
+            guard let self else { return }
+            self.lateWakeVoiceCheckInFlight = false
+            guard let score, self.recordingState == .recording, self.activeTranscriptionSession === session,
+                  !session.wakeSpeakerVerified else { return }
+            let threshold = TargetSpeakerFilter.wakeThreshold
+            owLog(String(format: "[LateWakeVoice] score %.3f (yours ≥%.2f)", score, threshold))
+            guard score >= threshold else { return }
+            self.lateWakeVoiceMatches += 1
+            guard self.lateWakeVoiceMatches >= Self.lateWakeVoiceMatchesNeeded else { return }
+            self.lateWakeVoiceProfile = nil
+            session.wakeSpeakerVerified = true
+            if session.wakeUnconfirmed {
+                session.wakeUnconfirmed = false
+                owLog("[LateWakeVoice] Your voice after the wake word — the session is no longer commands-only")
+            }
+            self.confirmWakeProbation(String(format: "speech after the wake scored %.2f", score))
+        }
+    }
+
+    /// How long into a wake session `checkLateWakeVoice` keeps scoring, and how often.
+    static let lateWakeVoiceWindow: TimeInterval = 12
+    static let lateWakeVoiceCheckInterval: TimeInterval = 1
+    static let lateWakeVoiceMatchesNeeded = 2
 
     /// The user's voice confirmed a wake on probation: the held pause runs now.
     func confirmWakeProbation(_ why: String) {

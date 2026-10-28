@@ -604,6 +604,12 @@ final class AppState {
     @ObservationIgnored var wakeProbation: WakeProbation?
     @ObservationIgnored var wakeProbationCheckInFlight = false
     @ObservationIgnored var lastWakeProbationCheck: TimeInterval = 0
+    /// A wake-word session whose "Jarvis" didn't match the voice: the profile its later speech is
+    /// scored against (`checkLateWakeVoice`). Nil once matched or when there's nothing to check.
+    @ObservationIgnored var lateWakeVoiceProfile: TargetSpeakerProfile?
+    @ObservationIgnored var lateWakeVoiceCheckInFlight = false
+    @ObservationIgnored var lastLateWakeVoiceCheck: TimeInterval = 0
+    @ObservationIgnored var lateWakeVoiceMatches = 0
     var systemAudioCapture: SystemAudioCapture?
     var systemAudioGeneration: UInt64 = 0
     var systemAudioTranscriptionTail: Task<Void, Never>?
