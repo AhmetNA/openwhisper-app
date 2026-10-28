@@ -119,7 +119,6 @@ extension AppState {
             switch verdict {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Weak detection %.2f confirmed in %d ms — %@", score, ms, why))
-                self.confirmWakeProbation("Whisper heard the wake word")
             case .rejected(let why):
                 guard id == self.wakeConfirmationID, self.recordingState == .recording else {
                     owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms, session already over — %@", score, ms, why))
@@ -148,7 +147,6 @@ extension AppState {
                             owLog(String(format: "[WakeWord] Weak detection %.2f confirmed on the second check with %.1f s more — %@",
                                          score, Double(since.count) / 16_000, why))
                             WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(again) }
-                            self.confirmWakeProbation("Whisper heard the wake word")
                             return
                         }
                     }
