@@ -17,12 +17,30 @@ enum CommandRewriter {
     }
 
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,
-    /// is unreachable or slow.
+    /// is unreachable or slow. With `cloud` set (Jarvis's chat is on the cloud) only the cloud
+    /// model is asked, so Gemma isn't loaded for a rewrite.
     static func rewrite(_ text: String, model: String, timeout: TimeInterval = 4,
-                        client: any LLMClient = LLM.default) async -> String? {
-        let request = LLMRequest(model: model, prompt: prompt(for: text), timeout: timeout,
-                                 temperature: 0.0, maxTokens: 40, stop: ["\n"])
-        guard let answer = try? await client.generate(request) else { return nil }
+                        client: any LLMClient = LLM.default,
+                        cloud: (client: any ChatStreaming, model: String)? = nil) async -> String? {
+        let answer: String
+        if let cloud {
+            let request = LLMChatRequest(model: cloud.model, messages: [["role": "user", "content": prompt(for: text)]],
+                                         timeout: timeout, temperature: 0.0, maxTokens: 40)
+            var reply = ""
+            do {
+                for try await piece in cloud.client.streamChat(request) { reply += piece }
+            } catch {
+                owLog("[CommandRewriter] Cloud (\(cloud.model)) gave no usable answer: \(ChatFallback.describe(error))")
+                return nil
+            }
+            // No stop sequence on the cloud: keep the first line, as `stop: ["\n"]` does locally.
+            answer = reply.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        } else {
+            let request = LLMRequest(model: model, prompt: prompt(for: text), timeout: timeout,
+                                     temperature: 0.0, maxTokens: 40, stop: ["\n"])
+            guard let local = try? await client.generate(request) else { return nil }
+            answer = local
+        }
         let line = answer.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"'`")))
         guard !line.isEmpty, line.uppercased() != "YOK", line.count < 120 else { return nil }
         return line

@@ -2,7 +2,7 @@ import XCTest
 @testable import OpenWhisper
 
 /// Answers from a script and remembers what was asked; never touches the network.
-private final class FakeLLMClient: LLMClient, @unchecked Sendable {
+private final class FakeLLMClient: LLMClient, ChatStreaming, @unchecked Sendable {
     var answer: Result<String, Error> = .success("")
     var models: [String] = []
     private(set) var requests: [LLMRequest] = []
@@ -79,6 +79,21 @@ final class LLMClientTests: XCTestCase {
         fake.answer = .success("YOK")
         let none = await CommandRewriter.rewrite("bugün hava güzel", model: "m", client: fake)
         XCTAssertNil(none)
+    }
+
+    func testRewriterOnTheCloudLeavesOllamaAlone() async {
+        let local = FakeLLMClient()
+        let cloud = FakeLLMClient()
+        cloud.answer = .success("Cloud'ı aç\nBaşka bir şey")
+        let line = await CommandRewriter.rewrite("Cloud Cloud'ı açar mısın?", model: "m", client: local, cloud: (cloud, "c"))
+        XCTAssertEqual(line, "Cloud'ı aç")
+        XCTAssertTrue(local.requests.isEmpty)
+        XCTAssertEqual(cloud.chats.first?.model, "c")
+
+        cloud.answer = .failure(LLMError.http(500))
+        let failed = await CommandRewriter.rewrite("x", model: "m", client: local, cloud: (cloud, "c"))
+        XCTAssertNil(failed)
+        XCTAssertTrue(local.requests.isEmpty)
     }
 
     func testFailuresBecomeNil() async {

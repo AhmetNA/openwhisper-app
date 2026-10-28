@@ -961,8 +961,10 @@ extension AppState {
                     }
                     // Sounds like a command no rule caught: let the model rephrase it, and run
                     // it only if a rule then recognises the rephrased sentence.
-                    if route == .chat, self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
-                       let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel) {
+                    let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
+                    if route == .chat, cloud != nil || self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
+                       let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
+                                                                     cloud: cloud.map { ($0.0, $0.model) }) {
                         if let command = CommandRewriter.safeCommand(rewritten, context: commandContext()) {
                             session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
                             owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
