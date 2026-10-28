@@ -284,6 +284,40 @@ final class TextInjector: TextInjecting, @unchecked Sendable {
         return true
     }
 
+    /// Empties the focused text field with Cmd+A and Delete ("sil", "alanı temizle"). Only when
+    /// `pid` is still frontmost. Returns whether the keys were posted.
+    func clearFocusedField(inPID pid: pid_t) -> Bool {
+        if VoiceTestInjector.shared.isActive {
+            owLog("[VoiceTest] would clear the field")
+            return true
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            owLog("[TextInjector] Clear skipped: target is no longer frontmost")
+            return false
+        }
+        let aKeyCode: CGKeyCode = 0
+        guard let selectDown = CGEvent(keyboardEventSource: nil, virtualKey: aKeyCode, keyDown: true),
+              let selectUp = CGEvent(keyboardEventSource: nil, virtualKey: aKeyCode, keyDown: false),
+              let deleteDown = CGEvent(keyboardEventSource: nil, virtualKey: backspaceKeyCode, keyDown: true),
+              let deleteUp = CGEvent(keyboardEventSource: nil, virtualKey: backspaceKeyCode, keyDown: false) else {
+            owLog("[TextInjector] Clear CGEvent creation failed")
+            return false
+        }
+        selectDown.flags = .maskCommand
+        selectUp.flags = .maskCommand
+        deleteDown.flags = []
+        deleteUp.flags = []
+        selectDown.post(tap: .cghidEventTap)
+        usleep(20_000)
+        selectUp.post(tap: .cghidEventTap)
+        usleep(50_000)
+        deleteDown.post(tap: .cghidEventTap)
+        usleep(20_000)
+        deleteUp.post(tap: .cghidEventTap)
+        owLog("[TextInjector] Cmd+A, Delete posted")
+        return true
+    }
+
     /// `pressReturn`, but when `pid` is in the background (another app or full-screen Space,
     /// after a background paste) it is brought forward for the Return and the app that was
     /// in front gets the focus back. Return is still only posted once `pid` is frontmost.

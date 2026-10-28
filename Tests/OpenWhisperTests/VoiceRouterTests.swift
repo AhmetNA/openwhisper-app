@@ -41,8 +41,16 @@ final class VoiceRouterTests: XCTestCase {
 
     func testDictationEditsActOnTheLastDictation() {
         let typing = facts(voice: false, focus: .editable, lastDictation: "Ahmed geldi")
-        guard case .dictationEdit(.deleteAll) = VoiceRouter.route("Sil.", facts: typing) else {
-            return XCTFail("'sil' after a dictation deletes it")
+        guard case .dictationEdit(.deleteAll) = VoiceRouter.route("Geri al.", facts: typing) else {
+            return XCTFail("'geri al' after a dictation deletes it")
+        }
+        guard case .dictationEdit(.clearField) = VoiceRouter.route("Sil.", facts: typing) else {
+            return XCTFail("'sil' empties the field")
+        }
+        for text in ["sil", "Alanı temizle", "hepsini sil"] {
+            guard case .dictationEdit(.clearField) = VoiceRouter.route(text, facts: facts(voice: false, focus: .editable)) else {
+                return XCTFail("clearing needs no dictation before it: \(text)")
+            }
         }
         guard case .dictationEdit(.replace(old: "Ahmed", new: "Ahmet")) = VoiceRouter.route("Ahmed'i Ahmet yap", facts: typing) else {
             return XCTFail("the misheard name is replaced")
@@ -53,7 +61,7 @@ final class VoiceRouterTests: XCTestCase {
         guard case .typed = VoiceRouter.route("Buraya yaz son kelimeyi sil", facts: typing) else {
             return XCTFail("explicit dictation keeps precedence")
         }
-        for text in ["sil", "Ahmed'i Ahmet yap"] {
+        for text in ["geri al", "Ahmed'i Ahmet yap"] {
             if case .dictationEdit = VoiceRouter.route(text, facts: facts(voice: false, focus: .editable)) {
                 XCTFail("no dictation to edit: \(text)")
             }

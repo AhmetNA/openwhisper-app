@@ -10,8 +10,9 @@ extension AppState {
     }
 
     /// Runs "sil", "son kelimeyi sil", "Ahmed'i Ahmet yap" or "enter'a bas". Only in the app in
-    /// front, and only when the caret still sits right after the pasted text: an edit said a
-    /// minute later, after the user typed or clicked elsewhere, must not erase their own text.
+    /// front. "Sil" / "alanı temizle" empty the whole focused field; the other edits run only
+    /// when the caret still sits right after the pasted text: an edit said a minute later,
+    /// after the user typed or clicked elsewhere, must not erase their own text.
     /// Returns what happened, for the Flow bar.
     func runDictationEdit(_ edit: DictationEdit, targetApp: NSRunningApplication?) async -> (status: String, done: Bool) {
         guard let injector = textInjector as? TextInjector else { return ("Yapılamadı", false) }
@@ -23,6 +24,20 @@ extension AppState {
         if edit == .pressReturn {
             let pressed = injector.pressReturn(inPID: targetApp.processIdentifier)
             return pressed ? ("Enter", true) : ("Enter'a basılamadı", false)
+        }
+        if edit == .clearField {
+            // Cmd+A only inside a text field: elsewhere it would select a page or files.
+            guard AXTextAccess.focusedEditableElement(matchingPID: targetApp.processIdentifier) != nil else {
+                owLog("[DictationEdit] clearField: no editable field in front")
+                return ("Metin kutusu bulunamadı", false)
+            }
+            DictationSnapshot.shared.invalidateForSwap()
+            swapPair = nil
+            swapPasteContext = nil
+            hotkey?.setSwapAvailable(false)
+            lastInjectedText = ""
+            let cleared = injector.clearFocusedField(inPID: targetApp.processIdentifier)
+            return cleared ? ("Temizlendi", true) : ("Temizlenemedi", false)
         }
 
         guard let dictation = editableDictation(in: targetApp) else {

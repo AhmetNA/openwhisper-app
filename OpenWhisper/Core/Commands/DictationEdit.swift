@@ -1,12 +1,14 @@
 import Foundation
 
-/// Spoken edits to the dictation OpenWhisper just pasted: "sil", "geri al", "son kelimeyi
-/// sil", "Ahmed'i Ahmet yap", "enter'a bas". Only the text the app itself pasted is ever
-/// changed, never what the user typed; `AppState.runDictationEdit` also checks that the caret
-/// still sits right after it.
+/// Spoken edits to the dictation OpenWhisper just pasted: "geri al", "son kelimeyi sil",
+/// "Ahmed'i Ahmet yap", "enter'a bas". Only the text the app itself pasted is changed, never
+/// what the user typed; `AppState.runDictationEdit` also checks that the caret still sits
+/// right after it. "Sil" and "alanı temizle" are the exception: they empty the whole field.
 enum DictationEdit: Equatable, Sendable {
-    /// "sil", "bunu sil", "geri al": the whole last dictation.
+    /// "geri al", "son yazdığımı sil": the whole last dictation.
     case deleteAll
+    /// "sil", "hepsini sil", "alanı temizle": everything in the focused text field.
+    case clearField
     case deleteLastWord
     case deleteLastSentence
     /// Every occurrence of `old` (as written in the dictation) becomes `new`.
@@ -16,9 +18,15 @@ enum DictationEdit: Equatable, Sendable {
     private static let locale = Locale(identifier: "tr_TR")
 
     private static let deleteAllPhrases: Set<String> = [
-        "sil", "bunu sil", "onu sil", "şunu sil", "sil bunu", "sil onu", "hepsini sil", "tümünü sil",
         "yazdığımı sil", "son yazdığımı sil", "yazdığını sil", "son yazdığını sil",
         "geri al", "bunu geri al", "onu geri al",
+    ]
+    private static let clearFieldPhrases: Set<String> = [
+        "sil", "bunu sil", "onu sil", "şunu sil", "sil bunu", "sil onu", "sil hepsini",
+        "hepsini sil", "tümünü sil", "tüm hepsini sil", "hepsini birden sil", "tamamını sil",
+        "her şeyi sil", "yazıyı sil", "yazıları sil", "metni sil", "alanı sil", "kutuyu sil",
+        "temizle", "hepsini temizle", "tümünü temizle", "her şeyi temizle", "alanı temizle",
+        "metni temizle", "yazıyı temizle", "kutuyu temizle", "imleci temizle", "metin kutusunu temizle",
     ]
     private static let deleteLastWordPhrases: Set<String> = [
         "son kelimeyi sil", "son sözcüğü sil", "en son kelimeyi sil",
@@ -36,12 +44,18 @@ enum DictationEdit: Equatable, Sendable {
         returnPhrases.contains(folded(text))
     }
 
+    /// "Sil", "alanı temizle" need no dictation before it either.
+    static func isClearField(_ text: String) -> Bool {
+        clearFieldPhrases.contains(folded(text))
+    }
+
     /// The edit `text` asks for on `dictation`, the text just pasted. A replacement only counts
     /// when its old words are really in the dictation; otherwise "raporu hazır yap" is plain
     /// dictation.
     static func parse(_ text: String, dictation: String) -> DictationEdit? {
         let phrase = folded(text)
         if returnPhrases.contains(phrase) { return .pressReturn }
+        if clearFieldPhrases.contains(phrase) { return .clearField }
         if deleteAllPhrases.contains(phrase) { return .deleteAll }
         if deleteLastWordPhrases.contains(phrase) { return .deleteLastWord }
         if deleteLastSentencePhrases.contains(phrase) { return .deleteLastSentence }
@@ -66,7 +80,7 @@ enum DictationEdit: Equatable, Sendable {
             }
         case .replace(let old, let new):
             result = Self.replacing(old, with: new, in: dictation) ?? dictation
-        case .pressReturn:
+        case .pressReturn, .clearField:
             return nil
         }
         return result == dictation ? nil : result

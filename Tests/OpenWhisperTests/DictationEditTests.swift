@@ -10,10 +10,14 @@ final class DictationEditTests: XCTestCase {
     }
 
     func testDeletePhrases() {
-        for spoken in ["Sil.", "bunu sil", "Geri al", "Son yazdığımı sil!"] {
+        for spoken in ["Geri al", "Son yazdığımı sil!"] {
             XCTAssertEqual(DictationEdit.parse(spoken, dictation: dictation), .deleteAll, spoken)
         }
-        XCTAssertEqual(edited("sil"), "")
+        XCTAssertEqual(edited("geri al"), "")
+        for spoken in ["Sil.", "bunu sil", "Hepsini sil", "tüm hepsini sil", "Temizle.", "alanı temizle", "imleci temizle"] {
+            XCTAssertEqual(DictationEdit.parse(spoken, dictation: dictation), .clearField, spoken)
+            XCTAssertTrue(DictationEdit.isClearField(spoken), spoken)
+        }
         XCTAssertEqual(edited("Son kelimeyi sil."), "Yarın Ahmed ile toplantı var. Saat üçte")
         XCTAssertEqual(edited("son cümleyi sil"), "Yarın Ahmed ile toplantı var.")
         XCTAssertEqual(edited("son cümleyi sil", "Tek cümle."), "")
