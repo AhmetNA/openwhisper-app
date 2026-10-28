@@ -323,7 +323,7 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: 7) {
             Label("Ses işleme", systemImage: "waveform.and.mic")
 
-            Toggle("Sese işlem uygulama", isOn: $appState.bypassAudioProcessing)
+            Toggle("Sesi işlemeden kullan", isOn: $appState.bypassAudioProcessing)
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .disabled(appState.recordingState != .idle)
@@ -363,7 +363,7 @@ struct SettingsView: View {
     private var deepFilterSettingDescription: String {
         let decision = appState.displayedDeepFilterDecision
         if appState.bypassAudioProcessing || decision.reason == "unprocessed" {
-            return "Sese işlem uygulanmıyor; filtre, ses yükseltme ve konuşmacı eleme kapalı."
+            return "Ses işlenmeden kullanılıyor; filtre, ses yükseltme ve konuşmacı eleme kapalı."
         }
         if decision.reason == "model unavailable" {
             return "Model hazır değil; kapalı."
