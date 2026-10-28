@@ -169,11 +169,25 @@ struct LockScreenIndicatorView: View {
                     // The middle of the lock screen belongs to other apps (Vorssaint).
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 } else {
-                    HStack(spacing: 16) {
-                        JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
-                                                                || appState.jarvisActivity != .none)
-                            .frame(width: 44, height: 44)
-                        caption(appState.flowBarMessage ?? statusText)
+                    VStack(spacing: 18) {
+                        HStack(spacing: 18) {
+                            JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
+                                                                    || appState.jarvisActivity != .none)
+                                .frame(width: 52, height: 52)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("JARVIS")
+                                    .font(.custom("Avenir Next", size: 30).weight(.ultraLight))
+                                    .tracking(12)
+                                    .foregroundStyle(.white)
+                                Text(statusText)
+                                    .font(.custom("Avenir Next", size: 12).weight(.semibold))
+                                    .tracking(5)
+                                    .foregroundStyle(statusColor)
+                                    .contentTransition(.opacity)
+                            }
+                        }
+                        .shadow(color: .black.opacity(0.5), radius: 8)
+                        if let message = appState.flowBarMessage { caption(message) }
                     }
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 }
@@ -186,7 +200,7 @@ struct LockScreenIndicatorView: View {
 
     private func caption(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 28, weight: .light, design: .rounded))
+            .font(.custom("Avenir Next", size: 26).weight(.light))
             .tracking(1.5)
             .multilineTextAlignment(.center)
             .lineLimit(3)
@@ -197,9 +211,9 @@ struct LockScreenIndicatorView: View {
     }
 
     private var statusText: String {
-        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "Jarvis düşünüyor" }
-        if appState.jarvisActivity == .speaking { return "Jarvis konuşuyor" }
-        return appState.wakeWordListening ? "Jarvis uyanık" : "Jarvis uyuyor"
+        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "THINKING" }
+        if appState.jarvisActivity == .speaking { return "SPEAKING" }
+        return appState.wakeWordListening ? "ALIVE" : "ASLEEP"
     }
 
     private var statusColor: Color {
