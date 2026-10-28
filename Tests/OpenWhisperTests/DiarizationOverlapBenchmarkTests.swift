@@ -40,7 +40,7 @@ final class DiarizationOverlapBenchmarkTests: XCTestCase {
             modelIdentifier: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
             embeddings: [(0..<256).map { _ in Float.random(in: -1...1) }]
         )
-        let analyze = { _ = try? await diarization.analyzeSpeakers(audioData: audio, profile: profile, audioProcessingMode: .off) }
+        let analyze = { _ = try? await diarization.analyzeSpeakers(audioData: audio, profile: profile) }
 
         // Warm both once so the first timed run doesn't pay model compilation.
         _ = try await whisper.transcribe(audioArray: audio, decodeOptions: options)

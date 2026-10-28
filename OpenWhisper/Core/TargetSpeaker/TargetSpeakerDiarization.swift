@@ -177,8 +177,7 @@ protocol TargetSpeakerDiarizationService: Sendable {
     ///   SES-PLANI.md section 10. Pass `[]` when no segment-level decision is available.
     func analyzeSpeakers(
         audioData: [Float],
-        profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        profile: TargetSpeakerProfile
     ) async throws -> TargetSpeakerAnalysis
 
     /// - Parameter analysis: `analyzeSpeakers` for these same samples, when it was started
@@ -187,7 +186,6 @@ protocol TargetSpeakerDiarizationService: Sendable {
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode,
         segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
         analysis: TargetSpeakerAnalysis?
     ) async throws -> TargetSpeakerDiarizationResult
@@ -199,14 +197,12 @@ extension TargetSpeakerDiarizationService {
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode = .off,
         segmentAcceptedRanges: [TargetSpeakerAcceptedRange] = []
     ) async throws -> TargetSpeakerDiarizationResult {
         try await diarizeAndFilter(
             audioData: audioData,
             transcription: transcription,
             profile: profile,
-            audioProcessingMode: audioProcessingMode,
             segmentAcceptedRanges: segmentAcceptedRanges,
             analysis: nil
         )
@@ -241,13 +237,11 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
 
     func analyzeSpeakers(
         audioData: [Float],
-        profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        profile: TargetSpeakerProfile
     ) async throws -> TargetSpeakerAnalysis {
         try await runtime.analyzeSpeakers(
             audioData: audioData,
-            profile: profile,
-            audioProcessingMode: audioProcessingMode
+            profile: profile
         )
     }
 
@@ -255,7 +249,6 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode,
         segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
         analysis: TargetSpeakerAnalysis?
     ) async throws -> TargetSpeakerDiarizationResult {
@@ -263,7 +256,6 @@ final class FluidAudioTargetSpeakerDiarizationService: TargetSpeakerDiarizationS
             audioData: audioData,
             transcription: transcription,
             profile: profile,
-            audioProcessingMode: audioProcessingMode,
             segmentAcceptedRanges: segmentAcceptedRanges,
             analysis: analysis
         )
@@ -416,15 +408,14 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
 
     func analyzeSpeakers(
         audioData: [Float],
-        profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode
+        profile: TargetSpeakerProfile
     ) async throws -> TargetSpeakerAnalysis {
         let started = Date()
         guard !audioData.isEmpty, audioData.allSatisfy({ $0.isFinite }) else {
             owLog("[TargetSpeakerDiarization] Error: invalidAudio (empty or non-finite samples)")
             throw TargetSpeakerDiarizationError.invalidAudio
         }
-        guard profile.isCompatible(with: FluidAudioTargetSpeakerDiarizationService.modelIdentifier, audioProcessingMode: audioProcessingMode) else {
+        guard profile.isCompatible(with: FluidAudioTargetSpeakerDiarizationService.modelIdentifier) else {
             owLog("[TargetSpeakerDiarization] Error: incompatibleProfile (expected \(FluidAudioTargetSpeakerDiarizationService.modelIdentifier), found \(profile.modelIdentifier))")
             throw TargetSpeakerDiarizationError.incompatibleProfile(
                 expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
@@ -461,7 +452,6 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         audioData: [Float],
         transcription: TimedTranscriptionResult,
         profile: TargetSpeakerProfile,
-        audioProcessingMode: AudioProcessingMode,
         segmentAcceptedRanges: [TargetSpeakerAcceptedRange],
         analysis: TargetSpeakerAnalysis?
     ) async throws -> TargetSpeakerDiarizationResult {
@@ -472,8 +462,7 @@ private actor FluidAudioTargetSpeakerDiarizationRuntime {
         } else {
             speakers = try await analyzeSpeakers(
                 audioData: audioData,
-                profile: profile,
-                audioProcessingMode: audioProcessingMode
+                profile: profile
             )
         }
         guard let embeddingDiarizer else {

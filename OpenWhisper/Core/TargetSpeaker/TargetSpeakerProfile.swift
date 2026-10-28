@@ -2,10 +2,10 @@ import Foundation
 import Security
 
 struct TargetSpeakerProfile: Codable, Equatable, Sendable {
-    // Version 3 profiles also record the audio processing mode (`.off` / `.deepFilterNet`) active during enrollment. Switching modes changes the acoustic
-    // path feeding the embedding model, so a profile enrolled under one mode is not guaranteed
-    // to match audio captured under another; an older profile predates this field entirely and
-    // must be re-enrolled, just like the version-2 multi-condition bump before it.
+    // Version 3 profiles also record the audio processing mode (`.off` / `.deepFilterNet`) active
+    // during enrollment; enrollment records the raw mic (`.off`) since 29 Oct 2026. An older
+    // profile predates this field entirely and must be re-enrolled, just like the version-2
+    // multi-condition bump before it.
     static let currentSchemaVersion = 3
     static let expectedEmbeddingDimension = 256
 
@@ -74,10 +74,11 @@ struct TargetSpeakerProfile: Codable, Equatable, Sendable {
         }
     }
 
-    func isCompatible(with modelIdentifier: String, audioProcessingMode: AudioProcessingMode) -> Bool {
+    /// The processing chain is not part of it: on 30 raw recordings a DeepFilter-enrolled profile
+    /// scored the same raw as through DeepFilter (29 Oct 2026), so toggling it keeps profiles valid.
+    func isCompatible(with modelIdentifier: String) -> Bool {
         schemaVersion == Self.currentSchemaVersion
             && self.modelIdentifier == modelIdentifier
-            && self.audioProcessingMode == audioProcessingMode
     }
 }
 

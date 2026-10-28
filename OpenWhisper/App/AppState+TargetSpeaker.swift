@@ -15,23 +15,14 @@ extension AppState {
             targetSpeakerProfile = try targetSpeakerProfileStore.load()
             hasStoredTargetSpeakerProfile = targetSpeakerProfile != nil
             if let profile = targetSpeakerProfile {
-                if profile.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) {
+                if profile.isCompatible(with: targetSpeakerModel.modelIdentifier) {
                     targetSpeakerProfileStatus = "Kayıtlı profil hazır"
                     owLog("[TargetSpeaker] loadTargetSpeakerProfile: loaded valid profile (embeddings=\(profile.embeddings.count), schema=\(profile.schemaVersion), model=\(profile.modelIdentifier))")
                 } else {
                     targetSpeakerProfile = nil
                     targetSpeakerEnabled = false
-                    // Same schema/model, only the audio pipeline changed -- give the user the
-                    // specific reason instead of the generic model-version message.
-                    let modelAndSchemaMatch = profile.schemaVersion == TargetSpeakerProfile.currentSchemaVersion
-                        && profile.modelIdentifier == targetSpeakerModel.modelIdentifier
-                    if modelAndSchemaMatch && profile.audioProcessingMode != audioProcessingMode {
-                        targetSpeakerProfileStatus = "Ses işleme modu değişti — yeniden kayıt gerekli"
-                        owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile audio processing mode mismatch (profile=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
-                    } else {
-                        targetSpeakerProfileStatus = "Model sürümü değişti — yeniden kayıt gerekli"
-                        owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile incompatible with model '\(targetSpeakerModel.modelIdentifier)'")
-                    }
+                    targetSpeakerProfileStatus = "Model sürümü değişti — yeniden kayıt gerekli"
+                    owLog("[TargetSpeaker] loadTargetSpeakerProfile: profile incompatible with model '\(targetSpeakerModel.modelIdentifier)'")
                 }
             } else {
                 targetSpeakerEnabled = false
@@ -60,14 +51,12 @@ extension AppState {
                 setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Henüz kayıt yok")
                 return
             }
-            if profile.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) {
+            if profile.isCompatible(with: targetSpeakerModel.modelIdentifier) {
                 setMicTargetSpeakerProfile(mic, profile: profile, stored: true, status: "Kayıtlı profil hazır")
                 owLog("[TargetSpeaker] \(mic) profile loaded (embeddings=\(profile.embeddings.count))")
             } else {
-                setMicTargetSpeakerProfile(mic, profile: nil, stored: true, status: profile.audioProcessingMode != audioProcessingMode
-                    ? "Ses işleme modu değişti — yeniden kayıt gerekli"
-                    : "Model sürümü değişti — yeniden kayıt gerekli")
-                owLog("[TargetSpeaker] \(mic) profile incompatible (mode=\(profile.audioProcessingMode), current=\(audioProcessingMode))")
+                setMicTargetSpeakerProfile(mic, profile: nil, stored: true, status: "Model sürümü değişti — yeniden kayıt gerekli")
+                owLog("[TargetSpeaker] \(mic) profile incompatible (model=\(profile.modelIdentifier))")
             }
         } catch {
             setMicTargetSpeakerProfile(mic, profile: nil, stored: false, status: "Profil okunamadı — yeniden kayıt gerekli")
@@ -150,7 +139,8 @@ extension AppState {
         }
     }
 
-    /// Starts the capture for an enrollment or sample. The buds mic hears music played into the
+    /// Starts the capture for an enrollment or sample, on the raw mic: dictation and the wake checks
+    /// score raw audio, so the profile hears the same chain. The buds mic hears music played into the
     /// ear and an external mic hears the Mac's speakers without echo cancellation, so media
     /// pauses for them whatever the ducking switch says.
     func startTargetSpeakerCapture(for mic: TargetSpeakerMic, audioEngine: AudioEngine) {
@@ -161,7 +151,8 @@ extension AppState {
         }
         audioEngine.startRecording(
             deviceUID: targetSpeakerEnrollmentInputUID(for: mic),
-            audioProcessingMode: audioProcessingMode,
+            audioProcessingMode: .off,
+            bypassAudioProcessing: true,
             waitsForLinkAudio: mic == .buds,
             levelCallback: { [weak self] rawLevel in
                 let target = AudioSignalProcessor.displayLevel(forRawRMS: rawLevel)
@@ -349,8 +340,7 @@ extension AppState {
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     candidate,
                     to: profile,
-                    store: self.targetSpeakerProfileStore(for: mic),
-                    audioProcessingMode: self.audioProcessingMode
+                    store: self.targetSpeakerProfileStore(for: mic)
                 )
                 guard self.confirmationOperationID == operationID else { return }
                 self.adoptTargetSpeakerProfile(receipt.appendedProfile, for: mic)
@@ -508,10 +498,6 @@ extension AppState {
         let mic = targetSpeakerSampleMic
         targetSpeakerSampleIsProcessing = true
         targetSpeakerSampleStatus = "Örnek doğrulanıyor…"
-        // The profile records the processing chain it was built under and `appendConfirmedCandidate`
-        // rejects a mismatch outright, so pass the mode actually in use rather than the parameter
-        // default — otherwise every append fails with a confusing incompatibility error.
-        let mode = audioProcessingMode
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.targetSpeakerSampleIsProcessing = false }
@@ -519,8 +505,7 @@ extension AppState {
                 let receipt = try await self.targetSpeakerFilter.appendConfirmedCandidateWithReceipt(
                     samples,
                     to: profile,
-                    store: self.targetSpeakerProfileStore(for: mic),
-                    audioProcessingMode: mode
+                    store: self.targetSpeakerProfileStore(for: mic)
                 )
                 let added = receipt.appendedProfile.embeddings.count - receipt.previousProfile.embeddings.count
                 self.adoptTargetSpeakerProfile(receipt.appendedProfile, for: mic)
@@ -721,8 +706,7 @@ extension AppState {
                 from: targetSpeakerEnrollmentRecordings,
                 store: targetSpeakerProfileStore(for: mic),
                 progressHandler: progressHandler,
-                tuning: acceptedScore == nil ? tuning : tuning.withoutEnrollmentFloors,
-                audioProcessingMode: audioProcessingMode
+                tuning: acceptedScore == nil ? tuning : tuning.withoutEnrollmentFloors
             )
             guard isCurrentTargetSpeakerEnrollment(generation) else { return }
             adoptTargetSpeakerProfile(profile, for: mic)

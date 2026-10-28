@@ -472,8 +472,7 @@ extension TargetSpeakerFilter {
         from recordings: [[Float]],
         store: TargetSpeakerProfileStore,
         progressHandler: TargetSpeakerProgressHandler? = nil,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async throws -> TargetSpeakerProfile {
         guard recordings.count == TargetSpeakerFilterConfiguration.requiredEnrollmentSampleCount else {
             throw TargetSpeakerEnrollmentError.requiresMultipleSamples
@@ -538,7 +537,7 @@ extension TargetSpeakerFilter {
         let profile = try TargetSpeakerProfile(
             modelIdentifier: model.modelIdentifier,
             embeddings: embeddings,
-            audioProcessingMode: audioProcessingMode
+            audioProcessingMode: .off
         )
         try Task.checkCancellation()
         do {
@@ -564,16 +563,14 @@ extension TargetSpeakerFilter {
         to existingProfile: TargetSpeakerProfile,
         store: TargetSpeakerProfileStore,
         progressHandler: TargetSpeakerProgressHandler? = nil,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async throws -> TargetSpeakerProfile {
         try await appendConfirmedCandidateWithReceipt(
             samples,
             to: existingProfile,
             store: store,
             progressHandler: progressHandler,
-            tuning: tuning,
-            audioProcessingMode: audioProcessingMode
+            tuning: tuning
         ).appendedProfile
     }
 
@@ -585,16 +582,14 @@ extension TargetSpeakerFilter {
         to existingProfile: TargetSpeakerProfile,
         store: TargetSpeakerProfileStore,
         progressHandler: TargetSpeakerProgressHandler? = nil,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async throws -> TargetSpeakerProfile {
         try await appendConfirmedCandidate(
             candidate.samples,
             to: existingProfile,
             store: store,
             progressHandler: progressHandler,
-            tuning: tuning,
-            audioProcessingMode: audioProcessingMode
+            tuning: tuning
         )
     }
 
@@ -603,16 +598,14 @@ extension TargetSpeakerFilter {
         to existingProfile: TargetSpeakerProfile,
         store: TargetSpeakerProfileStore,
         progressHandler: TargetSpeakerProgressHandler? = nil,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async throws -> TargetSpeakerProfileAppendReceipt {
         try await appendConfirmedCandidateWithReceipt(
             candidate.samples,
             to: existingProfile,
             store: store,
             progressHandler: progressHandler,
-            tuning: tuning,
-            audioProcessingMode: audioProcessingMode
+            tuning: tuning
         )
     }
 
@@ -624,10 +617,9 @@ extension TargetSpeakerFilter {
         to existingProfile: TargetSpeakerProfile,
         store: TargetSpeakerProfileStore,
         progressHandler: TargetSpeakerProgressHandler? = nil,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async throws -> TargetSpeakerProfileAppendReceipt {
-        guard existingProfile.isCompatible(with: model.modelIdentifier, audioProcessingMode: audioProcessingMode) else {
+        guard existingProfile.isCompatible(with: model.modelIdentifier) else {
             throw TargetSpeakerModelError.invalidEmbedding
         }
         guard existingProfile.embeddings.count < TargetSpeakerFilterConfiguration.maximumProfileEmbeddings else {
@@ -680,7 +672,7 @@ extension TargetSpeakerFilter {
             modelIdentifier: existingProfile.modelIdentifier,
             embeddings: existingProfile.embeddings + embeddingsToAppend,
             createdAt: existingProfile.createdAt,
-            audioProcessingMode: audioProcessingMode
+            audioProcessingMode: existingProfile.audioProcessingMode
         )
         try Task.checkCancellation()
         do {
@@ -866,8 +858,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
         samples: [Float],
         profile: TargetSpeakerProfile?,
         enabled: Bool,
-        tuning: TargetSpeakerTuning = .resolved(),
-        audioProcessingMode: AudioProcessingMode = .off
+        tuning: TargetSpeakerTuning = .resolved()
     ) async -> TargetSpeakerFilterResult {
         let startTime = Date()
         guard enabled else {
@@ -891,7 +882,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
             return Self.failClosed(samples: samples, error: error)
         }
 
-        guard profile.isCompatible(with: model.modelIdentifier, audioProcessingMode: audioProcessingMode) else {
+        guard profile.isCompatible(with: model.modelIdentifier) else {
             let error = "Ses profili modeli uyumsuz; yeniden kayıt gerekli"
             Self.logSummary(
                 samples: samples, voiceRunCount: 0, scoredRunCount: 0, acceptedSampleCount: 0,

@@ -29,8 +29,7 @@ final class RawMicSpeakerBenchmarkTests: XCTestCase {
             ]
             for (variant, samples) in variants {
                 owLog("[RawMicBench] \(name) \(variant)")
-                let result = await filter.filter(samples: samples, profile: profile, enabled: true,
-                                                 audioProcessingMode: profile.audioProcessingMode)
+                let result = await filter.filter(samples: samples, profile: profile, enabled: true)
                 owLog("[RawMicBench] \(name) \(variant) decision=\(result.decision) accepted=\(result.acceptedSampleCount)/\(samples.count)")
             }
         }

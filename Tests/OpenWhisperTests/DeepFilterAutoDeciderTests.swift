@@ -141,10 +141,4 @@ final class DeepFilterAutoDeciderTests: XCTestCase {
         XCTAssertEqual(meter.floorDBFS ?? 0, -70, accuracy: 0.5)
         XCTAssertEqual(meter.measuredSeconds, 3, accuracy: 0.02)
     }
-
-    func testProfileModeFollowsTheSetting() {
-        XCTAssertEqual(DeepFilterSetting.automatic.profileMode, .deepFilterNet)
-        XCTAssertEqual(DeepFilterSetting.on.profileMode, .deepFilterNet)
-        XCTAssertEqual(DeepFilterSetting.off.profileMode, .off)
-    }
 }

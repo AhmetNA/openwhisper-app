@@ -6,11 +6,6 @@ enum DeepFilterSetting: String, CaseIterable, Sendable {
     case automatic
     case on
     case off
-
-    /// The processing chain speaker profiles are enrolled and matched under. Automatic counts as
-    /// DeepFilterNet: it is on in every room that is not clean, and switching it off in a quiet
-    /// one changes the embedding input far less than re-enrolling every profile would.
-    var profileMode: AudioProcessingMode { self == .off ? .off : .deepFilterNet }
 }
 
 /// A room's noise floor measured on the raw mic (before gain, echo cancellation and DeepFilterNet,

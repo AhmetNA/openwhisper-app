@@ -562,8 +562,7 @@ extension AppState {
             let result = await targetSpeakerFilter.filter(
                 samples: segment.samples,
                 profile: session.targetSpeakerProfile,
-                enabled: true,
-                audioProcessingMode: audioProcessingMode
+                enabled: true
             )
             // The filter's own verdict, before the wake-verified override below.
             WakeClipLog.shared.update(session.wakeClipID) {
@@ -783,8 +782,7 @@ extension AppState {
                     Task {
                         try await diarization.analyzeSpeakers(
                             audioData: segment.samples,
-                            profile: profile,
-                            audioProcessingMode: audioProcessingMode
+                            profile: profile
                         )
                     }
                 }
@@ -807,7 +805,6 @@ extension AppState {
                         audioData: segment.samples,
                         transcription: timed,
                         profile: profile,
-                        audioProcessingMode: audioProcessingMode,
                         segmentAcceptedRanges: filtered.acceptedSampleRanges,
                         analysis: try await speakerAnalysis?.value
                     )

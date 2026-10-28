@@ -611,7 +611,7 @@ final class TargetSpeakerFilterTests: XCTestCase {
 
         let loaded = try store.load()
         XCTAssertEqual(loaded, legacyProfile)
-        XCTAssertTrue(loaded?.isCompatible(with: FluidAudioTargetSpeakerModel.identifier, audioProcessingMode: .off) == true)
+        XCTAssertTrue(loaded?.isCompatible(with: FluidAudioTargetSpeakerModel.identifier) == true)
     }
 
     func testNoMatchSkipsAllPostProcessing() {

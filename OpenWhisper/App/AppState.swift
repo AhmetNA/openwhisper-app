@@ -64,18 +64,12 @@ final class AppState {
             }
         }
     }
-    /// The chain speaker profiles are keyed to; `deepFilterSetting` drives it, and each
-    /// recording's actual mode comes from `deepFilterAuto` (see `startRecording`).
-    var audioProcessingMode: AudioProcessingMode {
-        didSet { UserDefaults.standard.set(audioProcessingMode.rawValue, forKey: "audioProcessingMode") }
-    }
     /// Raw mic. Starts on and is not persisted (user's choice), even though it also skips
     /// `AudioSignalProcessor.inputGain` and a quiet raw mic can decode to hallucinations.
     var bypassAudioProcessing = true
     var deepFilterSetting: DeepFilterSetting {
         didSet {
             UserDefaults.standard.set(deepFilterSetting.rawValue, forKey: "deepFilterSetting")
-            audioProcessingMode = deepFilterSetting.profileMode
         }
     }
     var deepFilterAuto = DeepFilterAutoDecider()
@@ -357,7 +351,7 @@ final class AppState {
     /// `hasStoredTargetSpeakerProfile` remains true for an incompatible profile so the user
     /// can still replace or delete it.
     var hasTargetSpeakerProfile: Bool {
-        targetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
+        targetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier) == true
     }
     var hasStoredTargetSpeakerProfile = false
     /// Current embedding count of the active profile, surfaced in Settings next to
@@ -396,7 +390,7 @@ final class AppState {
     var budsTargetSpeakerProfileStatus: String = "Henüz kayıt yok"
     var hasStoredBudsTargetSpeakerProfile = false
     var hasBudsTargetSpeakerProfile: Bool {
-        budsTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
+        budsTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier) == true
     }
     /// The external (USB, wired) mic's own profile, kept like the buds one: without it recordings
     /// from such a mic are not filtered at all.
@@ -404,7 +398,7 @@ final class AppState {
     var externalTargetSpeakerProfileStatus: String = "Henüz kayıt yok"
     var hasStoredExternalTargetSpeakerProfile = false
     var hasExternalTargetSpeakerProfile: Bool {
-        externalTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier, audioProcessingMode: audioProcessingMode) == true
+        externalTargetSpeakerProfile?.isCompatible(with: targetSpeakerModel.modelIdentifier) == true
     }
     /// The mic the running enrollment builds a profile for.
     var targetSpeakerEnrollmentMic: TargetSpeakerMic = .mac
@@ -686,38 +680,17 @@ final class AppState {
         // Captured before this initializer's own reads/writes touch UserDefaults (in particular
         // before the `whisperModel` line below, whose didSet immediately persists a value even
         // on a first-ever launch) -- true only when nothing has ever been saved for this app,
-        // used below to pick DeepFilterNet as the fresh-install default.
+        // used below to pick Otomatik DeepFilter as the fresh-install default.
         let isFreshInstall = defaults.object(forKey: "whisperModel") == nil
         transcriptionModel = defaults.string(forKey: "whisperModel") ?? TranscriptionModelRegistry.defaultModelID
         language = defaults.string(forKey: "language") ?? "tr"
-        if defaults.object(forKey: "voiceProcessingMigrationV1") == nil {
-            // Ölçüm: setVoiceProcessingEnabled(true) tek başına ~900-1080ms gecikme ekliyor
-            // (Fn->ilk ses buffer'ı 1072-1286ms -> 162-207ms). Depolanmış eski `true` değeri
-            // kod varsayılanını (false) eziyor, bu yüzden bir kereye mahsus zorla kapatılıyor.
-            // A genuinely fresh install has no such stored VP setting to migrate away from, and
-            // DeepFilterNet is now free at Fn-press time once prewarmed, so a new user gets it by
-            // default; an existing user hitting this migration for the first time keeps the
-            // forced-off behavior above unchanged -- never silently switched to a mode they never
-            // chose themselves.
-            let migratedMode: AudioProcessingMode = isFreshInstall ? .deepFilterNet : .off
-            audioProcessingMode = migratedMode
-            defaults.set(migratedMode.rawValue, forKey: "audioProcessingMode")
-            defaults.set(true, forKey: "voiceProcessingMigrationV1")
-            owLog(isFreshInstall
-                ? "[AppState] Voice processing migration: yeni kurulum, varsayılan DeepFilterNet"
-                : "[AppState] Voice processing migration: gürültü engelleme kalıcı olarak kapatıldı (ölçülen gecikme ~1sn)")
-        } else if let rawMode = defaults.string(forKey: "audioProcessingMode"),
-                  let mode = AudioProcessingMode(rawValue: rawMode) {
-            audioProcessingMode = mode
-        } else {
-            audioProcessingMode = .off
-        }
         if let raw = defaults.string(forKey: "deepFilterSetting"), let setting = DeepFilterSetting(rawValue: raw) {
             deepFilterSetting = setting
         } else {
-            // The old manual switch: DeepFilter becomes Otomatik, an explicit "Engelsiz" stays off.
+            // A fresh install gets Otomatik. Before this setting, the old manual switch: DeepFilter
+            // becomes Otomatik, anything else stays off.
             let storedMode = defaults.string(forKey: "audioProcessingMode") ?? ""
-            let migrated: DeepFilterSetting = storedMode == AudioProcessingMode.deepFilterNet.rawValue ? .automatic : .off
+            let migrated: DeepFilterSetting = isFreshInstall || storedMode == AudioProcessingMode.deepFilterNet.rawValue ? .automatic : .off
             deepFilterSetting = migrated
             defaults.set(migrated.rawValue, forKey: "deepFilterSetting")
             owLog("[DeepFilterAuto] Setting migrated from audioProcessingMode=\(storedMode) to \(migrated.rawValue)")
