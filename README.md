@@ -57,7 +57,7 @@ Accessibility API → text pasted into the active app
 | Mac | Apple Silicon: M1, M2, M3, or M4 |
 | macOS | 14.0 or newer |
 | Build tools | Xcode Command Line Tools; the full Xcode app is not required |
-| Optional cleanup | Ollama plus `gemma4:e4b-it-qat` (default), `gemma4:e2b-it-qat` (faster) or `qwen3.5:4b` |
+| Optional cleanup | Ollama plus `gemma4:e2b-it-qat` (default), `gemma4:e4b-it-qat` (more accurate, 2x the RAM) or `qwen3.5:4b` |
 | Optional voice add-ons | `uv` and Python 3.12 for the local voices and SetFit decider (see below) |
 | Optional Spotify | A Spotify Developer application and Spotify Premium for playback endpoints |
 
@@ -77,7 +77,7 @@ Ollama is not required for raw transcription, but it enables cleanup and the fle
 
 ```bash
 brew install ollama
-ollama pull gemma4:e4b-it-qat
+ollama pull gemma4:e2b-it-qat
 # Faster: ollama pull gemma4:e2b-it-qat · More careful: ollama pull qwen3.5:4b
 ```
 

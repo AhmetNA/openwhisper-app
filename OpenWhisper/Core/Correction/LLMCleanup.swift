@@ -10,7 +10,10 @@ final class LLMCleanup: Sendable {
     /// ~0.9s; gemma4:e2b-it-qat was faster (~0.27s) but left fillers in 5/20; qwen3.5:4b got
     /// 17/20 and 94/97 at ~0.9-1.1s; qwen3.5:9b and gemma4:12b-it-qat were too slow for the
     /// 3s Spotify timeout. (llama3.2:3b, earlier, translated English phrases.)
-    static let defaultModel = "gemma4:e4b-it-qat"
+    /// Since 28 Oct 2026 the default is e2b: cleanup isn't in use, and on the app's own prompts it
+    /// runs ~2x faster in 1.6 GB of RAM instead of 3.1 GB, scoring within a point of e4b
+    /// (Spotify 86 vs 88/97, reminder confirm 36 vs 37/38) except the wake check (14 vs 18/18).
+    static let defaultModel = "gemma4:e2b-it-qat"
 
     init(model: String = LLMCleanup.defaultModel, client: any LLMClient = LLM.default) {
         self.model = model
@@ -20,8 +23,8 @@ final class LLMCleanup: Sendable {
     /// Cleanup models offered in Settings, fastest first. Each must be `ollama pull`-ed
     /// separately; `isModelInstalled` guards against picking one that isn't.
     static let supportedModels: [(tag: String, label: String)] = [
-        ("gemma4:e2b-it-qat", "⚡ Hızlı (Gemma 4 E2B)"),
-        ("gemma4:e4b-it-qat", "⭐ Önerilen (Gemma 4 E4B)"),
+        ("gemma4:e2b-it-qat", "⭐ Önerilen (Gemma 4 E2B)"),
+        ("gemma4:e4b-it-qat", "🎯 Daha isabetli (Gemma 4 E4B)"),
         ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)"),
         // Candidates from the 2026-09-30 model survey, not yet measured on the Turkish eval
         // sets (Tools/compare_llms.sh). None has published Turkish numbers.
