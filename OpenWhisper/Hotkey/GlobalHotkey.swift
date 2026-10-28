@@ -411,6 +411,13 @@ final class GlobalHotkey {
                 return Unmanaged.passUnretained(event)
             }
 
+            // Keys we post ourselves (an agent's send Return, Cmd+V) are not the user's: a Return
+            // sending the previous command must not end a new "Hey Jarvis" session that opened
+            // meanwhile (28 Oct 2026: message unsent and the new command cut off at 1.7 s).
+            if event.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid()) {
+                return Unmanaged.passUnretained(event)
+            }
+
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if me.handleJarvisKey(type: type, keyCode: keyCode, event: event) {
                 return nil
