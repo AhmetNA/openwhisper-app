@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
-/// whether Jarvis is awake; while Jarvis listens it grows, the screen's edges darken, and a
-/// white glow inside them follows your voice once speech is heard.
+/// what Jarvis is doing; while Jarvis listens, your voice's waveform sits in the middle and a
+/// soft white glow along the screen's edges follows it.
 ///
 /// Ordinary windows can't appear over the lock screen, so the window is moved into a SkyLight
 /// space with a high absolute level (private API, loaded at runtime; without it the window just
@@ -119,55 +119,44 @@ struct LockScreenIndicatorView: View {
         GeometryReader { geo in
             ZStack {
                 if listening {
-                    RadialGradient(colors: [.clear, .clear, .black.opacity(0.75)], center: .center,
-                                   startRadius: 0, endRadius: max(geo.size.width, geo.size.height) * 0.62)
-                    RoundedRectangle(cornerRadius: 60)
-                        .strokeBorder(.white, lineWidth: 36)
-                        .blur(radius: 45)
-                        .padding(70)
-                        .opacity(voice * 0.85)
+                    Rectangle()
+                        .strokeBorder(.white, lineWidth: 18)
+                        .blur(radius: 28)
+                        .opacity(0.12 + voice * 0.3)
                         .animation(.easeOut(duration: 0.15), value: voice)
-                }
-                badge
+                    VStack(spacing: 22) {
+                        AudioWaveformView(level: appState.audioLevel)
+                            .scaleEffect(3)
+                            .frame(width: 220, height: 80)
+                        caption("Dinliyor")
+                    }
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                } else {
+                    HStack(spacing: 16) {
+                        JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
+                                                                || appState.jarvisActivity != .none)
+                            .frame(width: 44, height: 44)
+                        caption(appState.flowBarMessage ?? statusText)
+                    }
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
+                }
             }
             .animation(.easeInOut(duration: 0.3), value: listening)
+            .animation(.easeInOut(duration: 0.3), value: appState.flowBarMessage)
         }
         .ignoresSafeArea()
     }
 
-    @ViewBuilder
-    private var badge: some View {
-        if listening {
-            HStack(spacing: 14) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 26, weight: .semibold))
-                AudioWaveformView(level: appState.audioLevel)
-                    .scaleEffect(1.6)
-                    .frame(width: 100)
-                Text("Dinliyor")
-                    .font(.system(size: 22, weight: .semibold))
-            }
+    private func caption(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 28, weight: .light, design: .rounded))
+            .tracking(1.5)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .frame(maxWidth: 700)
             .foregroundStyle(.white)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 16)
-            .background(Capsule().fill(.black.opacity(0.45)))
-            .overlay(Capsule().strokeBorder(.white.opacity(0.25 + voice * 0.6), lineWidth: 1.5))
-        } else {
-            HStack(spacing: 14) {
-                JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
-                                                        || appState.jarvisActivity != .none)
-                    .frame(width: 44, height: 44)
-                Text(statusText)
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .padding(.leading, 12)
-            .padding(.trailing, 22)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 22).fill(.black.opacity(0.5)))
-            .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.2), lineWidth: 1))
-        }
+            .shadow(color: .black.opacity(0.5), radius: 8)
+            .contentTransition(.opacity)
     }
 
     private var statusText: String {
