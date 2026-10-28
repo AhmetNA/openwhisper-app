@@ -1232,7 +1232,7 @@ extension AppState {
     }
 
     /// How long into a wake session `checkLateWakeVoice` keeps scoring, and how often.
-    static let lateWakeVoiceWindow: TimeInterval = 12
+    static let lateWakeVoiceWindow: TimeInterval = 5
     static let lateWakeVoiceCheckInterval: TimeInterval = 1
     static let lateWakeVoiceMatchesNeeded = 2
 
