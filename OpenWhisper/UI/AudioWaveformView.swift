@@ -1,6 +1,21 @@
 import SwiftUI
 import Combine
 
+/// `AudioWaveformView` at rest: the same flat bars without its 20 Hz timer, which kept
+/// re-rendering zeros in the hidden flow bar between sessions.
+struct IdleWaveformView: View {
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(0..<14, id: \.self) { _ in
+                Capsule()
+                    .fill(Color.white.opacity(0.75))
+                    .frame(width: 2.5, height: 3.5)
+            }
+        }
+        .frame(height: 26, alignment: .center)
+    }
+}
+
 struct AudioWaveformView: View {
     let level: Float
     private let barWidth: CGFloat = 2.5

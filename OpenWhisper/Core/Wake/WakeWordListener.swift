@@ -78,6 +78,9 @@ final class WakeWordListener {
     private var blocksAtLog = 0
     private var levelsSinceLog: [Float] = []
     private var mediaPlaying = false
+    /// `OutputRoute.reachesRoom()`, refreshed at most once a second while media plays.
+    private var outputReachesRoom = true
+    private var outputRouteCheckedAt: TimeInterval = 0
     /// Whether the echo reference (what the Mac is actually playing) carries sound. Apps like
     /// Vorssaint or Safari keep their output open while silent; without this the gate would
     /// treat the room as music for hours and never close.
@@ -647,8 +650,15 @@ final class WakeWordListener {
         guard let detector else { return }
         // Media counts only while it is audible; with no reference (other mic, no Screen
         // Recording permission, AEC off) there is no way to tell, so the flag stands.
+        // Headphones, mute or volume 0 keep it out of the mic: the gate then closes as usual
+        // instead of running the embedding model on every block for the whole video.
         let now = ProcessInfo.processInfo.systemUptime
-        let mediaAudible = mediaPlaying && (!aecActive || referenceAudibility.isAudible(at: now))
+        if mediaPlaying, now - outputRouteCheckedAt >= 1 {
+            outputRouteCheckedAt = now
+            outputReachesRoom = OutputRoute.reachesRoom()
+        }
+        let mediaAudible = mediaPlaying && outputReachesRoom
+            && (!aecActive || referenceAudibility.isAudible(at: now))
         detector.gate?.mediaPlaying = mediaAudible
         // Speech under music is unproven for Silero: while media is audible, energy alone decides.
         if let voiceActivity {

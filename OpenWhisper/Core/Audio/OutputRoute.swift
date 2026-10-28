@@ -22,6 +22,16 @@ enum OutputRoute {
         return value
     }
 
+    /// Whether what the Mac plays can reach a microphone in the room: false for headphones,
+    /// a muted output or volume 0. Outputs it can't tell apart (USB, HDMI) count as the room.
+    static func reachesRoom() -> Bool {
+        if isHeadphones() { return false }
+        if systemVolume() == 0 { return false }
+        guard let device = defaultOutputDevice() else { return true }
+        let muted: UInt32? = read(device, kAudioDevicePropertyMute, scope: kAudioObjectPropertyScopeOutput)
+        return muted != 1
+    }
+
     private static func defaultOutputDevice() -> AudioDeviceID? {
         let id: AudioDeviceID? = read(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice,
                                       scope: kAudioObjectPropertyScopeGlobal)

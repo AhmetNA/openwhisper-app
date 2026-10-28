@@ -150,7 +150,7 @@ struct FlowBarView: View {
     // MARK: - Idle
 
     private var idleContent: some View {
-        AudioWaveformView(level: 0)
+        IdleWaveformView()
     }
 
     // MARK: - Recording
