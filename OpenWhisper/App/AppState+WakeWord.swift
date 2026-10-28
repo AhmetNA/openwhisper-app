@@ -57,7 +57,10 @@ extension AppState {
         }
         Task { [weak self] in
             guard let self else { return }
-            if await self.wakeSpeakerMatches(audio: audio, clipID: clipID) {
+            // Over music a voice just under the threshold counts: Whisper often can't hear the
+            // word there either (0.399 against 0.40 and "Ece abis", 28 Oct 2026, the call dropped).
+            let margin: Float = self.mediaPlaying ? Self.mediaWakeSpeakerMargin : 0
+            if await self.wakeSpeakerMatches(audio: audio, clipID: clipID, margin: margin) {
                 self.markWakeSpeakerVerified()
                 if score < WakeWordListener.confirmedScore { self.shadowWakeWordCheck(audio: audio, clipID: clipID) }
             } else if score < WakeWordListener.confirmedScore {
@@ -174,11 +177,15 @@ extension AppState {
         }
     }
 
+    /// How far under `TargetSpeakerFilter.wakeThreshold` a direct wake's voice may score while
+    /// media plays (`handleDirectWake`).
+    static let mediaWakeSpeakerMargin: Float = 0.02
+
     /// Whether the wake clip sounds like the enrolled user; true when the check is off. A model
     /// error lets the wake through: a failed download must not silence "Jarvis" altogether.
-    func wakeSpeakerMatches(audio: [Float], clipID: UUID? = nil) async -> Bool {
+    func wakeSpeakerMatches(audio: [Float], clipID: UUID? = nil, margin: Float = 0) async -> Bool {
         guard targetSpeakerGuardsWakeWord, let profile = wakeTargetSpeakerProfile else { return true }
-        let threshold = TargetSpeakerFilter.wakeThreshold
+        let threshold = TargetSpeakerFilter.wakeThreshold - margin
         let started = Date()
         do {
             let score = try await targetSpeakerFilter.wakeSpeakerScore(samples: audio, profile: profile)
