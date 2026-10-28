@@ -262,6 +262,8 @@ extension AppState {
             let generation = correctionGeneration
 
             var agentDeliveryFailure: String?
+            /// Jarvis opened the app or chat it sends to: the Flow bar keeps saying so.
+            var jarvisChangedScreen = false
 
             /// Pastes `rawText` (after learned/phonetic corrections) into `targetApp`. With
             /// `send`, presses Return once the paste landed, for coding agents: the text is
@@ -338,6 +340,28 @@ extension AppState {
                     owLog("[Misheard] Not Turkish or English: \(misheard.map(\.text))")
                 }
 
+                // Until Return is pressed the screen must stay put: say so on the Flow bar, and
+                // the moment the user moves to another app, tell them the message may not go.
+                var watchesScreen = self.autoPasteEnabled && send
+                let screenWatch = watchesScreen ? NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+                ) { [weak self] note in
+                    let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                    Task { @MainActor in
+                        guard watchesScreen, let app, app.processIdentifier != targetApp?.processIdentifier,
+                              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                        owLog("[Agent] Screen changed to \(app.localizedName ?? "?") before the send")
+                        self?.showFlowBarMessage("Ekran değişti, mesaj gitmeyebilir", durationMs: 8000)
+                    }
+                } : nil
+                defer {
+                    watchesScreen = false
+                    if let screenWatch { NSWorkspace.shared.notificationCenter.removeObserver(screenWatch) }
+                }
+                if watchesScreen, !jarvisChangedScreen {
+                    self.showFlowBarMessage("Gönderiyorum, ekranı değiştirmeyin", durationMs: 8000)
+                }
+
                 // Return can only be pressed in the frontmost app. If the user moved to another
                 // app (or full-screen Space) after "gönder", hop to the target, send there, and
                 // go straight back to where they were.
@@ -347,6 +371,8 @@ extension AppState {
                    let front = NSWorkspace.shared.frontmostApplication,
                    front.processIdentifier != target.processIdentifier {
                     owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
+                    jarvisChangedScreen = true
+                    self.showFlowBarMessage("Jarvis ekranı değiştirdi, bekleyin", durationMs: 8000)
                     if await AgentAppActivator.bringToFront(target) {
                         hopFrom = front
                     }
@@ -380,6 +406,9 @@ extension AppState {
                 }
 
                 if self.autoPasteEnabled, RecordedConversation.requiresBinding(pasteContext.bundleIdentifier) {
+                    if previousConversation != nil {
+                        self.showFlowBarMessage("Jarvis sohbeti değiştirdi, bekleyin", durationMs: 8000)
+                    }
                     guard let app = targetApp, let conversation = pasteContext.conversation,
                           await conversation.restore(in: app) else {
                         NSPasteboard.general.clearContents()
@@ -448,6 +477,8 @@ extension AppState {
                                             _ = await ClaudeSessionNavigator.waitForComposerText(app, text: initialText)
                                         }
                                         if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
+                                            // From here Jarvis itself may hop to the target and back.
+                                            watchesScreen = false
                                             sent = await injector.pressReturnBringingToFront(pid: pid, context: pasteContext)
                                         }
                                         // A posted Return proves nothing if Claude was not ready:
@@ -1083,7 +1114,13 @@ extension AppState {
                     self.showFlowBarMessage(agent.body.isEmpty ? status : "\(status), panoya kopyalandı", durationMs: 4500)
                     if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(spoken)) }
                 }
+                @MainActor func jarvisChangesScreen() {
+                    guard agent.send, !agent.body.isEmpty else { return }
+                    jarvisChangedScreen = true
+                    self.showFlowBarMessage("Jarvis ekranı değiştirdi, bekleyin", durationMs: 8000)
+                }
                 if let project = agent.project {
+                    jarvisChangesScreen()
                     switch await AgentProjectNavigator.open(project, target: agent.target ?? .claudeCode,
                                                             assumed: agent.targetAssumed, newSession: agent.session == .new) {
                     case .failed(let status, let spoken):
@@ -1129,6 +1166,7 @@ extension AppState {
                 if let target = agent.target,
                    !(targetApp?.bundleIdentifier.map(target.bundleIdentifiers.contains) ?? false)
                     || agent.session != .current {
+                    jarvisChangesScreen()
                     guard let app = await AgentAppActivator.activate(target) else {
                         await fail("\(target.displayName) açılamadı", spoken: "\(target.displayName) açılamadı")
                         return
