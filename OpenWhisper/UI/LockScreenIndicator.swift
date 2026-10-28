@@ -178,7 +178,7 @@ struct LockScreenIndicatorView: View {
 
     private var statusColor: Color {
         if appState.recordingState != .idle || appState.jarvisActivity != .none { return .white }
-        return appState.wakeWordListening ? Color(red: 0.3, green: 0.85, blue: 1) : .gray
+        return appState.wakeWordListening ? Color(red: 1, green: 0.55, blue: 0.15) : .gray
     }
 }
 
