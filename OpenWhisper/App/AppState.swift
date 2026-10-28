@@ -551,6 +551,16 @@ final class AppState {
     @ObservationIgnored var pendingClaudeMessage: String?
     /// The app whose chat `pendingClaudeMessage` recapped.
     @ObservationIgnored var pendingRecapAgent: AgentApp = .claudeCode
+    /// Settings › Jarvis: Claude Code's permission questions are asked out loud.
+    var claudeVoicePermissionsEnabled = UserDefaults.standard.object(forKey: "claudeVoicePermissionsEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(claudeVoicePermissionsEnabled, forKey: "claudeVoicePermissionsEnabled") }
+    }
+    @ObservationIgnored let claudePermissionServer = ClaudePermissionServer()
+    /// The permission question the next `.confirmation` recording answers.
+    @ObservationIgnored var pendingClaudePermission: PendingClaudePermission?
+    /// A question is being asked; the next one waits for it.
+    @ObservationIgnored var claudePermissionAsking = false
+    @ObservationIgnored var abandonedClaudePermissions: Set<UUID> = []
     /// After a Claude session recap, how long the mic waits for the first word of the message.
     nonisolated static let claudeMessageWindow: TimeInterval = 6
     /// The next `.followUp` recording comes after a command (`listenAfterCommand`): the

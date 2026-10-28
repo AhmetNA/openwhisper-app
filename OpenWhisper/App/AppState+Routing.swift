@@ -102,6 +102,7 @@ extension AppState {
                 self.reminderManager?.cancelPendingDeletion()
                 self.whatsAppSender.cancel()
             }
+            if session.trigger == .confirmation { self.endClaudePermission(reason: "no answer") }
             // Break the session ↔ worker reference cycle once the worker has drained the
             // session's stream and the final output step is complete.
             session.task = nil
@@ -258,6 +259,12 @@ extension AppState {
 
             owLog("[OpenWhisper] Raw: \(text)")
             session.latency.beginDecision()
+            // Claude asked for a permission out loud: this is the answer.
+            if session.trigger == .confirmation, let permission = pendingClaudePermission {
+                session.latency.finishDecision(route: "Claude izin cevabı")
+                await answerClaudePermission(permission, with: trimmed)
+                return
+            }
             correctionGeneration &+= 1
             let generation = correctionGeneration
 

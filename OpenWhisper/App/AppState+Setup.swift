@@ -170,6 +170,7 @@ extension AppState {
         owLog("[OpenWhisper] Notification permission: \(notifGranted)")
         setupTimers()
         setupWhatsAppAnnouncements()
+        setupClaudePermissions()
         owLog("[OpenWhisper] Ready!")
     }
 

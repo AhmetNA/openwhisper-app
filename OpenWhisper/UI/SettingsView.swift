@@ -707,6 +707,21 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
+                    Label("Claude izinlerini sesle sor", systemImage: "checkmark.shield")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.claudeVoicePermissionsEnabled },
+                                             set: { appState.claudeVoicePermissionsEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                Text("Claude Code bir işlem için izin isteyince soruyu sesli okur. “Evet”, “her zaman” ya da “hayır, …” diyebilirsiniz; cevap vermezseniz karar Claude'un penceresinde kalır.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
                     Label("WhatsApp mesajlarını haber ver", systemImage: "message")
                     Spacer()
                     Toggle("", isOn: Binding(get: { appState.whatsAppAnnouncementsEnabled },

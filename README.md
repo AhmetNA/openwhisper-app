@@ -360,3 +360,32 @@ Cloud-assisted chat navigation is always enabled and has no separate settings to
 Examples: “Bir önceki chat’e geç”, “Yeni chat aç”, or “Claude Code’da ses modeliyle ilgili konuştuğumuz sohbeti aç”. An explicitly named app takes priority; otherwise the app focused when recording started is used. “Previous” means the most recently active conversation other than the current one. Searches cover the latest 40 non-archived conversations, using bounded user/assistant excerpts rather than full transcripts. Claude sessions without completed turns are excluded.
 
 The model selects only new-chat or existing-chat navigation. Unknown IDs and duplicate titles are rejected; an existing-chat success reply requires the destination ID to be verified locally. Model failures do not trigger a guessed navigation. Existing explicit new-session dictation commands remain available.
+
+## Claude Code permissions by voice
+
+When Claude Code asks for permission to use a tool, Jarvis can read the question out loud and
+take a spoken answer: “Evet” allows it once, “Her zaman” also saves Claude's suggested rule,
+“Hayır” denies it, and “Hayır, önce testleri çalıştır” denies it and passes the rest to Claude.
+The full command is shown in the Flow bar; only a plain yes allows. Without an answer, or when
+you click in Claude first, Claude's own prompt decides. Toggle it in **Settings › Jarvis**.
+
+It needs a `PermissionRequest` hook in `~/.claude/settings.json`. Jarvis listens on
+`127.0.0.1:47823` only; when Jarvis isn't running the hook returns nothing and Claude asks as usual.
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s --max-time 90 --data-binary @- http://127.0.0.1:47823/claude/permission || true",
+            "timeout": 100
+          }
+        ]
+      }
+    ]
+  }
+}
+```
