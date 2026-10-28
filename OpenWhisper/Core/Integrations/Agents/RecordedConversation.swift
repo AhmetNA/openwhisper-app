@@ -84,6 +84,14 @@ struct RecordedConversation: @unchecked Sendable {
         return Self.currentTitle(window: window, agent: agent) == title
     }
 
+    /// The chat title on screen in this window now, to spot the user opening another chat mid-send.
+    func shownTitle(in app: NSRunningApplication) -> String? {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        guard let focusedWindow = Self.element(root, kAXFocusedWindowAttribute),
+              CFEqual(focusedWindow, window) else { return nil }
+        return Self.currentTitle(window: window, agent: agent)
+    }
+
     @MainActor
     func restore(in app: NSRunningApplication) async -> Bool {
         guard !app.isTerminated, await AgentAppActivator.bringToFront(app) else { return false }

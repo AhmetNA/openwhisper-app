@@ -428,6 +428,24 @@ extension AppState {
                     pasteContext.conversation = conversation
                 }
 
+                // Opening another chat in the same app is no app switch: watch the chat title.
+                var chatWatch: Task<Void, Never>?
+                if watchesScreen, let app = targetApp, let conversation = pasteContext.conversation,
+                   let shown = conversation.shownTitle(in: app) {
+                    chatWatch = Task { @MainActor [weak self] in
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .milliseconds(250))
+                            guard watchesScreen, !Task.isCancelled else { return }
+                            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                                  let now = conversation.shownTitle(in: app), now != shown else { continue }
+                            owLog("[Agent] Chat changed to \"\(now)\" before the send")
+                            self?.showFlowBarMessage("Sohbet değişti, mesaj gitmeyebilir", durationMs: 8000)
+                            return
+                        }
+                    }
+                }
+                defer { chatWatch?.cancel() }
+
                 if self.autoPasteEnabled {
                     let pasteStartedAt = session.latency.timestamp()
                     session.latency.expectAsyncOutput()
