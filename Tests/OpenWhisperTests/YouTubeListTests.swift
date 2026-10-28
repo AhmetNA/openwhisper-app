@@ -88,6 +88,16 @@ final class YouTubeListTests: XCTestCase {
         XCTAssertEqual(CommandFollowUp.resolve("Orkun'u aç", after: .youtubeList, listed: home), .system(.browser(.youtubeTitle("orkun'u"))))
         XCTAssertNil(CommandFollowUp.resolve("Safari'yi aç", after: .youtubeList, listed: home))
         XCTAssertNil(CommandFollowUp.resolve(heard, after: .youtubeList))
+        // 2026-10-28 voice test: a video not read aloud, its title half misheard.
+        let grid = home + [
+            .init(id: "m1", title: "Mantra | Bilardoda Yaşa Takılanlar, Süpürgeli Istaka, Okmeydanı | Marifet 15", channel: "Mantra"),
+            .init(id: "m2", title: "Mantra | Erzurum, Buz Hokeyi, Cağ Kebabı, Muhtar Sahnesi | Marifet 11. Bölüm", channel: "Mantra")
+        ]
+        XCTAssertEqual(CommandFollowUp.resolve("Mantra Ertuğrul Buzokey maçını açabilir misin?", after: .youtubeList, listed: grid),
+                       .system(.browser(.youtubeTitle("mantra ertuğrul buzokey maçını"))))
+        XCTAssertEqual(YouTubeList.bestMatch("mantra ertuğrul buzokey maçını", in: grid)?.id, "m2")
+        // One clear word among garbled ones could be either Mantra video.
+        XCTAssertNil(YouTubeList.bestMatch("mantra ertuğrul maçını", in: grid))
         XCTAssertEqual(SystemCommandParser.parse("Hey Jarvis, Barış Soydan'ın videosunu açabilir misin"), .browser(.youtubeTitle("barış soydan'ın")))
     }
 

@@ -163,7 +163,9 @@ enum YouTubeList {
     }
 
     /// Query-word coverage favors partial titles; edit distance tolerates ASR spelling.
-    /// Equal scores keep the on-screen order, rather than selecting randomly.
+    /// Two clearly heard words are enough when Whisper garbled the rest ("Mantra Ertuğrul
+    /// Buzokey maçını" → "Mantra | Erzurum, Buz Hokeyi"). Equal scores keep the on-screen
+    /// order, rather than selecting randomly.
     static func bestMatch(_ query: String, in candidates: [Video]) -> Video? {
         func tokens(_ text: String) -> [String] {
             // "Orkun'un" → "orkunun", "Soy'dan" → "soydan": one word, as the name is written.
@@ -192,12 +194,15 @@ enum YouTubeList {
         let queryWords = tokens(query)
         guard !queryWords.isEmpty else { return nil }
         var best: Video?
-        var bestScore = 0.64
+        var bestScore = 0.0
         for video in candidates {
-            let titleWords = tokens(video.title + " " + (video.channel ?? ""))
-            let coverage = queryWords.map { q in titleWords.map { similarity(q, $0) }.max() ?? 0 }
-                .reduce(0, +) / Double(queryWords.count)
-            if coverage > bestScore {
+            let single = tokens(video.title + " " + (video.channel ?? ""))
+            // "Buz Hokeyi" heard as one word, "buzokey".
+            let titleWords = single + zip(single, single.dropFirst()).map { $0 + $1 }
+            let scores = queryWords.map { q in titleWords.map { similarity(q, $0) }.max() ?? 0 }
+            let coverage = scores.reduce(0, +) / Double(queryWords.count)
+            let clear = zip(queryWords, scores).filter { $0.count >= 4 && $1 >= 0.75 }.count
+            if coverage > 0.64 || clear >= 2, coverage > bestScore {
                 bestScore = coverage
                 best = video
             }
