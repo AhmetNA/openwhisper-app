@@ -46,8 +46,9 @@ final class RecordingMediaController {
     private let transport: RecordingMediaTransport
     private let pauseDelay: TimeInterval
     private var active = false
+    private let ducker: AudioDucker
     private var pendingPause: DispatchWorkItem?
-    private var duckedForYouTube = false
+    private var volumeDucked = false
     private var receipts: [MediaPlaybackSnapshot] = []
     private let leftRunning = OSAllocatedUnfairLock(initialState: false)
 
@@ -55,23 +56,31 @@ final class RecordingMediaController {
     /// sessions read it: their mic hears what plays in the ear only if the pause failed.
     var playbackLeftRunning: Bool { leftRunning.withLock { $0 } }
 
-    init(transport: RecordingMediaTransport = NowPlayingTransport(), pauseDelay: TimeInterval = 2) {
+    /// A held pause turns the volume down this much (to 30%) while the wake is unconfirmed.
+    static let holdDuck: Float = 0.7
+
+    init(transport: RecordingMediaTransport = NowPlayingTransport(), pauseDelay: TimeInterval = 2,
+         ducker: AudioDucker = .shared) {
         self.transport = transport
         self.pauseDelay = pauseDelay
+        self.ducker = ducker
     }
 
     /// `immediately` skips the delay that lets a short Fn tap leave the music alone: for
     /// Bluetooth buds, whose mic hears the music played into the ear.
     /// `sparingYouTube` (wake-word sessions) never pauses a YouTube video: the volume dips 10%
     /// instead, so a false "Jarvis" barely disturbs it.
-    func begin(immediately: Bool = false, sparingYouTube: Bool = false) {
+    /// `holdingPause` (a "Jarvis" over media whose voice isn't confirmed yet, `WakeProbation`)
+    /// pauses nothing: the volume drops by `holdDuck` until `confirmPause()` pauses, or `end()`
+    /// restores it with every player left as it was. The volume stays down through the session.
+    func begin(immediately: Bool = false, sparingYouTube: Bool = false, holdingPause: Bool = false) {
         queue.async { [self] in
             guard !active else { return }
             active = true
             leftRunning.withLock { $0 = true }
-            if sparingYouTube {
-                AudioDucker.shared.duck(by: 0.1)
-                duckedForYouTube = true
+            if holdingPause || sparingYouTube {
+                ducker.duck(by: holdingPause ? Self.holdDuck : 0.1)
+                volumeDucked = true
             }
 
             let pause = DispatchWorkItem { [weak self] in
@@ -83,11 +92,22 @@ final class RecordingMediaController {
                 owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)" + (result.leftPlaying ? "; something is still playing" : ""))
             }
             pendingPause = pause
-            if pauseDelay > 0 && !immediately {
+            if holdingPause {
+                owLog("[RecordingMedia] Pause held until the wake is confirmed; volume turned down")
+            } else if pauseDelay > 0 && !immediately {
                 queue.asyncAfter(deadline: .now() + pauseDelay, execute: pause)
             } else {
                 pause.perform()
             }
+        }
+    }
+
+    /// Runs a held (or still delayed) pause now.
+    func confirmPause() {
+        queue.async { [self] in
+            guard active, let pause = pendingPause else { return }
+            pause.perform()
+            pause.cancel()  // a delayed copy already queued must not pause a second time
         }
     }
 
@@ -99,9 +119,9 @@ final class RecordingMediaController {
             active = false
             pendingPause?.cancel()
             pendingPause = nil
-            if duckedForYouTube {
-                AudioDucker.shared.restore()
-                duckedForYouTube = false
+            if volumeDucked {
+                ducker.restore()
+                volumeDucked = false
             }
             if resuming {
                 // Receipt order matters: MediaRemote players come first, while the one paused

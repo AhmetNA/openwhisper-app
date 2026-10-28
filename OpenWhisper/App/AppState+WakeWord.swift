@@ -91,6 +91,7 @@ extension AppState {
     func markWakeSpeakerVerified() {
         if recordingState == .recording, let session = activeTranscriptionSession, session.trigger == .wakeWord {
             session.wakeSpeakerVerified = true
+            confirmWakeProbation("wake word matched")
         } else {
             pendingWakeSpeakerVerified = true
         }

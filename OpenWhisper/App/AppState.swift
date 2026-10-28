@@ -600,6 +600,10 @@ final class AppState {
     @ObservationIgnored var ownVoiceStopGate: OwnVoiceStopGate?
     @ObservationIgnored var ownVoiceCheckInFlight = false
     @ObservationIgnored var lastOwnVoiceCheck: TimeInterval = 0
+    /// A wake over media that pauses nothing until the user's voice confirms it. See `WakeProbation`.
+    @ObservationIgnored var wakeProbation: WakeProbation?
+    @ObservationIgnored var wakeProbationCheckInFlight = false
+    @ObservationIgnored var lastWakeProbationCheck: TimeInterval = 0
     var systemAudioCapture: SystemAudioCapture?
     var systemAudioGeneration: UInt64 = 0
     var systemAudioTranscriptionTail: Task<Void, Never>?

@@ -138,4 +138,57 @@ final class RecordingMediaControllerTests: XCTestCase {
 
         XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
     }
+
+    private func heldController(_ transport: Transport, volume: MockVolumeController,
+                                scheduler: TestRampScheduler = TestRampScheduler()) -> (RecordingMediaController, AudioDucker) {
+        let ducker = AudioDucker(volumeController: volume, scheduler: scheduler)
+        return (RecordingMediaController(transport: transport, pauseDelay: 0, ducker: ducker), ducker)
+    }
+
+    func testHeldPauseTurnsTheVolumeDownAndNeverPausesWhenDropped() {
+        let transport = Transport()
+        let volume = MockVolumeController()
+        let scheduler = TestRampScheduler()
+        let (controller, ducker) = heldController(transport, volume: volume, scheduler: scheduler)
+
+        controller.begin(immediately: true, holdingPause: true)
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        XCTAssertTrue(transport.events.isEmpty)
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8 * 0.3, accuracy: 0.001)
+
+        controller.end()
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        for _ in 0..<100 { scheduler.triggerTick() }
+        ducker.flushQueueForTesting()
+        XCTAssertTrue(transport.events.isEmpty)
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8, accuracy: 0.0001)
+    }
+
+    func testConfirmedHeldPausePausesThenResumes() {
+        let transport = Transport()
+        let (controller, _) = heldController(transport, volume: MockVolumeController())
+
+        controller.begin(holdingPause: true)
+        controller.confirmPause()
+        controller.confirmPause()
+        controller.end()
+        controller.waitUntilIdle()
+
+        XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
+    }
+
+    func testConfirmingADelayedPauseRunsItOnce() {
+        let transport = Transport()
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0.05)
+
+        controller.begin()
+        controller.confirmPause()
+        Thread.sleep(forTimeInterval: 0.1)
+        controller.end()
+        controller.waitUntilIdle()
+
+        XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
+    }
 }

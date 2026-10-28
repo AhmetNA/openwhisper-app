@@ -187,8 +187,19 @@ extension AppState {
         // Not after a command: the user is judging the song or video it just started.
         // A spoken "Jarvis" (often a false wake over the video) never pauses YouTube.
         let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
+        // A "Jarvis" over media whose voice hasn't matched yet pauses nothing until it does.
+        let probationProfile = pausesMedia && recordingTrigger == .wakeWord && mediaPlaying
+            && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord && !bypassAudioProcessing
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
+        wakeProbation = probationProfile.map { WakeProbation(startTime: sessionStart, profile: $0) }
+        wakeProbationCheckInFlight = false
+        lastWakeProbationCheck = sessionStart
+        if wakeProbation != nil {
+            owLog(String(format: "[WakeProbation] Media playing and the voice not matched yet: nothing paused, %.0f s for your voice", WakeProbation.window))
+        }
         if pausesMedia {
-            recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord)
+            recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord,
+                                 holdingPause: wakeProbation != nil)
         }
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
@@ -398,6 +409,7 @@ extension AppState {
                 self.recordingDuration += 0.25
                 self.enqueueCompletedAudioSegments()
                 self.checkOwnVoiceEndpoint()
+                self.checkWakeProbation()
                 self.checkSpokenDoneEndpoint()
                 self.checkCommandOverReply()
             }
@@ -417,6 +429,7 @@ extension AppState {
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
+        wakeProbation = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
         owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
@@ -434,6 +447,7 @@ extension AppState {
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
+        wakeProbation = nil
 
         if targetSpeakerEnrollmentIsRecording {
             stopTargetSpeakerEnrollmentRecording()
@@ -939,6 +953,7 @@ extension AppState {
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
+        wakeProbation = nil
         guard recordingState == .recording, let session = activeTranscriptionSession else { return }
         if session.trigger == .confirmation {
             reminderManager?.cancelPendingDeletion()
@@ -1123,6 +1138,59 @@ extension AppState {
             self.hotkey?.externalCancelHandsFree()
             self.stopRecording()
         }
+    }
+
+    /// Scores the last 1.5 s against the session mic's profile every 0.5 s while a wake over
+    /// media is on probation. The user's voice pauses the media; none within the window drops the
+    /// session, with nothing paused. A check in flight at the deadline is waited for.
+    func checkWakeProbation() {
+        guard recordingState == .recording, let probation = wakeProbation, !wakeProbationCheckInFlight else { return }
+        let now = CACurrentMediaTime()
+        if probation.expired(at: now) {
+            wakeProbation = nil
+            owLog(String(format: "[WakeProbation] No voice of yours within %.0f s — dropping the session, nothing was paused", WakeProbation.window))
+            hotkey?.externalCancelHandsFree()
+            discardActiveRecording(reason: "wake over media, never your voice")
+            return
+        }
+        guard now - lastWakeProbationCheck >= WakeProbation.checkInterval, let audioEngine else { return }
+        let samples = audioEngine.recentSamples(count: OwnVoiceStopGate.windowSamples)
+        guard samples.count >= OwnVoiceStopGate.windowSamples else { return }
+        lastWakeProbationCheck = now
+        wakeProbationCheckInFlight = true
+        let filter = targetSpeakerFilter
+        let sessionID = activeTranscriptionSession?.id
+        Task { [weak self] in
+            let score: Float?
+            do {
+                score = try await filter.wakeSpeakerScore(samples: samples, profile: probation.profile)
+            } catch {
+                owLog("[WakeProbation] Speaker check failed, letting the wake through: \(error)")
+                score = nil
+            }
+            guard let self else { return }
+            self.wakeProbationCheckInFlight = false
+            guard self.recordingState == .recording, self.activeTranscriptionSession?.id == sessionID,
+                  var current = self.wakeProbation else { return }
+            guard let score else {
+                self.confirmWakeProbation("speaker check unavailable")
+                return
+            }
+            let threshold = TargetSpeakerFilter.wakeThreshold
+            owLog(String(format: "[WakeProbation] score %.3f (yours ≥%.2f)", score, threshold))
+            if current.record(score: score, threshold: threshold) {
+                self.wakeProbation = current
+                self.confirmWakeProbation(String(format: "command scored %.2f", score))
+            }
+        }
+    }
+
+    /// The user's voice confirmed a wake on probation: the held pause runs now.
+    func confirmWakeProbation(_ why: String) {
+        guard wakeProbation != nil else { return }
+        wakeProbation = nil
+        owLog("[WakeProbation] Your voice (\(why)) — pausing the media")
+        recordingMedia.confirmPause()
     }
 
     /// Whether this recording runs DeepFilterNet (`DeepFilterAutoDecider`), logged with its inputs.
