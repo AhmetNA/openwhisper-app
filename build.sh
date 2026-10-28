@@ -133,6 +133,14 @@ if [ -x "$ASR_DEST/.venv/bin/python" ]; then
     echo "==> Updated Qwen3-ASR server in $ASR_DEST"
 fi
 
+# Alternative speech model (Settings › Konuşma modeli › Nemotron 3.5 ASR): same as above, installed
+# once by servers/nemotron_asr_server/setup.sh.
+NEMOTRON_DEST="$HOME/Library/Application Support/OpenWhisper/nemotron"
+if [ -x "$NEMOTRON_DEST/.venv/bin/python" ]; then
+    cp servers/nemotron_asr_server/server.py "$NEMOTRON_DEST/"
+    echo "==> Updated Nemotron ASR server in $NEMOTRON_DEST"
+fi
+
 # Optional final-output Turkish ITN. setup.sh installs the pinned native runtime once.
 DAMGA_DEST="$HOME/Library/Application Support/OpenWhisper/damga"
 if [ -x "$DAMGA_DEST/.venv/bin/python" ]; then
