@@ -7,10 +7,6 @@ struct PermissionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\"İzin iste\" macOS'un izin penceresini açar; daha önce reddettiyseniz Sistem Ayarları'nı açar.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             VStack(spacing: 0) {
                 ForEach(PermissionsManager.Kind.allCases) { kind in

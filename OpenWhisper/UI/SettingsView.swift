@@ -540,7 +540,7 @@ struct SettingsView: View {
             }
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
             .padding(.leading, 22)
-            Text("Bağlı olan en üstteki mikrofon kaydeder. Sıra siz değiştirene kadar korunur. Listede olmayan mikrofon ilk sıraya eklenir; kayıtlı mikrofon eski yerinde kalır. 3 gün bağlı olmayan mikrofon listeden çıkar.")
+            Text("Bağlı olan en üstteki mikrofon kaydeder.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -634,10 +634,6 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Kayıt sırasında çalan müzik ve video duraklar, kayıt bitince devam eder.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -687,7 +683,7 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
-                Text("Mac kilitliyken Jarvis'in uyanık olup olmadığını gösterir. Dinlerken ekranın kenarları kararır, konuştuğunuzu duyunca içi beyaz parlar.")
+                Text("Mac kilitliyken Jarvis'in uyanık olup olmadığını gösterir.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -718,7 +714,7 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
-                Text("Biri WhatsApp'tan yazınca altta kaç mesaj geldiğini ve kimlerden ya da hangi gruplardan geldiğini gösterir; mesajı yazmaz, sesli okumaz, müziği durdurmaz.")
+                Text("WhatsApp'tan mesaj gelince altta kimden kaç mesaj geldiğini gösterir.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -830,9 +826,6 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Mac'e giriş yapınca OpenWhisper kendiliğinden açılır.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -845,10 +838,6 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("“Şarkı aç” ya da “beğendiğim şarkıları çal” deyince Beğenilen Şarkılar karışık sırayla çalar. Kapalıyken en son beğendiğin şarkıdan başlar.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -903,10 +892,6 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
-            Text("Komutlara kısa sesli cevap verir, ör. “Saat 14:05, patron.”")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Text("Ses sağlayıcı")

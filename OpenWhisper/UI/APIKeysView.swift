@@ -8,9 +8,6 @@ struct APIKeysView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Anahtarlar Anahtar Zinciri'nde saklanır.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             ForEach(APIKeys.all) { provider in
                 APIKeyRow(provider: provider, onChange: onChange)
                 if provider.id != APIKeys.all.last?.id { Divider() }
