@@ -216,28 +216,19 @@ extension AppState {
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
         // and delay this dispatch. Read everything the background block needs up front so the
         // dispatch itself has zero main-thread work between it and the guards above.
-        // Apple voice processing needs AVAudioEngine, which falls back to the wrong mic around
-        // Bluetooth buds; their in-ear mic has no speaker echo and call mode already denoises.
-        var processingMode: AudioProcessingMode = (recordingInputIsBluetooth || deferredWake != nil) && audioProcessingMode == .appleVoiceProcessing
-            ? .off : audioProcessingMode
-        if processingMode != audioProcessingMode {
-            owLog("[AudioEngine] Bluetooth input: recording without Apple voice processing")
-        }
+        let processingMode: AudioProcessingMode
         let bypassProcessing = bypassAudioProcessing
         let echoCancellation = !bypassProcessing && recordingEchoCancellationWanted(mic: recordingMic)
         // Decided once here for the whole recording, never switched while it runs.
         if bypassProcessing {
             processingMode = .off
             activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "unprocessed")
-        } else if processingMode != .appleVoiceProcessing {
+        } else {
             processingMode = decideDeepFilter(
                 inputDeviceUID: recordingInputDeviceUID,
                 inputIsBluetooth: recordingInputIsBluetooth,
                 echoCancellation: echoCancellation
             ) ? .deepFilterNet : .off
-        }
-        if processingMode == .appleVoiceProcessing {
-            activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "apple processing")
         }
         let sessionID = nextTranscriptionID &+ 1
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
@@ -254,7 +245,7 @@ extension AppState {
         // instead of restarting the hardware; after "Hey Jarvis" the audio since the wake comes
         // along, so a command said without a pause keeps its first words. Taken here, before
         // `recordingState` below stops the listener.
-        let captureHandoff: WakeCaptureHandoff? = wakeLikeSession && processingMode != .appleVoiceProcessing
+        let captureHandoff: WakeCaptureHandoff? = wakeLikeSession
             ? wakeWordListener?.handOffCapture(
                 toDeviceID: recordingInputDeviceUID.flatMap(AudioEngine.audioDeviceID(forUID:)) ?? AudioEngine.defaultInputDeviceID(),
                 wakePreroll: recordingTrigger == .wakeWord,
@@ -1292,13 +1283,13 @@ extension AppState {
     /// Echo-cancel this recording against what the Mac plays (`RecordingEchoCanceller`): only
     /// when opted in, something is playing, and there is a way to get the reference. Only the
     /// Mac mic: buds sit in the ear (no speaker echo), an external mic sits close to the mouth and
-    /// its recordings pause the music at once; voice processing already cancels echo itself.
+    /// its recordings pause the music at once.
     func recordingEchoCancellationWanted(mic: TargetSpeakerMic) -> Bool {
         guard EchoCancellationSettings.recordingIsEnabled else { return false }
         if mic == .external, mediaPlaying {
             owLog("[AEC] External mic — recording without echo cancellation")
         }
-        let wanted = mediaPlaying && audioProcessingMode != .appleVoiceProcessing && mic == .mac
+        let wanted = mediaPlaying && mic == .mac
         guard wanted else { return false }
         guard SystemOutputReference.hasPermission else {
             owLog("[AEC] No Screen Recording permission — recording without echo cancellation")

@@ -2,8 +2,7 @@ import Foundation
 import Security
 
 struct TargetSpeakerProfile: Codable, Equatable, Sendable {
-    // Version 3 profiles also record the audio processing mode (`.off` / `.deepFilterNet` /
-    // `.appleVoiceProcessing`) active during enrollment. Switching modes changes the acoustic
+    // Version 3 profiles also record the audio processing mode (`.off` / `.deepFilterNet`) active during enrollment. Switching modes changes the acoustic
     // path feeding the embedding model, so a profile enrolled under one mode is not guaranteed
     // to match audio captured under another; an older profile predates this field entirely and
     // must be re-enrolled, just like the version-2 multi-condition bump before it.

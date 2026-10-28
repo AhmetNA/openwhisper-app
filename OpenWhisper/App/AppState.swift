@@ -710,11 +710,7 @@ final class AppState {
                   let mode = AudioProcessingMode(rawValue: rawMode) {
             audioProcessingMode = mode
         } else {
-            // Migration already ran once under the old Bool-only setting, but the new enum key
-            // doesn't exist yet on this machine — translate the legacy value instead of
-            // silently reintroducing VP's latency.
-            let legacyVoiceProcessing = defaults.object(forKey: "noiseSuppressionEnabled") as? Bool ?? false
-            audioProcessingMode = legacyVoiceProcessing ? .appleVoiceProcessing : .off
+            audioProcessingMode = .off
         }
         if let raw = defaults.string(forKey: "deepFilterSetting"), let setting = DeepFilterSetting(rawValue: raw) {
             deepFilterSetting = setting

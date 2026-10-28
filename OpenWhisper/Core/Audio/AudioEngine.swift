@@ -20,14 +20,12 @@ struct CompletedAudioSegment: Sendable {
 }
 
 /// How microphone audio is cleaned up before transcription.
-/// `.appleVoiceProcessing` costs ~900ms-1.1s at recording start (VPIO hardware setup);
 /// `.deepFilterNet` runs a local neural denoiser (DeepFilterNet 3) with negligible startup cost
 /// once its model is preloaded; `.off` does no noise suppression beyond AudioSignalProcessor's
 /// fixed gain/compressor.
 enum AudioProcessingMode: String, Codable, Sendable {
     case off
     case deepFilterNet
-    case appleVoiceProcessing
 }
 
 final class AudioEngine: @unchecked Sendable {
@@ -236,16 +234,6 @@ final class AudioEngine: @unchecked Sendable {
         }
         logStep("CfgSetDeviceID")
 
-        if audioProcessingMode == .appleVoiceProcessing {
-            do {
-                try inputNode.setVoiceProcessingEnabled(true)
-                owLog("[AudioEngine] Apple voice processing enabled")
-            } catch {
-                owLog("[AudioEngine] Voice processing unavailable: \(error)")
-            }
-        }
-        logStep("CfgVoiceProcessing")
-
         configuredDeviceUID = deviceUID
         configuredAudioProcessingMode = audioProcessingMode
         isEnginePrepared = true
@@ -306,15 +294,15 @@ final class AudioEngine: @unchecked Sendable {
         lock.unlock()
 
         // Record through a bare AUHAL unit bound to the chosen device (or the system default)
-        // whenever voice processing is off. It runs at the device's own rate (48 kHz on the
+        // whenever it can. It runs at the device's own rate (48 kHz on the
         // built-in mic, where the engine's input node reported 44.1 kHz and DeepFilterNet then
         // resampled back to 48 kHz), delivers the device's small I/O buffers instead of the
         // tap's 16384 frames, and never falls back to Bluetooth buds that are the system default
-        // (see `HALInputCapture`). Voice processing still needs the engine.
+        // (see `HALInputCapture`).
         var capture: HALInputCapture?
         var adoptedHandoff: WakeCaptureHandoff?
         let deviceID = deviceUID.flatMap(Self.audioDeviceID(forUID:)) ?? Self.defaultInputDeviceID()
-        if audioProcessingMode != .appleVoiceProcessing, let deviceID {
+        if let deviceID {
             if let handoff, handoff.capture.deviceID == deviceID {
                 capture = handoff.capture
                 adoptedHandoff = handoff

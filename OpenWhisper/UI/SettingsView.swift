@@ -175,6 +175,8 @@ struct SettingsView: View {
         case .general:
             languageSection
             Divider()
+            launchAtLoginSection
+            Divider()
             inputDeviceSection
             Divider()
             audioProcessingSection
@@ -198,6 +200,7 @@ struct SettingsView: View {
                 Label("Model hazır değil", systemImage: "exclamationmark.circle")
                     .foregroundStyle(.orange)
             }
+            providerApprovalSection
             Divider()
             modelCategory("Metin temizleme")
             cleanupSection
@@ -211,6 +214,9 @@ struct SettingsView: View {
             Divider()
             modelCategory("Sesli cevap (TTS)")
             voiceRepliesSection
+            Divider()
+            modelCategory("Müzik")
+            musicSection
         case .voice:
             targetSpeakerSection
         case .accounts:
@@ -281,17 +287,13 @@ struct SettingsView: View {
                     .labelsHidden()
             }
             if appState.llmCleanupEnabled {
-                HStack {
-                    Text("Yerel model (Ollama)")
-                    Spacer()
-                    Picker("", selection: $appState.ollamaModel) {
-                        ForEach(LLMCleanup.supportedModels, id: \.tag) { option in
-                            Text(option.label).tag(option.tag)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 260)
+                HStack(spacing: 4) {
+                    Text("Yerel model: \(localModelLabel)")
+                    Button("Gelişmiş'te değiştir") { selectedTab = .advanced }
+                        .buttonStyle(.link)
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
                 if !appState.cleanupAvailable {
                     Text("Seçili model kurulu değil — terminalde: ollama pull \(appState.ollamaModel)")
                         .font(.caption)
@@ -368,9 +370,6 @@ struct SettingsView: View {
         if decision.reason == "model unavailable" {
             return "Model hazır değil; kapalı."
         }
-        if decision.reason == "apple processing" {
-            return "Apple ses işleme etkin."
-        }
         switch appState.deepFilterSetting {
         case .automatic:
             let reason: String
@@ -428,14 +427,6 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            if !appState.pendingProviderApprovals().isEmpty {
-                Label("Onay bekleyen konuşma sağlayıcısı var.", systemImage: "exclamationmark.shield")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                Button("Gelişmiş'te incele") { selectedTab = .advanced }
-                    .buttonStyle(.link)
-                    .font(.caption2)
-            }
         }
     }
 
@@ -718,6 +709,21 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("WhatsApp mesajlarını haber ver", systemImage: "message")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.whatsAppAnnouncementsEnabled },
+                                             set: { appState.whatsAppAnnouncementsEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                Text("Biri WhatsApp'tan yazınca altta kaç mesaj geldiğini ve kimlerden ya da hangi gruplardan geldiğini gösterir; mesajı yazmaz, sesli okumaz, müziği durdurmaz.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Divider()
 
             JarvisHotkeyRecorder()
@@ -740,6 +746,10 @@ struct SettingsView: View {
 
     private var advancedSection: some View {
         VStack(alignment: .leading, spacing: 18) {
+            modelCategory("Yerel model")
+            localModelSection
+
+            Divider()
             modelCategory("Jarvis uyanma hassasiyeti")
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -754,31 +764,91 @@ struct SettingsView: View {
                     }
                     .controlSize(.small)
                 }
-                jarvisSlider("Doğrudan uyanma", value: $wakeWordThreshold, range: 0.10...0.90,
-                             help: "Bu puanın üstünde hemen uyanır. Düşürürseniz daha az kaçırır ama yanlış uyanma artar.")
-                jarvisSlider("Emin olmadan uyanma", value: $wakeWordConfirmedScore, range: 0.10...0.95,
-                             help: "Bu puanın üstünde hemen başlar; “Jarvis” doğrulanmazsa kayıt iptal edilir.")
                 jarvisSlider("Aday", value: $wakeWordCandidateThreshold, range: 0.05...0.50,
-                             help: "Bu puanın üstündeki sesler önce doğrulanır, sonra uyanır.")
+                             help: "Bu puanla doğrudan uyanma puanı arasındaki sesler önce doğrulanır; “Jarvis” denmişse uyanır.")
+                jarvisSlider("Doğrudan uyanma", value: $wakeWordThreshold, range: 0.10...0.90,
+                             help: "Bu puanın üstünde hemen dinlemeye başlar. Doğrulamasız uyanma puanının altındaysa “Jarvis” aynı anda doğrulanır; doğrulanmazsa kayıt iptal edilir. Düşürürseniz daha az kaçırır ama yanlış uyanma artar.")
+                jarvisSlider("Doğrulamasız uyanma", value: $wakeWordConfirmedScore, range: 0.10...0.95,
+                             help: "Bu puanın üstünde “Jarvis” hiç doğrulanmadan uyanır. Düşürürseniz daha hızlı uyanır ama yanlış uyanma artar.")
                 if wakeWordCandidateThreshold >= wakeWordThreshold {
                     Label("Aday eşiği doğrudan uyanma eşiğinden düşük olmalı.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
-                jarvisSlider("Ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
-                             help: "Sesiniz tanınmıyorsa düşürün, başkası uyandırıyorsa yükseltin.")
-                    .disabled(!jarvisSpeakerCheckOn)
+                if wakeWordConfirmedScore < wakeWordThreshold {
+                    Label("Doğrulamasız uyanma eşiği doğrudan uyanma eşiğinden düşük olmamalı; şu an her doğrudan uyanma doğrulamasız geçer.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Divider()
             modelCategory("Karar modelleri")
             decisionSection
+        }
+    }
 
-            Divider()
-            modelCategory("Düzeltmeler")
-            correctionCheckpointsSection
+    /// One Ollama model for cleanup, Jarvis's local chat and its fallbacks.
+    private var localModelSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Yerel model (Ollama)")
+                Spacer()
+                Picker("", selection: $appState.ollamaModel) {
+                    ForEach(LLMCleanup.supportedModels, id: \.tag) { option in
+                        Text(option.label).tag(option.tag)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 260)
+            }
+            Text("Metin temizleme, yerel sohbet, çeviri, hatırlatıcılar, Spotify ve karar motoru bu modeli kullanır.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !appState.cleanupAvailable {
+                Text("Seçili model kurulu değil — terminalde: ollama pull \(appState.ollamaModel)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
 
-            providerApprovalSection
+    private var localModelLabel: String {
+        LLMCleanup.supportedModels.first { $0.tag == appState.ollamaModel }?.label ?? appState.ollamaModel
+    }
+
+    private var launchAtLoginSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Oturum açılışında başlat", systemImage: "power")
+                Spacer()
+                Toggle("", isOn: $appState.launchAtLogin)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            Text("Mac'e giriş yapınca OpenWhisper kendiliğinden açılır.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var musicSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Beğenilen şarkıları karışık çal", systemImage: "shuffle")
+                Spacer()
+                Toggle("", isOn: $likedSongsShuffle)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            Text("“Şarkı aç” ya da “beğendiğim şarkıları çal” deyince Beğenilen Şarkılar karışık sırayla çalar. Kapalıyken en son beğendiğin şarkıdan başlar.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -834,19 +904,6 @@ struct SettingsView: View {
                     .labelsHidden()
             }
             Text("Komutlara kısa sesli cevap verir, ör. “Saat 14:05, patron.”")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack {
-                Label("WhatsApp mesajlarını haber ver", systemImage: "message")
-                Spacer()
-                Toggle("", isOn: Binding(get: { appState.whatsAppAnnouncementsEnabled },
-                                         set: { appState.whatsAppAnnouncementsEnabled = $0 }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-            }
-            Text("Biri WhatsApp'tan yazınca altta kaç mesaj geldiğini ve kimlerden ya da hangi gruplardan geldiğini gösterir; mesajı yazmaz, sesli okumaz, müziği durdurmaz.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1024,6 +1081,17 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            HStack(alignment: .top) {
+                jarvisSlider("“Jarvis” için ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
+                             help: "Sesiniz tanınmıyorsa düşürün, başkası uyandırıyorsa yükseltin.")
+                Button("Varsayılan") {
+                    UserDefaults.standard.removeObject(forKey: "targetSpeakerWakeThreshold")
+                    targetSpeakerWakeThreshold = Double(TargetSpeakerFilterConfiguration.uncertainSimilarityFloor)
+                }
+                .controlSize(.small)
+            }
+            .disabled(!jarvisSpeakerCheckOn)
 
             micSpeakerProfileRow(.mac)
             micSpeakerProfileRow(.buds)
@@ -1291,17 +1359,6 @@ struct SettingsView: View {
                 spotifyTestStatusView
             }
 
-            Divider()
-
-            Text("Beğenilen Şarkılar")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Toggle("Karışık çal", isOn: $likedSongsShuffle)
-            Text("“Şarkı aç” ya da “beğendiğim şarkıları çal” deyince Beğenilen Şarkılar karışık sırayla çalar. Kapalıyken en son beğendiğin şarkıdan başlar.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
             // Only needed to register the app in Spotify's dashboard, before connecting.
             if !spotifyConnected {
                 HStack {
@@ -1531,6 +1588,7 @@ struct SettingsView: View {
                 Text("Düzenledikten sonra ⌥⇧C ile düzeltmeleri hemen onaya gönderin.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+                correctionCheckpointsSection
             }
         }
     }
