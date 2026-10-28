@@ -155,17 +155,9 @@ struct LockScreenIndicatorView: View {
             .overlay(Capsule().strokeBorder(.white.opacity(0.25 + voice * 0.6), lineWidth: 1.5))
         } else {
             HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(statusColor.opacity(0.25))
-                    Circle()
-                        .strokeBorder(statusColor, lineWidth: 2)
-                    Image(systemName: statusIcon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(statusColor)
-                }
-                .frame(width: 44, height: 44)
-                .shadow(color: statusColor.opacity(0.6), radius: 8)
+                JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
+                                                        || appState.jarvisActivity != .none)
+                    .frame(width: 44, height: 44)
                 Text(statusText)
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(.white)
@@ -184,14 +176,42 @@ struct LockScreenIndicatorView: View {
         return appState.wakeWordListening ? "Jarvis uyanık" : "Jarvis uyuyor"
     }
 
-    private var statusIcon: String {
-        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "ellipsis" }
-        if appState.jarvisActivity == .speaking { return "speaker.wave.2.fill" }
-        return appState.wakeWordListening ? "ear" : "moon.zzz.fill"
-    }
-
     private var statusColor: Color {
         if appState.recordingState != .idle || appState.jarvisActivity != .none { return .white }
-        return appState.wakeWordListening ? .green : .gray
+        return appState.wakeWordListening ? Color(red: 0.3, green: 0.85, blue: 1) : .gray
+    }
+}
+
+/// A small reactor-style core: a glowing center inside two counter-rotating segmented rings.
+/// Still and dim while Jarvis sleeps.
+private struct JarvisCore: View {
+    let color: Color
+    let active: Bool
+    @State private var turn = false
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0, to: 0.82)
+                .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [10, 5]))
+                .rotationEffect(.degrees(turn ? 360 : 0))
+            Circle()
+                .trim(from: 0, to: 0.6)
+                .stroke(color.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .padding(7)
+                .rotationEffect(.degrees(turn ? -360 : 0))
+            Circle()
+                .fill(RadialGradient(colors: [.white, color, color.opacity(0)], center: .center,
+                                     startRadius: 0, endRadius: 10))
+                .padding(12)
+                .scaleEffect(pulse ? 1.15 : 0.85)
+                .animation(active ? .easeInOut(duration: 1.2).repeatForever() : .default, value: pulse)
+        }
+        .shadow(color: color.opacity(active ? 0.8 : 0), radius: 10)
+        .opacity(active ? 1 : 0.55)
+        .animation(active ? .linear(duration: 6).repeatForever(autoreverses: false) : .default, value: turn)
+        .onAppear { turn = active; pulse = active }
+        .onChange(of: active) { _, isActive in turn = isActive; pulse = isActive }
     }
 }
