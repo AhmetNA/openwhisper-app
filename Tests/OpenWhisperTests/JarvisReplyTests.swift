@@ -61,8 +61,8 @@ final class JarvisReplyTests: XCTestCase {
 
     func testAgentSaysWhetherItSent() {
         var reply = quietReply()
-        XCTAssertEqual(reply.agent(sent: true), "Gönderdim.")
-        XCTAssertEqual(reply.agent(sent: false), "Yazdım.")
+        XCTAssertEqual(JarvisReply.category(of: reply.agent(sent: true)), "gonderme")
+        XCTAssertEqual(JarvisReply.category(of: reply.agent(sent: false)), "yazma")
     }
 
     func testReminderDeletionRepliesReflectRealOutcome() {
@@ -71,7 +71,7 @@ final class JarvisReplyTests: XCTestCase {
             reply.reminderDeletion(.confirmationRequired(matches: ["Toplantı"])),
             "Toplantı hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?"
         )
-        XCTAssertEqual(reply.reminderDeletion(.deleted(count: 1, appleVerified: true)), "Hatırlatıcıyı sildim.")
+        XCTAssertEqual(JarvisReply.category(of: reply.reminderDeletion(.deleted(count: 1, appleVerified: true))), "hatirlatici")
         XCTAssertEqual(reply.reminderDeletion(.notFound), "Maalesef, eşleşen bir hatırlatıcı bulamadım.")
         XCTAssertEqual(
             reply.reminderDeletion(.deleted(count: 1, appleVerified: false)),
@@ -110,8 +110,26 @@ final class JarvisVoiceTests: XCTestCase {
         XCTAssertFalse(JarvisVoice.isCacheable("Saat 14:05."))
     }
 
-    func testCacheKeyDependsOnVoice() {
-        XCTAssertNotEqual(JarvisVoice.cacheKey(text: "Tamam.", identity: "a"), JarvisVoice.cacheKey(text: "Tamam.", identity: "b"))
+    func testCachePathIsVoiceCategoryAndText() {
+        XCTAssertNotEqual(JarvisVoice.cachePath(text: "Tamam.", identity: "a"), JarvisVoice.cachePath(text: "Tamam.", identity: "b"))
+        let path = JarvisVoice.cachePath(text: "Gönderdim, patron.", identity: "pocket|alba")
+        XCTAssertTrue(path.hasPrefix("pocket-"), path)
+        XCTAssertTrue(path.hasSuffix("/gonderme/Gönderdim, patron..wav"), path)
+        XCTAssertTrue(JarvisVoice.cachePath(text: "Safari zaten kapalı.", identity: "a/b|c").contains("/diger/"))
+        XCTAssertFalse(JarvisVoice.cachePath(text: "x", identity: "k2/omni|h").hasPrefix("k2/"))
+    }
+
+    func testFixedRepliesComeFromTheirCategoryWithoutRepeats() {
+        var reply = JarvisReply(rng: SystemRandomNumberGenerator())
+        reply.addressChance = 0
+        let sent = Set(JarvisReply.phrases.first { $0.category == "gonderme" }!.variants)
+        var last = ""
+        for _ in 0..<20 {
+            let said = reply.agent(sent: true)
+            XCTAssertTrue(sent.contains(said), said)
+            XCTAssertNotEqual(said, last)
+            last = said
+        }
     }
 
     func testSpellsOutTimes() {

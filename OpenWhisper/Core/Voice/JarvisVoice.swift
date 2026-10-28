@@ -451,18 +451,20 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     }
 
     private func store(_ data: Data, for text: String, identity: String) {
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        try? data.write(to: cacheFile(for: text, identity: identity), options: .atomic)
+        let file = cacheFile(for: text, identity: identity)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
     }
 
     private func cacheFile(for text: String, identity: String) -> URL {
-        cacheDirectory.appendingPathComponent(Self.cacheKey(text: text, identity: identity) + ".wav")
+        cacheDirectory.appendingPathComponent(Self.cachePath(text: text, identity: identity))
     }
 
-    /// ElevenLabs replies were cached as .mp3; they are never read again.
+    /// Clips used to sit flat in the cache folder under a hash (and ElevenLabs ones as .mp3);
+    /// they are never read again. Only the per-voice folders stay.
     private func removeOldCache() {
         let files = (try? FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil)) ?? []
-        for file in files where file.pathExtension == "mp3" { try? FileManager.default.removeItem(at: file) }
+        for file in files where ["mp3", "wav"].contains(file.pathExtension) { try? FileManager.default.removeItem(at: file) }
     }
 
     /// Acks and fixed phrases repeat; answers with numbers ("Saat 14:05") don't.
@@ -470,10 +472,16 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
         text.count <= 60 && !text.contains(where: \.isNumber)
     }
 
-    /// `identity` is the provider's `cacheIdentity` (provider, model, voice, style).
-    nonisolated static func cacheKey(text: String, identity: String) -> String {
-        let digest = SHA256.hash(data: Data("\(identity)|\(text)".utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    /// `<voice>/<category>/<text>.wav`, so a clip is easy to find: the voice folder is the
+    /// provider's name plus a short hash of its `cacheIdentity` (provider, model, voice, style),
+    /// the category the one from `JarvisReply.phrases` ("diger" for any other reply).
+    nonisolated static func cachePath(text: String, identity: String) -> String {
+        func safe(_ name: String) -> String {
+            name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        }
+        let digest = SHA256.hash(data: Data(identity.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+        let provider = identity.split(separator: "|").first.map(String.init) ?? "ses"
+        return "\(safe(provider))-\(digest)/\(JarvisReply.category(of: text))/\(safe(text)).wav"
     }
 
     // MARK: - Text

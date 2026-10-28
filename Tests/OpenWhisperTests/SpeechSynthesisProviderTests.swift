@@ -186,18 +186,8 @@ final class SpeechSynthesisProviderTests: XCTestCase {
         let identities = [local.cacheIdentity, lite.cacheIdentity, flash.cacheIdentity]
         XCTAssertEqual(Set(identities).count, 3)
         XCTAssertTrue(lite.cacheIdentity.contains(GeminiSpeechProvider.defaultVoice))
-        let keys = identities.map { JarvisVoice.cacheKey(text: "Tamamdır.", identity: $0) }
+        let keys = identities.map { JarvisVoice.cachePath(text: "Tamamdır.", identity: $0) }
         XCTAssertEqual(Set(keys).count, 3)
-    }
-
-    /// Local clips cached before providers existed must keep their file names.
-    @MainActor
-    func testLocalCacheKeyMatchesTheOldFormula() {
-        let identity = LocalOmniVoiceProvider.shared.cacheIdentity
-        let refHash = String(identity.dropFirst(LocalOmniVoiceProvider.voiceModel.count + 1))
-        let old = SHA256.hash(data: Data("\(LocalOmniVoiceProvider.voiceModel)|\(refHash)|Tamam.".utf8))
-            .map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(JarvisVoice.cacheKey(text: "Tamam.", identity: identity), old)
     }
 
     // MARK: Gemini wire format

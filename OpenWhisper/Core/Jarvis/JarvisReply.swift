@@ -7,8 +7,8 @@ import Foundation
 struct JarvisReply {
     private var rng: any RandomNumberGenerator
     private var addressedLastTime = false
-    /// So the same ack ("Tamamdır.") never comes twice in a row.
-    private var lastAckIndex: Int?
+    /// The variant said last per category, so the same one ("Tamamdır.") never comes twice in a row.
+    private var lastPick: [String: String] = [:]
     /// Share of replies that address the user.
     var addressChance: Double = 0.3
 
@@ -19,8 +19,31 @@ struct JarvisReply {
     static let acks = ["Tamamdır.", "Hallettim.", "Hemen.", "Oldu.", "Anlaşıldı.", "Tamam.",
                        "Derhal.", "Emredersiniz.", "Başüstüne.", "Elbette.", "Hemen hallediyorum."]
     static let addresses = ["patron", "efendim", "sör"]
-    /// Replies that aren't in `acks` but repeat word for word, so they're worth pre-synthesizing.
-    static let fixedPhrases = ["Not ettim.", "Gönderdim.", "Yazdım.", "Sesle uyandırmayı kapattım."]
+    /// Replies that repeat word for word, by category, with the variants one is picked from.
+    /// All are pre-synthesized into `tts-cache/<voice>/<category>/`, so they play at once.
+    static let phrases: [(category: String, variants: [String])] = [
+        ("onay", acks),
+        ("gonderme", ["Gönderdim.", "İlettim.", "Yolladım.", "Mesaj gitti."]),
+        ("yazma", ["Yazdım.", "Yazdım, göndermedim.", "Metni yazdım."]),
+        ("oturum", ["Yeni session açtım.", "Yeni sohbet açtım.", "Yeni session hazır."]),
+        ("gecis", ["Cevabı gelen sohbete geçtim.", "Biten sohbete geçtim.", "Cevap gelen sohbeti açtım."]),
+        ("not", ["Not ettim.", "Aklımda tutuyorum.", "Not ettim, unutmam.", "Hafızama ekledim."]),
+        ("unutma", ["Unuttum.", "Hafızamdan çıkardım.", "Artık hatırlamıyorum."]),
+        ("hatirlatici", ["Hatırlatıcıyı sildim.", "Hatırlatıcı silindi."]),
+        ("muzik", ["Beğenilen şarkılar açılıyor.", "Beğendiğiniz şarkıları açıyorum."]),
+        ("hal", ["Gayet iyiyim, sizin için buradayım.", "Her zamanki gibi tetikteyim.",
+                 "Sistemler sorunsuz çalışıyor, teşekkürler."]),
+        ("ayar", ["Sesle uyandırmayı kapattım."]),
+    ]
+    /// Every phrase outside `acks`.
+    static let fixedPhrases = phrases.filter { $0.category != "onay" }.flatMap(\.variants)
+
+    /// The `phrases` category of a reply, with or without the address; "diger" for any other.
+    static func category(of reply: String) -> String {
+        var body = reply
+        for who in addresses { body = body.replacingOccurrences(of: ", \(who).", with: ".") }
+        return phrases.first { $0.variants.contains(body) }?.category ?? "diger"
+    }
 
     /// Endings of `SystemController` statuses that mean it didn't work: "değiştirilemedi",
     /// "çalıştırılamadı", "bulunamadı", "Bağlı kulaklık yok".
@@ -103,7 +126,7 @@ struct JarvisReply {
     /// Songs started from a bare "şarkı aç": nothing was named, so he says what he put on.
     mutating func spotify(handled: Bool, likedSongs: Bool = false) -> String? {
         guard handled else { return nil }
-        return likedSongs ? addressing("Beğenilen şarkılar açılıyor.") : ack()
+        return likedSongs ? addressing(pick("muzik")) : ack()
     }
 
     /// A Spotify answer or result said as is: "Sıradaki şarkı: …", "Müzik 30 dakika sonra kapanacak".
@@ -117,17 +140,17 @@ struct JarvisReply {
 
     /// "Claude Code'a şunu yaz … gönder": the text went in, and was sent if asked.
     mutating func agent(sent: Bool) -> String {
-        addressing(sent ? "Gönderdim." : "Yazdım.")
+        addressing(pick(sent ? "gonderme" : "yazma"))
     }
 
     /// "Claude Code'da yeni session aç" with nothing to write.
     mutating func newAgentSession() -> String {
-        addressing("Yeni session açtım.")
+        addressing(pick("oturum"))
     }
 
     /// "Biten sohbete geç": which chat is open now.
     mutating func finishedChat(_ title: String) -> String {
-        addressing(title.isEmpty ? "Cevabı gelen sohbete geçtim." : "\(title) sohbetine geçtim.")
+        addressing(title.isEmpty ? pick("gecis") : "\(title) sohbetine geçtim.")
     }
 
     /// "Bitirme projesine geç" / "Bitirme projesinde yeni session aç" with nothing to write.
@@ -170,7 +193,7 @@ struct JarvisReply {
             return "\(matches.count) hatırlatıcıyı silmek üzereyim: \(names). Onaylıyor musunuz?"
         case .deleted(let count, let appleVerified):
             if appleVerified {
-                return addressing(count == 1 ? "Hatırlatıcıyı sildim." : "\(count) hatırlatıcıyı sildim.")
+                return addressing(count == 1 ? pick("hatirlatici") : "\(count) hatırlatıcıyı sildim.")
             }
             return failure("yerel hatırlatıcıyı sildim fakat Apple Hatırlatıcılar kaydını doğrulayamadım")
         case .notFound:
@@ -202,18 +225,22 @@ struct JarvisReply {
 
     /// An ack from `ack()`, with or without the address.
     static func isAck(_ reply: String) -> Bool {
-        var body = reply
-        for who in addresses { body = body.replacingOccurrences(of: ", \(who).", with: ".") }
-        return acks.contains(body)
+        category(of: reply) == "onay"
     }
 
     // MARK: - Building blocks
 
     mutating func ack() -> String {
-        var index = Int.random(in: 0..<Self.acks.count, using: &rng)
-        if index == lastAckIndex { index = (index + 1 + Int.random(in: 0..<(Self.acks.count - 1), using: &rng)) % Self.acks.count }
-        lastAckIndex = index
-        return addressing(Self.acks[index])
+        addressing(pick("onay"))
+    }
+
+    /// A random variant of a `phrases` category, never the one it gave last time.
+    private mutating func pick(_ category: String) -> String {
+        let variants = Self.phrases.first { $0.category == category }?.variants ?? []
+        let fresh = variants.count > 1 ? variants.filter { $0 != lastPick[category] } : variants
+        let choice = fresh[Int.random(in: 0..<fresh.count, using: &rng)]
+        lastPick[category] = choice
+        return choice
     }
 
     // MARK: - About Jarvis himself
@@ -291,13 +318,13 @@ struct JarvisReply {
         case .remember(let fact) where fact.hasPrefix(UserMemory.namePrefix):
             return "Memnun oldum, \(fact.dropFirst(UserMemory.namePrefix.count))."
         case .remember:
-            return addressing(choose(["Aklımda tutuyorum.", "Not ettim, unutmam.", "Hafızama ekledim."]))
+            return addressing(pick("not"))
         case .recall:
             guard !facts.isEmpty else { return addressing("Henüz bana kendinizle ilgili bir şey söylemediniz.") }
             let recent = facts.suffix(6).map { $0.hasSuffix(".") ? $0 : $0 + "." }
             return "Bildiklerim şunlar: " + recent.joined(separator: " ")
         case .forget:
-            return removed > 0 ? addressing("Unuttum.") : addressing("Bununla ilgili bir şey hatırlamıyorum.")
+            return removed > 0 ? addressing(pick("unutma")) :addressing("Bununla ilgili bir şey hatırlamıyorum.")
         case .forgetLast:
             return removed > 0 ? addressing("Son söylediğinizi unuttum.") : addressing("Hafızamda bir şey yok zaten.")
         case .forgetAll:
@@ -371,8 +398,7 @@ struct JarvisReply {
         }
         switch greeting {
         case .howAreYou:
-            let line = choose(["Gayet iyiyim, sizin için buradayım.", "Her zamanki gibi tetikteyim.", "Sistemler sorunsuz çalışıyor, teşekkürler."])
-            return addressing(line)
+            return addressing(pick("hal"))
         case .goodNight:
             return hour >= 20 || hour < 5 ? addressing("İyi geceler, iyi dinlenin.") : addressing("Daha gün bitmedi ama iyi dinlenin.")
         case .goodMorning where !(5..<12).contains(hour):
