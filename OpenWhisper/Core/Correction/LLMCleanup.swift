@@ -425,7 +425,8 @@ final class LLMCleanup: Sendable {
 
     /// Loads `model` into memory ahead of the first dictation, so push-to-talk doesn't pay
     /// the cold load.
-    static func warmUp(model: String) async {
+    static func warmUp(model: String, caller: String = #fileID) async {
+        owLog("[Ollama] warm-up \(model) from \(caller)")
         try? await LLM.default.load(model: model, timeout: 120)
     }
 

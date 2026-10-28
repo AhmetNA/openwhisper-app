@@ -12,6 +12,20 @@ struct LLMRequest: @unchecked Sendable {
     var stop: [String]?
     /// A JSON schema for Ollama's `format`: the answer then follows it.
     var schema: [String: Any]?
+    /// The file that built the request, logged so the feature that loaded the model shows.
+    var caller: String
+
+    init(model: String, prompt: String, timeout: TimeInterval, temperature: Double, maxTokens: Int,
+         stop: [String]? = nil, schema: [String: Any]? = nil, caller: String = #fileID) {
+        self.model = model
+        self.prompt = prompt
+        self.timeout = timeout
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.stop = stop
+        self.schema = schema
+        self.caller = caller
+    }
 }
 
 /// A conversation turn list for `/api/chat`.
@@ -21,6 +35,17 @@ struct LLMChatRequest: Sendable {
     var timeout: TimeInterval
     var temperature: Double
     var maxTokens: Int
+    var caller: String
+
+    init(model: String, messages: [[String: String]], timeout: TimeInterval, temperature: Double,
+         maxTokens: Int, caller: String = #fileID) {
+        self.model = model
+        self.messages = messages
+        self.timeout = timeout
+        self.temperature = temperature
+        self.maxTokens = maxTokens
+        self.caller = caller
+    }
 }
 
 enum LLMError: Error, Equatable {
@@ -91,18 +116,21 @@ struct OllamaClient: LLMClient {
     }
 
     func generate(_ request: LLMRequest) async throws -> String {
+        owLog("[Ollama] generate \(request.model) from \(request.caller)")
         let json = try await post("api/generate", Self.generateBody(request), timeout: request.timeout)
         guard let response = json["response"] as? String else { throw LLMError.malformed }
         return response
     }
 
     func chat(_ request: LLMChatRequest) async throws -> String {
+        owLog("[Ollama] chat \(request.model) from \(request.caller)")
         let json = try await post("api/chat", Self.chatBody(request, stream: false), timeout: request.timeout)
         guard let content = (json["message"] as? [String: Any])?["content"] as? String else { throw LLMError.malformed }
         return content
     }
 
     func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
+        owLog("[Ollama] streamChat \(request.model) from \(request.caller)")
         let urlRequest = Self.urlRequest(baseURL.appendingPathComponent("api/chat"), timeout: request.timeout,
                                          body: Self.chatBody(request, stream: true))
         return AsyncThrowingStream { continuation in
