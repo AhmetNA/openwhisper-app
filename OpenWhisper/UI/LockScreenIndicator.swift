@@ -5,7 +5,7 @@ import SwiftUI
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
 /// what Jarvis is doing; while Jarvis listens, your voice's waveform sits in the middle and a
 /// soft white glow along the screen's edges follows it. The lock screen turns the display off
-/// a few seconds after locking, so while Jarvis works on a command it is held on.
+/// a few seconds after locking, so while Jarvis works on a command it is turned on and held on.
 ///
 /// Ordinary windows can't appear over the lock screen, so the window is moved into a SkyLight
 /// space with a high absolute level (private API, loaded at runtime; without it the window just
@@ -59,6 +59,9 @@ final class LockScreenIndicatorController {
                 kIOPMAssertPreventUserIdleDisplaySleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn),
                 "Jarvis kilit ekranında çalışıyor" as CFString, &id) == kIOReturnSuccess else { return }
             displayAssertion = id
+            // The assertion only keeps a lit display on; declared activity lights it if it went dark.
+            var activity: IOPMAssertionID = 0
+            IOPMAssertionDeclareUserActivity("Jarvis kilit ekranında uyandı" as CFString, kIOPMUserActiveLocal, &activity)
             owLog("[LockScreen] Holding the display on while Jarvis works")
         } else {
             IOPMAssertionRelease(displayAssertion)
