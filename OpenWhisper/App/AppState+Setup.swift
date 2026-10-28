@@ -44,6 +44,7 @@ extension AppState {
         textInjector = TextInjector()
         flowBarController = FlowBarController(appState: self)
         typedRequestPanel = TypedRequestPanelController(appState: self)
+        lockScreenIndicator = LockScreenIndicatorController(appState: self)
         syncFlowBarVisibility()
 
         loadTargetSpeakerProfile()

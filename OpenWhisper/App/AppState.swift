@@ -41,6 +41,7 @@ final class AppState {
     var recordingState: RecordingState = .idle {
         didSet {
             guard oldValue != recordingState else { return }
+            if recordingState != .recording { recordingHeardSpeech = false }
             syncFlowBarVisibility()
             updateWakeWordListener()
         }
@@ -289,6 +290,9 @@ final class AppState {
     }
 
     var audioLevel: Float = 0.0
+    /// The voice auto-stop has heard speech above the room's noise floor in this recording;
+    /// the lock-screen indicator glows only then.
+    var recordingHeardSpeech = false
     /// False from the start of a Bluetooth recording until the buds' mic delivers real audio
     /// (their call-mode link takes ~0.25–0.75 s). The flow bar says "connecting" until then.
     var recordingInputReady = true
@@ -422,6 +426,7 @@ final class AppState {
     var textInjector: TextInjecting? = TextInjector()
     var hotkey: GlobalHotkey?
     var flowBarController: FlowBarController?
+    var lockScreenIndicator: LockScreenIndicatorController?
     var reminderManager: ReminderManager?
     var recordingTimer: Timer?
     var targetApp: NSRunningApplication?
@@ -480,6 +485,13 @@ final class AppState {
             if !wakeWordEnabled { cancelPendingWhisperWake(reason: "wake disabled") }
             updateWakeWordListener()
             updateRemoteControl()
+        }
+    }
+    /// Settings › Jarvis: shows on the lock screen whether Jarvis is awake or listening.
+    var lockScreenIndicatorEnabled = UserDefaults.standard.object(forKey: "lockScreenIndicatorEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(lockScreenIndicatorEnabled, forKey: "lockScreenIndicatorEnabled")
+            lockScreenIndicator?.sync()
         }
     }
     /// Settings › Jarvis: keeps the Mac awake and "Jarvis" listening while the display sleeps.

@@ -689,6 +689,21 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
+                    Label("Kilit ekranında göster", systemImage: "lock.display")
+                    Spacer()
+                    Toggle("", isOn: Binding(get: { appState.lockScreenIndicatorEnabled },
+                                             set: { appState.lockScreenIndicatorEnabled = $0 }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                Text("Mac kilitliyken Jarvis'in uyanık olup olmadığını gösterir. Dinlerken ekranın kenarları kararır, konuştuğunuzu duyunca içi beyaz parlar.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
                     Label("Uzaktan kontrol", systemImage: "dot.radiowaves.left.and.right")
                     Spacer()
                     Toggle("", isOn: Binding(get: { appState.remoteControlEnabled },

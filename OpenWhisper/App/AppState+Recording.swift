@@ -1008,6 +1008,7 @@ extension AppState {
         guard recordingState == .recording, var detector = voiceEndpointDetector else { return }
         let levelDecision = detector.process(rms: rawRMS, at: time)
         voiceEndpointDetector = detector
+        if detector.speechDetected != recordingHeardSpeech { recordingHeardSpeech = detector.speechDetected }
         // Relative to the room, not to the user's loudness: a quieter second voice still counts.
         if ownVoiceStopGate != nil, let floor = detector.floorDB {
             let loud = VoiceEndpointDetector.dBFS(fromRMS: rawRMS) >= floor + detector.config.onsetMarginDB
