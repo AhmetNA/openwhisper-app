@@ -3,7 +3,7 @@ import IOKit.pwr_mgt
 import SwiftUI
 
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
-/// what Jarvis is doing; while Jarvis listens, your voice's waveform sits in the middle and a
+/// what Jarvis is doing; while Jarvis listens, your voice's waveform sits where the badge was and a
 /// soft white glow along the screen's edges follows it. The lock screen turns the display off
 /// a few seconds after locking, so while Jarvis works on a command it is turned on and held on.
 ///
@@ -166,7 +166,8 @@ struct LockScreenIndicatorView: View {
                             .frame(width: 220, height: 80)
                         caption("Dinliyor")
                     }
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    // The middle of the lock screen belongs to other apps (Vorssaint).
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 } else {
                     HStack(spacing: 16) {
                         JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
