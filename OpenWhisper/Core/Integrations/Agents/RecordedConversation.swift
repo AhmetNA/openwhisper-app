@@ -216,19 +216,28 @@ extension PasteContext {
 final class RecordedDraft: @unchecked Sendable {
     private let composer: AXUIElement
     private var observer: AXObserver?
+    private var deactivationObserver: NSObjectProtocol?
     private let lock = NSLock()
     private var invalidated = false
+    /// The app was left (another app, another full-screen Space). Coming back fires one
+    /// focus change onto the very same composer; that is not navigation.
+    private var awaitingReturn = false
 
     init?(app: NSRunningApplication, window: AXUIElement) {
         guard let composer = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) else { return nil }
         self.composer = composer
-        let callback: AXObserverCallback = { _, _, _, context in
+        let callback: AXObserverCallback = { _, element, notification, context in
             guard let context else { return }
             let draft = Unmanaged<RecordedDraft>.fromOpaque(context).takeUnretainedValue()
-            // Any focus/navigation event ends the draft's delivery lease, even if the
+            // Any other focus/navigation event ends the draft's delivery lease, even if the
             // user later returns to a same-titled blank page with a reused AX element.
             draft.lock.lock()
-            draft.invalidated = true
+            if draft.awaitingReturn, notification as String == kAXFocusedUIElementChangedNotification,
+               CFEqual(element, draft.composer) {
+                draft.awaitingReturn = false
+            } else {
+                draft.invalidated = true
+            }
             draft.lock.unlock()
         }
         var observer: AXObserver?
@@ -240,12 +249,22 @@ final class RecordedDraft: @unchecked Sendable {
         guard AXObserverAddNotification(observer, root, kAXFocusedUIElementChangedNotification as CFString, context) == .success,
               AXObserverAddNotification(observer, window, kAXTitleChangedNotification as CFString, context) == .success else { return nil }
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        let pid = app.processIdentifier
+        deactivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier == pid else { return }
+            self.lock.lock()
+            self.awaitingReturn = true
+            self.lock.unlock()
+        }
     }
 
     deinit {
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
+        if let deactivationObserver { NSWorkspace.shared.notificationCenter.removeObserver(deactivationObserver) }
     }
 
     func isCurrent(in app: NSRunningApplication) -> Bool {
