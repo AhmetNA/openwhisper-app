@@ -129,7 +129,7 @@ struct LockScreenIndicatorView: View {
                         .animation(.easeOut(duration: 0.15), value: voice)
                 }
                 badge
-                    .position(x: geo.size.width / 2, y: geo.size.height * 0.4)
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
             }
             .animation(.easeInOut(duration: 0.3), value: listening)
         }
