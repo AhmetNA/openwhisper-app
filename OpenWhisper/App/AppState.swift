@@ -600,6 +600,11 @@ final class AppState {
     @ObservationIgnored var ownVoiceStopGate: OwnVoiceStopGate?
     @ObservationIgnored var ownVoiceCheckInFlight = false
     @ObservationIgnored var lastOwnVoiceCheck: TimeInterval = 0
+    /// The profile the gate scores against: the session mic's own.
+    @ObservationIgnored var ownVoiceProfile: TargetSpeakerProfile?
+    /// External mic: the gate only logs where it would have stopped, until those logs show it
+    /// doesn't take the user's own voice for someone else's.
+    @ObservationIgnored var ownVoiceGateLogsOnly = false
     /// A wake over media that pauses nothing until the user's voice confirms it. See `WakeProbation`.
     @ObservationIgnored var wakeProbation: WakeProbation?
     @ObservationIgnored var wakeProbationCheckInFlight = false

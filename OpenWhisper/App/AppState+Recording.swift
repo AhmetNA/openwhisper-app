@@ -167,17 +167,21 @@ extension AppState {
                 ? "[TargetSpeaker] \(recordingMic) input: speaker filter off (no \(recordingMic) profile)"
                 : "[TargetSpeaker] \(recordingMic) input: filtering against the \(recordingMic) profile")
         }
-        // Mac mic only: the gate scores against the Mac profile every 0.5 s and cuts the session
-        // after ~2 s of "someone else", too risky before the other profiles were checked in noise.
-        ownVoiceStopGate = !bypassAudioProcessing && armVoiceAutoStop && wakeLikeSession && recordingMic == .mac
-            && (targetSpeakerFiltersSession || watchesPlayback) && targetSpeakerProfile != nil
+        // The gate scores against the session mic's profile every 0.5 s and cuts the session after
+        // ~2 s of "someone else". Scoring only, so the raw mic runs it too. On an external mic it
+        // only logs until its profile is checked in noise; the buds' call-mode mic is left out.
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && [.mac, .external].contains(recordingMic)
+            && (targetSpeakerEnabled || watchesPlayback) && sessionProfile != nil
             && !VoiceTestInjector.shared.bypassesSpeakerChecks
             ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
             : nil
         ownVoiceCheckInFlight = false
         lastOwnVoiceCheck = sessionStart
+        ownVoiceProfile = sessionProfile
+        ownVoiceGateLogsOnly = recordingMic != .mac
         if ownVoiceStopGate != nil {
-            owLog("[OwnVoiceStop] Armed for wake-word session" + (watchesPlayback ? " (media playing: only your voice keeps it open)" : ""))
+            owLog("[OwnVoiceStop] Armed for wake-word session" + (watchesPlayback ? " (media playing: only your voice keeps it open)" : "")
+                  + (ownVoiceGateLogsOnly ? " (\(recordingMic) mic: log only)" : ""))
         }
 
         // The Settings switch decides for every trigger, voice sessions included. Buds are the
@@ -1055,6 +1059,10 @@ extension AppState {
                   gate.endsTurnOverPlayback(endpointAt: endpoint.time,
                                             requiredSilence: smart.requiredSilence(after: endpoint),
                                             now: time) else { return }
+            guard !ownVoiceGateLogsOnly else {
+                owLog("[OwnVoiceStop] Would stop here (turn complete, your voice hasn't come back) — log only")
+                return
+            }
             owLog(String(format: "[OwnVoiceStop] Turn complete %.3f %.1f s ago and your voice hasn't come back — the rest is the media, stopping",
                          endpoint.probability, time - endpoint.time))
             decision = .stop
@@ -1097,7 +1105,7 @@ extension AppState {
     /// Pauses are Smart Turn's call, not this gate's.
     func checkOwnVoiceEndpoint() {
         guard recordingState == .recording, ownVoiceStopGate != nil, !ownVoiceCheckInFlight,
-              let profile = targetSpeakerProfile, let audioEngine else { return }
+              let profile = ownVoiceProfile, let audioEngine else { return }
         let now = CACurrentMediaTime()
         guard now - lastOwnVoiceCheck >= OwnVoiceStopGate.checkInterval else { return }
         let samples = audioEngine.recentSamples(count: OwnVoiceStopGate.windowSamples)
@@ -1133,6 +1141,12 @@ extension AppState {
             owLog(String(format: "[OwnVoiceStop] score %.3f speech %.1fs (user ≥%.2f, other <%.2f)%@",
                          score, gate.speechDuration(endingAt: now), gate.userThreshold, gate.otherThreshold, outcome))
             guard verdict != .keep else { return }
+            if self.ownVoiceGateLogsOnly {
+                owLog("[OwnVoiceStop] Would stop here — log only, the session goes on")
+                gate = OwnVoiceStopGate(startTime: now, watchesPlayback: gate.watchesPlayback)
+                self.ownVoiceStopGate = gate
+                return
+            }
             // A weak wake Whisper didn't confirm, with no word of the user's: the video called.
             if verdict == .noUserVoice, !gate.userHeard, self.activeTranscriptionSession?.wakeUnconfirmed == true {
                 self.hotkey?.externalCancelHandsFree()
