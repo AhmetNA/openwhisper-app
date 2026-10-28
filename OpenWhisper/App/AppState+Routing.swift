@@ -653,7 +653,13 @@ extension AppState {
                             conversationContinuationApp = nil
                         }
                         if command == .developerMode {
-                            if let app = await AgentAppActivator.activate(.claudeCode),
+                            // ChatGPT, still launching behind Claude, can take the front while
+                            // Claude is being activated; try again once its launch has settled.
+                            var claude: NSRunningApplication?
+                            for _ in 0..<3 where claude == nil {
+                                claude = await AgentAppActivator.activate(.claudeCode)
+                            }
+                            if let app = claude,
                                await ClaudeSessionNavigator.openNewSession(app) {
                                 conversationContinuationApp = app
                                 status += " · Claude Code’da yeni sohbet hazır"
