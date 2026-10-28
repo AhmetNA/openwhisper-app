@@ -336,7 +336,11 @@ struct SettingsView: View {
             }
             .font(.caption)
 
-            Picker("DeepFilter", selection: $appState.deepFilterSetting) {
+            // Raw mic skips DeepFilter, so the picker shows that instead of the saved choice.
+            Picker("DeepFilter", selection: Binding(
+                get: { appState.bypassAudioProcessing ? .off : appState.deepFilterSetting },
+                set: { appState.deepFilterSetting = $0 }
+            )) {
                 Text("Otomatik").tag(DeepFilterSetting.automatic)
                 Text("Açık").tag(DeepFilterSetting.on)
                 Text("Kapalı").tag(DeepFilterSetting.off)
