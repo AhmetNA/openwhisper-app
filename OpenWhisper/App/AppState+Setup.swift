@@ -264,14 +264,12 @@ extension AppState {
             owLog("[OpenWhisper] Model provider not found: \(transcriptionModel)")
             return
         }
-        // Only one speech model stays in memory: Qwen and Nemotron run in their own servers,
-        // Whisper in-process.
-        let id = provider.descriptor.id
-        if LocalQwenASRProvider.isQwen(id) || id == LocalNemotronASRProvider.id {
+        // Only one speech model stays in memory: Qwen runs in its own server, Whisper in-process.
+        if LocalQwenASRProvider.isQwen(provider.descriptor.id) {
             await transcriptionModelRegistry.unloadWhisperKit()
+        } else {
+            await QwenASRServer.shared.stop()
         }
-        if !LocalQwenASRProvider.isQwen(id) { await QwenASRServer.shared.stop() }
-        if id != LocalNemotronASRProvider.id { await NemotronASRServer.shared.stop() }
         modelIsDownloading = !provider.isDownloaded
         owLog("[OpenWhisper] Loading model: \(provider.descriptor.id) (download needed: \(modelIsDownloading))...")
         do {

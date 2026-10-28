@@ -111,7 +111,6 @@ final class TranscriptionModelRegistry: @unchecked Sendable {
         // Qwen3-ASR (LocalQwenASRProvider) is no longer offered: on the same 48-clip Turkish corpus
         // it made more errors than Turbo (clean WER 12.6% / 14.0% with glossary vs 8.4%) and wrote
         // sentences into silence. See tools/whisper-compare/results/qwen/summary.json.
-        register(LocalNemotronASRProvider())
 
         // Paket içi manifestler uygulamanın kendi koduyla aynı güvene sahip (.bundled): imzalı
         // app bundle'ının parçası, kullanıcı tarafından değiştirilemez.

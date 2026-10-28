@@ -1,6 +1,6 @@
 import Foundation
 
-/// One of the local Python model servers (TTS voices, Qwen3-ASR, Nemotron ASR, SetFit): installed by its
+/// One of the local Python model servers (TTS voices, Qwen3-ASR, SetFit): installed by its
 /// `setup.sh` into `~/Library/Application Support/OpenWhisper/<folder>`, started by the app
 /// on 127.0.0.1 with `--port` and `--parent-pid` (so it quits with the app), and asked
 /// `GET /health` until its model is loaded. Every server answers `/health` with `ready`,
@@ -50,7 +50,7 @@ final class LocalModelServer {
     nonisolated static func allPorts() -> [Int] {
         [LocalOmniVoiceProvider.port, SetFitDecider.port, QwenASRServer.port,
          LocalEMALightningProvider.port, LocalPocketTTSProvider.port, LocalPiperJarvisProvider.port,
-         DamgaNormalizer.port, LocalPhononProvider.port, NemotronASRServer.port]
+         DamgaNormalizer.port, LocalPhononProvider.port]
     }
 
     nonisolated var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
