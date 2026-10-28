@@ -85,4 +85,11 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(probability, 0)
         XCTAssertLessThanOrEqual(probability, 1)
     }
+
+    // Harici mikrofonda YouTube (en fazla −45 dBFS) eşiğin altında, konuşma (−22…−35) üstünde kalıyor.
+    func testLevelDBSeparatesNearSpeechFromFarVideo() {
+        XCTAssertEqual(SmartTurnEndpointDetector.levelDB([Float](repeating: 0.01, count: 4096)), -40, accuracy: 0.01)
+        XCTAssertLessThan(SmartTurnEndpointDetector.levelDB([Float](repeating: 0.0056, count: 4096)), -40)
+        XCTAssertGreaterThan(SmartTurnEndpointDetector.levelDB([Float](repeating: 0.03, count: 4096)), -40)
+    }
 }

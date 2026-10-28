@@ -1,3 +1,4 @@
+import Accelerate
 import CoreML
 import FluidAudio
 import Foundation
@@ -101,7 +102,12 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
     private let continuation: AsyncStream<Item>.Continuation
     private var consumer: Task<Void, Never>?
 
-    init(startTime: TimeInterval, config: Config = Config(), ignoredLeadingSeconds: TimeInterval = 0) {
+    /// `farSoundFloorDB`: chunks quieter than this reach Silero and Smart Turn as silence. For an
+    /// external mic over a video: it sits at the mouth, so on 28 Oct 2026 the user's speech ran
+    /// −22…−35 dBFS and YouTube at most −45 per 256 ms chunk, and the video alone kept a session
+    /// open for 28 s. The recording itself is untouched.
+    init(startTime: TimeInterval, config: Config = Config(), ignoredLeadingSeconds: TimeInterval = 0,
+         farSoundFloorDB: Float? = nil) {
         self.startTime = startTime
         self.config = config
         let (stream, continuation) = AsyncStream<Item>.makeStream(bufferingPolicy: .bufferingNewest(768))
@@ -157,8 +163,11 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
                     }
 
                     while pending.count >= VadManager.chunkSize {
-                        let chunk = Array(pending.prefix(VadManager.chunkSize))
+                        var chunk = Array(pending.prefix(VadManager.chunkSize))
                         pending.removeFirst(VadManager.chunkSize)
+                        if let farSoundFloorDB, Self.levelDB(chunk) < farSoundFloorDB {
+                            chunk = [Float](repeating: 0, count: chunk.count)
+                        }
                         processedSamples += chunk.count
                         recent.append(contentsOf: chunk)
                         if recent.count > Self.windowSamples {
@@ -232,6 +241,12 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         continuation.yield(.finish)
         continuation.finish()
         consumer?.cancel()
+    }
+
+    static func levelDB(_ samples: [Float]) -> Float {
+        var rms: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(samples.count))
+        return 20 * log10(max(rms, 1e-7))
     }
 
     /// Audio-thread safe. Work is queued to the detached consumer; the caller never runs ML.

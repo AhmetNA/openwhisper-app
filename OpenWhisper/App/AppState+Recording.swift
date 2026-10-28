@@ -133,18 +133,28 @@ extension AppState {
                     : ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
             )
             : nil
+        // An external mic over a video: only sound near the mic counts as speech. The endpoint
+        // samples carry the input gain unless the audio is unprocessed.
+        let farSoundFloorDB: Float? = recordingMic == .external && mediaPlaying
+            ? -40 + (bypassAudioProcessing ? 0 : 20 * log10(AudioSignalProcessor.inputGain))
+            : nil
         smartTurnEndpointDetector = useSmartTurnEndpoint
             ? SmartTurnEndpointDetector(
                 startTime: sessionStart,
                 config: smartTurnConfig,
-                ignoredLeadingSeconds: ignoredLeadingSeconds
+                ignoredLeadingSeconds: ignoredLeadingSeconds,
+                farSoundFloorDB: farSoundFloorDB
             )
             : nil
+        if let farSoundFloorDB {
+            owLog(String(format: "[SmartTurn] External mic over media: sound under %.0f dBFS counts as silence", farSoundFloorDB))
+        }
         // Over a video or song only the user's voice keeps the session open, filter on or off:
         // the speakers' residual after echo cancellation keeps Silero hearing "speech" forever.
         // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
         // Jarvis's reply (the window waits for it to end).
-        // An external mic gets the buds treatment: media pauses at once instead.
+        // An external mic: media pauses at once, and a YouTube video it leaves playing stays
+        // under `farSoundFloorDB`.
         let watchesPlayback = mediaPlaying && recordingMic == .mac && !overReply
         // The buds' call-mode mic scores 0.2–0.35 against the Mac-mic profile and a USB mic
         // 0.33–0.43, so every batch was rejected: they are filtered only against their own profile.
