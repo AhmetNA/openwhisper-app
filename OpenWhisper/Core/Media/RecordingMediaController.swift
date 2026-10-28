@@ -49,6 +49,8 @@ final class RecordingMediaController {
     private let ducker: AudioDucker
     private var pendingPause: DispatchWorkItem?
     private var volumeDucked = false
+    /// The volume is down for a held pause (`holdDuck`), not for media that keeps playing.
+    private var holdDucked = false
     private var receipts: [MediaPlaybackSnapshot] = []
     private let leftRunning = OSAllocatedUnfairLock(initialState: false)
 
@@ -71,8 +73,8 @@ final class RecordingMediaController {
     /// `sparingYouTube` (wake-word sessions) never pauses a YouTube video: the volume dips 10%
     /// instead, so a false "Jarvis" barely disturbs it.
     /// `holdingPause` (a "Jarvis" over media whose voice isn't confirmed yet, `WakeProbation`)
-    /// pauses nothing: the volume drops by `holdDuck` until `confirmPause()` pauses, or `end()`
-    /// restores it with every player left as it was. The volume stays down through the session.
+    /// pauses nothing: the volume drops by `holdDuck` until `confirmPause()` pauses (and brings
+    /// it back once nothing is left playing), or `end()` restores it with every player left as it was.
     func begin(immediately: Bool = false, sparingYouTube: Bool = false, holdingPause: Bool = false) {
         queue.async { [self] in
             guard !active else { return }
@@ -81,6 +83,7 @@ final class RecordingMediaController {
             if holdingPause || sparingYouTube {
                 ducker.duck(by: holdingPause ? Self.holdDuck : 0.1)
                 volumeDucked = true
+                holdDucked = holdingPause
             }
 
             let pause = DispatchWorkItem { [weak self] in
@@ -89,6 +92,13 @@ final class RecordingMediaController {
                 let result = self.transport.pausePlayingItemsReportingLeftovers(sparingYouTube: sparingYouTube)
                 self.receipts = result.receipts
                 self.leftRunning.withLock { $0 = result.leftPlaying }
+                // Nothing plays any more: bring the volume back so Jarvis's reply is heard at the
+                // user's level (28 Oct 2026: it answered at 11% after a confirmed hold).
+                if self.holdDucked, !result.leftPlaying {
+                    self.ducker.restore()
+                    self.volumeDucked = false
+                    self.holdDucked = false
+                }
                 owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)" + (result.leftPlaying ? "; something is still playing" : ""))
             }
             pendingPause = pause
@@ -123,6 +133,7 @@ final class RecordingMediaController {
                 ducker.restore()
                 volumeDucked = false
             }
+            holdDucked = false
             if resuming {
                 // Receipt order matters: MediaRemote players come first, while the one paused
                 // over the global route still holds it; scripted players can't steal it then.

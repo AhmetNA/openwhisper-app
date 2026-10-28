@@ -179,6 +179,41 @@ final class RecordingMediaControllerTests: XCTestCase {
         XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
     }
 
+    func testConfirmedHeldPauseBringsTheVolumeBackOnceNothingPlays() {
+        let transport = Transport()
+        let volume = MockVolumeController()
+        let scheduler = TestRampScheduler()
+        let (controller, ducker) = heldController(transport, volume: volume, scheduler: scheduler)
+
+        controller.begin(holdingPause: true)
+        controller.confirmPause()
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        for _ in 0..<100 { scheduler.triggerTick() }
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8, accuracy: 0.0001)
+        controller.end()
+        controller.waitUntilIdle()
+        XCTAssertEqual(transport.events, ["pause", "resume:Safari/video-1"])
+    }
+
+    func testConfirmedHeldPauseKeepsTheVolumeDownWhileSomethingStillPlays() {
+        let transport = LeftoverTransport()
+        transport.leftPlaying = true
+        let volume = MockVolumeController()
+        let scheduler = TestRampScheduler()
+        let ducker = AudioDucker(volumeController: volume, scheduler: scheduler)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0, ducker: ducker)
+
+        controller.begin(holdingPause: true)
+        controller.confirmPause()
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        for _ in 0..<100 { scheduler.triggerTick() }
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8 * 0.3, accuracy: 0.001)
+    }
+
     func testConfirmingADelayedPauseRunsItOnce() {
         let transport = Transport()
         let controller = RecordingMediaController(transport: transport, pauseDelay: 0.05)
