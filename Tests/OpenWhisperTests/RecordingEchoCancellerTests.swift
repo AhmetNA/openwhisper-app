@@ -124,11 +124,13 @@ final class RecordingEchoCancellerTests: XCTestCase {
         let reference = noise(total + 8_000, seed: 8, amplitude: 0.3)
         var mic = [Float](repeating: 0, count: total)
         for i in delay..<total { mic[i] = 0.5 * reference[i - delay] }
-        // ScreenCaptureKit's buffers carry timestamps ~75 ms behind the mic's, so the aligner
-        // holds the newest mic (plus its 100 ms lookahead) until the reference catches up.
-        let lag = 1_200
+        // The process tap's buffers arrive ~7 ms after their audio, like the mic's, so the
+        // aligner holds the newest mic about its lookahead until the reference catches up.
+        let lag = 112
         let handoffAt = 16_000 * 8
-        let prerollStart = handoffAt - 3_200 // the wake preroll replays 200 ms
+        // The wake preroll starts up to one 80 ms frame before the end of the scored (cancelled)
+        // audio, which is where the aligner's held mic begins (whole chunks, as the mic arrives).
+        let prerollStart = (handoffAt - lag - EchoCanceller.lookahead - 800) / chunk * chunk
 
         // The wake listener: its own aligner and canceller over the first 8 s.
         var aligner = EchoReferenceAligner()
@@ -151,7 +153,7 @@ final class RecordingEchoCancellerTests: XCTestCase {
         var sent = handoffAt - lag
         var at = prerollStart
         while at < total {
-            let target = min(reference.count, max(sent, at + 3_200 + chunk - lag))
+            let target = min(reference.count, max(sent, at + (handoffAt - prerollStart) + chunk - lag))
             if target > sent {
                 stream.appendReference(Array(reference[sent..<target]), startIndex: t0 + sent)
                 sent = target

@@ -212,7 +212,7 @@ final class PartitionedEchoFilter: EchoCancellationEngine {
 
 /// WebRTC AEC3 v2.1 configured to return only its linear adaptive-filter output. AEC3 consumes
 /// 10 ms frames and estimates the remaining render/capture delay itself; the shared timestamp
-/// aligner still provides the reference 100 ms ahead, exactly as in the offline research harness.
+/// aligner still provides the reference `EchoCanceller.lookahead` ahead.
 final class AEC3LinearEchoFilter: EchoCancellationEngine {
     let kind = EchoCancellationEngineKind.aec3
     let blockSize = 160
@@ -374,8 +374,11 @@ enum EchoDelayEstimator {
 /// appears "early" is still within reach). Finds the bulk delay itself.
 final class EchoCanceller {
     static let sampleRate = 16_000
-    /// How far the paired reference runs ahead of the mic's own timestamps.
-    static let lookahead = 1_600
+    /// How far the paired reference runs ahead of the mic's own timestamps; the mic waits this
+    /// long for its reference. 40 ms: the echo is stamped ~42 ms after its reference (process
+    /// tap, built-in speakers and mic, 29 Oct 2026), so this only has to cover `delayMargin`.
+    /// It was 100 ms while ScreenCaptureKit's late buffers set the wait anyway.
+    static let lookahead = 640
     /// Largest paired delay searched: lookahead + 500 ms of real latency.
     static let maxDelay = lookahead + 8_000
     /// The filter starts this far before the estimated delay (the echo builds up before its peak).
