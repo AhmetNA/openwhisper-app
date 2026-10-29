@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "OpenWhisper",
     platforms: [
-        .macOS(.v14)
+        .macOS("14.2")
     ],
     dependencies: [
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),

@@ -30,11 +30,13 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>14.2</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Jarvis needs to control Spotify to play, pause and search music, System Events to switch dark mode, and Mail to count, read and open your mail, with your voice.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Jarvis, müzik çalarken seni duyabilmek için Mac'in çaldığı sesi mikrofondan çıkarır. Bu ses kaydedilmez.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Jarvis sesli komutla Bluetooth'u açıp kapatmak ve kulaklığı bağlamak ya da bağlantısını kesmek için Bluetooth erişimi ister.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
