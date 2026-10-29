@@ -187,14 +187,19 @@ enum ClaudeSessionNavigator {
             return skip("value write failed")
         }
         func clear() { AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, "" as CFString) }
-        // The AX value can take up to a second to show the write.
-        var shown = false
-        let shownDeadline = Date().addingTimeInterval(1.5)
+        // A Claude window behind other windows updates its AX tree late: the write can take
+        // a few seconds to show.
+        let writtenAt = Date()
+        var current: String?
         repeat {
             try? await Task.sleep(nanoseconds: 150_000_000)
-            shown = value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines) == needle
-        } while !shown && Date() < shownDeadline
-        guard shown else { clear(); return skip("text did not show in the composer") }
+            current = value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        } while current != needle && Date().timeIntervalSince(writtenAt) < 3
+        guard current == needle else {
+            clear()
+            return skip("text did not show in the composer within 3 s, read [\(current.map { String($0.prefix(40)) } ?? "nil")]")
+        }
+        owLog("[Agent] Claude: background write showed after \(Int(Date().timeIntervalSince(writtenAt) * 1000)) ms")
         // Let the composer's own state catch up with the value before Send reads it.
         try? await Task.sleep(nanoseconds: 200_000_000)
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier else {
@@ -206,10 +211,10 @@ enum ClaudeSessionNavigator {
         }
         press(send)
         // A sent message leaves the composer.
-        let deadline = Date().addingTimeInterval(1.5)
+        let deadline = Date().addingTimeInterval(3)
         repeat {
             try? await Task.sleep(nanoseconds: 150_000_000)
-            if value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines) != needle { return true }
+            if let now = value(prompt), now.trimmingCharacters(in: .whitespacesAndNewlines) != needle { return true }
         } while Date() < deadline
         owLog("[Agent] Claude: Send pressed in the background but the text stayed in the composer")
         return false
