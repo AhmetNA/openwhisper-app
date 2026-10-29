@@ -41,4 +41,26 @@ final class CloudSessionNavigationTests: XCTestCase {
             XCTAssertNotNil(CloudSessionNavigation.decision("{\"action\":\"\(action)\",\"id\":null}", candidates: [], currentID: nil))
         }
     }
+
+    func testTitleMatchOpensTheBestScoringChat() {
+        let chats = ["En uzun süren komutlar analizi", "Model kurulumu ve test", "Yeni 2B model araştırması",
+                     "Spotify zaman aşımı", "Developer modu hata mesajı"].enumerated().map {
+            CloudSessionNavigation.Candidate(id: "\($0.offset)", title: $0.element, activity: 0, excerpt: "")
+        }
+        func match(_ text: String, current: String? = nil) -> String? {
+            CloudSessionNavigation.titleMatch(text, candidates: chats, currentID: current)?.0.title
+        }
+        // 29 Oct 2026: the spoken topic was the title word for word, yet it waited 1.8 s for the cloud.
+        XCTAssertEqual(match("En uzun süren komutlar analizi sohbetine geç."), "En uzun süren komutlar analizi")
+        XCTAssertEqual(match("Claude'da spotify zaman aşımı sohbetini aç"), "Spotify zaman aşımı")
+        XCTAssertEqual(match("Developer modu hata mesajı oturumuna geç"), "Developer modu hata mesajı")
+        XCTAssertEqual(match("Model kurulumu ve test sohbetine geç."), "Model kurulumu ve test")
+        // Left to the cloud: no topic, a relative chat, a weak or tied match, the current chat.
+        XCTAssertNil(match("Yeni sohbet aç"))
+        XCTAssertNil(match("Önceki sohbete geç"))
+        XCTAssertNil(match("Yeni 2B model araştırması sohbetine geç"))
+        XCTAssertNil(match("Ses sorunları sohbetine geç"))
+        XCTAssertNil(match("Model sohbetine geç"))
+        XCTAssertNil(match("Spotify zaman aşımı sohbetine geç", current: "3"))
+    }
 }

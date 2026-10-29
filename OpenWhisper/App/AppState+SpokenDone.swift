@@ -58,6 +58,7 @@ extension AppState {
                 guard let self, self.recordingState == .recording,
                       self.activeTranscriptionSession === session, !session.isCancelled,
                       session.doneLastSpeechTime == speechTime else { return }
+                CloudSessionNavigation.prefetch(text, front: session.targetApp)
                 let spokenDone = SpokenDoneEndpoint.removingSuffix(from: text) != nil
                 guard spokenDone || self.isFinishedClearCommand(text, session: session, endpoint: endpoint,
                                                                 previewSampleCount: whole?.count) else { return }
