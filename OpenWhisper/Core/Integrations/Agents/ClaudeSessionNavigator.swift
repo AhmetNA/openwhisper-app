@@ -175,6 +175,9 @@ enum ClaudeSessionNavigator {
             owLog("[Agent] Claude: background send skipped (\(reason))")
             return nil
         }
+        // Electron suspends a window that is off screen (full screen in another Space,
+        // minimized): the write never lands there, so don't wait for it.
+        guard hasWindowOnScreen(app) else { return skip("window not on screen") }
         guard let prompt = find(in: pane, maxDepth: 50, where: isPrompt) else { return skip("no composer") }
         guard (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return skip("composer not empty") }
         var bar = prompt
@@ -218,6 +221,18 @@ enum ClaudeSessionNavigator {
         } while Date() < deadline
         owLog("[Agent] Claude: Send pressed in the background but the text stayed in the composer")
         return false
+    }
+
+    /// Whether one of the app's normal windows is on the current screen (its title strip alone
+    /// is a separate small window, so that one does not count).
+    private static func hasWindowOnScreen(_ app: NSRunningApplication) -> Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { window in
+            guard window[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier,
+                  window[kCGWindowLayer as String] as? Int == 0,
+                  let bounds = window[kCGWindowBounds as String].flatMap({ CGRect(dictionaryRepresentation: $0 as! CFDictionary) }) else { return false }
+            return bounds.width > 300 && bounds.height > 300
+        }
     }
 
     /// Switches to the sidebar session titled `name` (expanding collapsed day groups if
