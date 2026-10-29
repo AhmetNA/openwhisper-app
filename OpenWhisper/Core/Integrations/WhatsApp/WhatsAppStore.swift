@@ -258,6 +258,8 @@ enum WhatsAppStore {
             else if !chat.isGroup, let number = chat.jid.split(separator: "@").first,
                     contactPhones.contains(where: { number.hasSuffix($0) }) { score = 3 }
             else if spoken.allSatisfy({ word in chatWords.contains { matches(word, $0) } }) { score = 2 }
+            // Whisper misspells names: "Dileğim" for "Dilayım".
+            else if spoken.allSatisfy({ word in chatWords.contains { near(word, $0) } }) { score = 1 }
             guard score > 0 else { continue }
             scored.append((chat, score * 2 + (chat.isGroup ? 0 : 1)))
         }
@@ -276,6 +278,15 @@ enum WhatsAppStore {
     /// whole of it with a case ending ("Aliden" ~ "Ali").
     private static func matches(_ spoken: String, _ word: String) -> Bool {
         word.hasPrefix(spoken) || withEnding(spoken, word)
+    }
+
+    /// A misheard spelling of the word or of its start: "dilegim" ~ "dilayimmm". One letter
+    /// off for short words, two for longer ones.
+    private static func near(_ spoken: String, _ word: String) -> Bool {
+        guard spoken.count >= 4, word.count >= 3 else { return false }
+        let allowed = spoken.count >= 6 ? 2 : 1
+        return CorrectionEngine.levenshtein(spoken, word) <= allowed
+            || CorrectionEngine.levenshtein(spoken, String(word.prefix(spoken.count))) <= allowed
     }
 
     /// `spoken` is `word` with a case ending: "aliden" ~ "ali".

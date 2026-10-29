@@ -77,6 +77,10 @@ final class WhatsAppTests: XCTestCase {
         XCTAssertNil(WhatsAppStore.bestChat(for: "Zeynep", in: chats))
         XCTAssertEqual(WhatsAppStore.bestChat(for: "Aliy", in: chats)?.chat.id, 2)
         XCTAssertEqual(WhatsAppStore.bestChat(for: "Dilay", in: [chat(9, "Dilayimmm❤️❤️")])?.chat.id, 9)
+        let dilay = [chat(9, "Dilayimmm❤️❤️"), chat(10, "Dilek Kaya", last: 300)]
+        XCTAssertEqual(WhatsAppStore.bestChat(for: "Dileğim", in: dilay)?.chat.id, 9)
+        XCTAssertEqual(WhatsAppStore.bestChat(for: "Dileyim", in: dilay)?.chat.id, 9)
+        XCTAssertEqual(WhatsAppStore.bestChat(for: "Dilek", in: dilay)?.chat.id, 10)
     }
 
     func testBestChatThroughContacts() {

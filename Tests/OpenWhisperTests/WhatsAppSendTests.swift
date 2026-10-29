@@ -15,6 +15,8 @@ final class WhatsAppSendTests: XCTestCase {
         XCTAssertEqual(WhatsAppSendParser.parse("Akşam geliyorum diye Dilayım'a mesaj at"),
                        WhatsAppOutgoing(recipient: "Dilayım", body: "Akşam geliyorum"))
         XCTAssertEqual(WhatsAppSendParser.parse("dilayıma mesaj yaz"), WhatsAppOutgoing(recipient: "Dilayım", body: ""))
+        XCTAssertEqual(WhatsAppSendParser.parse("Whatsapp'tan dileğime mesaj at."), WhatsAppOutgoing(recipient: "Dileğim", body: ""))
+        XCTAssertEqual(WhatsAppSendParser.parse("Datsattan dileyime mesaj at."), WhatsAppOutgoing(recipient: "Dileyim", body: ""))
     }
 
     func testNotMessageRequests() {

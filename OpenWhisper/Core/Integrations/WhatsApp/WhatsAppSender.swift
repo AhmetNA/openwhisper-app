@@ -52,8 +52,15 @@ enum WhatsAppSendParser {
         return WhatsAppOutgoing(recipient: name, body: body)
     }
 
+    /// "Whatsapp'tan" misheard ("Datsattan") is left before the name: "Datsattan Dileyim".
+    private static let misheardApp = #"^\S*[st]a[pbt]+\S*(?:tan|dan|ten|den)$"#
+
     private static func recipientName(_ text: String, _ range: NSRange) -> String? {
-        let name = cut(text, range).trimmingCharacters(in: .whitespaces)
+        var name = cut(text, range).trimmingCharacters(in: .whitespaces)
+        let words = name.split(separator: " ")
+        if words.count > 1, WhatsAppStore.fold(String(words[0])).range(of: misheardApp, options: .regularExpression) != nil {
+            name = words.dropFirst().joined(separator: " ")
+        }
         let lowered = name.lowercased(with: locale)
         guard !name.isEmpty, name.split(separator: " ").count <= 3, !notRecipients.contains(lowered) else { return nil }
         return name.split(separator: " ").map { $0.prefix(1).uppercased(with: locale) + $0.dropFirst() }.joined(separator: " ")
