@@ -15,12 +15,15 @@ enum WhatsAppSendParser {
     private static let call = #"^\s*(?:hey\s+)?(?:(?:jarvis|cervis|carvis|jarvıs|çarvis|jervis)[\s,.!]+)?(?:lütfen\s+)?(?:whats ?app\S*\s+)?"#
     // "Dilayım'a", "dilayıma", "Ali'ye", "anneme": the name and its dative ending.
     private static let recipient = #"(.+?)['’]?(?:ya|ye|a|e)"#
+    // "Dileğimi mesaj gönder": Whisper hears the dative as an accusative. Only before "mesaj".
+    private static let misheardRecipient = #"(.+?)\s?['’]?(?:ya|ye|a|e|yi|yı|yu|yü|i|ı|u|ü)"#
     private static let message = #"(?:(?:bir |kısa (?:bir )?)?(?:whats ?app\S* )?mesaj\S*\s+)"#
     private static let verb = #"(?:yaz|gönder|at|yolla|ilet)"#
 
     /// Words that end in a dative but are no person: "buraya yaz", "bana yaz", "ona at".
     private static let notRecipients: Set<String> = [
         "bur", "bura", "şur", "şura", "or", "ora", "ban", "san", "on", "bun", "şun", "kendim", "kendin",
+        "ben", "sen", "onlar", "bunlar", "şunlar",
         "claude", "cloud", "claude code", "cloud code", "codex", "chatgpt", "jarvis", "not", "notlar",
     ]
 
@@ -31,7 +34,7 @@ enum WhatsAppSendParser {
         guard lowered.utf16.count == trimmed.utf16.count else { return nil }
         let withBody = #"\#(call)\#(recipient)\s+(?:whats ?app\S*\s+)?\#(message)?(?:şunu\s+|şöyle\s+)?\#(verb)(?:\s+ki|\s+diye)?[\s:,.!]+(.+)$"#
         let saidFirst = #"\#(call)(.+?),?\s+diye\s+\#(recipient)\s+\#(message)?\#(verb)[\s.!]*$"#
-        let bodyless = #"\#(call)\#(recipient)\s+(?:whats ?app\S*\s+)?\#(message)\#(verb)[\s.!]*$"#
+        let bodyless = #"\#(call)\#(misheardRecipient)\s+(?:whats ?app\S*\s+)?\#(message)\#(verb)[\s.!]*$"#
 
         if let groups = match(withBody, lowered), let name = recipientName(trimmed, groups[0]) {
             return outgoing(name, body: cut(trimmed, groups[1]))

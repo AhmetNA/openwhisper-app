@@ -17,6 +17,8 @@ final class WhatsAppSendTests: XCTestCase {
         XCTAssertEqual(WhatsAppSendParser.parse("dilayıma mesaj yaz"), WhatsAppOutgoing(recipient: "Dilayım", body: ""))
         XCTAssertEqual(WhatsAppSendParser.parse("Whatsapp'tan dileğime mesaj at."), WhatsAppOutgoing(recipient: "Dileğim", body: ""))
         XCTAssertEqual(WhatsAppSendParser.parse("Datsattan dileyime mesaj at."), WhatsAppOutgoing(recipient: "Dileyim", body: ""))
+        XCTAssertEqual(WhatsAppSendParser.parse("Dileğimi mesaj gönder."), WhatsAppOutgoing(recipient: "Dileğim", body: ""))
+        XCTAssertEqual(WhatsAppSendParser.parse("Whatsapp'tan Dileyim 'e mesaj gönder."), WhatsAppOutgoing(recipient: "Dileyim", body: ""))
     }
 
     func testNotMessageRequests() {
@@ -25,6 +27,8 @@ final class WhatsAppSendTests: XCTestCase {
         XCTAssertNil(WhatsAppSendParser.parse("Claude Code'a yaz: testleri çalıştır"))
         XCTAssertNil(WhatsAppSendParser.parse("Ali ne yazdı"))
         XCTAssertNil(WhatsAppSendParser.parse("Bu akşam yazacağım"))
+        XCTAssertNil(WhatsAppSendParser.parse("Bunu mesaj olarak gönder"))
+        XCTAssertNil(WhatsAppSendParser.parse("Beni mesaj at"))
     }
 
     func testAsksForTheMessage() async {
@@ -70,6 +74,11 @@ final class WhatsAppSendTests: XCTestCase {
                                       hasTargetApp: true, targetBundleID: nil)
         guard case .whatsAppSend = VoiceRouter.route("Dilayım'a yaz: akşam geliyorum", facts: facts) else {
             return XCTFail("a message request is not dictation, even in a text field")
+        }
+        let agentInFront = VoiceRouter.Facts(isVoiceCommand: true, acceptsCommands: true, focus: .editable,
+                                             hasTargetApp: true, targetBundleID: "com.anthropic.claudefordesktop")
+        guard case .whatsAppSend = VoiceRouter.route("Whatsapp'tan Dileyim 'e mesaj gönder.", facts: agentInFront) else {
+            return XCTFail("a trailing gönder is not a message to the agent in front")
         }
         if case .whatsAppConfirmation = VoiceRouter.route("evet", facts: facts) {
             XCTFail("no message waits")

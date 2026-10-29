@@ -86,10 +86,15 @@ enum VoiceRouter {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let voice = facts.isVoiceCommand
 
+        let whatsApp = facts.acceptsCommands ? WhatsAppSendParser.parse(trimmed) : nil
+
         // A named target wins; otherwise a Jarvis send goes to the app that was frontmost
         // when recording began. TextInjector still verifies that the destination is safe.
         // "Claude Code'a geç ve şunu yolla …" is the same as naming the app in the command.
-        if case .agent(let agent)? = CommandRegistry.match(trimmed, in: [.agent], context: CommandRegistry.Context()) {
+        // A bare "Ali'ye mesaj gönder" is WhatsApp, not a send to the app in front; a named agent
+        // or a dictated text ("kodekse gönder …") still goes to the agent.
+        if case .agent(let agent)? = CommandRegistry.match(trimmed, in: [.agent], context: CommandRegistry.Context()),
+           agent.target != nil || whatsApp?.body.isEmpty != true {
             if voice, agent.send, agent.target == nil, !facts.hasTargetApp {
                 return .agentWithoutForeground
             }
@@ -106,9 +111,7 @@ enum VoiceRouter {
 
         // "Dilayım'a yaz: …", "Ali'ye mesaj at …": before the typed rule, which would read a
         // trailing "… mesaj yaz" as dictation. Nothing is sent before a spoken yes.
-        if facts.acceptsCommands, let outgoing = WhatsAppSendParser.parse(trimmed) {
-            return .whatsAppSend(outgoing)
-        }
+        if let whatsApp { return .whatsAppSend(whatsApp) }
 
         // An explicit "buraya yaz …" or trailing "… bunu yaz" always means the captured
         // text field, even when the words themselves resemble a Jarvis command. A trailing
