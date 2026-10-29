@@ -1118,6 +1118,14 @@ extension AppState {
                 await say(reply, durationMs: 5000)
                 return
             }
+            // After "ne yazayım?" all of it is the message, never a command or dictation.
+            if self.whatsAppSender.awaitsBody, let answer = await self.whatsAppSender.handleConfirmation(trimmed) {
+                session.latency.finishDecision(route: "WhatsApp mesaj metni")
+                owLog("[Route] WhatsApp message body")
+                self.lastTranscription = text
+                await sayWhatsApp(answer)
+                return
+            }
             var route = session.sendsToRecappedSession.map {
                 .agent(AgentDictation(target: $0, body: trimmed, send: true, session: .last))
             } ?? VoiceRouter.route(text, facts: facts)

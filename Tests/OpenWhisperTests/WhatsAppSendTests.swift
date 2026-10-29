@@ -27,6 +27,23 @@ final class WhatsAppSendTests: XCTestCase {
         XCTAssertNil(WhatsAppSendParser.parse("Bu akşam yazacağım"))
     }
 
+    func testAsksForTheMessage() async {
+        let sender = WhatsAppSender(pressReturn: { _ in false })
+        sender.setPendingForTesting(.init(chatName: "Dilayım", phone: "905550000000", body: "", chatID: nil,
+                                          expiresAt: Date().addingTimeInterval(45)))
+        XCTAssertTrue(sender.awaitsBody)
+        let readBack = await sender.handleConfirmation("akşam geliyorum")
+        XCTAssertEqual(readBack, .confirm("Dilayım kişisine: Akşam geliyorum. Göndereyim mi?"))
+        XCTAssertFalse(sender.awaitsBody)
+        XCTAssertTrue(sender.hasPending)
+
+        sender.setPendingForTesting(.init(chatName: "Dilayım", phone: "905550000000", body: "", chatID: nil,
+                                          expiresAt: Date().addingTimeInterval(45)))
+        let cancelled = await sender.handleConfirmation("Vazgeç")
+        XCTAssertEqual(cancelled, .done("Tamam, göndermedim"))
+        XCTAssertFalse(sender.hasPending)
+    }
+
     func testAnswers() {
         XCTAssertEqual(WhatsAppSender.decision("Evet."), .approve)
         XCTAssertEqual(WhatsAppSender.decision("Evet gönder"), .approve)

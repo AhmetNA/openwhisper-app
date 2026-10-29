@@ -46,10 +46,15 @@ enum WhatsAppSendParser {
     }
 
     private static func outgoing(_ name: String, body: String) -> WhatsAppOutgoing? {
-        var body = body.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”'")))
+        let body = cleanBody(body)
         guard !body.isEmpty else { return nil }
-        body = body.prefix(1).uppercased(with: locale) + body.dropFirst()
         return WhatsAppOutgoing(recipient: name, body: body)
+    }
+
+    /// The message as it is sent: no quotes around it, a capital first letter.
+    static func cleanBody(_ text: String) -> String {
+        let body = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”'")))
+        return body.prefix(1).uppercased(with: locale) + body.dropFirst()
     }
 
     /// "Whatsapp'tan" misheard ("Datsattan") is left before the name: "Datsattan Dileyim".
@@ -77,8 +82,8 @@ enum WhatsAppSendParser {
     }
 }
 
-/// Sends a WhatsApp message only after a spoken yes. The draft is resolved to one chat and
-/// read back first; on "evet" the WhatsApp app itself opens the chat with the text in its
+/// Sends a WhatsApp message only after a spoken yes. The draft is resolved to one chat (a
+/// request without a message first asks "ne yazayım?") and read back first; on "evet" the WhatsApp app itself opens the chat with the text in its
 /// message field (`whatsapp://send`), Jarvis checks that the field holds exactly that text
 /// and presses Return, then looks for the sent message in WhatsApp's database.
 @MainActor
@@ -87,7 +92,8 @@ final class WhatsAppSender {
         let chatName: String
         /// International number, digits only.
         let phone: String
-        let body: String
+        /// Empty while "ne yazayım?" waits for the message.
+        var body: String
         let chatID: Int64?
         var expiresAt: Date
         var retried = false
@@ -104,6 +110,8 @@ final class WhatsAppSender {
     /// "Dilayım'dan mesaj var, okuyayım mı?" waits for its answer (`WhatsAppWatcher`).
     private(set) var readOffer: (chatIDs: [Int64], expiresAt: Date)?
     var hasPending: Bool { pending != nil || readOffer != nil }
+    /// "Ne yazayım?" waits: the whole next transcript is the message.
+    var awaitsBody: Bool { pending?.body.isEmpty == true }
     private static let confirmationTimeout: TimeInterval = 45
     static let bundleIdentifier = "net.whatsapp.WhatsApp"
 
@@ -112,6 +120,10 @@ final class WhatsAppSender {
 
     init(pressReturn: @escaping (pid_t) -> Bool) {
         self.pressReturn = pressReturn
+    }
+
+    func setPendingForTesting(_ draft: Draft) {
+        pending = draft
     }
 
     func cancel() {
@@ -143,14 +155,21 @@ final class WhatsAppSender {
                 ? "WhatsApp'ta \(outgoing.recipient) adında kimse bulunamadı"
                 : "\(outgoing.recipient) için telefon numarası bulunamadı")
         }
+        let draft = Draft(chatName: name, phone: phone, body: outgoing.body, chatID: best?.id,
+                          expiresAt: Date().addingTimeInterval(Self.confirmationTimeout))
         guard !outgoing.body.isEmpty else {
-            return .done(await openChat(phone: phone) ? "\(name) sohbetini açtım" : "WhatsApp açılamadı")
+            pending = draft
+            owLog("[WhatsApp] chat found, asking for the message")
+            return .confirm("\(name) kişisine ne yazayım?")
         }
-        pending = Draft(chatName: name, phone: phone, body: outgoing.body, chatID: best?.id,
-                        expiresAt: Date().addingTimeInterval(Self.confirmationTimeout))
-        owLog("[WhatsApp] message to one chat awaiting confirmation (\(outgoing.body.count) chars)")
-        let sentence = outgoing.body.last.map { ".!?".contains($0) } == true ? outgoing.body : outgoing.body + "."
-        return .confirm("\(name) kişisine: \(sentence) Göndereyim mi?")
+        return readBack(draft)
+    }
+
+    private func readBack(_ draft: Draft) -> Prepared {
+        pending = draft
+        owLog("[WhatsApp] message to one chat awaiting confirmation (\(draft.body.count) chars)")
+        let sentence = draft.body.last.map { ".!?".contains($0) } == true ? draft.body : draft.body + "."
+        return .confirm("\(draft.chatName) kişisine: \(sentence) Göndereyim mi?")
     }
 
     /// The answer to the pending draft, or nil when `text` is no answer (a new message
@@ -173,7 +192,21 @@ final class WhatsAppSender {
         }
         guard draft.expiresAt > Date() else {
             pending = nil
-            return .done("Onay süresi doldu, göndermedim")
+            return .done(draft.body.isEmpty ? "Süre doldu, mesaj yazmadım" : "Onay süresi doldu, göndermedim")
+        }
+        // The answer to "ne yazayım?" is the message, unless it calls the message off.
+        if draft.body.isEmpty {
+            if Self.decision(text) == .reject {
+                pending = nil
+                return .done("Tamam, göndermedim")
+            }
+            draft.body = WhatsAppSendParser.cleanBody(text)
+            guard !draft.body.isEmpty else {
+                pending = nil
+                return nil
+            }
+            draft.expiresAt = Date().addingTimeInterval(Self.confirmationTimeout)
+            return readBack(draft)
         }
         switch Self.decision(text) {
         case .approve:
