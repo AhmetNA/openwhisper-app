@@ -369,6 +369,27 @@ extension AppState {
                     self.showFlowBarMessage("Gönderiyorum, ekranı değiştirmeyin", durationMs: 8000)
                 }
 
+                // Claude still shows the recorded chat behind another app: send it there
+                // without switching screens. Anything else takes the hop below.
+                if self.autoPasteEnabled, send, let target = targetApp, !target.isTerminated,
+                   target.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
+                   NSWorkspace.shared.frontmostApplication?.processIdentifier != target.processIdentifier,
+                   let conversation = pasteContext.conversation, conversation.isCurrent(in: target),
+                   await ClaudeSessionNavigator.sendInBackground(target, window: conversation.window, text: initialText) {
+                    watchesScreen = false
+                    self.lastInjectedText = ""
+                    self.swapPair = nil
+                    self.swapPasteContext = nil
+                    self.hotkey?.setSwapAvailable(false)
+                    session.latency.markOutput("sent in background")
+                    owLog("[Result] Agent message sent in background")
+                    if let traceID {
+                        VoiceEventLog.shared.append(traceID, "[Result] Agent message sent in background")
+                    }
+                    self.showFlowBarMessage("gönderildi", durationMs: 1200)
+                    return true
+                }
+
                 // Return can only be pressed in the frontmost app. If the user moved to another
                 // app (or full-screen Space) after "gönder", hop to the target, send there, and
                 // go straight back to where they were.
