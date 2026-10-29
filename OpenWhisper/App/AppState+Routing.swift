@@ -375,19 +375,21 @@ extension AppState {
                    target.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
                    NSWorkspace.shared.frontmostApplication?.processIdentifier != target.processIdentifier,
                    let conversation = pasteContext.conversation, conversation.isCurrent(in: target),
-                   await ClaudeSessionNavigator.sendInBackground(target, window: conversation.window, text: initialText) {
+                   let sent = await ClaudeSessionNavigator.sendInBackground(target, window: conversation.window, text: initialText) {
+                    // Once Send was pressed there is no retry: it could post the message twice.
                     watchesScreen = false
                     self.lastInjectedText = ""
                     self.swapPair = nil
                     self.swapPasteContext = nil
                     self.hotkey?.setSwapAvailable(false)
-                    session.latency.markOutput("sent in background")
-                    owLog("[Result] Agent message sent in background")
+                    let result = sent ? "Agent message sent in background" : "Agent message written in background, send unconfirmed"
+                    session.latency.markOutput(result)
+                    owLog("[Result] \(result)")
                     if let traceID {
-                        VoiceEventLog.shared.append(traceID, "[Result] Agent message sent in background")
+                        VoiceEventLog.shared.append(traceID, "[Result] \(result)")
                     }
-                    self.showFlowBarMessage("gönderildi", durationMs: 1200)
-                    return true
+                    self.showFlowBarMessage(sent ? "gönderildi" : "yazıldı, gönderilmedi", durationMs: 1200)
+                    return sent
                 }
 
                 // Return can only be pressed in the frontmost app. If the user moved to another

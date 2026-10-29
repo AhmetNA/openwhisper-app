@@ -165,20 +165,21 @@ enum ClaudeSessionNavigator {
     /// Sends `text` in `window` while Claude stays behind another app: the composer takes an
     /// AX value write and the composer's own Send button takes AXPress (Return posted to a
     /// background Claude is ignored). Only into an empty composer; a busy session shows Stop
-    /// instead of Send and is left alone. False means nothing was sent and the composer is empty.
-    static func sendInBackground(_ app: NSRunningApplication, window: AXUIElement, text: String) async -> Bool {
+    /// instead of Send and is left alone. Nil: nothing was pressed and the composer is empty.
+    /// False: Send was pressed but the text stayed; it may still go out, so never retry it.
+    static func sendInBackground(_ app: NSRunningApplication, window: AXUIElement, text: String) async -> Bool? {
         AXUIElementSetMessagingTimeout(window, 0.5)
         let isPrompt: (AXUIElement) -> Bool = { role($0) == kAXTextAreaRole && description($0) == "Prompt" }
         let pane = find(in: window, maxDepth: 22, where: { description($0) == "Primary pane" }) ?? window
         guard let prompt = find(in: pane, maxDepth: 50, where: isPrompt),
-              (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+              (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         var bar = prompt
         for _ in 0..<5 {
-            guard let parent = attribute(bar, kAXParentAttribute) else { return false }
+            guard let parent = attribute(bar, kAXParentAttribute) else { return nil }
             bar = parent as! AXUIElement
         }
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, text as CFString) == .success else { return false }
+        guard AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, text as CFString) == .success else { return nil }
         func clear() { AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, "" as CFString) }
         // Let the composer take the value before Send reads it.
         try? await Task.sleep(nanoseconds: 400_000_000)
@@ -187,7 +188,7 @@ enum ClaudeSessionNavigator {
               let send = find(in: bar, maxDepth: 14, where: { role($0) == kAXButtonRole && description($0) == "Send" }),
               attribute(send, kAXEnabledAttribute) as? Bool != false else {
             clear()
-            return false
+            return nil
         }
         press(send)
         // A sent message leaves the composer.
@@ -197,7 +198,6 @@ enum ClaudeSessionNavigator {
             if value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines) != needle { return true }
         } while Date() < deadline
         owLog("[Agent] Claude: Send pressed in the background but the text stayed in the composer")
-        clear()
         return false
     }
 
