@@ -404,7 +404,8 @@ extension AppState {
                     owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
                     jarvisChangedScreen = true
                     self.showFlowBarMessage("Jarvis ekranı değiştirdi, bekleyin", durationMs: 8000)
-                    if await AgentAppActivator.bringToFront(target) {
+                    // A bound conversation focuses its own composer right after this.
+                    if await AgentAppActivator.bringToFront(target, settle: !RecordedConversation.requiresBinding(target.bundleIdentifier)) {
                         hopFrom = front
                     }
                 }
@@ -513,7 +514,9 @@ extension AppState {
                                 self.hotkey?.setSwapAvailable(false)
                                 // Electron composers and CLI bracketed paste need a moment to
                                 // take the paste before Return, or only part of it is sent.
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                                // Claude's composer is watched for the pasted text below instead.
+                                let isClaude = targetApp?.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false
+                                DispatchQueue.main.asyncAfter(deadline: .now() + (isClaude ? 0.05 : 0.25)) { [weak self] in
                                     Task { @MainActor in
                                         guard let self else { return }
                                         // A background paste (the hop above failed or the user moved

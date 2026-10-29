@@ -132,6 +132,21 @@ enum ClaudeSessionNavigator {
         return false
     }
 
+    /// The composer of a chat that was already on screen is mounted: focus it and wait only
+    /// until AX reports that focus, instead of the fixed settle a freshly loaded one needs.
+    static func focusShownComposer(_ app: NSRunningApplication) async -> Bool {
+        if let prompt = promptField(app) {
+            focus(prompt)
+            let deadline = Date().addingTimeInterval(0.4)
+            repeat {
+                if let current = AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier),
+                   CFEqual(current, prompt) { return true }
+                try? await Task.sleep(nanoseconds: 30_000_000)
+            } while Date() < deadline
+        }
+        return await waitForComposer(app, timeout: 2.5)
+    }
+
     /// Before Return: waits until the composer shows the pasted `text`. Electron can take a
     /// long paste after its AX value is first read, and an early Return sends nothing.
     /// True when the composer cannot be read, so a missing AX tree never blocks the send.

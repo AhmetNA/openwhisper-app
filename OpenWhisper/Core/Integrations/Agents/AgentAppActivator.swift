@@ -92,7 +92,8 @@ enum AgentAppActivator {
 
     /// Brings a running app (back) to the front and waits until it is frontmost. Opening its
     /// bundle works from a background menu-bar app and switches to its full-screen Space too.
-    static func bringToFront(_ app: NSRunningApplication, timeout: TimeInterval = 2) async -> Bool {
+    /// `settle: false` skips the focus pause when the caller focuses the field itself.
+    static func bringToFront(_ app: NSRunningApplication, timeout: TimeInterval = 2, settle: Bool = true) async -> Bool {
         let pid = app.processIdentifier
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
         if let url = app.bundleURL {
@@ -106,7 +107,7 @@ enum AgentAppActivator {
         while Date() < deadline {
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
                 // Let the window restore keyboard focus to its text field.
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                if settle { try? await Task.sleep(nanoseconds: 200_000_000) }
                 return true
             }
             try? await Task.sleep(nanoseconds: 30_000_000)

@@ -96,7 +96,7 @@ struct RecordedConversation: @unchecked Sendable {
     func restore(in app: NSRunningApplication) async -> Bool {
         guard !app.isTerminated, await AgentAppActivator.bringToFront(app) else { return false }
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-        if isCurrent(in: app) { return await waitForComposer(in: app) }
+        if isCurrent(in: app) { return await waitForComposer(in: app, navigated: false) }
         // Unsaved drafts have no deep link. Never open another blank chat for them.
         guard draft == nil else { return false }
         let opened: Bool
@@ -114,17 +114,22 @@ struct RecordedConversation: @unchecked Sendable {
     /// The title changes before Electron has mounted the destination's input handlers.
     /// Let navigation settle, then reacquire and focus the new composer before capturing
     /// its paste baseline. Never retain the field found during the transition.
+    /// A chat that was already on screen has its composer mounted: no settle needed.
     @MainActor
-    private func waitForComposer(in app: NSRunningApplication) async -> Bool {
-        do { try await Task.sleep(nanoseconds: 650_000_000) }
-        catch { return false }
+    private func waitForComposer(in app: NSRunningApplication, navigated: Bool = true) async -> Bool {
+        if navigated {
+            do { try await Task.sleep(nanoseconds: 650_000_000) }
+            catch { return false }
+        }
         guard !app.isTerminated, isCurrent(in: app) else { return false }
         let focused: Bool
         switch agent {
         case .codex, .chatGPT:
             focused = await CodexSessionNavigator.focusComposer(app, timeout: 2.5)
         case .claudeCode:
-            focused = await ClaudeSessionNavigator.waitForComposer(app, timeout: 2.5)
+            focused = navigated
+                ? await ClaudeSessionNavigator.waitForComposer(app, timeout: 2.5)
+                : await ClaudeSessionNavigator.focusShownComposer(app)
         }
         guard focused, !Task.isCancelled, isCurrent(in: app),
               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
