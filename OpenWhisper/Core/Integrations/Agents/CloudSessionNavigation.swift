@@ -8,6 +8,10 @@ enum CloudSessionNavigation {
     /// `handle`'s reply after switching to an existing chat; the mic stays open there too.
     static let switchedChat = "İstediğin sohbete geçtim."
 
+    /// Characters of recap and recent messages sent per chat. At 1800 the 40 chats made a
+    /// ~50-65k character prompt and the cloud took 4.9-5.6 s to answer (28 Oct 2026).
+    static let excerptLimit = 500
+
     struct Candidate: Codable, Equatable, Sendable {
         let id: String
         let title: String
@@ -63,7 +67,7 @@ enum CloudSessionNavigation {
                         .first { FileManager.default.fileExists(atPath: $0) }
                 }.map(transcriptExcerpt(path:)) ?? ""
                 return Candidate(id: $0.id, title: $0.title, activity: $0.lastActivity.timeIntervalSince1970,
-                                 excerpt: String((($0.storedRecap ?? "") + "\n" + last).prefix(1800)))
+                                 excerpt: String((($0.storedRecap ?? "") + "\n" + last).prefix(excerptLimit)))
             }
         }
         var handle: OpaquePointer?
@@ -113,7 +117,7 @@ enum CloudSessionNavigation {
             }.compactMap { $0["text"] as? String }.joined(separator: " ")
             if !message.hasPrefix("<") && !message.hasPrefix("# AGENTS.md") { messages.append(message) }
         }
-        return String(messages.suffix(4).joined(separator: "\n").suffix(1800))
+        return String(messages.suffix(4).joined(separator: "\n").suffix(excerptLimit))
     }
 
     @MainActor
@@ -134,7 +138,9 @@ enum CloudSessionNavigation {
         }
         let current = front.flatMap { RecordedConversation.capture(app: $0) }
         let currentID = current?.agent == agent ? current?.sessionID : nil
+        let loadStart = Date()
         let candidates = await Task.detached { load(agent) }.value
+        let loadMs = Int(Date().timeIntervalSince(loadStart) * 1000)
         guard !Task.isCancelled else { return nil }
         let encoded = (try? JSONEncoder().encode(candidates)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         let prompt = """
@@ -148,6 +154,7 @@ enum CloudSessionNavigation {
         \(encoded)
         """
         do {
+            let cloudStart = Date()
             var output = ""
             for try await piece in client.streamChat(LLMChatRequest(model: model,
                 messages: [["role": "system", "content": prompt], ["role": "user", "content": text]],
@@ -155,11 +162,14 @@ enum CloudSessionNavigation {
                 output += piece
                 guard output.count < 4000, !Task.isCancelled else { return "Sohbet geçişi iptal edildi." }
             }
+            owLog("[CloudSessionNavigation] \(candidates.count) chats loaded in \(loadMs) ms, prompt \(prompt.count) chars, cloud \(Int(Date().timeIntervalSince(cloudStart) * 1000)) ms")
             guard let chosen = decision(output, candidates: candidates, currentID: currentID) else {
                 return "Hangi sohbeti açacağımı netleştiremedim; konusunu biraz daha açık söyler misin?"
             }
             if chosen.action == "none" { return nil }
             if chosen.action == "ambiguous" { return "Son 40 sohbet içinde kesin bir eşleşme bulamadım; sohbetin konusunu daha açık söyler misin?" }
+            let openStart = Date()
+            defer { owLog("[CloudSessionNavigation] opening took \(Int(Date().timeIntervalSince(openStart) * 1000)) ms") }
             guard !Task.isCancelled, !RemoteControl.screenIsLocked,
                   let app = await AgentAppActivator.activate(agent) else { return "Sohbet uygulamasını açamadım." }
             let opened: Bool
