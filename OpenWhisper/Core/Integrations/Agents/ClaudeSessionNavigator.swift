@@ -171,24 +171,38 @@ enum ClaudeSessionNavigator {
         AXUIElementSetMessagingTimeout(window, 0.5)
         let isPrompt: (AXUIElement) -> Bool = { role($0) == kAXTextAreaRole && description($0) == "Prompt" }
         let pane = find(in: window, maxDepth: 22, where: { description($0) == "Primary pane" }) ?? window
-        guard let prompt = find(in: pane, maxDepth: 50, where: isPrompt),
-              (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        func skip(_ reason: String) -> Bool? {
+            owLog("[Agent] Claude: background send skipped (\(reason))")
+            return nil
+        }
+        guard let prompt = find(in: pane, maxDepth: 50, where: isPrompt) else { return skip("no composer") }
+        guard (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return skip("composer not empty") }
         var bar = prompt
         for _ in 0..<5 {
-            guard let parent = attribute(bar, kAXParentAttribute) else { return nil }
+            guard let parent = attribute(bar, kAXParentAttribute) else { return skip("no composer bar") }
             bar = parent as! AXUIElement
         }
         let needle = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, text as CFString) == .success else { return nil }
+        guard AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, text as CFString) == .success else {
+            return skip("value write failed")
+        }
         func clear() { AXUIElementSetAttributeValue(prompt, kAXValueAttribute as CFString, "" as CFString) }
-        // Let the composer take the value before Send reads it.
-        try? await Task.sleep(nanoseconds: 400_000_000)
-        guard value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines) == needle,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier,
-              let send = find(in: bar, maxDepth: 14, where: { role($0) == kAXButtonRole && description($0) == "Send" }),
+        // The AX value can take up to a second to show the write.
+        var shown = false
+        let shownDeadline = Date().addingTimeInterval(1.5)
+        repeat {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            shown = value(prompt)?.trimmingCharacters(in: .whitespacesAndNewlines) == needle
+        } while !shown && Date() < shownDeadline
+        guard shown else { clear(); return skip("text did not show in the composer") }
+        // Let the composer's own state catch up with the value before Send reads it.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier else {
+            clear(); return skip("Claude came to the front")
+        }
+        guard let send = find(in: bar, maxDepth: 14, where: { role($0) == kAXButtonRole && description($0) == "Send" }),
               attribute(send, kAXEnabledAttribute) as? Bool != false else {
-            clear()
-            return nil
+            clear(); return skip("no enabled Send button")
         }
         press(send)
         // A sent message leaves the composer.

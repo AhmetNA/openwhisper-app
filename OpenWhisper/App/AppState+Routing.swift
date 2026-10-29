@@ -374,7 +374,8 @@ extension AppState {
                 if self.autoPasteEnabled, send, let target = targetApp, !target.isTerminated,
                    target.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
                    NSWorkspace.shared.frontmostApplication?.processIdentifier != target.processIdentifier,
-                   let conversation = pasteContext.conversation, conversation.isCurrent(in: target),
+                   let conversation = pasteContext.conversation,
+                   conversation.isCurrent(in: target) || { owLog("[Agent] Claude: background send skipped (another chat is shown)"); return false }(),
                    let sent = await ClaudeSessionNavigator.sendInBackground(target, window: conversation.window, text: initialText) {
                     // Once Send was pressed there is no retry: it could post the message twice.
                     watchesScreen = false
