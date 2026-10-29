@@ -217,7 +217,8 @@ extension AppState {
         // dispatch itself has zero main-thread work between it and the guards above.
         let processingMode: AudioProcessingMode
         let bypassProcessing = bypassAudioProcessing
-        let echoCancellation = !bypassProcessing && recordingEchoCancellationWanted(mic: recordingMic)
+        // Also on the raw mic: it only takes out what the Mac plays; DeepFilter and gain stay off.
+        let echoCancellation = recordingEchoCancellationWanted(mic: recordingMic)
         // Decided once here for the whole recording, never switched while it runs.
         if bypassProcessing {
             processingMode = .off

@@ -261,7 +261,8 @@ final class AudioEngine: @unchecked Sendable {
         levelCallback: @escaping (Float) -> Void
     ) -> Bool {
         let audioProcessingMode: AudioProcessingMode = bypassAudioProcessing ? .off : requestedProcessingMode
-        let echoCancellation = !bypassAudioProcessing && requestedEchoCancellation
+        // Raw mic still cancels echo; only the denoiser and gain are bypassed.
+        let echoCancellation = requestedEchoCancellation
         appliesSignalProcessing = !bypassAudioProcessing
         hasLoggedFirstBuffer = false
         hasLoggedFirstAudibleBuffer = false
