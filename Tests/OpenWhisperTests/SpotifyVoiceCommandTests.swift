@@ -35,6 +35,17 @@ final class SpotifyVoiceCommandTests: XCTestCase {
         XCTAssertNil(decide("Yarın toplantı var", Parse(intent: .none), commandMode: true))
     }
 
+    func testTextWithoutEvidenceIsNotSentToTheModel() {
+        // 28 Oct 2026: each waited for the cloud parse (6.7–15.3 s) only to be dropped.
+        for transcript in ["Necairiz.", "Son mesajı sil.", "The secret.", "Kapatma butonuna bas.", "Son gelen cevap ne?"] {
+            XCTAssertFalse(SpotifyManager.isCommandCandidate(transcript), transcript)
+        }
+        for transcript in ["Şarkıyı durdur.", "Bu şarkıdan sıkıldım", "Sesi biraz kıs", "Piyanosal bir şeyler Spotify'da.",
+                           "Sonraki şarkı", "Ne çalıyor?", "Müziğe devam et"] {
+            XCTAssertTrue(SpotifyManager.isCommandCandidate(transcript), transcript)
+        }
+    }
+
     func testFutureAndHortativePlayVerbsCount() {
         // 25 Sep 2026: gemma4 answered a playlist search, but "açacağız" wasn't a play verb.
         let parse = Parse(intent: .search, kind: .playlist, title: "eğlenceli", artist: "")

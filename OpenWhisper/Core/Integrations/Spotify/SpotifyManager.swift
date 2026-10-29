@@ -845,11 +845,27 @@ final class SpotifyManager: @unchecked Sendable {
         return words.joined(separator: " ")
     }
 
-    /// Short, not quoting or negating anything: what a voice-started session sends to Ollama.
+    /// Short, not quoting or negating anything, and holding words some intent could be
+    /// evidenced by: what a voice-started session sends to Ollama. `commandIntent` drops any
+    /// answer without that evidence, so asking about "Son mesajı sil" only cost time
+    /// (up to the 15 s timeout in the log of 28 Oct 2026).
     static func isCommandCandidate(_ text: String) -> Bool {
         let normalized = normalize(text)
         return spokenWordCount(normalized) <= maxNaturalWordCount
             && mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
+            && mayHaveCommandEvidence(repairCommandVerbMishearing(repairPlayVerbMishearing(text)))
+    }
+
+    /// Whether `hasEvidence(natural: true)` or a Spotify-named search could pass for some
+    /// answer. Search and play are checked by their verbs alone, since their evidence also
+    /// depends on the title the model finds.
+    private static func mayHaveCommandEvidence(_ text: String) -> Bool {
+        let words = Set(canonicalizeVerbs(intentWords(normalize(text))))
+        let verbs: Set<String> = ["çal", "cal", "aç", "ac", "oynat", "başlat", "baslat", "dinlet", "play", "resume",
+                                  "ara", "bul", "search"]
+        if addressesSpotify(text) || !words.isDisjoint(with: verbs) { return true }
+        let intents: [SpotifyRequestParser.OllamaIntent] = [.pause, .next, .previous, .volume, .volumeUp, .volumeDown, .current, .like]
+        return intents.contains { hasEvidence(for: SpotifyRequestParser.OllamaParse(intent: $0), in: text, natural: true) }
     }
 
     /// 10 for "biraz", 30 for "çok", 20 otherwise.
@@ -902,8 +918,9 @@ final class SpotifyManager: @unchecked Sendable {
         // one Ollama round trip, not SetFit + Ollama. A confident SetFit answer cancels it.
         // A voice session warms the model when it starts, but a cold load still takes
         // several seconds; dictation keeps the short timeout so pasting isn't held up.
+        // The cloud has no cold load, so it keeps the short timeout too.
         let model = selectedOllamaModel
-        let timeout: TimeInterval = commandMode ? 15 : 3
+        let timeout: TimeInterval = commandMode && cloud == nil ? 15 : 3
         let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let (client, cloudModel) = cloud {
             Task { await SpotifyRequestParser.queryCloud(transcript: text, client: client, model: cloudModel, timeout: timeout) }
         } else if ollamaAvailable {
