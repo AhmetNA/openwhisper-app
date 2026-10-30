@@ -242,7 +242,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         return text
     }
 
-    private static func deduplicateRepetitivePhrases(in text: String) -> String {
+    static func deduplicateRepetitivePhrases(in text: String) -> String {
         let parts = text.components(separatedBy: CharacterSet(charactersIn: ".!?"))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }

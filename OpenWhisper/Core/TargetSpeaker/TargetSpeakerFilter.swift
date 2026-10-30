@@ -789,6 +789,8 @@ struct TargetSpeakerFilterResult: Sendable {
     let acceptedSampleRanges: [TargetSpeakerAcceptedRange]
     /// Accepted without identity scoring: every voice run was shorter than the scoring window.
     var shortBypass = false
+    /// Every voice run lies inside one accepted range: the mask removed no speech, only the gaps.
+    var acceptedAllVoice = false
 
     var hasAcceptedTargetSpeech: Bool { acceptedSampleCount > 0 }
     var candidateSamples: [Float]? { confirmationCandidate?.samples }
@@ -1101,6 +1103,9 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 acceptedSampleRanges: paddedAccepted.map { TargetSpeakerAcceptedRange(start: $0.start, end: $0.end) }
             )
             result.shortBypass = shortBypassApplies
+            result.acceptedAllVoice = voiceRuns.allSatisfy { run in
+                paddedAccepted.contains { $0.start <= run.start && run.end <= $0.end }
+            }
             return result
         } catch {
             Self.logSummary(

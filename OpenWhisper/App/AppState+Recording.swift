@@ -867,21 +867,29 @@ extension AppState {
                         // and never offer it for confirmation.
                         guard !isAmbiguousTargetMatch,
                               filtered.hasAcceptedTargetSpeech else { return }
-                        if session.trigger == .confirmation, !heard.isEmpty {
-                            // A one-word answer is too short for diarization; masking its gaps turns
-                            // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
-                            session.heardVariants.append(heard)
-                        }
-                        let maskedText = try await transcriber.transcribe(
-                            audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
-                            language: language,
-                            overlapSampleCount: segment.overlapSampleCount
-                        )
-                        if session.trigger == .confirmation, !heard.isEmpty {
-                            session.heardVariants.append(maskedText)
-                            segmentText = heard
+                        if session.trigger != .confirmation, !heard.isEmpty,
+                           filtered.decision == .accepted, filtered.acceptedAllVoice {
+                            // The mask removed only silence, so it holds the same speech the first
+                            // decode heard: decoding it again cost ~0.5 s on short wake commands.
+                            owLog("[OpenWhisper] Batch \(segmentNumber) gate kept every voice run; reusing the first decode")
+                            segmentText = WhisperTranscriber.deduplicateRepetitivePhrases(in: heard)
                         } else {
-                            segmentText = maskedText
+                            if session.trigger == .confirmation, !heard.isEmpty {
+                                // A one-word answer is too short for diarization; masking its gaps turns
+                                // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
+                                session.heardVariants.append(heard)
+                            }
+                            let maskedText = try await transcriber.transcribe(
+                                audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
+                                language: language,
+                                overlapSampleCount: segment.overlapSampleCount
+                            )
+                            if session.trigger == .confirmation, !heard.isEmpty {
+                                session.heardVariants.append(maskedText)
+                                segmentText = heard
+                            } else {
+                                segmentText = maskedText
+                            }
                         }
                     }
                 }
