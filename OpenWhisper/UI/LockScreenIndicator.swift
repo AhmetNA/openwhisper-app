@@ -3,8 +3,8 @@ import IOKit.pwr_mgt
 import SwiftUI
 
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
-/// what Jarvis is doing; while Jarvis listens, your voice's waveform sits where the badge was and a
-/// soft white glow along the screen's edges follows it. The lock screen turns the display off
+/// what Jarvis is doing; when Jarvis wakes, two lights run along the screen's edges, and while it
+/// listens the badge's core grows large and spins, and a soft white glow along the edges follows your voice. The lock screen turns the display off
 /// a few seconds after locking, so while Jarvis works on a command it is turned on and held on.
 ///
 /// Ordinary windows can't appear over the lock screen, so the window is moved into a SkyLight
@@ -143,6 +143,8 @@ private final class SkyLightSpace {
 
 struct LockScreenIndicatorView: View {
     @Environment(AppState.self) var appState
+    @Namespace private var coreSpace
+    @State private var wakes = 0
 
     private var listening: Bool { appState.recordingState == .recording }
     /// 0 in silence, rising to 1 as the voice gets louder.
@@ -154,25 +156,37 @@ struct LockScreenIndicatorView: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
+                Color.clear.keyframeAnimator(initialValue: 1.0, trigger: wakes) { _, sweep in
+                    EdgeSweep(progress: sweep)
+                        .stroke(.white, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                        .shadow(color: .white, radius: 10)
+                        .shadow(color: Color(red: 1, green: 0.55, blue: 0.15), radius: 24)
+                        // Fades out over the last stretch, where the two lights meet.
+                        .opacity(min(1, (1 - sweep) * 5))
+                } keyframes: { _ in
+                    MoveKeyframe(0)
+                    CubicKeyframe(1, duration: 1.4)
+                }
                 if listening {
                     Rectangle()
                         .strokeBorder(.white, lineWidth: 18)
                         .blur(radius: 28)
                         .opacity(0.12 + voice * 0.3)
                         .animation(.easeOut(duration: 0.15), value: voice)
-                    VStack(spacing: 22) {
-                        AudioWaveformView(level: appState.audioLevel)
-                            .scaleEffect(3)
-                            .frame(width: 220, height: 80)
-                        caption("Dinliyor")
-                    }
-                    // The middle of the lock screen belongs to other apps (Vorssaint).
-                    .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
+                    JarvisCore(color: .white, active: true, size: 180, period: 2.5)
+                        .matchedGeometryEffect(id: "core", in: coreSpace)
+                        .frame(width: 180, height: 180)
+                        .scaleEffect(1 + voice * 0.15)
+                        .shadow(color: .white.opacity(0.3 + voice * 0.5), radius: 20 + voice * 30)
+                        .animation(.easeOut(duration: 0.15), value: voice)
+                        // The middle of the lock screen belongs to other apps (Vorssaint).
+                        .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 } else {
                     VStack(spacing: 18) {
                         HStack(spacing: 18) {
                             JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
                                                                     || appState.jarvisActivity != .none)
+                                .matchedGeometryEffect(id: "core", in: coreSpace)
                                 .frame(width: 52, height: 52)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("JARVIS")
@@ -192,10 +206,13 @@ struct LockScreenIndicatorView: View {
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 }
             }
-            .animation(.easeInOut(duration: 0.3), value: listening)
+            .animation(.spring(duration: 0.5), value: listening)
             .animation(.easeInOut(duration: 0.3), value: appState.flowBarMessage)
         }
         .ignoresSafeArea()
+        .onChange(of: listening) { _, isListening in
+            if isListening { wakes += 1 }
+        }
     }
 
     private func caption(_ text: String) -> some View {
@@ -222,36 +239,62 @@ struct LockScreenIndicatorView: View {
     }
 }
 
-/// A small reactor-style core: a glowing center inside two counter-rotating segmented rings.
+/// A reactor-style core: a glowing center inside two counter-rotating segmented rings.
 /// Still and dim while Jarvis sleeps.
 private struct JarvisCore: View {
     let color: Color
     let active: Bool
+    var size: CGFloat = 52
+    /// Seconds per turn.
+    var period: Double = 6
     @State private var turn = false
     @State private var pulse = false
 
     var body: some View {
+        let k = size / 52
         ZStack {
             Circle()
                 .trim(from: 0, to: 0.82)
-                .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [10, 5]))
+                .stroke(color, style: StrokeStyle(lineWidth: 2.5 * k, lineCap: .round, dash: [10 * k, 5 * k]))
                 .rotationEffect(.degrees(turn ? 360 : 0))
             Circle()
                 .trim(from: 0, to: 0.6)
-                .stroke(color.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                .padding(7)
+                .stroke(color.opacity(0.7), style: StrokeStyle(lineWidth: 1.5 * k, lineCap: .round))
+                .padding(7 * k)
                 .rotationEffect(.degrees(turn ? -360 : 0))
             Circle()
                 .fill(RadialGradient(colors: [.white, color, color.opacity(0)], center: .center,
-                                     startRadius: 0, endRadius: 10))
-                .padding(12)
+                                     startRadius: 0, endRadius: 10 * k))
+                .padding(12 * k)
                 .scaleEffect(pulse ? 1.15 : 0.85)
                 .animation(active ? .easeInOut(duration: 1.2).repeatForever() : .default, value: pulse)
         }
-        .shadow(color: color.opacity(active ? 0.8 : 0), radius: 10)
+        .shadow(color: color.opacity(active ? 0.8 : 0), radius: 10 * k)
         .opacity(active ? 1 : 0.55)
-        .animation(active ? .linear(duration: 6).repeatForever(autoreverses: false) : .default, value: turn)
+        .animation(active ? .linear(duration: period).repeatForever(autoreverses: false) : .default, value: turn)
         .onAppear { turn = active; pulse = active }
         .onChange(of: active) { _, isActive in turn = isActive; pulse = isActive }
+    }
+}
+
+/// Two short lights that leave the top middle of the screen, run down either side and meet at the bottom.
+private struct EdgeSweep: Shape {
+    var progress: Double
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var half = Path()
+        half.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        half.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        half.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        half.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        let end = progress
+        let tail = half.trimmedPath(from: max(end - 0.18, 0), to: end)
+        var path = tail
+        path.addPath(tail, transform: CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: rect.minX + rect.maxX, ty: 0))
+        return path
     }
 }
