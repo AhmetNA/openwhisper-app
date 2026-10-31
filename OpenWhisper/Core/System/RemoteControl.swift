@@ -10,6 +10,7 @@ import IOKit.pwr_mgt
 /// Unlocking is never done by voice: macOS ignores synthetic input at the lock screen, and a
 /// spoken unlock would let anyone in the room in. The answer points to Apple Watch unlock.
 @MainActor
+@Observable
 final class RemoteControl {
     /// On battery below this the Mac is let sleep again, so a forgotten switch can't drain it.
     static let minimumBatteryPercent = 20
@@ -18,6 +19,8 @@ final class RemoteControl {
 
     /// Whether the assertion is held now; false while switched off or on low battery.
     private(set) var isHoldingAwake = false
+    /// Switched on, but on battery below `minimumBatteryPercent`: waits for power (Settings shows it).
+    private(set) var waitingForPower = false
     /// Called when `isHoldingAwake` changes.
     var onChange: (() -> Void)?
     private var wanted = false
@@ -41,6 +44,12 @@ final class RemoteControl {
         let battery = Self.batteryPercentOnBattery()
         let lowBattery = battery.map { $0 < Self.minimumBatteryPercent } ?? false
         let hold = wanted && !lowBattery
+        if waitingForPower != (wanted && lowBattery) {
+            waitingForPower = wanted && lowBattery
+            if waitingForPower, !isHoldingAwake, let battery {
+                owLog("[RemoteControl] On battery at \(battery)% (below \(Self.minimumBatteryPercent)%): not holding the Mac awake until on power")
+            }
+        }
         guard hold != isHoldingAwake else { return }
         if hold {
             var id: IOPMAssertionID = 0
