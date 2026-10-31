@@ -43,7 +43,7 @@ struct SettingsView: View {
     }
 
     enum Tab: String, CaseIterable, Identifiable {
-        case general, dictation, corrections, jarvis, voice, accounts, permissions, advanced
+        case general, dictation, corrections, jarvis, voice, accounts, permissions
 
         var id: Self { self }
         var title: String {
@@ -55,7 +55,6 @@ struct SettingsView: View {
             case .voice: "Sesim"
             case .accounts: "Hesaplar"
             case .permissions: "İzinler"
-            case .advanced: "Gelişmiş"
             }
         }
         var symbol: String {
@@ -67,7 +66,6 @@ struct SettingsView: View {
             case .voice: "person.wave.2"
             case .accounts: "key"
             case .permissions: "lock.shield"
-            case .advanced: "gearshape.2"
             }
         }
         /// Sidebar heading shown above the first tab of each group.
@@ -76,12 +74,14 @@ struct SettingsView: View {
             case .general: nil
             case .dictation, .corrections: "DİKTE"
             case .jarvis, .voice: "JARVIS"
-            case .accounts, .permissions, .advanced: "SİSTEM"
+            case .accounts, .permissions: "SİSTEM"
             }
         }
     }
 
     @State private var selectedTab: Tab = .general
+    /// Tabs whose "Gelişmiş" disclosure is open.
+    @State private var advancedOpen: Set<Tab> = []
 
     // Read live by `WakeWordListener` / `TargetSpeakerFilter` on every score, so no restart needed.
     @AppStorage("wakeWordThreshold") private var wakeWordThreshold: Double = 0.25
@@ -173,52 +173,82 @@ struct SettingsView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            languageSection
-            Divider()
-            launchAtLoginSection
-            Divider()
-            inputDeviceSection
-            Divider()
-            audioProcessingSection
-            Divider()
-            audioDuckingSection
+            primaryGroup {
+                inputDeviceSection
+                audioDuckingSection
+                languageSection
+            }
             if let error = appState.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.orange)
             }
-        case .dictation:
-            modelCategory("Konuşma tanıma")
-            transcriptionModelSection
-            if appState.modelLoading {
-                ProgressView("Model yükleniyor…")
-            } else if appState.whisperSuspendedForIdle {
-                Text("Konuşma modeli beklemede · seslenince veya kayıt başlayınca yüklenir.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if !appState.modelLoaded {
-                Label("Model hazır değil", systemImage: "exclamationmark.circle")
-                    .foregroundStyle(.orange)
-            }
-            providerApprovalSection
             Divider()
-            modelCategory("Metin temizleme")
-            cleanupSection
+            secondaryGroup {
+                launchAtLoginSection
+            }
+            advancedGroup(.general) {
+                audioProcessingSection
+                Divider()
+                keepBuiltInMicSection
+            }
+        case .dictation:
+            primaryGroup {
+                VStack(alignment: .leading, spacing: 6) {
+                    transcriptionModelSection
+                    if appState.modelLoading {
+                        ProgressView("Model yükleniyor…")
+                    } else if appState.whisperSuspendedForIdle {
+                        Text("Konuşma modeli beklemede · seslenince veya kayıt başlayınca yüklenir.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if !appState.modelLoaded {
+                        Label("Model hazır değil", systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.orange)
+                    }
+                }
+                cleanupSection
+            }
+            pendingProviderApprovalSection
+            Divider()
+            secondaryGroup {
+                textFormattingSection
+            }
+            advancedGroup(.dictation) {
+                localModelSection
+                approvedProviderSection
+            }
         case .corrections:
             EmptyView()  // Full-height layout, drawn by `body`.
         case .jarvis:
-            jarvisSection
+            primaryGroup {
+                wakeWordSection
+                voiceRepliesSection
+                chatModelSection
+            }
             Divider()
-            modelCategory("Sohbet (LLM)")
-            chatModelSection
-            Divider()
-            modelCategory("Sesli cevap (TTS)")
-            voiceRepliesSection
-            Divider()
-            modelCategory("Müzik")
-            musicSection
+            secondaryGroup {
+                jarvisExtrasSection
+                musicSection
+            }
+            advancedGroup(.jarvis) {
+                wakeThresholdsSection
+                Divider()
+                voiceProviderSection
+                Divider()
+                decisionSection
+            }
         case .voice:
-            targetSpeakerSection
+            primaryGroup {
+                targetSpeakerSection
+            }
+            Divider()
+            secondaryGroup {
+                targetSpeakerScopeSection
+            }
+            advancedGroup(.voice) {
+                targetSpeakerThresholdSection
+            }
         case .accounts:
             APIKeysView { provider in
                 guard provider.id == APIKeys.gemini.id else { return }
@@ -229,9 +259,45 @@ struct SettingsView: View {
             spotifySection
         case .permissions:
             PermissionsView()
-        case .advanced:
-            advancedSection
         }
+    }
+
+    /// Everyday settings: larger text and controls, at the top of the page.
+    private func primaryGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            content()
+        }
+        .font(.title3)
+        .controlSize(.large)
+    }
+
+    /// Less used settings: smaller text and controls.
+    private func secondaryGroup<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            content()
+        }
+        .font(.callout)
+        .controlSize(.small)
+    }
+
+    /// Fine-tuning, folded away under "Gelişmiş" at the bottom of the page.
+    private func advancedGroup<Content: View>(_ tab: Tab, @ViewBuilder _ content: @escaping () -> Content) -> some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { advancedOpen.contains(tab) },
+            set: { if $0 { advancedOpen.insert(tab) } else { advancedOpen.remove(tab) } }
+        )) {
+            VStack(alignment: .leading, spacing: 16) {
+                content()
+            }
+            .font(.callout)
+            .controlSize(.small)
+            .padding(.top, 10)
+        } label: {
+            Text("Gelişmiş")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 4)
     }
 
     private var languageSection: some View {
@@ -289,7 +355,7 @@ struct SettingsView: View {
             if appState.llmCleanupEnabled {
                 HStack(spacing: 4) {
                     Text("Yerel model: \(localModelLabel)")
-                    Button("Gelişmiş'te değiştir") { selectedTab = .advanced }
+                    Button("Gelişmiş'te değiştir") { advancedOpen.insert(.dictation) }
                         .buttonStyle(.link)
                 }
                 .font(.caption2)
@@ -300,7 +366,12 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            Divider()
+        }
+    }
+
+    private var textFormattingSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 6) {
             Toggle("Türkçe sayı ve tarih biçimlendirme (Damga)", isOn: $appState.damgaEnabled)
             Text("“Yüz elli lira” → “150 TL”. Sayı, tarih, saat ve iletişim bilgilerini biçimlendirir.")
                 .font(.caption)
@@ -310,7 +381,6 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Divider()
             Toggle("Gülmeyi random'a çevir", isOn: $appState.laughterToRandomEnabled)
             Text("“Ha ha ha” gibi gülmeleri “asdfghjk” gibi rastgele harflere çevirir.")
                 .font(.caption)
@@ -430,22 +500,27 @@ struct SettingsView: View {
         }
     }
 
-    /// User-installed speech providers: approval requests and granted approvals.
+    /// User-installed speech providers awaiting approval; kept on the page so they're not missed.
     @ViewBuilder
-    private var providerApprovalSection: some View {
+    private var pendingProviderApprovalSection: some View {
         let pendingApprovals = appState.pendingProviderApprovals()
-        let approvedUserInstalledIDs = appState.approvedUserInstalledProviderIDs()
-        if !pendingApprovals.isEmpty || !approvedUserInstalledIDs.isEmpty {
+        if !pendingApprovals.isEmpty {
             Divider()
             modelCategory("Ek konuşma sağlayıcıları")
-            if !pendingApprovals.isEmpty {
-                providerApprovalRows(pendingApprovals)
-                    .id(providerApprovalRefreshToken)
-            }
-            if !approvedUserInstalledIDs.isEmpty {
-                approvedProviderRevokeRows(approvedUserInstalledIDs)
-                    .id(providerApprovalRefreshToken)
-            }
+            providerApprovalRows(pendingApprovals)
+                .id(providerApprovalRefreshToken)
+        }
+    }
+
+    /// User-installed speech providers that were granted approval.
+    @ViewBuilder
+    private var approvedProviderSection: some View {
+        let approvedUserInstalledIDs = appState.approvedUserInstalledProviderIDs()
+        if !approvedUserInstalledIDs.isEmpty {
+            Divider()
+            modelCategory("Ek konuşma sağlayıcıları")
+            approvedProviderRevokeRows(approvedUserInstalledIDs)
+                .id(providerApprovalRefreshToken)
         }
     }
 
@@ -546,19 +621,6 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 22)
 
-            Toggle("Sistem girişini Mac mikrofonunda tut", isOn: $keepBuiltInMicAsDefault)
-                .font(.caption)
-                .padding(.leading, 22)
-                .onChange(of: keepBuiltInMicAsDefault) { _, on in
-                    if on { DefaultInputGuard.shared.enforce() }
-                    appState.refreshInputDevices()
-                }
-            Text("Bluetooth kulaklık bağlanınca da giriş Mac mikrofonunda kalır, kulaklık sesi yüksek kalitede çalar.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 22)
-
             if appState.resolvedInputIsBluetooth {
                 HStack(alignment: .top, spacing: 4) {
                     Image(systemName: "info.circle")
@@ -574,6 +636,20 @@ struct SettingsView: View {
         }
         .onAppear {
             appState.refreshInputDevices()
+        }
+    }
+
+    private var keepBuiltInMicSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Sistem girişini Mac mikrofonunda tut", isOn: $keepBuiltInMicAsDefault)
+                .onChange(of: keepBuiltInMicAsDefault) { _, on in
+                    if on { DefaultInputGuard.shared.enforce() }
+                    appState.refreshInputDevices()
+                }
+            Text("Bluetooth kulaklık bağlanınca da giriş Mac mikrofonunda kalır, kulaklık sesi yüksek kalitede çalar.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -639,40 +715,57 @@ struct SettingsView: View {
 
     // MARK: - Jarvis Section
 
-    private var jarvisSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("“Jarvis” ile sesle başlat", systemImage: "ear")
-                    Spacer()
-                    Toggle("", isOn: Binding(get: { appState.wakeWordEnabled },
-                                             set: { appState.wakeWordEnabled = $0 }))
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-                if appState.wakeWordBlocked {
-                    Label(appState.wakeWordStatus, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if appState.wakeWordStatus.contains("Mikrofon izni") {
-                        Button("Mikrofon ayarlarını aç") {
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-                                NSWorkspace.shared.open(url)
-                            }
+    private var wakeWordSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("“Jarvis” ile sesle başlat", systemImage: "ear")
+                Spacer()
+                Toggle("", isOn: Binding(get: { appState.wakeWordEnabled },
+                                         set: { appState.wakeWordEnabled = $0 }))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            if appState.wakeWordBlocked {
+                Label(appState.wakeWordStatus, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                if appState.wakeWordStatus.contains("Mikrofon izni") {
+                    Button("Mikrofon ayarlarını aç") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
                         }
-                        .controlSize(.small)
                     }
-                } else {
-                    Text(appState.wakeWordStatus)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .controlSize(.small)
                 }
-                Text("“Jarvis”, “Hey Jarvis” ya da “Selam Jarvis” deyince dinler. İmleç bir yazı alanındaysa oraya yazar, değilse cevap verir. “Buraya yaz…” ya da “Bana cevap ver…” diyerek seçebilirsiniz.")
+            } else {
+                Text(appState.wakeWordStatus)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            Text("“Jarvis”, “Hey Jarvis” ya da “Selam Jarvis” deyince dinler. İmleç bir yazı alanındaysa oraya yazar, değilse cevap verir. “Buraya yaz…” ya da “Bana cevap ver…” diyerek seçebilirsiniz.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Image(systemName: jarvisSpeakerCheckOn ? "checkmark.circle.fill" : "person.wave.2")
+                    .foregroundStyle(jarvisSpeakerCheckOn ? .green : .secondary)
+                Text(jarvisSpeakerCheckOn ? "Yalnızca sizin sesinizle uyanır." : "Herkesin sesiyle uyanır.")
+                Button("Sesim'de değiştir") { selectedTab = .voice }
+                    .buttonStyle(.link)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var jarvisExtrasSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            JarvisHotkeyRecorder()
+
+            JarvisHotkeyRecorder(slot: .typedRequest)
+
+            Divider()
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -734,33 +827,11 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-
-            Divider()
-
-            JarvisHotkeyRecorder()
-
-            JarvisHotkeyRecorder(slot: .typedRequest)
-
-            HStack(spacing: 6) {
-                Image(systemName: jarvisSpeakerCheckOn ? "checkmark.circle.fill" : "person.wave.2")
-                    .foregroundStyle(jarvisSpeakerCheckOn ? .green : .secondary)
-                Text(jarvisSpeakerCheckOn ? "Yalnızca sizin sesinizle uyanır." : "Herkesin sesiyle uyanır.")
-                Button("Sesim'de değiştir") { selectedTab = .voice }
-                    .buttonStyle(.link)
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Advanced Section
-
-    private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            modelCategory("Yerel model")
-            localModelSection
-
-            Divider()
+    private var wakeThresholdsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
             modelCategory("Jarvis uyanma hassasiyeti")
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -793,10 +864,6 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-
-            Divider()
-            modelCategory("Karar modelleri")
-            decisionSection
         }
     }
 
@@ -875,6 +942,7 @@ struct SettingsView: View {
     private var decisionSection: some View {
         @Bindable var appState = appState
         return VStack(alignment: .leading, spacing: 8) {
+            modelCategory("Karar modelleri")
             HStack {
                 Text("Karar motoru")
                 Spacer()
@@ -908,6 +976,38 @@ struct SettingsView: View {
                     .labelsHidden()
             }
 
+            if !voiceProvider.voices.isEmpty {
+                HStack {
+                    Text("Ses")
+                    Spacer()
+                    Picker("", selection: Binding(get: { appState.voiceID },
+                                                  set: { appState.voiceID = $0 })) {
+                        ForEach(voiceProvider.voices) { voice in
+                            Text("\(voice.id) — \(voice.trait)").tag(voice.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+            }
+            if voiceProvider.needsAPIKey && !voiceAPIKeyStored {
+                HStack {
+                    Label("API anahtarı yok. Anahtar girilene kadar Jarvis sessiz kalır.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Ekle") { selectedTab = .accounts }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .onAppear(perform: refreshVoiceAPIKeyState)
+        .onChange(of: appState.voiceProviderID) { _, _ in refreshVoiceAPIKeyState(); stopSentenceTest() }
+    }
+
+    private var voiceProviderSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            modelCategory("Sesli cevap (TTS)")
             HStack {
                 Text("Ses sağlayıcı")
                 Spacer()
@@ -937,39 +1037,13 @@ struct SettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            if !voiceProvider.voices.isEmpty {
-                HStack {
-                    Text("Ses")
-                    Spacer()
-                    Picker("", selection: Binding(get: { appState.voiceID },
-                                                  set: { appState.voiceID = $0 })) {
-                        ForEach(voiceProvider.voices) { voice in
-                            Text("\(voice.id) — \(voice.trait)").tag(voice.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 220)
-                }
-            }
             Label(voiceProvider.summary, systemImage: voiceProvider.needsAPIKey ? "network" : "desktopcomputer")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-            if voiceProvider.needsAPIKey && !voiceAPIKeyStored {
-                HStack {
-                    Label("API anahtarı yok. Anahtar girilene kadar Jarvis sessiz kalır.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Ekle") { selectedTab = .accounts }
-                        .controlSize(.small)
-                }
-            }
             sentenceTestRow
         }
-        .onAppear(perform: refreshVoiceAPIKeyState)
-        .onChange(of: appState.voiceProviderID) { _, _ in refreshVoiceAPIKeyState(); stopSentenceTest() }
     }
 
     /// Reads `JarvisVoice.testSentences` with the chosen provider/model/voice, so voices can be
@@ -1065,33 +1139,8 @@ struct SettingsView: View {
                 Toggle("", isOn: $appState.targetSpeakerEnabled)
                     .toggleStyle(.switch)
                     .labelsHidden()
-                    .controlSize(.small)
                     .disabled(!appState.hasTargetSpeakerProfile && !appState.targetSpeakerEnabled)
             }
-
-            Picker("Nerede geçerli", selection: $appState.targetSpeakerScope) {
-                ForEach(TargetSpeakerScope.allCases) { scope in
-                    Text(scope.title).tag(scope)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(!appState.targetSpeakerEnabled)
-            Text(appState.targetSpeakerScope.detail)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            HStack(alignment: .top) {
-                jarvisSlider("“Jarvis” için ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
-                             help: "Sesiniz tanınmıyorsa düşürün, başkası uyandırıyorsa yükseltin.")
-                Button("Varsayılan") {
-                    UserDefaults.standard.removeObject(forKey: "targetSpeakerWakeThreshold")
-                    targetSpeakerWakeThreshold = Double(TargetSpeakerFilterConfiguration.uncertainSimilarityFloor)
-                }
-                .controlSize(.small)
-            }
-            .disabled(!jarvisSpeakerCheckOn)
 
             micSpeakerProfileRow(.mac)
             micSpeakerProfileRow(.buds)
@@ -1156,6 +1205,37 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var targetSpeakerScopeSection: some View {
+        @Bindable var appState = appState
+        return VStack(alignment: .leading, spacing: 6) {
+            Picker("Nerede geçerli", selection: $appState.targetSpeakerScope) {
+                ForEach(TargetSpeakerScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(!appState.targetSpeakerEnabled)
+            Text(appState.targetSpeakerScope.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var targetSpeakerThresholdSection: some View {
+        HStack(alignment: .top) {
+            jarvisSlider("“Jarvis” için ses benzerliği", value: $targetSpeakerWakeThreshold, range: 0.20...0.80,
+                         help: "Sesiniz tanınmıyorsa düşürün, başkası uyandırıyorsa yükseltin.")
+            Button("Varsayılan") {
+                UserDefaults.standard.removeObject(forKey: "targetSpeakerWakeThreshold")
+                targetSpeakerWakeThreshold = Double(TargetSpeakerFilterConfiguration.uncertainSimilarityFloor)
+            }
+            .controlSize(.small)
+        }
+        .disabled(!jarvisSpeakerCheckOn)
     }
 
     /// One card per mic: each keeps its own profile, since the Mac mic, buds and an external mic
