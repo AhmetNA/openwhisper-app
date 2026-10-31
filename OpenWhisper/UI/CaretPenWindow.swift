@@ -7,6 +7,8 @@ import SwiftUI
 final class CaretPenController {
     private let panel: NSPanel
     private var shownAt: CGRect?
+    /// The glass's edge left of the pen: little, as it overlaps the text before the caret.
+    static let leading: CGFloat = 3
 
     init() {
         panel = NSPanel(
@@ -29,13 +31,15 @@ final class CaretPenController {
     func show(at caret: CGRect) -> Bool {
         if shownAt == caret { return true }
         guard let mainHeight = NSScreen.screens.first?.frame.height else { return false }
-        let origin = NSPoint(x: caret.minX + 6, y: mainHeight - caret.maxY + caret.height / 2 - 13)
+        // The pen's first point lands on the caret's middle.
+        let origin = NSPoint(x: caret.minX - Self.leading - ProcessingWaveformView.startX,
+                             y: mainHeight - caret.maxY + caret.height / 2 - 13)
         guard NSScreen.screens.contains(where: { $0.frame.contains(NSPoint(x: caret.minX, y: mainHeight - caret.midY)) }) else {
             return false
         }
         // A new view each time, so the pen starts from the left again.
         panel.contentView = NSHostingView(rootView: CaretPenView())
-        panel.setFrame(NSRect(origin: origin, size: NSSize(width: 84, height: 26)), display: true)
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: 68 + Self.leading + 8, height: 26)), display: true)
         panel.orderFrontRegardless()
         shownAt = caret
         return true
@@ -52,7 +56,8 @@ final class CaretPenController {
 private struct CaretPenView: View {
     var body: some View {
         ProcessingWaveformView()
-            .padding(.horizontal, 8)
+            .padding(.leading, CaretPenController.leading)
+            .padding(.trailing, 8)
             .background(
                 ZStack {
                     RoundedRectangle(cornerRadius: 13).fill(.ultraThinMaterial)

@@ -23,8 +23,10 @@ struct ProcessingWaveformView: View {
     private let width: CGFloat = 68
     private let trail = 0.7
     private let samples = 48
-    /// Path time the pen starts at: around -0.75 it is at its left end, heading right.
-    @State private var startTime = -0.75 + .random(in: -0.1...0.2)
+    /// Path times where the pen is near its left end, on the middle line, heading right
+    /// (`startX` from the left edge), so it starts at the caret; which one varies the drawing.
+    static let startX: CGFloat = 8
+    @State private var startTime = [-0.56, 2.447, 11.305, 14.492, 26.378, 38.282].randomElement()!
     @State private var started = Date()
 
     var body: some View {
