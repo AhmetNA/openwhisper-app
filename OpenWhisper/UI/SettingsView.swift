@@ -1308,96 +1308,106 @@ struct SettingsView: View {
             }
 
             if enrolling {
-                Text(appState.targetSpeakerEnrollmentIsRecording
-                     ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
-                     : appState.targetSpeakerEnrollmentStatus)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if appState.targetSpeakerEnrollmentIsRecording,
-                   AppState.targetSpeakerEnrollmentReadingTexts.indices.contains(appState.targetSpeakerEnrollmentStep) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Sesli oku:")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(AppState.targetSpeakerEnrollmentReadingTexts[appState.targetSpeakerEnrollmentStep])
-                            .font(.callout)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                }
-
-                if let progress = appState.targetSpeakerPreparationProgress {
-                    ProgressView(value: progress)
-                } else if appState.targetSpeakerEnrollmentIsProcessing {
-                    ProgressView()
-                }
-                if !appState.targetSpeakerPreparationMessage.isEmpty {
-                    Text(appState.targetSpeakerPreparationMessage)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                micEnrollmentProgress
             }
 
-            HStack(spacing: 8) {
-                Button(enrolling && appState.targetSpeakerEnrollmentIsRecording
-                       ? "Kaydı bitir"
-                       : stored && !enrolling ? "Yeniden kaydet" : "Sesimi kaydet") {
-                    if enrolling && appState.targetSpeakerEnrollmentIsRecording {
-                        owLog("[TargetSpeaker] User clicked 'Kaydı bitir' (\(mic)) in SettingsView")
-                        appState.stopTargetSpeakerEnrollmentRecording()
-                    } else {
-                        owLog("[TargetSpeaker] User clicked enroll (\(mic)) in SettingsView")
-                        if !enrolling {
-                            appState.beginTargetSpeakerEnrollment(for: mic)
-                        }
-                        appState.startTargetSpeakerEnrollmentRecording()
+            micProfileButtons(mic, connected: connected, enrolling: enrolling, stored: stored)
+        }
+    }
+
+    /// Reading prompt and progress while a profile is being recorded.
+    @ViewBuilder
+    private var micEnrollmentProgress: some View {
+        Text(appState.targetSpeakerEnrollmentIsRecording
+             ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
+             : appState.targetSpeakerEnrollmentStatus)
+            .font(.caption)
+            .foregroundStyle(.primary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        if appState.targetSpeakerEnrollmentIsRecording,
+           AppState.targetSpeakerEnrollmentReadingTexts.indices.contains(appState.targetSpeakerEnrollmentStep) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sesli oku:")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(AppState.targetSpeakerEnrollmentReadingTexts[appState.targetSpeakerEnrollmentStep])
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        }
+
+        if let progress = appState.targetSpeakerPreparationProgress {
+            ProgressView(value: progress)
+        } else if appState.targetSpeakerEnrollmentIsProcessing {
+            ProgressView()
+        }
+        if !appState.targetSpeakerPreparationMessage.isEmpty {
+            Text(appState.targetSpeakerPreparationMessage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func micProfileButtons(_ mic: TargetSpeakerMic, connected: Bool, enrolling: Bool, stored: Bool) -> some View {
+        HStack(spacing: 8) {
+            Button(enrolling && appState.targetSpeakerEnrollmentIsRecording
+                   ? "Kaydı bitir"
+                   : stored && !enrolling ? "Yeniden kaydet" : "Sesimi kaydet") {
+                if enrolling && appState.targetSpeakerEnrollmentIsRecording {
+                    owLog("[TargetSpeaker] User clicked 'Kaydı bitir' (\(mic)) in SettingsView")
+                    appState.stopTargetSpeakerEnrollmentRecording()
+                } else {
+                    owLog("[TargetSpeaker] User clicked enroll (\(mic)) in SettingsView")
+                    if !enrolling {
+                        appState.beginTargetSpeakerEnrollment(for: mic)
                     }
+                    appState.startTargetSpeakerEnrollmentRecording()
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!connected
+                      || appState.targetSpeakerEnrollmentIsProcessing
+                      || appState.targetSpeakerSampleIsRecording
+                      || appState.targetSpeakerSampleIsProcessing
+                      || (appState.targetSpeakerEnrollmentActive && !enrolling))
+
+            if enrolling, let rejected = appState.targetSpeakerRejectedEnrollment,
+               !appState.targetSpeakerEnrollmentIsRecording {
+                Button("Olduğu gibi kabul et (\(String(format: "%.2f", rejected.score)))") {
+                    appState.acceptRejectedTargetSpeakerEnrollment()
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(!connected
-                          || appState.targetSpeakerEnrollmentIsProcessing
-                          || appState.targetSpeakerSampleIsRecording
-                          || appState.targetSpeakerSampleIsProcessing
-                          || (appState.targetSpeakerEnrollmentActive && !enrolling))
+                .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+            }
 
-                if enrolling, let rejected = appState.targetSpeakerRejectedEnrollment,
-                   !appState.targetSpeakerEnrollmentIsRecording {
-                    Button("Olduğu gibi kabul et (\(String(format: "%.2f", rejected.score)))") {
-                        appState.acceptRejectedTargetSpeakerEnrollment()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(appState.targetSpeakerEnrollmentIsProcessing)
+            if enrolling {
+                Button("İptal") {
+                    owLog("[TargetSpeaker] User clicked 'İptal' enrollment in SettingsView")
+                    appState.cancelTargetSpeakerEnrollment()
                 }
+                .buttonStyle(.plain)
+                .font(.caption)
+            }
 
-                if enrolling {
-                    Button("İptal") {
-                        owLog("[TargetSpeaker] User clicked 'İptal' enrollment in SettingsView")
-                        appState.cancelTargetSpeakerEnrollment()
+            if stored {
+                Button("Sil") {
+                    owLog("[TargetSpeaker] User clicked 'Sil' \(mic) profile in SettingsView")
+                    if mic == .mac {
+                        appState.deleteTargetSpeakerProfile()
+                    } else {
+                        appState.deleteMicTargetSpeakerProfile(mic)
                     }
-                    .buttonStyle(.plain)
-                    .font(.caption)
                 }
-
-                if stored {
-                    Button("Sil") {
-                        owLog("[TargetSpeaker] User clicked 'Sil' \(mic) profile in SettingsView")
-                        if mic == .mac {
-                            appState.deleteTargetSpeakerProfile()
-                        } else {
-                            appState.deleteMicTargetSpeakerProfile(mic)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .font(.caption)
-                    .disabled(appState.targetSpeakerEnrollmentIsProcessing)
-                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .font(.caption)
+                .disabled(appState.targetSpeakerEnrollmentIsProcessing)
             }
         }
     }
@@ -1473,44 +1483,48 @@ struct SettingsView: View {
                 }
             }
 
-            HStack(spacing: 8) {
-                if spotifyConnected {
-                    Label("Bağlı", systemImage: "checkmark.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                    Spacer()
-                    Button("Bağlantıyı kaldır") {
-                        disconnectSpotifyAccount()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.red)
-                    .font(.caption)
-                } else if spotifyConnectState == .connecting {
-                    Button("İptal") {
-                        cancelSpotifyConnect()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    spotifyConnectStatusView
-                } else {
-                    Button("Spotify hesabını bağla") {
-                        connectSpotifyAccount()
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Spacer()
-
-                    spotifyConnectStatusView
-                }
-            }
-
+            spotifyAccountRow
         }
         .onAppear {
             spotifyClientID = SpotifyCredentialsStore.loadClientID()
             spotifyHasStoredSecret = SpotifyCredentialsStore.hasClientSecret()
             spotifyConnected = SpotifyCredentialsStore.hasRefreshToken()
+        }
+    }
+
+    /// Connect / cancel / disconnect the Spotify account.
+    private var spotifyAccountRow: some View {
+        HStack(spacing: 8) {
+            if spotifyConnected {
+                Label("Bağlı", systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+                Spacer()
+                Button("Bağlantıyı kaldır") {
+                    disconnectSpotifyAccount()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .font(.caption)
+            } else if spotifyConnectState == .connecting {
+                Button("İptal") {
+                    cancelSpotifyConnect()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                spotifyConnectStatusView
+            } else {
+                Button("Spotify hesabını bağla") {
+                    connectSpotifyAccount()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Spacer()
+
+                spotifyConnectStatusView
+            }
         }
     }
 

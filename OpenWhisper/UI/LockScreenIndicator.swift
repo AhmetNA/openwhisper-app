@@ -229,9 +229,9 @@ struct LockScreenIndicatorView: View {
     }
 
     private var statusText: String {
-        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "THINKING" }
-        if appState.jarvisActivity == .speaking { return "SPEAKING" }
-        return appState.wakeWordListening ? "ALIVE" : "ASLEEP"
+        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "DÜŞÜNÜYOR" }
+        if appState.jarvisActivity == .speaking { return "KONUŞUYOR" }
+        return appState.wakeWordListening ? "UYANIK" : "UYKUDA"
     }
 
     /// Blue while listening, green while thinking, pink while speaking.

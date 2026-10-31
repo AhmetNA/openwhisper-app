@@ -162,7 +162,7 @@ struct FlowBarView: View {
                 AudioWaveformView(level: appState.audioLevel)
             } else {
                 // Bluetooth buds are still switching to call mode; speech now would be lost.
-                Text("connecting")
+                Text("bağlanıyor")
                     .font(.custom("Bradley Hand", size: 16).weight(.medium))
                     .foregroundStyle(.white.opacity(0.6))
                     .padding(.horizontal, 6)
@@ -197,7 +197,7 @@ struct FlowBarView: View {
     // MARK: - Speaking
 
     private var jarvisContent: some View {
-        Text("speaking")
+        Text("konuşuyor")
             .font(.custom("Bradley Hand", size: 16).weight(.medium))
             .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 6)
