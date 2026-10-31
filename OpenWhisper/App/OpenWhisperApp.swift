@@ -53,6 +53,10 @@ func owLog(_ msg: String) {
 struct OpenWhisperApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() {
+        InterfaceLanguage.apply()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarContentView()
@@ -88,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         owLog("applicationDidFinishLaunching called")
+        owLog("[Language] interface=\(InterfaceLanguage.current) strings=\(Bundle.main.preferredLocalizations) sample=\(loc("Genel"))")
         NSApplication.shared.setActivationPolicy(.accessory)
 
         // Set delegate so notifications show even when app is in foreground

@@ -38,8 +38,8 @@ struct PermissionsView: View {
                 .frame(width: 22)
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(kind.title)
-                Text(kind.purpose)
+                Text(loc(kind.title))
+                Text(loc(kind.purpose))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -71,7 +71,7 @@ struct PermissionsView: View {
         case .unknown(let why): (why, .secondary)
         case nil: ("…", .secondary)
         }
-        return Text(text)
+        return Text(loc(text))
             .font(.caption.weight(.medium))
             .foregroundStyle(color)
             .lineLimit(1)

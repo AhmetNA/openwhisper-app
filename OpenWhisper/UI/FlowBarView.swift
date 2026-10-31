@@ -53,7 +53,7 @@ struct FlowBarView: View {
                 }
             }
             if let notice = appState.microphoneFlowNotice {
-                Label(notice, systemImage: "mic.fill")
+                Label(loc(notice), systemImage: "mic.fill")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)

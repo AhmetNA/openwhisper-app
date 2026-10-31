@@ -82,6 +82,7 @@ struct SettingsView: View {
     @State private var selectedTab: Tab = .general
     /// Tabs whose "Gelişmiş" disclosure is open.
     @State private var advancedOpen: Set<Tab> = []
+    @State private var interfaceLanguage = InterfaceLanguage.current
 
     // Read live by `WakeWordListener` / `TargetSpeakerFilter` on every score, so no restart needed.
     @AppStorage("wakeWordThreshold") private var wakeWordThreshold: Double = 0.25
@@ -101,7 +102,7 @@ struct SettingsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
-                        Text(selectedTab.title)
+                        Text(loc(selectedTab.title))
                             .font(.title2.weight(.semibold))
                         tabContent
                     }
@@ -124,7 +125,7 @@ struct SettingsView: View {
                 .padding(.bottom, 12)
             ForEach(Tab.allCases) { tab in
                 if let group = tab.group, Tab.allCases.first(where: { $0.group == group }) == tab {
-                    Text(group)
+                    Text(loc(group))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 12)
@@ -137,7 +138,7 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         Image(systemName: tab.symbol)
                             .frame(width: 18)
-                        Text(tab.title)
+                        Text(loc(tab.title))
                         Spacer(minLength: 0)
                         if tab == .corrections {
                             let count = CorrectionStore.shared.records.filter { $0.status == .candidate }.count
@@ -177,6 +178,7 @@ struct SettingsView: View {
                 inputDeviceSection
                 audioDuckingSection
                 languageSection
+                interfaceLanguageSection
             }
             if let error = appState.lastError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -303,7 +305,7 @@ struct SettingsView: View {
     private var languageSection: some View {
         @Bindable var appState = appState
         return HStack {
-        Label("Dil", systemImage: "globe")
+        Label("Yazıya dökme dili", systemImage: "globe")
         Spacer()
         Picker("", selection: $appState.language) {
             Text("Auto-detect").tag("")
@@ -342,6 +344,39 @@ struct SettingsView: View {
     }
     }
 
+    private var interfaceLanguageSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Arayüz dili", systemImage: "character.bubble")
+                Spacer()
+                Picker("", selection: Binding(get: { interfaceLanguage }, set: {
+                    interfaceLanguage = $0
+                    InterfaceLanguage.set($0, appState: appState)
+                })) {
+                    Text(verbatim: "Türkçe").tag("tr")
+                    Text(verbatim: "English").tag("en")
+                }
+                .labelsHidden()
+                .frame(width: 150)
+            }
+            if interfaceLanguage == "en" {
+                Text("Jarvis İngilizce konuşur (Phonon 31m sesi).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if interfaceLanguage != InterfaceLanguage.launched {
+                HStack {
+                    Text("Yeniden başlatınca uygulanır.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Yeniden başlat") { InterfaceLanguage.relaunch() }
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
     private var cleanupSection: some View {
         @Bindable var appState = appState
         return VStack(alignment: .leading, spacing: 12) {
@@ -377,7 +412,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if appState.damgaEnabled {
-                Text(appState.language == "tr" ? DamgaNormalizer.shared.status : "Türkçe seçildiğinde çalışır.")
+                Text(loc(appState.language == "tr" ? DamgaNormalizer.shared.status : "Türkçe seçildiğinde çalışır."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -426,7 +461,7 @@ struct SettingsView: View {
             .controlSize(.small)
             .disabled(appState.recordingState != .idle || appState.bypassAudioProcessing)
 
-            Text(deepFilterSettingDescription)
+            Text(loc(deepFilterSettingDescription))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -664,7 +699,7 @@ struct SettingsView: View {
                 .frame(width: 14)
             Image(systemName: isBuiltIn ? "laptopcomputer" : entry.isBluetooth ? "headphones" : "mic")
                 .frame(width: 16)
-            Text(isBuiltIn ? "Mac Mikrofonu" : entry.name)
+            Text(isBuiltIn ? loc("Mac Mikrofonu") : entry.name)
                 .lineLimit(1)
             if inUse {
                 Text("kullanılıyor")
@@ -726,7 +761,7 @@ struct SettingsView: View {
                     .labelsHidden()
             }
             if appState.wakeWordBlocked {
-                Label(appState.wakeWordStatus, systemImage: "exclamationmark.triangle.fill")
+                Label(loc(appState.wakeWordStatus), systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -739,7 +774,7 @@ struct SettingsView: View {
                     .controlSize(.small)
                 }
             } else {
-                Text(appState.wakeWordStatus)
+                Text(loc(appState.wakeWordStatus))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -885,7 +920,7 @@ struct SettingsView: View {
                 Spacer()
                 Picker("", selection: $appState.ollamaModel) {
                     ForEach(LLMCleanup.supportedModels, id: \.tag) { option in
-                        Text(option.label).tag(option.tag)
+                        Text(loc(option.label)).tag(option.tag)
                     }
                 }
                 .labelsHidden()
@@ -939,7 +974,7 @@ struct SettingsView: View {
     }
 
     private func modelCategory(_ title: String) -> some View {
-        Text(title.uppercased())
+        Text(loc(title).uppercased())
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
     }
@@ -957,7 +992,7 @@ struct SettingsView: View {
                 Spacer()
                 Picker("", selection: $appState.decisionEngine) {
                     ForEach(SetFitDecider.Engine.allCases) { engine in
-                        Text(engine.label).tag(engine)
+                        Text(loc(engine.label)).tag(engine)
                     }
                 }
                 .labelsHidden()
@@ -1023,7 +1058,7 @@ struct SettingsView: View {
                 Picker("", selection: Binding(get: { appState.voiceProviderID },
                                               set: { appState.voiceProviderID = $0 })) {
                     ForEach(SpeechProviders.all) { provider in
-                        Text(provider.title).tag(provider.id)
+                        Text(loc(provider.title)).tag(provider.id)
                     }
                 }
                 .labelsHidden()
@@ -1036,17 +1071,17 @@ struct SettingsView: View {
                     Picker("", selection: Binding(get: { appState.voiceModelID },
                                                   set: { appState.voiceModelID = $0 })) {
                         ForEach(voiceProvider.models) { model in
-                            Text(model.title).tag(model.id)
+                            Text(loc(model.title)).tag(model.id)
                         }
                     }
                     .labelsHidden()
                     .frame(width: 220)
                 }
-                Text(voiceProvider.model(id: appState.voiceModelID).detail)
+                Text(loc(voiceProvider.model(id: appState.voiceModelID).detail))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
-            Label(voiceProvider.summary, systemImage: voiceProvider.needsAPIKey ? "network" : "desktopcomputer")
+            Label(loc(voiceProvider.summary), systemImage: voiceProvider.needsAPIKey ? "network" : "desktopcomputer")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1124,13 +1159,13 @@ struct SettingsView: View {
     private func jarvisSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, help: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
-                Text(title).font(.caption)
+                Text(loc(title)).font(.caption)
                 Slider(value: value, in: range, step: 0.01)
                 Text(String(format: "%.2f", value.wrappedValue))
                     .font(.caption.monospacedDigit())
                     .frame(width: 36, alignment: .trailing)
             }
-            Text(help)
+            Text(loc(help))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1160,7 +1195,7 @@ struct SettingsView: View {
                 || !appState.targetSpeakerSampleStatus.isEmpty {
                 Text(appState.targetSpeakerSampleIsRecording
                      ? "Ses örneği: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerSampleStatus)"
-                     : appState.targetSpeakerSampleStatus)
+                     : loc(appState.targetSpeakerSampleStatus))
                     .font(.caption)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1221,13 +1256,13 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: 6) {
             Picker("Nerede geçerli", selection: $appState.targetSpeakerScope) {
                 ForEach(TargetSpeakerScope.allCases) { scope in
-                    Text(scope.title).tag(scope)
+                    Text(loc(scope.title)).tag(scope)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .disabled(!appState.targetSpeakerEnabled)
-            Text(appState.targetSpeakerScope.detail)
+            Text(loc(appState.targetSpeakerScope.detail))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1279,7 +1314,7 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .frame(width: 16)
-                Text(name)
+                Text(loc(name))
                     .font(.callout.weight(.medium))
                 Image(systemName: ready ? "checkmark.circle.fill" : "circle.dashed")
                     .foregroundStyle(ready ? .green : .secondary)
@@ -1291,7 +1326,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Text(status + (stored ? " · \(appState.targetSpeakerProfile(for: mic)?.embeddings.count ?? 0) örnek" : ""))
+            Text(loc(status) + (stored ? " · \(appState.targetSpeakerProfile(for: mic)?.embeddings.count ?? 0) örnek" : ""))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -1320,7 +1355,7 @@ struct SettingsView: View {
     private var micEnrollmentProgress: some View {
         Text(appState.targetSpeakerEnrollmentIsRecording
              ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
-             : appState.targetSpeakerEnrollmentStatus)
+             : loc(appState.targetSpeakerEnrollmentStatus))
             .font(.caption)
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
@@ -1346,7 +1381,7 @@ struct SettingsView: View {
             ProgressView()
         }
         if !appState.targetSpeakerPreparationMessage.isEmpty {
-            Text(appState.targetSpeakerPreparationMessage)
+            Text(loc(appState.targetSpeakerPreparationMessage))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -1893,7 +1928,7 @@ struct CorrectionsManagementView<Settings: View>: View {
             filter = option
         } label: {
             HStack(spacing: 6) {
-                Text(option.title)
+                Text(loc(option.title))
                 Text("\(count)")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -1914,7 +1949,7 @@ struct CorrectionsManagementView<Settings: View>: View {
             Image(systemName: filter == .candidate ? "checkmark.seal" : "tray")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text(emptyTitle)
+            Text(loc(emptyTitle))
                 .font(.headline)
             Text(filter == .candidate
                  ? "Yeni bir düzeltme önerildiğinde burada görünecek."

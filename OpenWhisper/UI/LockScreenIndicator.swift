@@ -194,7 +194,7 @@ struct LockScreenIndicatorView: View {
                                     .font(.custom("Avenir Next", size: 30).weight(.ultraLight))
                                     .tracking(12)
                                     .foregroundStyle(.white)
-                                Text(statusText)
+                                Text(loc(statusText))
                                     .font(.custom("Avenir Next", size: 12).weight(.semibold))
                                     .tracking(5)
                                     .foregroundStyle(statusColor)
