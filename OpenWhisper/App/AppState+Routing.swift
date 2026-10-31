@@ -984,11 +984,11 @@ extension AppState {
                 switch outcome {
                 case .done:
                     self.showFlowBarMessage("Tamamlandı ✓", durationMs: 1500)
-                    await self.speakReply(self.jarvisReply.ack())
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.ack()) }
                 case .failed(let reason):
                     owLog("[ScreenTask] Stopped: \(reason)")
                     self.showFlowBarMessage(reason, durationMs: 4000)
-                    await self.speakReply(self.jarvisReply.failure(reason))
+                    if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(reason)) }
                 case .cancelled:
                     owLog("[ScreenTask] Stopped by the user")
                     self.showFlowBarMessage("Durdurdum", durationMs: 1500)
@@ -1015,7 +1015,8 @@ extension AppState {
                 let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
                 if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
                 // "Ayarlar'da bildirimleri kapat": several presses, by the cloud model (`ScreenTask`).
-                let cloud = session.isVoiceCommand && ScreenTask.isGoal(trimmed) && ChatBackend.selected == .cloud
+                // Fn too, outside a text field (checked above): there such a sentence is typed.
+                let cloud = ScreenTask.isGoal(trimmed) && ChatBackend.selected == .cloud
                     ? CloudLLM.client() : nil
                 guard ScreenActions.worthLooking(trimmed) || cloud != nil else { return false }
                 // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
