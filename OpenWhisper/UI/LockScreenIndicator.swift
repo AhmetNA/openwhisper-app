@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Settings › Jarvis › "Kilit ekranında göster": while the Mac is locked, a small badge says
 /// what Jarvis is doing; when Jarvis wakes, two lights run along the screen's edges, and while it
-/// listens the badge's core grows large and spins, and a soft white glow along the edges follows your voice. The lock screen turns the display off
+/// listens the badge's core grows large and spins. The lock screen turns the display off
 /// a few seconds after locking, so while Jarvis works on a command it is turned on and held on.
 ///
 /// Ordinary windows can't appear over the lock screen, so the window is moved into a SkyLight
@@ -168,11 +168,6 @@ struct LockScreenIndicatorView: View {
                     CubicKeyframe(1, duration: 1.4)
                 }
                 if listening {
-                    Rectangle()
-                        .strokeBorder(.white, lineWidth: 18)
-                        .blur(radius: 28)
-                        .opacity(0.12 + voice * 0.3)
-                        .animation(.easeOut(duration: 0.15), value: voice)
                     JarvisCore(color: .white, active: true, size: 180, period: 2.5)
                         .matchedGeometryEffect(id: "core", in: coreSpace)
                         .frame(width: 180, height: 180)
