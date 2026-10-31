@@ -36,7 +36,7 @@ final class JarvisChat {
         let conversation = { (canSearch: Bool) in
             [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
                                                              canSearch: canSearch)]]
-                + self.history
+                + (canSearch ? self.history : self.history.map { $0.filter { $0.key != CloudChatClient.searchedKey } })
                 + [["role": "user", "content": text]]
         }
         let messages = conversation(Self.cloudReady && APIKeys.exa.hasKey)
@@ -93,7 +93,9 @@ final class JarvisChat {
                 owLog("[Chat] '\(text)' → '\(full)' (\(backend.value), first sentence \(firstSentenceMs ?? -1) ms, all \(total) ms)")
                 self.lastReply = full
                 if !full.isEmpty {
-                    self.history += [["role": "user", "content": text], ["role": "assistant", "content": full]]
+                    var answer = ["role": "assistant", "content": full]
+                    if let query = backend.searched { answer[CloudChatClient.searchedKey] = query }
+                    self.history += [["role": "user", "content": text], answer]
                     self.history = Array(self.history.suffix(Self.maxHistoryMessages))
                     self.lastTurn = Date()
                 }
@@ -120,6 +122,7 @@ final class JarvisChat {
         }
         var searching = cloud
         searching.webSearchKey = APIKeys.exa.key()
+        searching.onSearch = { backend.searched = $0 }
         let client = searching
         backend.set("cloud \(model)")
         return ChatFallback.stream(
@@ -136,12 +139,18 @@ final class JarvisChat {
             })
     }
 
-    /// Who is answering; written from the fallback's task, read when the reply is logged.
+    /// Who is answering and what it searched; written from the fallback's task, read when the
+    /// reply is logged and kept.
     final class Backend: @unchecked Sendable {
         private let lock = NSLock()
         private var name = ""
+        private var query: String?
         func set(_ value: String) { lock.withLock { name = value } }
         var value: String { lock.withLock { name } }
+        var searched: String? {
+            get { lock.withLock { query } }
+            set { lock.withLock { query = newValue } }
+        }
     }
 
     /// The cloud model can answer on its own, without Ollama running.

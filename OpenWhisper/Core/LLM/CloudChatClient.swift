@@ -18,6 +18,13 @@ struct CloudChatClient: ChatStreaming {
     /// When set, the model may search the internet (`WebSearch`) once per reply. Only Jarvis's
     /// free conversation sets it.
     var webSearchKey: String?
+    /// Told the query when a reply searched, so the history can keep it (`searchedKey`).
+    var onSearch: (@Sendable (String) -> Void)?
+
+    /// On a history reply that came from a search: its query. With search on, the reply goes
+    /// out after its call (`withSearches`); without it, only the reply. Without the calls the
+    /// model takes its earlier answers as known facts and answers the next result from memory.
+    static let searchedKey = "searched"
 
     static func chatBody(_ request: LLMChatRequest, thinkingOff: Bool = true) -> [String: Any] {
         var body: [String: Any] = [
@@ -70,12 +77,29 @@ struct CloudChatClient: ChatStreaming {
     }
 
     /// The messages after a search: the model's call and what the search found.
-    static func messages(_ messages: [[String: String]], after call: ToolCall, found: String) -> [[String: Any]] {
-        messages + [
-            ["role": "assistant", "content": "",
-             "tool_calls": [["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]]],
-            ["role": "tool", "tool_call_id": call.id, "content": found],
-        ]
+    static func messages(_ messages: [[String: Any]], after call: ToolCall, found: String) -> [[String: Any]] {
+        messages + searchTurn(call, found: found)
+    }
+
+    private static func searchTurn(_ call: ToolCall, found: String) -> [[String: Any]] {
+        [["role": "assistant", "content": "",
+          "tool_calls": [["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]]],
+         ["role": "tool", "tool_call_id": call.id, "content": found]]
+    }
+
+    /// The history as the server takes it: each searched reply after its call (`searchedKey`).
+    /// Earlier results aren't sent again, only that there were some; they'd slow every reply.
+    static func withSearches(_ messages: [[String: String]], tools: Bool) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for (index, message) in messages.enumerated() {
+            var plain = message
+            if let query = plain.removeValue(forKey: searchedKey), tools {
+                let arguments = (try? JSONSerialization.data(withJSONObject: ["query": query])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                out += searchTurn(ToolCall(id: "call_\(index)", name: WebSearch.toolName, arguments: arguments), found: "(arama sonuçları)")
+            }
+            out.append(plain)
+        }
+        return out
     }
 
     /// The model ids of a `/models` answer; nil when it isn't the OpenAI shape.
@@ -105,6 +129,8 @@ struct CloudChatClient: ChatStreaming {
 
     func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
         var body = Self.chatBody(request, thinkingOff: thinkingOff)
+        let messages = Self.withSearches(request.messages, tools: webSearchKey != nil)
+        body["messages"] = messages
         if webSearchKey != nil { body["tools"] = [WebSearch.tool] }
         return AsyncThrowingStream { [body] continuation in
             let task = Task {
@@ -118,13 +144,14 @@ struct CloudChatClient: ChatStreaming {
                         do {
                             found = try await WebSearch.search(query, key: webSearchKey)
                             owLog("[Chat] Web search '\(query)' → \(found.count) chars")
+                            onSearch?(query)
                         } catch {
                             owLog("[Chat] Web search '\(query)' failed: \(ChatFallback.describe(error))")
                             found = "Arama yapılamadı."
                         }
                         var followUp = body
                         followUp["tools"] = nil
-                        followUp["messages"] = Self.messages(request.messages, after: call, found: found)
+                        followUp["messages"] = Self.messages(messages, after: call, found: found)
                         _ = try await stream(body: followUp, timeout: request.timeout, into: continuation)
                     }
                     continuation.finish()

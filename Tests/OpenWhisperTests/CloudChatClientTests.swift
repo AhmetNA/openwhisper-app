@@ -43,6 +43,19 @@ final class CloudChatClientTests: XCTestCase {
         XCTAssertEqual(messages[2]["content"] as? String, "1. Skor 2-1")
     }
 
+    func testSearchedHistoryRepliesGoAfterTheirCall() {
+        let history = [["role": "user", "content": "Maç kaç kaç?"],
+                       ["role": "assistant", "content": "1-1 bitti patron.", CloudChatClient.searchedKey: "Fenerbahçe maçı"]]
+        let searching = CloudChatClient.withSearches(history, tools: true)
+        XCTAssertEqual(searching.map { $0["role"] as? String }, ["user", "assistant", "tool", "assistant"])
+        let call = (searching[1]["tool_calls"] as? [[String: Any]])?.first?["function"] as? [String: Any]
+        XCTAssertEqual(CloudChatClient.ToolCall(arguments: call?["arguments"] as? String ?? "").query, "Fenerbahçe maçı")
+        XCTAssertNil(searching[3][CloudChatClient.searchedKey])
+        let plain = CloudChatClient.withSearches(history, tools: false)
+        XCTAssertEqual(plain.count, 2)
+        XCTAssertNil(plain[1][CloudChatClient.searchedKey])
+    }
+
     func testWebSearchResultsAreShortLines() {
         let data = Data(#"{"results":[{"title":"Maç sonucu","url":"https://ornek.com/a","publishedDate":"2026-10-30T20:00:00Z","highlights":["Fenerbahçe 2-1 kazandı."]}]}"#.utf8)
         XCTAssertEqual(WebSearch.results(from: data), "1. Maç sonucu (2026-10-30) https://ornek.com/a\nFenerbahçe 2-1 kazandı.\n")
