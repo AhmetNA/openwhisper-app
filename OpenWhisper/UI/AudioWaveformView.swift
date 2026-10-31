@@ -16,28 +16,46 @@ struct IdleWaveformView: View {
     }
 }
 
-/// Shown while a recording is turned into text: the same bars at rest, with a soft swell
-/// running left to right through them like the dots of "typing…".
+/// Shown while a recording is turned into text: a wavy line drawn left to right as if by a
+/// pen, its tail fading out behind the tip.
 struct ProcessingWaveformView: View {
-    private let barCount = 14
-    private let period = 1.1
+    private let width: CGFloat = 68
+    private let trail: CGFloat = 40
+    private let period = 1.4
 
     var body: some View {
         TimelineView(.animation) { context in
             let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-            // The crest starts off the left edge and leaves off the right before coming back.
-            let crest = phase * Double(barCount + 6) - 3
-            HStack(spacing: 2.5) {
-                ForEach(0..<barCount, id: \.self) { index in
-                    let distance = Double(index) - crest
-                    let swell = exp(-distance * distance / 3)
-                    Capsule()
-                        .fill(Color.white.opacity(0.45 + 0.5 * swell))
-                        .frame(width: 2.5, height: 3.5 + 12 * swell)
+            Canvas { canvas, size in
+                // The tip runs past the right edge so the tail can leave before it starts again.
+                let tip = CGFloat(phase) * (size.width + trail)
+                let from = max(0, tip - trail), to = min(size.width, tip)
+                guard to > from else { return }
+                var x = from
+                while x < to {
+                    let next = min(x + 1, to)
+                    var segment = Path()
+                    segment.move(to: point(at: x, in: size))
+                    segment.addLine(to: point(at: next, in: size))
+                    let fade = (next - (tip - trail)) / trail
+                    canvas.stroke(segment, with: .color(.white.opacity(0.9 * fade)),
+                                  style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    x = next
+                }
+                if tip <= size.width {
+                    let p = point(at: tip, in: size)
+                    canvas.fill(Path(ellipseIn: CGRect(x: p.x - 1.75, y: p.y - 1.75, width: 3.5, height: 3.5)),
+                                with: .color(.white))
                 }
             }
         }
-        .frame(height: 26, alignment: .center)
+        .frame(width: width, height: 26)
+    }
+
+    /// A handwritten-looking wave: the height wanders a little along the line.
+    private func point(at x: CGFloat, in size: CGSize) -> CGPoint {
+        let amplitude = 6 * (0.65 + 0.35 * sin(x * 0.09))
+        return CGPoint(x: x, y: size.height / 2 + amplitude * sin(x * 0.32))
     }
 }
 
