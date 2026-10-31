@@ -301,6 +301,24 @@ extension AppState {
         screenModeActive = false
     }
 
+    /// One line per Jarvis screen step: where the time went between the end of speech and the
+    /// result. `startedAt`: when routing reached the screen step; `parts` follow in order.
+    func logScreenStep(_ session: RecordingTranscriptionSession, _ outcome: String, startedAt: TimeInterval,
+                       _ parts: [(String, TimeInterval)]) {
+        func format(_ seconds: TimeInterval) -> String {
+            seconds < 1 ? "\(Int((seconds * 1000).rounded())) ms" : String(format: "%.2f sn", seconds)
+        }
+        let speechEnd = session.doneLastSpeechTime
+        var line: [String] = []
+        if speechEnd > 0, session.stoppedAt >= speechEnd {
+            line.append("konuşma sonu → mikrofon kapandı \(format(session.stoppedAt - speechEnd))")
+        }
+        if session.stoppedAt > 0 { line.append("mikrofon → metin \(format(startedAt - session.stoppedAt))") }
+        line += parts.map { "\($0.0) \(format($0.1))" }
+        if speechEnd > 0 { line.append("konuşma sonu → sonuç \(format(CACurrentMediaTime() - speechEnd))") }
+        owLog("[ScreenMode] Adım (\(outcome)): " + line.joined(separator: " | "))
+    }
+
     /// Screen mode: what is left of `ScreenMode.silence` since the last step.
     var screenModeWindow: TimeInterval {
         max(3, ScreenMode.silence - Date().timeIntervalSince(screenModeLastAction))

@@ -30,4 +30,18 @@ final class ScreenModeTests: XCTestCase {
         XCTAssertNil(ScreenMode.typeRequest("gönder"))
         XCTAssertNil(ScreenMode.typeRequest("aşağı kaydır"))
     }
+
+    func testFinishedPresses() {
+        XCTAssertTrue(ScreenMode.isFinishedPress("Software update'e bas."))
+        XCTAssertTrue(ScreenMode.isFinishedPress("geri butonuna bas lütfen"))
+        XCTAssertTrue(ScreenMode.isFinishedPress("Kaydet'e tıkla"))
+        XCTAssertTrue(ScreenMode.isFinishedPress("Gönder'e basar mısın?"))
+    }
+
+    func testUnfinishedOrTypingIsNoFinishedPress() {
+        XCTAssertFalse(ScreenMode.isFinishedPress("geri butonuna"))
+        XCTAssertFalse(ScreenMode.isFinishedPress("merhaba yaz ve gönder"))
+        XCTAssertFalse(ScreenMode.isFinishedPress("bas yaz"))
+        XCTAssertFalse(ScreenMode.isFinishedPress("aşağı kaydır"))
+    }
 }

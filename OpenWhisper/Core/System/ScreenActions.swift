@@ -388,7 +388,7 @@ enum ScreenActions {
             return nil
         }
         let pick = parsePick(answer, count: elements.count)
-        owLog("[Screen] Model answered '\(answer.trimmingCharacters(in: .whitespacesAndNewlines))' in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        owLog("[Screen] Model (\(ChatBackend.selected == .cloud ? "cloud" : LLM.selectedModel)) answered '\(answer.trimmingCharacters(in: .whitespacesAndNewlines))' in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         return pick
     }
 

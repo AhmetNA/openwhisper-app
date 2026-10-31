@@ -981,6 +981,8 @@ extension AppState {
                 let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
                 if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
                 guard ScreenActions.worthLooking(trimmed) else { return false }
+                let stepStarted = CACurrentMediaTime()
+                var stepParts: [(String, TimeInterval)] = []
                 // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
                 let saysClick = ScreenActions.saysClick(trimmed)
                 // Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
@@ -989,12 +991,15 @@ extension AppState {
                     let name = ScreenActions.spokenName(trimmed)
                     owLog("[Screen] Nothing on screen matches '\(name)'")
                     session.latency.finishDecision(route: "ekran eylemi, bulunamadı")
+                    self.logScreenStep(session, "bulunamadı", startedAt: stepStarted, stepParts)
                     self.lastTranscription = text
                     self.showFlowBarMessage("Ekranda “\(name)” bulamadım", durationMs: 4000)
                     if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure("Bulamadım")) }
                     return true
                 }
+                var mark = CACurrentMediaTime()
                 let elements = ScreenActions.elements(of: app)
+                stepParts.append(("ekran okuma", CACurrentMediaTime() - mark))
                 guard !elements.isEmpty else { return await notFound() }
                 let labels = elements.map(\.label)
                 var pick: Int?
@@ -1011,7 +1016,9 @@ extension AppState {
                     owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
                 } else if !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
+                    mark = CACurrentMediaTime()
                     pick = await ScreenActions.modelPick(trimmed, elements: elements)
+                    stepParts.append(("model seçimi", CACurrentMediaTime() - mark))
                     byModel = true
                     if let chosen = pick, exact.isEmpty, !soundAlike.contains(chosen),
                        !ScreenActions.isGrounded(trimmed, label: labels[chosen]) {
@@ -1033,7 +1040,12 @@ extension AppState {
                     askFollowUp(prompt, heard: heard)
                     return true
                 }
+                mark = CACurrentMediaTime()
                 let pressed = ScreenActions.perform(target)
+                stepParts.append(("basma", CACurrentMediaTime() - mark))
+                if session.isVoiceCommand {
+                    self.logScreenStep(session, pressed ? "basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
+                }
                 self.showFlowBarMessage(pressed ? "“\(target.label)” ✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
                 // A Jarvis press opens screen mode: the mic stays open for the next step, and
                 // a spoken "tamam" would only slow it down.
@@ -1253,8 +1265,11 @@ extension AppState {
                         if let typing = ScreenMode.typeRequest(trimmed) {
                             owLog("[ScreenMode] Type\(typing.send ? " and send" : ""): \(typing.text.count) chars")
                             self.lastTranscription = text
+                            let typeStarted = CACurrentMediaTime()
                             let delivered = await pasteAsDictation(typing.text, targetApp: session.targetApp,
                                                                    pasteContext: session.pasteContext, send: typing.send)
+                            self.logScreenStep(session, delivered ? (typing.send ? "yazıldı, gönderildi" : "yazıldı") : "yazılamadı",
+                                               startedAt: typeStarted, [("yazma", CACurrentMediaTime() - typeStarted)])
                             if delivered, typing.send {
                                 endScreenMode("sent")
                                 await say(self.jarvisReply.agent(sent: true), durationMs: 1500)

@@ -547,6 +547,7 @@ extension AppState {
         }
         noteRecordingNoiseFloor(audioEngine)
         session.latency.markRecordingStopped()
+        session.stoppedAt = CACurrentMediaTime()
         // A voice command keeps media paused until it has run (see finishTranscription).
         if !session.isVoiceCommand {
             recordingMedia.end()
@@ -663,12 +664,19 @@ extension AppState {
         // audio a second time. Go straight to that masked decode: same text, ~0.7 s sooner.
         // Confirmations keep the timed decode, whose full text they use as a heard variant.
         let skipsUnscorableDiarization = filtered.shortBypass && session.trigger != .confirmation
+        // A screen-mode step is a few words: diarization failed to name the speaker on 7 of 13
+        // (1 Nov 2026) and then decoded again, ~1.3 s after the mic stopped. With nothing
+        // playing, the gate's masked audio is enough. Ambiguous batches have no accepted
+        // samples and still need diarization.
+        let skipsScreenStepDiarization = screenModeActive && session.followsCommand
+            && !session.speakersPlayed && filtered.decision != .ambiguous
         let shouldUseDiarization = session.targetSpeakerEnabled
             && !filtered.wasFailClosed
             && targetSpeakerDiarizationReady
             && filtered.hadVoiceActivity
             && canUseDiarizationDecision
             && !skipsUnscorableDiarization
+            && !skipsScreenStepDiarization
         if session.targetSpeakerEnabled && filtered.decision == .partial {
             session.hadPartialTargetSpeech = true
         }

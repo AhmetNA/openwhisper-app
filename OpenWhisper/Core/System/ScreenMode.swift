@@ -23,6 +23,18 @@ enum ScreenMode {
         return closers.contains(words.joined(separator: " "))
     }
 
+    private static let pressVerbs: Set<String> = ["bas", "basın", "bassana", "tıkla", "tıklayın", "tıklasana"]
+
+    /// "Ayarlar'a bas", "geri butonuna tıklar mısın": the step is said in full, so the mic can
+    /// stop without waiting out the silence. Never "… yaz": a message may go on after a pause.
+    static func isFinishedPress(_ text: String) -> Bool {
+        var words = ScreenActions.normalized(text).replacingOccurrences(of: "'", with: " ")
+            .split(separator: " ").map(String.init).filter { $0 != "lütfen" }
+        guard typeRequest(text) == nil, let last = words.popLast() else { return false }
+        if pressVerbs.contains(last) { return true }
+        return ["mısın", "mısınız"].contains(last) && ["basar", "tıklar"].contains(words.last ?? "")
+    }
+
     private static let sendRegex = try! NSRegularExpression(
         pattern: #"^(.+?)[\s,]+(?:diye\s+)?(?:yaz\s+ve|yazıp|yaz)\s+(?:gönder|yolla)(?:\s+lütfen)?[\s.!]*$"#,
         options: [.caseInsensitive])

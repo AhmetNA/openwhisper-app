@@ -130,10 +130,14 @@ extension AppState {
     private func isFinishedClearCommand(_ text: String, session: RecordingTranscriptionSession,
                                         endpoint: SmartTurnEndpointDetector.Endpoint?,
                                         previewSampleCount: Int?) -> Bool {
+        // Screen mode: "… bas" is a whole step, and Smart Turn rates many of them below 0.97
+        // ("Nova'ya bas" 0.58), waiting 2–3 s more for nothing.
+        let screenPress = screenModeActive && session.followsCommand && ScreenMode.isFinishedPress(text)
         guard session.isVoiceCommand, let endpoint, let previewSampleCount,
               let detector = smartTurnEndpointDetector,
-              endpoint.probability >= 0.97, detector.lastEndpoint == endpoint,
+              endpoint.probability >= (screenPress ? 0.5 : 0.97), detector.lastEndpoint == endpoint,
               detector.previewCoverage.lastSpeechSample <= previewSampleCount else { return false }
+        if screenPress { return true }
         let timers = TimerManager.shared
         let context = CommandRegistry.Context(ringing: timers.ringing != nil, timerActive: !timers.timers.isEmpty,
                                               installedApps: SystemController.installedApps())

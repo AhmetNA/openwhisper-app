@@ -91,6 +91,8 @@ final class RecordingTranscriptionSession {
     // Session-scoped so an old decode can never stop a newer microphone session.
     var doneCheckInFlight = false
     var doneLastSpeechTime: TimeInterval = 0
+    /// `CACurrentMediaTime` when the mic stopped; screen steps log the time from here.
+    var stoppedAt: TimeInterval = 0
     var doneCheckedSpeechTime: TimeInterval = 0
     var doneLastCheckTime: TimeInterval = 0
     var doneCheckedEndpointTime: TimeInterval = 0
