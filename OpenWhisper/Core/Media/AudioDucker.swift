@@ -343,6 +343,14 @@ final class AudioDucker: @unchecked Sendable {
     /// while the post-dictation restore is still ramping, so the current reading is the
     /// ducked level: the change is applied to the pre-dictation level instead, and the
     /// ramp is cancelled for good so it doesn't overwrite the new level.
+    /// The level a volume command would start from (see `applyVolumeCommand`).
+    func volumeCommandBase() -> Float? {
+        queue.sync {
+            guard let deviceID = duckedDeviceID ?? volumeController.defaultOutputDeviceID() else { return nil }
+            return originalVolume ?? volumeController.currentVolume(deviceID: deviceID)
+        }
+    }
+
     func applyVolumeCommand(_ transform: (Float) -> Float) -> (from: Float, to: Float)? {
         queue.sync {
             activeRampHandle?.stop()

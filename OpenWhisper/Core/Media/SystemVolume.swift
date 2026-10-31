@@ -23,7 +23,27 @@ enum SystemVolume {
     /// put the volume back first (see `SpotifyManager.undoLastCommand`).
     nonisolated(unsafe) static var lastChange: (from: Float, to: Float)?
 
+    /// Set while Jarvis is about to say a reply: a lowering then waits in `pendingLowering`
+    /// until `applyPendingLowering()`, so the reply isn't spoken at the new, quieter level.
+    nonisolated(unsafe) static var defersLowering = false
+    nonisolated(unsafe) private static var pendingLowering: Float?
+
+    static func applyPendingLowering() {
+        guard let target = pendingLowering else { return }
+        pendingLowering = nil
+        _ = AudioDucker.shared.applyVolumeCommand { _ in target }
+    }
+
     private static func apply(_ transform: (Float) -> Float) -> SpotifyActionResult {
+        if defersLowering, let current = AudioDucker.shared.volumeCommandBase() {
+            let target = min(max(transform(current), 0), 1)
+            if target < current {
+                owLog("[SystemVolume] Lowering \(percent(current)) → \(percent(target)) after the reply")
+                pendingLowering = target
+                lastChange = (current, target)
+                return .success(changeMessage(from: percent(current), to: percent(target)))
+            }
+        }
         guard let (from, to) = AudioDucker.shared.applyVolumeCommand(transform) else {
             return .failure("Ses seviyesi değiştirilemedi")
         }

@@ -1673,9 +1673,13 @@ extension AppState {
                 let speaksFailure = SpotifyManager.speaksFailure(afterCommand: commandText)
                 let misheard = self.cleanupAvailable ? self.misheardWords(in: commandText) : []
                 let actionStartedAt = session.latency.timestamp()
+                // "Sesi kıs": the ack is said at the old level, then the volume goes down.
+                SystemVolume.defersLowering = session.isVoiceCommand && self.voiceRepliesEnabled
                 let handled = await SpotifyManager.shared.handleCommand(
                     text: commandText, targetApp: session.targetApp, recordUndo: !misheard.isEmpty
                 )
+                SystemVolume.defersLowering = false
+                defer { SystemVolume.applyPendingLowering() }
                 session.latency.record(.action, since: actionStartedAt, detail: "Spotify")
                 let resultMessage = SpotifyManager.shared.takeResultMessage(for: commandText)
                 if handled { session.latency.markOutput("Spotify komutu tamamlandı") }
