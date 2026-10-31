@@ -35,6 +35,31 @@ enum ScreenMode {
         return ["mısın", "mısınız"].contains(last) && ["basar", "tıklar"].contains(words.last ?? "")
     }
 
+    private static let fieldRegex = try! NSRegularExpression(
+        pattern: #"^(?:jarvis[\s,]+)?(.+?)\s+(?:kısmına|alanına|çubuğuna|kutusuna|kutucuğuna|bölümüne|satırına)\s+(?:şunu\s+|şöyle\s+)?(.+?)(?:\s+diye)?\s+(yaz|yazıp\s+ara|yaz\s+ve\s+ara|ara|arat|yazıp\s+gönder|yaz\s+ve\s+gönder)(?:\s+lütfen)?[\s.!]*$"#,
+        options: [.caseInsensitive])
+
+    /// "Arama kısmına kedi videoları yaz" → (field "Arama", "kedi videoları", send). One step:
+    /// the field is found and focused, the text typed. Return goes when the field is a search
+    /// or "ara"/"gönder" is said; "mesaj kısmına … yaz" types only.
+    static func fieldTypeRequest(_ text: String) -> (field: String, text: String, send: Bool)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = fieldRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+              let fieldRange = Range(match.range(at: 1), in: trimmed), let bodyRange = Range(match.range(at: 2), in: trimmed),
+              let verbRange = Range(match.range(at: 3), in: trimmed) else { return nil }
+        let field = String(trimmed[fieldRange])
+        let body = String(trimmed[bodyRange]).trimmingCharacters(in: CharacterSet(charactersIn: " ,:\"'“”"))
+        guard !body.isEmpty else { return nil }
+        let verb = trimmed[verbRange].lowercased(with: locale)
+        return (field, body, isSearchField(field) || verb.contains("ara") || verb.contains("gönder"))
+    }
+
+    /// "arama", "ara", "search": a search field, where typing means searching.
+    static func isSearchField(_ name: String) -> Bool {
+        let name = ScreenActions.normalized(name)
+        return name.hasPrefix("ara") || name.contains("search") || name.contains("bul")
+    }
+
     private static let sendRegex = try! NSRegularExpression(
         pattern: #"^(.+?)[\s,]+(?:diye\s+)?(?:yaz\s+ve|yazıp|yaz)\s+(?:gönder|yolla)(?:\s+lütfen)?[\s.!]*$"#,
         options: [.caseInsensitive])

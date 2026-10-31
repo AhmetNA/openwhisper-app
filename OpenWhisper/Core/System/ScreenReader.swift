@@ -122,10 +122,14 @@ enum ScreenReader {
             return nil
         }
         // The CG list is front to back, so the first normal window of the app is the one in front.
+        // Claude keeps an invisible 32 pt strip above its window (alpha 0): OCR read 0 lines of it.
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         guard let windowID = info.first(where: {
-                  ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
+                  let bounds = ($0[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) } ?? .zero
+                  return ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
                       && ($0[kCGWindowLayer as String] as? Int) == 0
+                      && ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0
+                      && bounds.width > 100 && bounds.height > 100
               })?[kCGWindowNumber as String] as? CGWindowID,
               let content = try? await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true),
               let window = content.windows.first(where: { $0.windowID == windowID }) else { return nil }

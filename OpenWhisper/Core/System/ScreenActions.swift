@@ -385,6 +385,26 @@ enum ScreenActions {
         return (label, CGPoint(x: frame.midX, y: frame.midY))
     }
 
+    /// "Arama kısmı": the text field so named gets the keyboard focus: from the accessibility
+    /// tree (a search field for "arama"), else its name or placeholder clicked on the screenshot.
+    static func focusField(named name: String, in app: NSRunningApplication) async -> Bool {
+        let fields = elements(of: app).filter(\.isTextField)
+        let search = ScreenMode.isSearchField(name)
+        let named = fields.filter { isGrounded(name, label: $0.label) || (search && $0.role == "AXSearchField") }
+        if let field = named.count == 1 ? named[0] : (search ? named.first { $0.role == "AXSearchField" } : nil),
+           perform(field) {
+            return true
+        }
+        var hit = await findText(name, in: app)
+        if hit == nil, search { hit = await findText("Search", in: app) }
+        if let hit {
+            owLog("[Screen] Field '\(name)' clicked on the screenshot")
+            return click(at: hit.point)
+        }
+        owLog("[Screen] No field named '\(name)' (\(fields.count) text fields)")
+        return false
+    }
+
     // MARK: - Icons, by a vision model
 
     /// The center of the box a vision model answered, on a 0–1000 scale of the image. Qwen-VL

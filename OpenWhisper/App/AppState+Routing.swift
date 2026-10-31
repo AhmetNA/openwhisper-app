@@ -1272,6 +1272,36 @@ extension AppState {
                 route = VoiceRouter.route(text, facts: facts)
             }
 
+            // "Arama kısmına kedi videoları yaz": find the field, type, search, in one step.
+            if session.isVoiceCommand, session.acceptsCommands, !session.heardOnlyOverPlayback,
+               let request = ScreenMode.fieldTypeRequest(trimmed), let app = session.targetApp, !app.isTerminated,
+               app.bundleIdentifier != Bundle.main.bundleIdentifier,
+               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                let started = CACurrentMediaTime()
+                owLog("[ScreenMode] Type into '\(request.field)'\(request.send ? " and send" : ""): \(request.text.count) chars")
+                self.lastTranscription = text
+                guard await ScreenActions.focusField(named: request.field, in: app) else {
+                    session.latency.finishDecision(route: "alana yazma, alan bulunamadı")
+                    self.logScreenStep(session, "alan bulunamadı", startedAt: started, [("alan arama", CACurrentMediaTime() - started)])
+                    await say(self.jarvisReply.failure("“\(request.field)” alanını bulamadım"), durationMs: 3000)
+                    return
+                }
+                let focused = CACurrentMediaTime()
+                // The click or focus needs a moment before the field takes the paste.
+                try? await Task.sleep(for: .milliseconds(150))
+                let delivered = await pasteAsDictation(request.text, targetApp: app, pasteContext: session.pasteContext,
+                                                       send: request.send)
+                self.logScreenStep(session, delivered ? "alana yazıldı" : "yazılamadı", startedAt: started,
+                                   [("alan bulma", focused - started), ("yazma", CACurrentMediaTime() - focused)])
+                if delivered {
+                    self.noteScreenModeAction()
+                    commandFollowUp = .some(nil)
+                } else {
+                    await say(self.jarvisReply.failure("Yazamadım"), durationMs: 3000)
+                }
+                return
+            }
+
             // Screen mode: "tamamdır", "harikasın" end it, whatever else they would route to.
             if screenModeActive, session.followsCommand, ScreenMode.isCloser(trimmed) {
                 session.latency.finishDecision(route: "ekran modu, bitti")

@@ -44,4 +44,17 @@ final class ScreenModeTests: XCTestCase {
         XCTAssertFalse(ScreenMode.isFinishedPress("bas yaz"))
         XCTAssertFalse(ScreenMode.isFinishedPress("aşağı kaydır"))
     }
+
+    func testTypeIntoAField() {
+        let search = ScreenMode.fieldTypeRequest("arama kısmına kedi videoları yaz")
+        XCTAssertEqual(search?.field, "arama")
+        XCTAssertEqual(search?.text, "kedi videoları")
+        XCTAssertEqual(search?.send, true)
+        let message = ScreenMode.fieldTypeRequest("Jarvis mesaj kutusuna yarın geliyorum diye yaz")
+        XCTAssertEqual(message?.field, "mesaj")
+        XCTAssertEqual(message?.text, "yarın geliyorum")
+        XCTAssertEqual(message?.send, false)
+        XCTAssertEqual(ScreenMode.fieldTypeRequest("adres çubuğuna youtube.com yaz ve gönder")?.send, true)
+        XCTAssertNil(ScreenMode.fieldTypeRequest("kedi videoları yaz"))
+    }
 }
