@@ -428,8 +428,15 @@ extension AppState {
     /// Schedules stopRecording() after a short tail delay (default 0.40s / 400ms) so that speech spoken
     /// right as the hotkey/Fn key is released is not truncated from the audio buffer. Visually,
     /// the UI transitions to `.transcribing` immediately on key release so the user feels an instant response.
-    func stopRecordingWithTail(delay: TimeInterval = 0.40) {
+    func stopRecordingWithTail(delay requestedDelay: TimeInterval = 0.40) {
         guard recordingState == .recording else { return }
+        // Speech that ended before the release has nothing left to catch; a short tail still
+        // covers audio in flight (Bluetooth) and a quiet last consonant the level missed.
+        var delay = requestedDelay
+        if let speechTime = activeTranscriptionSession?.doneLastSpeechTime, speechTime > 0,
+           CACurrentMediaTime() - speechTime >= 0.30 {
+            delay = min(delay, 0.15)
+        }
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
