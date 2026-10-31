@@ -128,6 +128,8 @@ final class JarvisChat {
                                                  temperature: 0.6, maxTokens: 110))
             },
             fallback: local,
+            // Deciding to search takes the cloud model 0.7–2 s, sometimes more; Ollama can't search.
+            deadline: client.webSearchKey == nil ? ChatFallback.deadline : ChatFallback.searchDeadline,
             onFallback: { reason in
                 owLog("[Chat] Cloud \(model): \(reason), falling back to Ollama")
                 backend.set("ollama \(ollamaModel) after cloud \(reason)")
