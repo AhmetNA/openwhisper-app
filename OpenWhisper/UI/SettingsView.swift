@@ -786,11 +786,14 @@ struct SettingsView: View {
                 HStack {
                     Label("Uzaktan kontrol", systemImage: "dot.radiowaves.left.and.right")
                     Spacer()
-                    Toggle("", isOn: Binding(get: { appState.remoteControlEnabled },
-                                             set: { appState.remoteControlEnabled = $0 }))
+                    // Remote control needs the "Jarvis" listener: switching it on switches that on too.
+                    Toggle("", isOn: Binding(get: { appState.remoteControlEnabled && appState.wakeWordEnabled },
+                                             set: {
+                                                 appState.remoteControlEnabled = $0
+                                                 if $0 { appState.wakeWordEnabled = true }
+                                             }))
                         .toggleStyle(.switch)
                         .labelsHidden()
-                        .disabled(!appState.wakeWordEnabled)
                 }
                 Text("Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir.")
                     .font(.caption2)
