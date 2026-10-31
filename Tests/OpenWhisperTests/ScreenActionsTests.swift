@@ -122,4 +122,12 @@ final class ScreenActionsTests: XCTestCase {
     func testTextOnTheScreenshotTwiceIsNotClicked() {
         XCTAssertNil(ScreenActions.textMatch("Ara'ya bas", lines: ["Ara", "Ara"]))
     }
+
+    func testVisionPoint() {
+        XCTAssertEqual(ScreenActions.parseVisionPoint("{\"bbox_2d\": [490, 70, 534, 106]}"), CGPoint(x: 512, y: 88))
+        XCTAssertEqual(ScreenActions.parseVisionPoint("```json\n{\"box_2d\": [14, 946, 44, 977]}\n```", yFirst: true),
+                       CGPoint(x: 961.5, y: 29))
+        XCTAssertNil(ScreenActions.parseVisionPoint("NONE"))
+        XCTAssertNil(ScreenActions.parseVisionPoint("[1500, 20, 1600, 40]"))
+    }
 }

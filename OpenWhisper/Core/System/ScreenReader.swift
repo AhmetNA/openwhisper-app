@@ -96,9 +96,23 @@ enum ScreenReader {
     nonisolated(unsafe) private static var askedForScreenRecording = false
 
     /// The front window's screenshot run through Vision: its text lines, its frame in screen
-    /// points and its title. Needs Screen Recording; asks for it once per launch.
+    /// points and its title.
     private static func recognizeFrontWindow(of app: NSRunningApplication) async
         -> (lines: [VNRecognizedTextObservation], frame: CGRect, title: String?)? {
+        guard let (image, frame, title) = await captureFrontWindow(of: app) else { return nil }
+        let lines = await Task.detached { () -> [VNRecognizedTextObservation] in
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.recognitionLanguages = ["tr-TR", "en-US"]
+            try? VNImageRequestHandler(cgImage: image).perform([request])
+            return request.results ?? []
+        }.value
+        return (lines, frame, title)
+    }
+
+    /// A screenshot of `app`'s front window, its frame in screen points and its title. Needs
+    /// Screen Recording; asks for it once per launch.
+    static func captureFrontWindow(of app: NSRunningApplication) async -> (image: CGImage, frame: CGRect, title: String?)? {
         guard CGPreflightScreenCaptureAccess() else {
             if !askedForScreenRecording {
                 askedForScreenRecording = true
@@ -122,14 +136,7 @@ enum ScreenReader {
         config.showsCursor = false
         guard let image = try? await SCScreenshotManager.captureImage(
             contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: config) else { return nil }
-        let lines = await Task.detached { () -> [VNRecognizedTextObservation] in
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["tr-TR", "en-US"]
-            try? VNImageRequestHandler(cgImage: image).perform([request])
-            return request.results ?? []
-        }.value
-        return (lines, window.frame, window.title)
+        return (image, window.frame, window.title)
     }
 
     // MARK: - AX helpers

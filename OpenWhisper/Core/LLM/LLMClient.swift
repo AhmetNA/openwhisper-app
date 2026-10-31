@@ -12,11 +12,13 @@ struct LLMRequest: @unchecked Sendable {
     var stop: [String]?
     /// A JSON schema for Ollama's `format`: the answer then follows it.
     var schema: [String: Any]?
+    /// Base64 images for a vision model (Ollama's `images`).
+    var images: [String]?
     /// The file that built the request, logged so the feature that loaded the model shows.
     var caller: String
 
     init(model: String, prompt: String, timeout: TimeInterval, temperature: Double, maxTokens: Int,
-         stop: [String]? = nil, schema: [String: Any]? = nil, caller: String = #fileID) {
+         stop: [String]? = nil, schema: [String: Any]? = nil, images: [String]? = nil, caller: String = #fileID) {
         self.model = model
         self.prompt = prompt
         self.timeout = timeout
@@ -24,6 +26,7 @@ struct LLMRequest: @unchecked Sendable {
         self.maxTokens = maxTokens
         self.stop = stop
         self.schema = schema
+        self.images = images
         self.caller = caller
     }
 }
@@ -101,6 +104,7 @@ struct OllamaClient: LLMClient {
             "options": options,
         ]
         if let schema = request.schema { body["format"] = schema }
+        if let images = request.images { body["images"] = images }
         return body
     }
 

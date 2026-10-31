@@ -163,6 +163,27 @@ struct CloudChatClient: ChatStreaming {
         }
     }
 
+    /// One answer, whole, to `messages` whose content may hold images (`image_url` parts).
+    func complete(model: String, messages: [[String: Any]], timeout: TimeInterval, maxTokens: Int) async throws -> String {
+        var body = Self.chatBody(LLMChatRequest(model: model, messages: [], timeout: timeout, temperature: 0, maxTokens: maxTokens),
+                                 thinkingOff: thinkingOff)
+        body["messages"] = messages
+        let stream = AsyncThrowingStream<String, Error> { continuation in
+            let task = Task {
+                do {
+                    _ = try await self.stream(body: body, timeout: timeout, into: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+        var answer = ""
+        for try await piece in stream { answer += piece }
+        return answer
+    }
+
     /// Streams one answer's text into `continuation` and returns its tool call, if any. The
     /// call's first part yields an empty piece, so `ChatFallback` keeps the reply on the cloud
     /// while the search runs.

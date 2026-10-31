@@ -385,6 +385,86 @@ enum ScreenActions {
         return (label, CGPoint(x: frame.midX, y: frame.midY))
     }
 
+    // MARK: - Icons, by a vision model
+
+    /// The center of the box a vision model answered, on a 0–1000 scale of the image. Qwen-VL
+    /// writes `bbox_2d` as [x1, y1, x2, y2]; Gemma writes `box_2d` as [y1, x1, y2, x2]
+    /// (`yFirst`). Nil for "NONE".
+    static func parseVisionPoint(_ answer: String, yFirst: Bool = false) -> CGPoint? {
+        // Whole tokens only: the "2" of "bbox_2d" is no coordinate.
+        let numbers = answer.split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "." || $0 == "_") })
+            .compactMap { Double($0) }
+        let point: CGPoint
+        if numbers.count >= 4 {
+            let (a, b) = ((numbers[0] + numbers[2]) / 2, (numbers[1] + numbers[3]) / 2)
+            point = yFirst ? CGPoint(x: b, y: a) : CGPoint(x: a, y: b)
+        } else {
+            return nil
+        }
+        guard (0...1000).contains(point.x), (0...1000).contains(point.y) else { return nil }
+        return point
+    }
+
+    /// Something without text (a close X, a gear, three dots): the screenshot goes to a vision
+    /// model, the cloud's when the cloud is selected, else the local one. The point to click.
+    static func visionPick(_ said: String, in app: NSRunningApplication) async -> CGPoint? {
+        guard let (image, frame, _) = await ScreenReader.captureFrontWindow(of: app),
+              let jpeg = jpegBase64(image, maxWidth: 1280) else { return nil }
+        // Each model in the box format it was trained on (tried 1 Nov 2026: Gemma answered a
+        // plain "x,y" with the same top-left corner for every icon).
+        func prompt(_ format: String) -> String {
+            """
+            This is a screenshot of a Mac app window. The user said, in Turkish: "\(said)". Detect the element \
+            they want to click; it may be an icon without text (a close X, a gear, three dots, a plus, a back \
+            arrow). Output only its bounding box as JSON: \(format), normalized to 0-1000. If it is not there, \
+            output NONE.
+            """
+        }
+        let started = Date()
+        var yFirst = false
+        let answer: String?
+        let backend: String
+        if ChatBackend.selected == .cloud, let (client, chatModel) = CloudLLM.client() {
+            // A vision model from the server's list when there is one; the chat model may see no images.
+            let model = CloudLLM.cachedModels.first { $0.lowercased().contains("vl") } ?? chatModel
+            backend = model
+            let content: [[String: Any]] = [
+                ["type": "text", "text": prompt(#"{"bbox_2d": [x1, y1, x2, y2]}"#)],
+                ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(jpeg)"]],
+            ]
+            do {
+                answer = try await client.complete(model: model, messages: [["role": "user", "content": content]],
+                                                   timeout: 10, maxTokens: 40)
+            } catch {
+                owLog("[Screen] Vision model failed: \(ChatFallback.describe(error))")
+                answer = nil
+            }
+        } else {
+            backend = LLM.selectedModel
+            yFirst = true
+            answer = try? await LLM.default.generate(LLMRequest(model: LLM.selectedModel, prompt: prompt(#"{"box_2d": [y1, x1, y2, x2]}"#), timeout: 15,
+                                                                temperature: 0, maxTokens: 40, images: [jpeg]))
+        }
+        let reply = answer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        owLog("[Screen] Vision model (\(backend)) answered '\(reply.prefix(80))' in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        guard let point = parseVisionPoint(reply, yFirst: yFirst) else { return nil }
+        return CGPoint(x: frame.minX + point.x / 1000 * frame.width, y: frame.minY + point.y / 1000 * frame.height)
+    }
+
+    private static func jpegBase64(_ image: CGImage, maxWidth: Int) -> String? {
+        let scale = min(1, Double(maxWidth) / Double(image.width))
+        let width = Int(Double(image.width) * scale), height = Int(Double(image.height) * scale)
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let scaled = context.makeImage(),
+              let data = NSBitmapImageRep(cgImage: scaled).representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+        else { return nil }
+        return data.base64EncodedString()
+    }
+
     private static let placeWords: Set<String> = [
         "sağ", "sağdaki", "sol", "soldaki", "üst", "üstteki", "alt", "alttaki", "ortadaki", "ilk", "ilkine", "ikinci",
         "ikinciye", "üçüncü", "dördüncü", "sonuncu", "sonuncuya", "son", "mavi", "kırmızı", "yeşil", "aşağıdaki",

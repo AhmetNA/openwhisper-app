@@ -999,25 +999,33 @@ extension AppState {
                 }
                 var mark = CACurrentMediaTime()
                 /// Not in the accessibility tree (a canvas, a game, an Electron view): find the
-                /// words on a screenshot and click them. Only when pressing was asked for.
+                /// words on a screenshot and click them; an icon without words goes to a vision
+                /// model. Only when pressing was asked for.
                 @MainActor func pressByText() async -> Bool {
                     guard session.isVoiceCommand, saysClick || screenModeStep else { return await notFound() }
                     mark = CACurrentMediaTime()
-                    let hit = await ScreenActions.findText(trimmed, in: app)
+                    var hit = await ScreenActions.findText(trimmed, in: app)
                     stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
-                    guard let hit, !ScreenActions.isRisky(hit.label) || saysClick,
-                          NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                    if let found = hit, ScreenActions.isRisky(found.label), !saysClick { hit = nil }
+                    if hit == nil, saysClick {
+                        self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 12000)
+                        mark = CACurrentMediaTime()
+                        let point = await ScreenActions.visionPick(trimmed, in: app)
+                        stepParts.append(("görüntü modeli", CACurrentMediaTime() - mark))
+                        if let point { hit = (ScreenActions.spokenName(trimmed), point) } else { self.dismissFlowBarMessage() }
+                    }
+                    guard let hit, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
                         return await notFound()
                     }
                     session.latency.finishDecision(route: "ekran eylemi, ekran görüntüsünden")
-                    owLog("[Route] screen action: text '\(hit.label)' on the screenshot")
+                    owLog("[Route] screen action: '\(hit.label)' on the screenshot at \(Int(hit.point.x)),\(Int(hit.point.y))")
                     self.lastTranscription = text
                     self.lastCommandUndo = []
                     mark = CACurrentMediaTime()
                     let pressed = ScreenActions.click(at: hit.point)
                     stepParts.append(("tıklama", CACurrentMediaTime() - mark))
                     if session.isVoiceCommand {
-                        self.logScreenStep(session, pressed ? "tıklandı (OCR)" : "tıklanamadı", startedAt: stepStarted, stepParts)
+                        self.logScreenStep(session, pressed ? "ekran görüntüsünden tıklandı" : "tıklanamadı", startedAt: stepStarted, stepParts)
                     }
                     self.showFlowBarMessage(pressed ? "“\(hit.label)” ✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
                     if session.isVoiceCommand, pressed {
