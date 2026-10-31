@@ -8,7 +8,8 @@ struct FlowBarView: View {
             HStack(spacing: 8) {
                 if appState.systemAudioEnabled && appState.recordingState == .idle {
                     systemAudioContent
-                } else if let message = appState.flowBarMessage {
+                } else if let message = appState.flowBarMessage,
+                          appState.jarvisActivity != .speaking || appState.targetSpeakerAppendOfferActive {
                     if appState.targetSpeakerAppendOfferActive {
                         rejectedRecordingOfferContent(message: message)
 

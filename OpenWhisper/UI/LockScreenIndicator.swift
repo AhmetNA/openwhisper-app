@@ -178,7 +178,7 @@ struct LockScreenIndicatorView: View {
                             .shadow(color: busyColor.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
                             .animation(.easeOut(duration: 0.15), value: voice)
                             .animation(.easeInOut(duration: 0.4), value: busyColor)
-                        if let message = appState.flowBarMessage { caption(message) }
+                        if let message = appState.flowBarMessage, appState.jarvisActivity != .speaking { caption(message) }
                     }
                     // The middle of the lock screen belongs to other apps (Vorssaint).
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
@@ -202,7 +202,7 @@ struct LockScreenIndicatorView: View {
                             }
                         }
                         .shadow(color: .black.opacity(0.5), radius: 8)
-                        if let message = appState.flowBarMessage { caption(message) }
+                        if let message = appState.flowBarMessage, appState.jarvisActivity != .speaking { caption(message) }
                     }
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 }

@@ -178,6 +178,10 @@ final class AppState {
     var jarvisActivity: JarvisActivity = .none {
         didSet {
             guard oldValue != jarvisActivity else { return }
+            // What he says is heard, not also written under him; "speaking" stays.
+            if jarvisActivity == .speaking, flowBarMessage != nil, !targetSpeakerAppendOfferActive {
+                dismissFlowBarMessage()
+            }
             syncFlowBarVisibility()
         }
     }
