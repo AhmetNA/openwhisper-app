@@ -327,6 +327,64 @@ enum ScreenActions {
         }
     }
 
+    // MARK: - Text on the screenshot
+
+    /// The OCR line that holds the name said, and the part of it to click: every said word
+    /// (case endings aside: "yönetimine" is "Yönetimi") or at least two of three, the tightest
+    /// line first. Nil when nothing fits or two different places fit equally.
+    static func textMatch(_ said: String, lines: [String]) -> (line: Int, range: Range<String.Index>)? {
+        // "Ayarlar'a": the name is before the apostrophe.
+        let saidWords = spokenName(said).split(separator: " ").compactMap { $0.split(separator: "'").first.map(String.init) }
+        guard !saidWords.isEmpty else { return nil }
+        func fits(_ said: String, _ seen: String) -> Bool {
+            if said == seen { return true }
+            if min(said.count, seen.count) >= 4, said.prefix(4) == seen.prefix(4) { return true }
+            let (a, b) = (soundKey(said), soundKey(seen))
+            return min(a.count, b.count) >= 5 && a.prefix(5) == b.prefix(5)
+        }
+        var best: (line: Int, range: Range<String.Index>, matched: Int, extra: Int)?
+        var tied = false
+        for (index, line) in lines.enumerated() {
+            var words: [(word: String, range: Range<String.Index>)] = []
+            line.enumerateSubstrings(in: line.startIndex..., options: .byWords) { word, range, _, _ in
+                if let word { words.append((normalized(word).replacingOccurrences(of: "'", with: ""), range)) }
+            }
+            var hits: [Range<String.Index>] = []
+            for word in saidWords {
+                if let hit = words.first(where: { fits(word, $0.word) }) { hits.append(hit.range) }
+            }
+            guard hits.count * 3 >= saidWords.count * 2,
+                  let lower = hits.map(\.lowerBound).min(), let upper = hits.map(\.upperBound).max() else { continue }
+            let candidate = (line: index, range: lower..<upper, matched: hits.count, extra: words.count - hits.count)
+            if let current = best {
+                if (candidate.matched, -candidate.extra) > (current.matched, -current.extra) {
+                    best = candidate
+                    tied = false
+                } else if (candidate.matched, -candidate.extra) == (current.matched, -current.extra) {
+                    tied = true
+                }
+            } else {
+                best = candidate
+            }
+        }
+        guard let best, !tied else {
+            if tied { owLog("[Screen] '\(said)' fits more than one text on the screenshot; none clicked") }
+            return nil
+        }
+        return (best.line, best.range)
+    }
+
+    /// Not in the accessibility tree: find the name on a screenshot of `app`'s window. The
+    /// label read and the point to click.
+    static func findText(_ said: String, in app: NSRunningApplication) async -> (label: String, point: CGPoint)? {
+        let texts = await ScreenReader.ocrTexts(of: app)
+        guard let match = textMatch(said, lines: texts.map(\.text)),
+              let frame = texts[match.line].frame(of: match.range) else { return nil }
+        let label = String(texts[match.line].text[match.range])
+        owLog("[Screen] '\(said)' found on the screenshot as '\(label)'")
+        return (label, CGPoint(x: frame.midX, y: frame.midY))
+    }
+
     private static let placeWords: Set<String> = [
         "sağ", "sağdaki", "sol", "soldaki", "üst", "üstteki", "alt", "alttaki", "ortadaki", "ilk", "ilkine", "ikinci",
         "ikinciye", "üçüncü", "dördüncü", "sonuncu", "sonuncuya", "son", "mavi", "kırmızı", "yeşil", "aşağıdaki",
@@ -468,7 +526,7 @@ enum ScreenActions {
         return click(at: CGPoint(x: frame.midX, y: frame.midY))
     }
 
-    private static func click(at point: CGPoint) -> Bool {
+    static func click(at point: CGPoint) -> Bool {
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left) else {
             return false

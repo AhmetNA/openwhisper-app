@@ -58,11 +58,55 @@ enum ScreenReader {
     /// The front window read by OCR, for apps whose accessibility tree stays empty (many
     /// Electron apps). Needs Screen Recording; nil without it or when nothing legible shows.
     static func ocrWindowText(of app: NSRunningApplication, limit: Int = 6000) async -> (title: String, text: String)? {
+        let start = Date()
+        guard let (lines, _, title) = await recognizeFrontWindow(of: app) else { return nil }
+        let text = String(lines.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n").prefix(limit))
+        owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): \(text.count) chars in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
+        guard !text.isEmpty else { return nil }
+        return (title ?? app.localizedName ?? "Pencere", text)
+    }
+
+    /// A line OCR read in the front window, and where its words are on screen.
+    struct ScreenText: @unchecked Sendable {
+        let text: String
+        fileprivate let candidate: VNRecognizedText
+        fileprivate let windowFrame: CGRect
+
+        /// `range` of `text` in screen points, top-left origin as `CGEvent` takes it.
+        func frame(of range: Range<String.Index>) -> CGRect? {
+            guard let box = (try? candidate.boundingBox(for: range))??.boundingBox else { return nil }
+            return CGRect(x: windowFrame.minX + box.minX * windowFrame.width,
+                          y: windowFrame.minY + (1 - box.maxY) * windowFrame.height,
+                          width: box.width * windowFrame.width, height: box.height * windowFrame.height)
+        }
+    }
+
+    /// Every line of text in the front window, read off a screenshot: what the accessibility
+    /// tree doesn't show (canvases, games, many Electron views) is still on the screen.
+    static func ocrTexts(of app: NSRunningApplication) async -> [ScreenText] {
+        let start = Date()
+        guard let (lines, frame, _) = await recognizeFrontWindow(of: app) else { return [] }
+        let texts = lines.compactMap { line in
+            line.topCandidates(1).first.map { ScreenText(text: $0.string, candidate: $0, windowFrame: frame) }
+        }
+        owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): \(texts.count) lines in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
+        return texts
+    }
+
+    nonisolated(unsafe) private static var askedForScreenRecording = false
+
+    /// The front window's screenshot run through Vision: its text lines, its frame in screen
+    /// points and its title. Needs Screen Recording; asks for it once per launch.
+    private static func recognizeFrontWindow(of app: NSRunningApplication) async
+        -> (lines: [VNRecognizedTextObservation], frame: CGRect, title: String?)? {
         guard CGPreflightScreenCaptureAccess() else {
+            if !askedForScreenRecording {
+                askedForScreenRecording = true
+                CGRequestScreenCaptureAccess()
+            }
             owLog("[ScreenReader] OCR skipped: no Screen Recording permission")
             return nil
         }
-        let start = Date()
         // The CG list is front to back, so the first normal window of the app is the one in front.
         let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         guard let windowID = info.first(where: {
@@ -78,17 +122,14 @@ enum ScreenReader {
         config.showsCursor = false
         guard let image = try? await SCScreenshotManager.captureImage(
             contentFilter: SCContentFilter(desktopIndependentWindow: window), configuration: config) else { return nil }
-        let text = await Task.detached { () -> String in
+        let lines = await Task.detached { () -> [VNRecognizedTextObservation] in
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
             request.recognitionLanguages = ["tr-TR", "en-US"]
             try? VNImageRequestHandler(cgImage: image).perform([request])
-            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-            return String(lines.joined(separator: "\n").prefix(limit))
+            return request.results ?? []
         }.value
-        owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): \(text.count) chars in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
-        guard !text.isEmpty else { return nil }
-        return (window.title ?? app.localizedName ?? "Pencere", text)
+        return (lines, window.frame, window.title)
     }
 
     // MARK: - AX helpers

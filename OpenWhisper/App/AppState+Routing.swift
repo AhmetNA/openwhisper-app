@@ -998,9 +998,39 @@ extension AppState {
                     return true
                 }
                 var mark = CACurrentMediaTime()
+                /// Not in the accessibility tree (a canvas, a game, an Electron view): find the
+                /// words on a screenshot and click them. Only when pressing was asked for.
+                @MainActor func pressByText() async -> Bool {
+                    guard session.isVoiceCommand, saysClick || screenModeStep else { return await notFound() }
+                    mark = CACurrentMediaTime()
+                    let hit = await ScreenActions.findText(trimmed, in: app)
+                    stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
+                    guard let hit, !ScreenActions.isRisky(hit.label) || saysClick,
+                          NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                        return await notFound()
+                    }
+                    session.latency.finishDecision(route: "ekran eylemi, ekran görüntüsünden")
+                    owLog("[Route] screen action: text '\(hit.label)' on the screenshot")
+                    self.lastTranscription = text
+                    self.lastCommandUndo = []
+                    mark = CACurrentMediaTime()
+                    let pressed = ScreenActions.click(at: hit.point)
+                    stepParts.append(("tıklama", CACurrentMediaTime() - mark))
+                    if session.isVoiceCommand {
+                        self.logScreenStep(session, pressed ? "tıklandı (OCR)" : "tıklanamadı", startedAt: stepStarted, stepParts)
+                    }
+                    self.showFlowBarMessage(pressed ? "“\(hit.label)” ✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
+                    if session.isVoiceCommand, pressed {
+                        self.noteScreenModeAction()
+                        commandFollowUp = .some(nil)
+                    } else if session.isVoiceCommand {
+                        await self.speakReply(self.jarvisReply.failure("Basamadım"))
+                    }
+                    return true
+                }
                 let elements = ScreenActions.elements(of: app)
                 stepParts.append(("ekran okuma", CACurrentMediaTime() - mark))
-                guard !elements.isEmpty else { return await notFound() }
+                guard !elements.isEmpty else { return await pressByText() }
                 let labels = elements.map(\.label)
                 var pick: Int?
                 var byModel = false
@@ -1027,7 +1057,7 @@ extension AppState {
                     }
                     if pick == nil { self.dismissFlowBarMessage() }
                 }
-                guard let pick else { return await notFound() }
+                guard let pick else { return await pressByText() }
                 let target = elements[pick]
                 session.latency.finishDecision(route: "ekran eylemi")
                 owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(byModel ? " by the model" : "")")

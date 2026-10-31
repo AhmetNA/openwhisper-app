@@ -106,4 +106,20 @@ final class ScreenActionsTests: XCTestCase {
         XCTAssertTrue(ScreenActions.isGrounded("İkinci videoyu aç", label: "Lofi beats to study"))
         XCTAssertFalse(ScreenActions.isGrounded("Gönder butonuna bas", label: "Delete"))
     }
+
+    func testTextOnTheScreenshot() {
+        let lines = ["Yeni sohbet", "Computer use özelliği ve branch yönetimi", "Ayarlar", "AirDrop & Continuity"]
+        func clicked(_ said: String) -> String? {
+            ScreenActions.textMatch(said, lines: lines).map { String(lines[$0.line][$0.range]) }
+        }
+        XCTAssertEqual(clicked("Computer use özelliği ve branch yönetimine bas"), "Computer use özelliği ve branch yönetimi")
+        XCTAssertEqual(clicked("Ayarlar'a bas"), "Ayarlar")
+        XCTAssertEqual(clicked("yeni sohbete tıkla"), "Yeni sohbet")
+        XCTAssertEqual(clicked("Airdrop kontinüültüye bas"), "AirDrop & Continuity")
+        XCTAssertNil(clicked("Spotify'a bas"))
+    }
+
+    func testTextOnTheScreenshotTwiceIsNotClicked() {
+        XCTAssertNil(ScreenActions.textMatch("Ara'ya bas", lines: ["Ara", "Ara"]))
+    }
 }
