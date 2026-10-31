@@ -98,8 +98,8 @@ private struct TypedRequestView: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    /// The logo's teal, used only for the accent line and the caret.
-    private static let teal = Color(red: 0.20, green: 0.85, blue: 0.80)
+    /// The lock screen core's listening blue: the core, the accent line and the caret.
+    private static let accent = Color(red: 0.3, green: 0.75, blue: 1)
     private static let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
 
     var body: some View {
@@ -111,15 +111,13 @@ private struct TypedRequestView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: 22, height: 22)
+                JarvisCore(color: Self.accent, active: true, size: 26, period: 4)
+                    .frame(width: 26, height: 26)
                 TextField("", text: $text, prompt: Text("Jarvis'e yaz…").foregroundColor(.white.opacity(0.3)))
                     .textFieldStyle(.plain)
                     .font(.system(size: 17))
                     .foregroundStyle(.white.opacity(0.92))
-                    .tint(Self.teal)
+                    .tint(Self.accent)
                     .focused($focused)
                     .onSubmit {
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,9 +148,9 @@ private struct TypedRequestView: View {
         }
     }
 
-    /// A thin teal line along the bottom edge that fades out at both ends.
+    /// A thin accent line along the bottom edge that fades out at both ends.
     private var accentLine: some View {
-        let gradient = LinearGradient(colors: [.clear, Self.teal, .clear], startPoint: .leading, endPoint: .trailing)
+        let gradient = LinearGradient(colors: [.clear, Self.accent, .clear], startPoint: .leading, endPoint: .trailing)
         return ZStack {
             Rectangle().fill(gradient).frame(height: 1)
             Rectangle().fill(gradient).frame(height: 3).blur(radius: 3).opacity(0.6)

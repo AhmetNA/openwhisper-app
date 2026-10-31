@@ -247,8 +247,8 @@ struct LockScreenIndicatorView: View {
 }
 
 /// A reactor-style core: a glowing center inside two counter-rotating segmented rings.
-/// Still and dim while Jarvis sleeps.
-private struct JarvisCore: View {
+/// Still and dim while Jarvis sleeps. Also the logo in the "write to Jarvis" panel.
+struct JarvisCore: View {
     let color: Color
     let active: Bool
     var size: CGFloat = 52
