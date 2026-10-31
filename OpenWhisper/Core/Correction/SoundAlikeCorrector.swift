@@ -37,10 +37,13 @@ enum SoundAlikeCorrector {
         WhatsApp [vatsap] = vatsap, vatsab, whatsap, vots app
         YouTube [yutub] = yutub, yutup, you tube
         Bluetooth [blutut] = blutut, bulutut, blu tut
+        # Gerçek kelime olmayan bozulmalar her uygulamada Claude olur; "cloud" gibi gerçek kelimeler aşağıda.
+        Claude = klod, klot, clode, klaud, kılod, kılot, kulod, culud, kulud, cılat, cılad, cılade, kılad, klat, klaat, kılaat, kılavd
+        Claude Code = klod kod
 
         @Claude
-        Claude [klod] = cloud, klod, klot, clod, clode, claud, klaud
-        Claude Code = cloudcode, cloud code, klod kod
+        Claude [klod] = cloud, clod, claud
+        Claude Code = cloudcode, cloud code
         Claude.md = cloudmd, cloud md, cloud.md
         """
 
@@ -120,6 +123,21 @@ enum SoundAlikeCorrector {
         return (output.joined(separator: " "), applied)
     }
 
+    /// Glossary names with a spoken form (sozluk.txt: `Codex [kodeks]`), for words that are
+    /// neither Turkish nor English (`isUnknown`): a word the dictionaries know stays as it is,
+    /// however close it sounds. One word at a time; "kılod" → Claude, "githaba" → GitHub'a.
+    static func correct(_ text: String, glossary entries: [Entry], isUnknown: (String) -> Bool) -> (String, [(String, String)]) {
+        guard !entries.isEmpty else { return (text, []) }
+        var applied: [(String, String)] = []
+        let words = text.split(separator: " ", omittingEmptySubsequences: false).map { word -> String in
+            let word = String(word)
+            guard isUnknown(word), let fixed = replacement(for: word, entries: entries) else { return word }
+            applied.append((word, fixed))
+            return fixed
+        }
+        return (words.joined(separator: " "), applied)
+    }
+
     /// "Sputfayda," → "Spotify'da,", or nil when the word is not a variant.
     private static func replacement(for word: String, entries: [Entry]) -> String? {
         let trailing = String(word.reversed().prefix { $0.isPunctuation && $0 != "'" && $0 != "’" }.reversed())
@@ -135,6 +153,9 @@ enum SoundAlikeCorrector {
                 if matches(root, entry) { return entry.canonical + "'" + suffix + trailing }
                 continue
             }
+            // Heard exactly as listed, the word's last letters are not a suffix: "çetcipiti" is
+            // ChatGPT, not "ChatGPT'ı".
+            if matchesExactly(root, entry) { return entry.canonical + trailing }
             // Suffix first, longest first: the whole word "sputfayda" also sounds close enough,
             // and matching it would drop the "'da".
             for suffix in CorrectionEngine.turkishSuffixes where root.hasSuffix(fold(suffix)) && root.count > suffix.count + 3 {
@@ -147,6 +168,11 @@ enum SoundAlikeCorrector {
             if matches(root, entry) { return entry.canonical + trailing }
         }
         return nil
+    }
+
+    private static func matchesExactly(_ candidate: String, _ entry: Entry) -> Bool {
+        let forms = entry.variants + (entry.spoken.map { [$0] } ?? [])
+        return forms.contains { fold($0).replacingOccurrences(of: " ", with: "") == candidate }
     }
 
     private static func matches(_ candidate: String, _ entry: Entry) -> Bool {

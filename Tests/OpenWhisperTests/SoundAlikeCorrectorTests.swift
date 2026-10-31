@@ -68,6 +68,34 @@ final class SoundAlikeCorrectorTests: XCTestCase {
         XCTAssertEqual(SoundAlikeCorrector.correct("cloud'a yükle", entries: AppFocus.soundAlikeEntries(entries, focus: nil)).0, "cloud'a yükle")
     }
 
+    func testClaudeMishearingsInEveryApp() {
+        let inSafari = AppFocus.soundAlikeEntries(entries, focus: AppFocus(appName: "Safari", entries: entries))
+        // "Kılaat" heard 31 Oct 2026; the others are the command parser's list.
+        XCTAssertEqual(SoundAlikeCorrector.correct("Kılaat'a sor, klod koda yaz, kılodda dene", entries: inSafari).0,
+                       "Claude'a sor, Claude Code'a yaz, Claude'da dene")
+        // Real words stay what they are outside Claude.
+        let text = "cloud'a yükle, Google Cloud'da kılık kıyafet, kan clot"
+        XCTAssertEqual(SoundAlikeCorrector.correct(text, entries: inSafari, keeping: ["Google Cloud"]).0, text)
+    }
+
+    func testGlossaryNamesOnlyForUnknownWords() {
+        let glossary = [
+            SoundAlikeCorrector.Entry(canonical: "ChatGPT", spoken: "çetcipiti", variants: []),
+            SoundAlikeCorrector.Entry(canonical: "GitHub", spoken: "githab", variants: []),
+            SoundAlikeCorrector.Entry(canonical: "Codex", spoken: "kodeks", variants: []),
+        ]
+        let known: Set<String> = ["kodeks", "kodeksi"]
+        let fix = { (text: String) in
+            SoundAlikeCorrector.correct(text, glossary: glossary) { word in
+                !known.contains(word.lowercased().filter(\.isLetter))
+            }.0
+        }
+        // The whole word heard as the name keeps its last letter.
+        XCTAssertEqual(fix("çetcipiti aç, githaba pushla."), "ChatGPT aç, GitHub'a pushla.")
+        // "kodeks" is a Turkish word: left alone, however close it sounds.
+        XCTAssertEqual(fix("kodeksi okudum"), "kodeksi okudum")
+    }
+
     func testFrontAppFirstKeepsEveryApp() {
         let focus = AppFocus(appName: "Claude", entries: [])!
         XCTAssertEqual(focus.frontFirst(["Safari", "Claude", "Notes"]), ["Claude", "Safari", "Notes"])

@@ -27,6 +27,7 @@ enum GlossaryStore {
     private static var isCachePopulated = false
     private static var cachedKey: CacheKey?
     private static var cachedLines: [String] = []
+    private static var cachedSpoken: [SoundAlikeCorrector.Entry] = []
 
     /// Reads the glossary file's current (mtime, size) through a *resolved* path. Returns nil
     /// when the file doesn't exist or its resource values can't be read.
@@ -65,6 +66,15 @@ enum GlossaryStore {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
+    /// A line may give how the term sounds in Turkish: `Codex [kodeks]`. The term is "Codex"
+    /// everywhere; the spoken form is only for `spokenEntries()`.
+    private static func split(_ line: String) -> (term: String, spoken: String?) {
+        guard let open = line.firstIndex(of: "["), let close = line.lastIndex(of: "]"), open < close else { return (line, nil) }
+        let term = line[..<open].trimmingCharacters(in: .whitespaces)
+        let spoken = line[line.index(after: open)..<close].trimmingCharacters(in: .whitespaces)
+        return (term, spoken.isEmpty ? nil : spoken)
+    }
+
     /// Returns the parsed glossary lines, reloading from disk only when the file's (mtime,
     /// size) has changed since the last read (or hasn't been read yet). Must be called with
     /// `lock` held.
@@ -73,16 +83,14 @@ enum GlossaryStore {
         if isCachePopulated && cachedKey == key {
             return cachedLines
         }
-        let lines: [String]
-        if let contents = try? String(contentsOf: glossaryURL, encoding: .utf8) {
-            lines = parseLines(from: contents)
-        } else {
-            lines = []
-        }
+        let parsed = ((try? String(contentsOf: glossaryURL, encoding: .utf8)).map(parseLines) ?? []).map(split)
         isCachePopulated = true
         cachedKey = key
-        cachedLines = lines
-        return lines
+        cachedLines = parsed.map(\.term).filter { !$0.isEmpty }
+        cachedSpoken = parsed.compactMap { line in
+            line.spoken.map { SoundAlikeCorrector.Entry(canonical: line.term, spoken: $0, variants: []) }
+        }
+        return cachedLines
     }
 
     /// Full glossary terms. Matches the original `LLMCleanup`/`WhisperTranscriber`
@@ -105,6 +113,14 @@ enum GlossaryStore {
         lock.lock()
         defer { lock.unlock() }
         return linesLocked().filter { !$0.contains(" ") }
+    }
+
+    /// Terms written with a spoken form, for `SoundAlikeCorrector.correct(_:glossary:isUnknown:)`.
+    static func spokenEntries() -> [SoundAlikeCorrector.Entry] {
+        lock.lock()
+        defer { lock.unlock() }
+        _ = linesLocked()
+        return cachedSpoken
     }
 
     /// Multi-word glossary terms ("Google Cloud"), which a one-word correction must not split.

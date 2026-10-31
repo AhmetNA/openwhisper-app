@@ -220,11 +220,22 @@ extension AppState {
             // Claude), its name in app matching and in the cleanup model's terms.
             let soundAlikeEntries = SoundAlikeCorrector.loadEntries()
             let focus = AppFocus(app: session.targetApp, entries: soundAlikeEntries)
-            let (text, soundAlikes) = session.appliesSpeechChecks
+            let (soundAlikeText, soundAlikes) = session.appliesSpeechChecks
                 ? SoundAlikeCorrector.correct(spoken, entries: AppFocus.soundAlikeEntries(soundAlikeEntries, focus: focus),
                                               keeping: GlossaryStore.multiWordTerms())
                 : (spoken, [])
+            var text = soundAlikeText
             for (heard, written) in soundAlikes { owLog("[SoundAlike] \(heard) → \(written)") }
+            // A word neither Turkish nor English that sounds like a glossary name is that name.
+            if session.appliesSpeechChecks {
+                let locale = Locale(identifier: "tr_TR")
+                let unknown = Set(misheardWords(in: text).map { $0.text.lowercased(with: locale) })
+                let glossaryFixes: [(String, String)]
+                (text, glossaryFixes) = SoundAlikeCorrector.correct(text, glossary: GlossaryStore.spokenEntries()) { word in
+                    MisheardWordDetector.words(in: word).first.map { unknown.contains($0.lowercased(with: locale)) } ?? false
+                }
+                for (heard, written) in glossaryFixes { owLog("[Glossary] \(heard) → \(written)") }
+            }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty,
                   !trimmed.hasPrefix("[BLANK"),
