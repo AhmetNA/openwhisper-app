@@ -958,6 +958,42 @@ extension AppState {
                 self.startVoiceSession(trigger: .confirmation)
             }
 
+            /// A goal of several steps on screen. A risky step is asked like a single press, and
+            /// the task ends there.
+            @MainActor func screenTask(client: CloudChatClient, model: String) async -> Bool {
+                session.latency.finishDecision(route: "çok adımlı ekran eylemi")
+                owLog("[Route] screen task: '\(trimmed)'")
+                self.lastTranscription = text
+                self.lastCommandUndo = []
+                self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
+                let outcome = await ScreenTask.run(
+                    goal: trimmed, client: client, model: model,
+                    progress: { self.showFlowBarMessage($0, durationMs: 8000) },
+                    type: { text, app in
+                        await withCheckedContinuation { continuation in
+                            guard let injector = self.textInjector else { return continuation.resume(returning: false) }
+                            injector.pasteTextResult(text, targetApp: app, context: nil) { outcome in
+                                if case .clipboardOnly = outcome { continuation.resume(returning: false) } else { continuation.resume(returning: true) }
+                            }
+                        }
+                    })
+                switch outcome {
+                case .done:
+                    self.showFlowBarMessage("Tamamlandı ✓", durationMs: 1500)
+                    await self.speakReply(self.jarvisReply.ack())
+                case .failed(let reason):
+                    owLog("[ScreenTask] Stopped: \(reason)")
+                    self.showFlowBarMessage(reason, durationMs: 4000)
+                    await self.speakReply(self.jarvisReply.failure(reason))
+                case .confirm(let target, let app):
+                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
+                    let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
+                    let heard = await self.speakReply(prompt)
+                    askFollowUp(prompt, heard: heard)
+                }
+                return true
+            }
+
             /// "Kaydet", "izin ver", "sağ üstteki çarpıya bas": something in the front window,
             /// named as the user would to a friend. Not in a text field, unless clicking is said
             /// outright (there "tamam" is dictation), and never from a mic left open after a
@@ -971,7 +1007,10 @@ extension AppState {
                 // report it unknown); a Jarvis session only stays out of a known text field.
                 let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
                 if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
-                guard ScreenActions.worthLooking(trimmed) else { return false }
+                // "Ayarlar'da bildirimleri kapat": several presses, by the cloud model (`ScreenTask`).
+                let cloud = session.isVoiceCommand && ScreenTask.isGoal(trimmed) && ChatBackend.selected == .cloud
+                    ? CloudLLM.client() : nil
+                guard ScreenActions.worthLooking(trimmed) || cloud != nil else { return false }
                 // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
                 let saysClick = ScreenActions.saysClick(trimmed)
                 // Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
@@ -1000,6 +1039,8 @@ extension AppState {
                 } else if soundAlike.count == 1 {
                     pick = soundAlike[0]
                     owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
+                } else if let (client, model) = cloud {
+                    return await screenTask(client: client, model: model)
                 } else if !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
                     pick = await ScreenActions.modelPick(trimmed, elements: elements)
