@@ -130,4 +130,10 @@ final class ScreenActionsTests: XCTestCase {
         XCTAssertNil(ScreenActions.parseVisionPoint("NONE"))
         XCTAssertNil(ScreenActions.parseVisionPoint("[1500, 20, 1600, 40]"))
     }
+
+    func testPlusAndNotificationsAreGrounded() {
+        XCTAssertTrue(ScreenActions.isGrounded("+ butonuna bas", label: "New"))
+        XCTAssertTrue(ScreenActions.isGrounded("Ayarlarda bildirimleri kapat", label: "Notifications"))
+        XCTAssertEqual(ScreenActions.spokenName("bu butonuna bas"), "")
+    }
 }

@@ -1002,7 +1002,9 @@ extension AppState {
                 /// words on a screenshot and click them; an icon without words goes to a vision
                 /// model. Only when pressing was asked for.
                 @MainActor func pressByText() async -> Bool {
-                    guard session.isVoiceCommand, saysClick || screenModeStep else { return await notFound() }
+                    // "bu butonuna bas" names nothing: no screenshot can find it.
+                    guard session.isVoiceCommand, saysClick || screenModeStep,
+                          !ScreenActions.spokenName(trimmed).isEmpty else { return await notFound() }
                     mark = CACurrentMediaTime()
                     var hit = await ScreenActions.findText(trimmed, in: app)
                     stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))

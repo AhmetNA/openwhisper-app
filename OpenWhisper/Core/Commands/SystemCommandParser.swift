@@ -159,6 +159,9 @@ enum SystemCommandParser {
     /// `installedApps`: app names to resolve "X'i aç / kapat" against (see `SystemController`).
     /// `shortcuts`: names from `shortcuts list`, for "X kısayolunu çalıştır".
     /// The mail reply, calendar, browser, video and Mac rules, in `CommandRegistry` order.
+    /// The direction of the last scroll run, for "biraz daha kaydır". Set by `SystemController`.
+    nonisolated(unsafe) static var lastScrollUp = false
+
     static func parse(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], scenes: [String] = [],
                       readingPaused: Bool = false, readingJustCut: Bool = false, now: Date = Date()) -> SystemCommand? {
         let context = CommandRegistry.Context(installedApps: installedApps, shortcuts: { shortcuts }, scenes: scenes,
@@ -476,6 +479,14 @@ enum SystemCommandParser {
         }
         if matches(scrollText, #"^\#(scrollTarget)\s+(?:yukarı|yukari|up)(?:ya)?\s+\#(clippedScrollVerb)$"#) {
             return .scroll(up: true, large: isLargeScroll)
+        }
+        // No direction: "sayfayı biraz kaydır" goes down; "biraz daha kaydır", "bir daha kaydır"
+        // the way the last scroll went.
+        if matches(scrollText, #"^(?:biraz\s+)?(?:daha|bir\s+daha)\s+(?:\#(scrollTarget)\s+)?(?:kaydır(?:ır)?|kaydir)(?:\s+lütfen)?$"#) {
+            return .scroll(up: lastScrollUp, large: isLargeScroll)
+        }
+        if matches(scrollText, #"^(?:\#(scrollTarget)\s+)?(?:biraz\s+)?(?:kaydır(?:ır)?|kaydir)(?:\s+lütfen)?$"#) {
+            return .scroll(up: false, large: isLargeScroll)
         }
         // Brightness: "parlaklığı artır", "ekranı biraz karart", "parlaklığı yüzde 50 yap".
         if matches(text, #"parlaklı|parlak|^arlaklı|ekranı karart|ekranı aydınlat"#) {

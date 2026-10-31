@@ -306,6 +306,7 @@ enum ScreenActions {
         "kabul": ["accept", "agree"], "giriş": ["sign in", "log in", "login"], "çıkış": ["sign out", "log out", "logout"],
         "durdur": ["stop", "pause"], "oynat": ["play"], "başlat": ["start", "play"], "atla": ["skip"],
         "evet": ["yes"], "hayır": ["no"], "güncelle": ["update"], "ekle": ["add"], "tekrar": ["retry"],
+        "bildirim": ["notification"], "artı": ["new", "add", "plus"],
     ]
 
     /// Whether the model's pick is tied to what was said: a shared word or stem, a sound-alike,
@@ -507,7 +508,9 @@ enum ScreenActions {
     }
 
     static func normalized(_ text: String) -> String {
+        // Whisper writes a spoken "artı" as "+": "+ butonuna bas".
         text.lowercased(with: locale)
+            .replacingOccurrences(of: "+", with: " artı ")
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: #"[^\p{L}\p{N}' ]"#, with: " ", options: .regularExpression)
             .split(separator: " ").joined(separator: " ")

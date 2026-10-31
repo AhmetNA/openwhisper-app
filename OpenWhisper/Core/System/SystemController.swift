@@ -307,6 +307,7 @@ enum SystemController {
     /// Line-based scrolling follows the target app's own scrolling behavior and works in both
     /// native views and Chromium/Electron content such as Codex.
     private static func scroll(up: Bool, large: Bool) -> String {
+        SystemCommandParser.lastScrollUp = up
         guard AXIsProcessTrusted() else {
             return "Ekran kaydırılamadı: Erişilebilirlik izni gerekli"
         }

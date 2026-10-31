@@ -168,20 +168,17 @@ struct CloudChatClient: ChatStreaming {
         var body = Self.chatBody(LLMChatRequest(model: model, messages: [], timeout: timeout, temperature: 0, maxTokens: maxTokens),
                                  thinkingOff: thinkingOff)
         body["messages"] = messages
-        let stream = AsyncThrowingStream<String, Error> { continuation in
-            let task = Task {
-                do {
-                    _ = try await self.stream(body: body, timeout: timeout, into: continuation)
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
+        body["stream"] = false
+        let (data, response) = try await URLSession.shared.data(for: request(path: "chat/completions", body: body, timeout: timeout))
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            // A 400 says why (image too large, no vision on this model…): keep it.
+            owLog("[Chat] HTTP \(status): \(String(decoding: data.prefix(300), as: UTF8.self))")
+            throw LLMError.http(status)
         }
-        var answer = ""
-        for try await piece in stream { answer += piece }
-        return answer
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let message = (json?["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any]
+        return message?["content"] as? String ?? ""
     }
 
     /// Streams one answer's text into `continuation` and returns its tool call, if any. The

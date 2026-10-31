@@ -70,6 +70,11 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Ekranı baya bir yukarı kaydı"), .scroll(up: true, large: true))
         XCTAssertEqual(SystemCommandParser.parse("Sayfayı çok aşağı kaydır"), .scroll(up: false, large: true))
         XCTAssertEqual(SystemCommandParser.parse("Epey yukarı scroll"), .scroll(up: true, large: true))
+        XCTAssertEqual(SystemCommandParser.parse("Sayfayı biraz kaydır."), .scroll(up: false, large: false))
+        SystemCommandParser.lastScrollUp = true
+        XCTAssertEqual(SystemCommandParser.parse("Biraz daha kaydır"), .scroll(up: true, large: false))
+        SystemCommandParser.lastScrollUp = false
+        XCTAssertEqual(SystemCommandParser.parse("bir daha kaydır"), .scroll(up: false, large: false))
         XCTAssertNil(SystemCommandParser.parse("Yukarı kaydı"))
         XCTAssertNil(SystemCommandParser.parse("Ekranı aşağı kaydırmak istiyorum"))
         XCTAssertNil(SystemCommandParser.parse("Aşağıda güzel bir sayfa var"))
