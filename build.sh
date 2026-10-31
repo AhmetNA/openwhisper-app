@@ -53,6 +53,10 @@ if [ -d "$BUNDLE_SRC" ]; then
     cp -R "$BUNDLE_SRC" "$APP_DIR/Resources/"
 fi
 
+# Interface strings (Ayarlar › Arayüz dili). Text("…") looks them up in the main bundle,
+# not in SwiftPM's resource bundle, so they live outside OpenWhisper/Resources.
+cp -R Localization/*.lproj "$APP_DIR/Resources/"
+
 # Copy app icon and set in Info.plist
 cp "OpenWhisper/Resources/AppIcon.icns" "$APP_DIR/Resources/AppIcon.icns" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Delete :CFBundleIconFile" "$APP_DIR/Info.plist" 2>/dev/null || true

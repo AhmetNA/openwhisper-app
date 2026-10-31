@@ -34,9 +34,9 @@ private struct APIKeyRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label(provider.title, systemImage: "key")
+                Label(loc(provider.title), systemImage: "key")
                     .font(.headline)
-                Text(provider.purpose)
+                Text(loc(provider.purpose))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()

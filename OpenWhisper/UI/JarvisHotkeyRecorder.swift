@@ -43,7 +43,7 @@ struct JarvisHotkeyRecorder: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Label(title, systemImage: slot == .jarvisKey ? "keyboard" : "text.bubble")
+                Label(loc(title), systemImage: slot == .jarvisKey ? "keyboard" : "text.bubble")
                 Spacer()
                 if capturing {
                     Text("Bir tuşa basın… (Esc: iptal)")
@@ -52,7 +52,7 @@ struct JarvisHotkeyRecorder: View {
                     Button("İptal") { stopCapture() }
                         .controlSize(.small)
                 } else {
-                    Text(hotkey?.label ?? "Atanmadı")
+                    Text(hotkey?.label ?? loc("Atanmadı"))
                         .font(.system(.body, design: .rounded).weight(.medium))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -80,7 +80,7 @@ struct JarvisHotkeyRecorder: View {
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(help)
+            Text(loc(help))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

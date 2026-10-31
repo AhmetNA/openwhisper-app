@@ -20,7 +20,7 @@ struct MenuBarContentView: View {
                         Circle()
                             .fill(statusColor)
                             .frame(width: 6, height: 6)
-                        Text(statusText)
+                        Text(loc(statusText))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -40,12 +40,12 @@ struct MenuBarContentView: View {
                     Text("“Jarvis” ile sesle başlat")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
-                    Text(appState.wakeWordStatus)
+                    Text(loc(appState.wakeWordStatus))
                         .font(.caption)
                         .foregroundStyle(appState.wakeWordBlocked ? Color.orange : .secondary)
                         .lineLimit(appState.wakeWordBlocked ? 3 : 1)
                         .fixedSize(horizontal: false, vertical: appState.wakeWordBlocked)
-                        .help(appState.wakeWordStatus)
+                        .help(loc(appState.wakeWordStatus))
                 }
                 Spacer(minLength: 4)
                 Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))
@@ -68,7 +68,7 @@ struct MenuBarContentView: View {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
-                    Text(appState.systemAudioStatus)
+                    Text(loc(appState.systemAudioStatus))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -169,7 +169,7 @@ struct MenuBarContentView: View {
             }
 
             if let replayStatus = appState.replayStatus {
-                Text(replayStatus)
+                Text(loc(replayStatus))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -323,7 +323,7 @@ private struct TimersSection: View {
                 Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
             }
             Spacer(minLength: 4)
-            Button(action, action: perform)
+            Button(loc(action), action: perform)
                 .controlSize(.small)
         }
     }
