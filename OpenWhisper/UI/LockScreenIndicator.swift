@@ -147,6 +147,8 @@ struct LockScreenIndicatorView: View {
     @State private var wakes = 0
 
     private var listening: Bool { appState.recordingState == .recording }
+    /// Listening, thinking or speaking: the large core stays on screen for all three.
+    private var busy: Bool { appState.recordingState != .idle || appState.jarvisActivity != .none }
     /// 0 in silence, rising to 1 as the voice gets louder.
     private var voice: Double {
         guard listening, appState.recordingHeardSpeech else { return 0 }
@@ -167,15 +169,19 @@ struct LockScreenIndicatorView: View {
                     MoveKeyframe(0)
                     CubicKeyframe(1, duration: 1.4)
                 }
-                if listening {
-                    JarvisCore(color: Self.listeningColor, active: true, size: 110, period: 2.5)
-                        .matchedGeometryEffect(id: "core", in: coreSpace)
-                        .frame(width: 110, height: 110)
-                        .scaleEffect(1 + voice * 0.1)
-                        .shadow(color: Self.listeningColor.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
-                        .animation(.easeOut(duration: 0.15), value: voice)
-                        // The middle of the lock screen belongs to other apps (Vorssaint).
-                        .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
+                if busy {
+                    VStack(spacing: 22) {
+                        JarvisCore(color: busyColor, active: true, size: 110, period: 2.5)
+                            .matchedGeometryEffect(id: "core", in: coreSpace)
+                            .frame(width: 110, height: 110)
+                            .scaleEffect(1 + voice * 0.1)
+                            .shadow(color: busyColor.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
+                            .animation(.easeOut(duration: 0.15), value: voice)
+                            .animation(.easeInOut(duration: 0.4), value: busyColor)
+                        if let message = appState.flowBarMessage { caption(message) }
+                    }
+                    // The middle of the lock screen belongs to other apps (Vorssaint).
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 } else {
                     VStack(spacing: 18) {
                         HStack(spacing: 18) {
@@ -201,7 +207,7 @@ struct LockScreenIndicatorView: View {
                     .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
                 }
             }
-            .animation(.spring(duration: 0.5), value: listening)
+            .animation(.spring(duration: 0.5), value: busy)
             .animation(.easeInOut(duration: 0.3), value: appState.flowBarMessage)
         }
         .ignoresSafeArea()
@@ -228,12 +234,14 @@ struct LockScreenIndicatorView: View {
         return appState.wakeWordListening ? "ALIVE" : "ASLEEP"
     }
 
-    private static let listeningColor = Color(red: 0.35, green: 0.8, blue: 1)
-    private static let speakingColor = Color(red: 0.72, green: 0.5, blue: 1)
+    /// Blue while listening, green while thinking, pink while speaking.
+    private var busyColor: Color {
+        if listening { return Color(red: 0.3, green: 0.75, blue: 1) }
+        if appState.jarvisActivity == .speaking { return Color(red: 1, green: 0.35, blue: 0.7) }
+        return Color(red: 0.35, green: 1, blue: 0.55)
+    }
 
     private var statusColor: Color {
-        if appState.jarvisActivity == .speaking { return Self.speakingColor }
-        if appState.recordingState != .idle || appState.jarvisActivity != .none { return .white }
         return appState.wakeWordListening ? Color(red: 1, green: 0.55, blue: 0.15) : .gray
     }
 }
