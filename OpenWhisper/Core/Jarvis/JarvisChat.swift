@@ -32,7 +32,8 @@ final class JarvisChat {
     /// `model` is the Ollama model, used alone or when the cloud model fails.
     func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled)]]
+        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
+                                                                        canSearch: Self.cloudReady && APIKeys.exa.hasKey)]]
             + history
             + [["role": "user", "content": text]]
 
@@ -107,10 +108,13 @@ final class JarvisChat {
             LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: messages, timeout: 10,
                                                   temperature: 0.6, maxTokens: 110))
         }
-        guard ChatBackend.selected == .cloud, let (client, model) = CloudLLM.client() else {
+        guard ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() else {
             backend.set("ollama \(ollamaModel)")
             return local()
         }
+        var searching = cloud
+        searching.webSearchKey = APIKeys.exa.key()
+        let client = searching
         backend.set("cloud \(model)")
         return ChatFallback.stream(
             primary: {
@@ -137,7 +141,9 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> String {
+    /// `canSearch`: the cloud model has the `web_search` tool (`WebSearch`).
+    nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = [],
+                                         canSearch: Bool = false) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "tr_TR")
         formatter.dateFormat = "d MMMM yyyy EEEE, HH:mm"
@@ -148,7 +154,7 @@ final class JarvisChat {
         - Çok kısa ol: genelde tek cümle, en fazla iki kısa cümle. Kullanıcı açıkça detay isterse en fazla dört cümle.
         - Madde işareti, başlık, markdown, emoji, kod kullanma. Düz konuşma dili.
         \(languageRule(language))
-        \(accessRule(context))
+        \(accessRule(context, canSearch: canSearch))
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
         - Kullanıcının sözü sesten yazıya çevrildi; yanlış duyulmuş bir kelimeyi ("Kenarbahçe" → Fenerbahçe) en yakın anlamlı haliyle yorumla.
         - Soru anlaşılıyorsa ama cevabını bilmiyorsan "anlayamadım" deme; neden bilemediğini kısaca söyle (ör. "Canlı skorlara erişimim yok patron.").
@@ -158,9 +164,15 @@ final class JarvisChat {
     }
 
     /// With live context the calendar, timers, the playing song and what the front app shows
-    /// (page, selected mail, chat) are known; internet, weather and news never are.
-    nonisolated private static func accessRule(_ context: [String]) -> String {
-        context.isEmpty
+    /// (page, selected mail, chat) are known; internet, weather and news only through the search.
+    nonisolated private static func accessRule(_ context: [String], canSearch: Bool) -> String {
+        if canSearch {
+            let search = "- Güncel bilgi (haber, skor, hava durumu, fiyat, yakın tarihli olay) gerekirse web_search aracıyla ara ve yalnızca sonuçlara dayanarak kısaca cevap ver; adres ya da kaynak adı okuma. Sonuçta yoksa bulamadığını söyle, uydurma."
+            return context.isEmpty
+                ? search + "\n- E-postaya ve takvime erişimin yok."
+                : search + "\n- Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama, ekrandaki sayfa, mail, sohbet ya da seçili metin) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
+        }
+        return context.isEmpty
             ? "- Bu sohbette internete, hava durumuna, haberlere, e-postaya ve takvime erişimin yok. Güncel bilgi uydurma; bilmiyorsan kısaca söyle."
             : "- İnternete, hava durumuna ve haberlere erişimin yok; güncel bilgi uydurma. Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama, ekrandaki sayfa, mail, sohbet ya da seçili metin) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."
     }

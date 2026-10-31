@@ -25,6 +25,30 @@ final class CloudChatClientTests: XCTestCase {
         XCTAssertEqual(CloudChatClient.parse(line: ": keep-alive"), .skip)
     }
 
+    func testParseToolCallParts() {
+        XCTAssertEqual(CloudChatClient.parse(line: #"data: {"choices":[{"delta":{"tool_calls":[{"id":"c1","type":"function","index":0,"function":{"name":"web_search"}}]}}]}"#),
+                       .toolCall(id: "c1", name: "web_search", arguments: ""))
+        XCTAssertEqual(CloudChatClient.parse(line: #"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"query\": \"Fener"}}]}}]}"#),
+                       .toolCall(id: nil, name: nil, arguments: #"{"query": "Fener"#))
+    }
+
+    func testToolCallQueryAndFollowUpMessages() {
+        let call = CloudChatClient.ToolCall(id: "c1", name: "web_search", arguments: #"{"query": "Fenerbahçe maçı 30 Ekim 2026"}"#)
+        XCTAssertEqual(call.query, "Fenerbahçe maçı 30 Ekim 2026")
+        let messages = CloudChatClient.messages([["role": "user", "content": "Maç kaç kaç?"]], after: call, found: "1. Skor 2-1")
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(messages[1]["role"] as? String, "assistant")
+        XCTAssertEqual((messages[1]["tool_calls"] as? [[String: Any]])?.first?["id"] as? String, "c1")
+        XCTAssertEqual(messages[2]["tool_call_id"] as? String, "c1")
+        XCTAssertEqual(messages[2]["content"] as? String, "1. Skor 2-1")
+    }
+
+    func testWebSearchResultsAreShortLines() {
+        let data = Data(#"{"results":[{"title":"Maç sonucu","url":"https://ornek.com/a","publishedDate":"2026-10-30T20:00:00Z","highlights":["Fenerbahçe 2-1 kazandı."]}]}"#.utf8)
+        XCTAssertEqual(WebSearch.results(from: data), "1. Maç sonucu (2026-10-30) https://ornek.com/a\nFenerbahçe 2-1 kazandı.\n")
+        XCTAssertEqual(WebSearch.results(from: Data(#"{"results":[]}"#.utf8)), "Sonuç bulunamadı.")
+    }
+
     // MARK: - Fallback
 
     private static func pieces(_ items: [String], thenThrow error: Error? = nil,

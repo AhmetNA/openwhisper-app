@@ -15,6 +15,9 @@ struct CloudChatClient: ChatStreaming {
     /// Whether to send the thinking-off fields. Many open-weight servers think by default and
     /// then start 1–5 s later; strict servers reject the unknown fields (`CloudModelCheck`).
     var thinkingOff = true
+    /// When set, the model may search the internet (`WebSearch`) once per reply. Only Jarvis's
+    /// free conversation sets it.
+    var webSearchKey: String?
 
     static func chatBody(_ request: LLMChatRequest, thinkingOff: Bool = true) -> [String: Any] {
         var body: [String: Any] = [
@@ -33,6 +36,8 @@ struct CloudChatClient: ChatStreaming {
 
     enum Line: Equatable {
         case piece(String)
+        /// A part of the tool call: the first part has its id and name, the rest more arguments.
+        case toolCall(id: String?, name: String?, arguments: String)
         case done
         case skip
     }
@@ -43,9 +48,34 @@ struct CloudChatClient: ChatStreaming {
         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
         if payload == "[DONE]" { return .done }
         guard let json = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any],
-              let delta = (json["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any],
-              let content = delta["content"] as? String, !content.isEmpty else { return .skip }
+              let delta = (json["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any] else { return .skip }
+        if let call = (delta["tool_calls"] as? [[String: Any]])?.first {
+            let function = call["function"] as? [String: Any]
+            return .toolCall(id: call["id"] as? String, name: function?["name"] as? String,
+                             arguments: function?["arguments"] as? String ?? "")
+        }
+        guard let content = delta["content"] as? String, !content.isEmpty else { return .skip }
         return .piece(content)
+    }
+
+    /// The tool call of one answer, put together from its parts.
+    struct ToolCall: Equatable {
+        var id = ""
+        var name = ""
+        var arguments = ""
+
+        var query: String? {
+            (try? JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String: Any])?["query"] as? String
+        }
+    }
+
+    /// The messages after a search: the model's call and what the search found.
+    static func messages(_ messages: [[String: String]], after call: ToolCall, found: String) -> [[String: Any]] {
+        messages + [
+            ["role": "assistant", "content": "",
+             "tool_calls": [["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.arguments]]]],
+            ["role": "tool", "tool_call_id": call.id, "content": found],
+        ]
     }
 
     /// The model ids of a `/models` answer; nil when it isn't the OpenAI shape.
@@ -74,22 +104,26 @@ struct CloudChatClient: ChatStreaming {
     }
 
     func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
-        let urlRequest = Result {
-            try self.request(path: "chat/completions", body: Self.chatBody(request, thinkingOff: thinkingOff),
-                             timeout: request.timeout)
-        }
-        return AsyncThrowingStream { continuation in
+        var body = Self.chatBody(request, thinkingOff: thinkingOff)
+        if webSearchKey != nil { body["tools"] = [WebSearch.tool] }
+        return AsyncThrowingStream { [body] continuation in
             let task = Task {
                 do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: try urlRequest.get())
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-                    guard status == 200 else { throw LLMError.http(status) }
-                    lines: for try await line in bytes.lines {
-                        switch Self.parse(line: line) {
-                        case .piece(let piece): continuation.yield(piece)
-                        case .done: break lines
-                        case .skip: continue
+                    let call = try await stream(body: body, timeout: request.timeout, into: continuation)
+                    // One search per reply; a second call in the follow-up is ignored.
+                    if let webSearchKey, call.name == WebSearch.toolName {
+                        let query = call.query ?? ""
+                        let found: String
+                        do {
+                            found = try await WebSearch.search(query, key: webSearchKey)
+                            owLog("[Chat] Web search '\(query)' → \(found.count) chars")
+                        } catch {
+                            owLog("[Chat] Web search '\(query)' failed: \(ChatFallback.describe(error))")
+                            found = "Arama yapılamadı."
                         }
+                        var followUp = body
+                        followUp["messages"] = Self.messages(request.messages, after: call, found: found)
+                        _ = try await stream(body: followUp, timeout: request.timeout, into: continuation)
                     }
                     continuation.finish()
                 } catch {
@@ -98,6 +132,30 @@ struct CloudChatClient: ChatStreaming {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// Streams one answer's text into `continuation` and returns its tool call, if any. The
+    /// call's first part yields an empty piece, so `ChatFallback` keeps the reply on the cloud
+    /// while the search runs.
+    private func stream(body: [String: Any], timeout: TimeInterval,
+                        into continuation: AsyncThrowingStream<String, Error>.Continuation) async throws -> ToolCall {
+        let (bytes, response) = try await URLSession.shared.bytes(for: request(path: "chat/completions", body: body, timeout: timeout))
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else { throw LLMError.http(status) }
+        var call = ToolCall()
+        lines: for try await line in bytes.lines {
+            switch Self.parse(line: line) {
+            case .piece(let piece): continuation.yield(piece)
+            case .toolCall(let id, let name, let arguments):
+                if call.name.isEmpty, name != nil { continuation.yield("") }
+                if let id { call.id = id }
+                if let name { call.name = name }
+                call.arguments += arguments
+            case .done: break lines
+            case .skip: continue
+            }
+        }
+        return call
     }
 }
 

@@ -17,6 +17,8 @@ struct APIKeyProvider: Identifiable, Sendable {
     let fixedTestURL: URL?
     /// The header the key goes in; the value is "Bearer <key>" for `Authorization`.
     let keyHeader: String
+    /// Sent as a POST to the test URL when the service has nothing to GET.
+    var testBody: Data? = nil
 
     var store: KeychainSecretStore { KeychainSecretStore(service: service) }
 
@@ -68,6 +70,11 @@ struct APIKeyProvider: Identifiable, Sendable {
         guard let url = testURL else { return "Önce servis adresini girin." }
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue(keyHeader == "Authorization" ? "Bearer \(key)" : key, forHTTPHeaderField: keyHeader)
+        if let testBody {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = testBody
+        }
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             switch (response as? HTTPURLResponse)?.statusCode ?? -1 {
@@ -103,7 +110,16 @@ enum APIKeys {
         needsAddress: false, fixedTestURL: URL(string: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1")!,
         keyHeader: "x-goog-api-key")
 
-    static let all = [cloudLLM, gemini]
+    /// The test is one real search.
+    static let exa = APIKeyProvider(
+        id: "exa", title: "Exa",
+        purpose: "Jarvis'in internette araması (bulut sohbetiyle).",
+        placeholder: "API anahtarı", expectedPrefix: nil,
+        service: "com.openwhisper.app.search", account: "exa.api_key",
+        needsAddress: false, fixedTestURL: WebSearch.endpoint, keyHeader: "x-api-key",
+        testBody: try? JSONSerialization.data(withJSONObject: WebSearch.body(query: "bugün")))
+
+    static let all = [cloudLLM, gemini, exa]
 }
 
 /// The OpenAI-compatible service the user set up for Jarvis's chat: its address, chosen model
