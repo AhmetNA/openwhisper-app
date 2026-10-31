@@ -23,15 +23,21 @@ struct ProcessingWaveformView: View {
     private let width: CGFloat = 68
     private let trail = 0.7
     private let samples = 48
+    /// Path time the pen starts at: around -0.75 it is at its left end, heading right.
+    @State private var startTime = -0.75 + .random(in: -0.1...0.2)
+    @State private var started = Date()
 
     var body: some View {
         TimelineView(.animation) { context in
-            let now = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10_000)
+            let elapsed = max(0, context.date.timeIntervalSince(started))
+            let now = startTime + elapsed
+            // The trail grows from the starting point instead of appearing already drawn.
+            let length = min(trail, elapsed)
             Canvas { canvas, size in
-                var previous = point(at: now - trail, in: size)
+                var previous = point(at: now - length, in: size)
                 for step in 1...samples {
                     let fade = Double(step) / Double(samples)
-                    let current = point(at: now - trail * (1 - fade), in: size)
+                    let current = point(at: now - length * (1 - fade), in: size)
                     var segment = Path()
                     segment.move(to: previous)
                     segment.addLine(to: current)
