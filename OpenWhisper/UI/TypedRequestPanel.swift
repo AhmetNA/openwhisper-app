@@ -63,7 +63,7 @@ final class TypedRequestPanelController {
         panel.level = .floating
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -98,21 +98,31 @@ private struct TypedRequestView: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
+    /// The logo's two ends: indigo at the top, teal at the bottom.
+    private static let indigo = Color(red: 0.17, green: 0.17, blue: 0.49)
+    private static let teal = Color(red: 0.08, green: 0.70, blue: 0.61)
+    private static let cyan = Color(red: 0.35, green: 0.85, blue: 1.0)
+    private static let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if let prompt {
                 Text(prompt)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Self.cyan.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 10) {
-                Image(systemName: "text.bubble")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                TextField("Jarvis'e yaz…", text: $text)
+            HStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 36, height: 36)
+                    .shadow(color: Self.teal.opacity(0.8), radius: 8)
+                TextField("", text: $text, prompt: Text("Jarvis'e yaz…").foregroundColor(.white.opacity(0.35)))
                     .textFieldStyle(.plain)
-                    .font(.title3)
+                    .font(.system(size: 19, weight: .light, design: .rounded))
+                    .foregroundStyle(.white)
+                    .tint(Self.cyan)
                     .focused($focused)
                     .onSubmit {
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -120,15 +130,52 @@ private struct TypedRequestView: View {
                         onSubmit(trimmed)
                     }
                     .onExitCommand(perform: onCancel)
+                Image(systemName: "return")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(text.isEmpty ? .white.opacity(0.25) : Self.cyan)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+                    .animation(.easeOut(duration: 0.15), value: text.isEmpty)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
         .frame(width: 560, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.1)))
+        .background {
+            ZStack {
+                Self.shape.fill(.ultraThinMaterial)
+                Self.shape.fill(LinearGradient(
+                    colors: [Self.indigo.opacity(0.85), Color.black.opacity(0.8), Self.teal.opacity(0.35)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ))
+            }
+        }
+        .overlay { GlowingBorder(shape: Self.shape, colors: [Self.indigo, Self.teal, Self.cyan, Self.teal, Self.indigo]) }
+        .shadow(color: Self.teal.opacity(0.35), radius: 18)
+        .environment(\.colorScheme, .dark)
+        // Room for the glow inside the borderless panel.
+        .padding(24)
         .onAppear {
             DispatchQueue.main.async { focused = true }
         }
+    }
+}
+
+/// A gradient edge that slowly circles the box.
+private struct GlowingBorder<S: Shape>: View {
+    let shape: S
+    let colors: [Color]
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let angle = Angle.degrees(timeline.date.timeIntervalSinceReferenceDate * 60)
+            let gradient = AngularGradient(colors: colors, center: .center, angle: angle)
+            ZStack {
+                shape.stroke(gradient, lineWidth: 1.5)
+                shape.stroke(gradient, lineWidth: 4).blur(radius: 6).opacity(0.6)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
