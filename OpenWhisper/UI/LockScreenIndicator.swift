@@ -168,11 +168,11 @@ struct LockScreenIndicatorView: View {
                     CubicKeyframe(1, duration: 1.4)
                 }
                 if listening {
-                    JarvisCore(color: .white, active: true, size: 110, period: 2.5)
+                    JarvisCore(color: Self.listeningColor, active: true, size: 110, period: 2.5)
                         .matchedGeometryEffect(id: "core", in: coreSpace)
                         .frame(width: 110, height: 110)
                         .scaleEffect(1 + voice * 0.1)
-                        .shadow(color: .white.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
+                        .shadow(color: Self.listeningColor.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
                         .animation(.easeOut(duration: 0.15), value: voice)
                         // The middle of the lock screen belongs to other apps (Vorssaint).
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
@@ -228,7 +228,11 @@ struct LockScreenIndicatorView: View {
         return appState.wakeWordListening ? "ALIVE" : "ASLEEP"
     }
 
+    private static let listeningColor = Color(red: 0.35, green: 0.8, blue: 1)
+    private static let speakingColor = Color(red: 0.72, green: 0.5, blue: 1)
+
     private var statusColor: Color {
+        if appState.jarvisActivity == .speaking { return Self.speakingColor }
         if appState.recordingState != .idle || appState.jarvisActivity != .none { return .white }
         return appState.wakeWordListening ? Color(red: 1, green: 0.55, blue: 0.15) : .gray
     }
