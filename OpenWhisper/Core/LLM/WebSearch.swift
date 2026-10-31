@@ -7,8 +7,9 @@ enum WebSearch {
     static let endpoint = URL(string: "https://api.exa.ai/search")!
     /// What the spoken answer is built from; more only slows the second request.
     private static let maxChars = 3000
-    /// Per page, so one long page can't hide the others (and their dates) from the model.
-    private static let maxPassageChars = 450
+    /// Per page, so one long page can't hide the others (and their dates) from the model. At
+    /// 450 a month table ended before November and the model gave another city's number.
+    private static let maxPassageChars = 900
 
     /// The tool as the OpenAI `tools` field describes it.
     static let tool: [String: Any] = [
