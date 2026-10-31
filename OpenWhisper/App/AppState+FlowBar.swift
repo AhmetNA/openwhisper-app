@@ -39,9 +39,10 @@ extension AppState {
     }
 
     /// Looks up the caret of the field a dictation goes into, so the processing pen is drawn
-    /// there. Off the main thread: AX calls can block on a busy app.
+    /// there; "Hey Jarvis" sessions too, until he starts thinking about a command. Off the main
+    /// thread: AX calls can block on a busy app.
     func startCaretPen(for session: RecordingTranscriptionSession) {
-        guard caretPenRect == nil, flowBarEnabled, !session.isVoiceCommand, session.trigger != .typed,
+        guard caretPenRect == nil, flowBarEnabled, session.trigger != .typed,
               session.pasteContext.focusStatus != .notEditable else { return }
         let context = session.pasteContext
         Task {
