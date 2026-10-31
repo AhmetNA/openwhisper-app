@@ -168,6 +168,8 @@ final class AppState {
     @ObservationIgnored let voiceTest = VoiceTestSession()
     /// The last thing Jarvis said, for "ne dedin?".
     @ObservationIgnored var lastSpokenReply: String?
+    /// Chat context read while a voice command is transcribed (`prefetchJarvisContext`).
+    @ObservationIgnored var prefetchedJarvisContext: (task: Task<JarvisContext, Never>, started: Date)?
     enum JarvisActivity: Sendable, Equatable {
         case none, thinking, speaking
     }

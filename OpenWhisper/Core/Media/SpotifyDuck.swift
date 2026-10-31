@@ -39,6 +39,11 @@ final class SpotifyDuck: @unchecked Sendable {
         }
     }
 
+    /// Returns once every hold/release asked for so far has run, so a read sees the real volume.
+    func settled() async {
+        await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+    }
+
     /// App termination: never leave Spotify quiet.
     func restoreImmediately() {
         queue.sync { holds = 0; restore() }

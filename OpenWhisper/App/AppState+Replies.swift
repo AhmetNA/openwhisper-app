@@ -119,6 +119,24 @@ extension AppState {
         return heard
     }
 
+    /// Reads the chat context while a voice command is still being transcribed: the reads took
+    /// ~0.3 s before the chat model could start. After the duck release, so Spotify's real
+    /// volume is read.
+    func prefetchJarvisContext() {
+        prefetchedJarvisContext = (Task { @MainActor in
+            await SpotifyDuck.shared.settled()
+            return await JarvisContext.gather()
+        }, Date())
+    }
+
+    /// The prefetched context when it is recent enough to describe the moment of the question.
+    func takePrefetchedJarvisContext() async -> JarvisContext? {
+        guard let prefetched = prefetchedJarvisContext else { return nil }
+        prefetchedJarvisContext = nil
+        guard Date().timeIntervalSince(prefetched.started) < 10 else { return nil }
+        return await prefetched.task.value
+    }
+
     /// A "Jarvis" session that is no command and not meant for Claude Code / Codex: the user is
     /// talking to Jarvis, so the chat model (cloud or local) answers out loud. The voice starts on the first
     /// sentence while the rest is still being written. Without a voice the answer is shown.
@@ -134,7 +152,9 @@ extension AppState {
         }
         jarvisActivity = .thinking
         defer { jarvisActivity = .none }
-        let context = await JarvisContext.gather()
+        let prefetched = await takePrefetchedJarvisContext()
+        let context: JarvisContext
+        if let prefetched { context = prefetched } else { context = await JarvisContext.gather() }
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
             to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,

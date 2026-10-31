@@ -485,6 +485,8 @@ extension AppState {
         // A voice command keeps media paused until it has run (see finishTranscription).
         if !session.isVoiceCommand {
             recordingMedia.end()
+        } else {
+            prefetchJarvisContext()
         }
 
         // Batches already drained during recording are queued before the final tail returned by
