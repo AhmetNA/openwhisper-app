@@ -1024,7 +1024,8 @@ extension AppState {
             // For a Jarvis session that is not a command, keyboard focus is the primary signal:
             // editable means dictation (unless the model says a question is for Jarvis), known
             // non-editable means chat. The LLM is otherwise only a fallback when Accessibility
-            // could not determine the focus. Fn dictation is always typed.
+            // could not determine the focus. Fn dictation is always typed, except on the lock
+            // screen: nothing is dictated there, so every trigger gets the Jarvis answer.
             @MainActor func dictateOrChat() async {
                 // After a command only a command is taken (see the follow-up check below).
                 if session.takesOnlyCommands {
@@ -1034,7 +1035,7 @@ extension AppState {
                     return
                 }
                 let front = session.targetApp?.bundleIdentifier
-                if session.isVoiceCommand {
+                if session.isVoiceCommand || RemoteControl.screenIsLocked {
                     // The lock screen's password field has focus, but nobody dictates into it.
                     let focusStatus = RemoteControl.screenIsLocked ? .notEditable : session.routingFocus
                     let isQuestion = JarvisAddressee.looksLikeQuestion(trimmed)
@@ -1055,7 +1056,8 @@ extension AppState {
                     )
                     owLog("[Addressee] focus \(focusStatus.rawValue), question \(isQuestion), score \(score.map(String.init) ?? "not-used") / threshold \(minScore) → \(route.rawValue) (front: \(front ?? "none"))")
                     if route == .chat,
-                       JarvisAddressee.skipsChat(frontBundleID: front, misheardWordCount: self.misheardWords(in: trimmed).count) {
+                       JarvisAddressee.skipsChat(frontBundleID: front, misheardWordCount: self.misheardWords(in: trimmed).count,
+                                                 isQuestion: isQuestion) {
                         owLog("[Addressee] Lock screen and the text has non-words; not answering: '\(trimmed)'")
                         session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
                         return

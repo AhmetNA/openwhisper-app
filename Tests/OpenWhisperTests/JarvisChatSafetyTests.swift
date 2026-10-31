@@ -54,6 +54,12 @@ final class JarvisChatSafetyTests: XCTestCase {
         XCTAssertTrue(JarvisChat.saysNotUnderstood("Sanırım ne demek istediğinizi tam anlayamadım efendim."))
         XCTAssertTrue(JarvisChat.saysNotUnderstood("Bunu anlamadım."))
         XCTAssertFalse(JarvisChat.saysNotUnderstood("Daha açık bir ifade kullanabilir misiniz?"))
-        XCTAssertTrue(JarvisChat.awaitsAnswer(JarvisChat.notUnderstoodReply))
+    }
+
+    /// Every ask-again sentence still opens the mic for the answer.
+    func testAskAgainVariantsAllAwaitAnAnswer() {
+        for reply in JarvisChat.notUnderstoodReplies + JarvisChat.unrecognizedCommandReplies {
+            XCTAssertTrue(JarvisChat.awaitsAnswer(reply), reply)
+        }
     }
 }

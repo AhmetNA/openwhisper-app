@@ -100,9 +100,16 @@ final class LogFixRegressionTests: XCTestCase {
     func testGarbledTextOnTheLockScreenGetsNoChat() {
         let garbled = MisheardWordDetector.find(in: "Siz se sonhalen.").count
         XCTAssertGreaterThan(garbled, 0)
-        XCTAssertTrue(JarvisAddressee.skipsChat(frontBundleID: "com.apple.loginwindow", misheardWordCount: garbled))
-        XCTAssertFalse(JarvisAddressee.skipsChat(frontBundleID: "com.apple.loginwindow", misheardWordCount: 0))
-        XCTAssertFalse(JarvisAddressee.skipsChat(frontBundleID: "com.apple.finder", misheardWordCount: garbled))
+        XCTAssertTrue(JarvisAddressee.skipsChat(frontBundleID: "com.apple.loginwindow", misheardWordCount: garbled, isQuestion: false))
+        XCTAssertFalse(JarvisAddressee.skipsChat(frontBundleID: "com.apple.loginwindow", misheardWordCount: 0, isQuestion: false))
+        XCTAssertFalse(JarvisAddressee.skipsChat(frontBundleID: "com.apple.finder", misheardWordCount: garbled, isQuestion: false))
+    }
+
+    /// "Kenarbahçe ve Göztepe maçı kaç kaç bitmiş" on the lock screen was dropped (31 Oct 2026).
+    func testQuestionWithAMisheardNameOnTheLockScreenStillGetsChat() {
+        let text = "Kenarbahçe ve Göztepe maçı kaç kaç bitmiş."
+        XCTAssertTrue(JarvisAddressee.looksLikeQuestion(text))
+        XCTAssertFalse(JarvisAddressee.skipsChat(frontBundleID: "com.apple.loginwindow", misheardWordCount: 1, isQuestion: true))
     }
 
     func testFollowUpThatHeardOnlyOthersKeepsNoCandidate() {

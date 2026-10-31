@@ -46,7 +46,7 @@ final class JarvisChat {
                 // After "anlayamadım…" the model only restates it ("Daha açık bir ifade
                 // kullanabilir misiniz?"); the rest of the reply is dropped.
                 var saidNotUnderstood = false
-                func emit(_ sentences: [String]) {
+                @MainActor func emit(_ sentences: [String]) {
                     for original in sentences.map(Self.speakable) where !original.isEmpty && !saidNotUnderstood {
                         var sentence = Self.preventUnsupportedActionClaim(original, for: text)
                         if sentence != original {
@@ -56,16 +56,16 @@ final class JarvisChat {
                             // one fixed sentence keeps it short and says what actually happened.
                             sentence = Self.unrecognizedCommandReply
                         } else if Self.saysNotUnderstood(original) {
-                            // One fixed sentence that already asks the user to say it again.
-                            sentence = Self.notUnderstoodReply
+                            // A short sentence of ours that already asks the user to say it again.
+                            sentence = self.askAgain(from: Self.notUnderstoodReplies)
                         }
                         if sentence == Self.unrecognizedCommandReply {
                             owLog("[Chat] Command not recognized by any router: '\(text)'")
+                            sentence = self.askAgain(from: Self.unrecognizedCommandReplies)
                         }
-                        if sentence == Self.unrecognizedCommandReply || sentence == Self.notUnderstoodReply {
+                        if Self.unrecognizedCommandReplies.contains(sentence) || Self.notUnderstoodReplies.contains(sentence) {
                             // Said once is enough; drop the model's follow-up sentences.
                             saidNotUnderstood = true
-                            if full.contains(sentence) { continue }
                         }
                         if firstSentenceMs == nil { firstSentenceMs = Int(Date().timeIntervalSince(started) * 1000) }
                         full += (full.isEmpty ? "" : " ") + sentence
@@ -150,6 +150,8 @@ final class JarvisChat {
         \(languageRule(language))
         \(accessRule(context))
         - Buraya yalnızca komut olarak tanınmayan sözler gelir; sen hiçbir bilgisayar işlemi yapamazsın. Bir işlem istenirse (müzik, hatırlatıcı, ayar, uygulama, e-posta…) yalnızca "\(unrecognizedCommandReply)" de. "Sildim", "silindi", "gönderdim", "oluşturdum", "açtım" gibi başarı iddialarında bulunma; "bu sohbetten yapamam" deme.
+        - Kullanıcının sözü sesten yazıya çevrildi; yanlış duyulmuş bir kelimeyi ("Kenarbahçe" → Fenerbahçe) en yakın anlamlı haliyle yorumla.
+        - Soru anlaşılıyorsa ama cevabını bilmiyorsan "anlayamadım" deme; neden bilemediğini kısaca söyle (ör. "Canlı skorlara erişimim yok patron.").
         - Kendi adını ("Jarvis") söyleme.
         Şu an: \(formatter.string(from: now)).\(contextBlock(context))\(factsBlock(userFacts))\(recallBlock(recalled))
         """
@@ -230,10 +232,35 @@ final class JarvisChat {
 
     /// What an action request that no command router recognised gets back: honest (nothing ran)
     /// and actionable (say it again), instead of a "can't do that from this chat" refusal.
+    /// The model is told to say exactly this; what is spoken is one of `unrecognizedCommandReplies`.
     nonisolated static let unrecognizedCommandReply = "Bunu komut olarak anlayamadım patron, biraz daha açık söyler misin?"
 
-    /// The model didn't understand the user; it is replaced by `notUnderstoodReply`.
-    nonisolated static let notUnderstoodReply = "Anlayamadım patron, biraz daha açık söyler misin?"
+    /// Spoken in turn so the same sentence isn't heard again and again. Each ends in "?", so
+    /// Jarvis then listens for the answer (`awaitsAnswer`).
+    nonisolated static let unrecognizedCommandReplies = [
+        unrecognizedCommandReply,
+        "Bunu bir komuta bağlayamadım, başka türlü söyler misin?",
+        "Hangi işi istediğini çıkaramadım efendim, bir daha söyler misin?",
+        "Bu isteği tanıyamadım, biraz daha açık anlatır mısın?",
+    ]
+
+    /// The model didn't understand the user; its sentence is replaced by one of these.
+    nonisolated static let notUnderstoodReplies = [
+        "Anlayamadım patron, biraz daha açık söyler misin?",
+        "Tam seçemedim, bir daha söyler misin?",
+        "Kaçırdım galiba, tekrar eder misin?",
+        "Pardon, net duyamadım. Bir kez daha söyler misin?",
+        "Ne demek istediğini tam çıkaramadım efendim, başka türlü söyler misin?",
+    ]
+
+    /// The previous ask-again sentence, so the next one is a different one.
+    private var lastAskAgain: String?
+
+    private func askAgain(from replies: [String]) -> String {
+        let pick = replies.filter { $0 != lastAskAgain }.randomElement() ?? replies[0]
+        lastAskAgain = pick
+        return pick
+    }
 
     nonisolated static func saysNotUnderstood(_ sentence: String) -> Bool {
         let lowered = sentence.lowercased(with: Locale(identifier: "tr_TR"))
