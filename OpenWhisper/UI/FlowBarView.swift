@@ -31,7 +31,6 @@ struct FlowBarView: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 8)
                             .frame(minHeight: 26)
-                        if appState.screenTaskRunning { screenTaskStopButton }
                     }
                 } else {
                     switch appState.recordingState {
@@ -187,22 +186,6 @@ struct FlowBarView: View {
                 .accessibilityLabel("Kaydı bitir ve metni yaz")
             }
         }
-    }
-
-    /// The panel is non-activating: clicking it leaves the app the task works in in front.
-    private var screenTaskStopButton: some View {
-        Button {
-            appState.stopScreenTask()
-        } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.white.opacity(0.22)))
-        }
-        .buttonStyle(.plain)
-        .help("Durdur")
-        .accessibilityLabel("Ekrandaki işi durdur")
     }
 
     // MARK: - Transcribing

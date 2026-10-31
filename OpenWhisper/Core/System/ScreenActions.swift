@@ -10,8 +10,6 @@ struct ScreenElement: @unchecked Sendable {
     let region: String
     /// In a sheet or dialog, which usually is what the user is answering.
     let inDialog: Bool
-    /// A checkbox's, switch's or radio button's state; nil for anything else.
-    var isOn: Bool? = nil
 
     var kind: String {
         switch role {
@@ -79,9 +77,8 @@ enum ScreenActions {
             if control || pressOnly,
                isEnabled(node), let elementFrame = frame(of: node), elementFrame.width > 1, elementFrame.height > 1,
                windowFrame.intersects(elementFrame), let label = control ? label(of: node, role: role) : ownLabel(of: node) {
-                let isOn = ["AXCheckBox", "AXRadioButton"].contains(role) ? isChecked(node) : nil
                 found.append(ScreenElement(element: node, role: role, label: label,
-                                           region: region(of: elementFrame, in: windowFrame), inDialog: inDialog, isOn: isOn))
+                                           region: region(of: elementFrame, in: windowFrame), inDialog: inDialog))
                 // A row's label already holds its texts; its buttons still count.
                 if control && role != "AXRow" && role != "AXLink" { return }
             }
@@ -142,12 +139,6 @@ enum ScreenActions {
         var names: CFArray?
         guard AXUIElementCopyActionNames(node, &names) == .success, let list = names as? [String] else { return false }
         return list.contains(kAXPressAction)
-    }
-
-    private static func isChecked(_ node: AXUIElement) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(node, kAXValueAttribute as CFString, &value) == .success else { return nil }
-        return (value as? NSNumber)?.boolValue
     }
 
     private static func isEnabled(_ node: AXUIElement) -> Bool {
