@@ -32,10 +32,15 @@ final class JarvisChat {
     /// `model` is the Ollama model, used alone or when the cloud model fails.
     func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        let messages = [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
-                                                                        canSearch: Self.cloudReady && APIKeys.exa.hasKey)]]
-            + history
-            + [["role": "user", "content": text]]
+        // Ollama has no search: its prompt says so, or it answers "searched" facts from history.
+        let conversation = { (canSearch: Bool) in
+            [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
+                                                             canSearch: canSearch)]]
+                + self.history
+                + [["role": "user", "content": text]]
+        }
+        let messages = conversation(Self.cloudReady && APIKeys.exa.hasKey)
+        let localMessages = conversation(false)
 
         lastReply = nil
         return AsyncStream { continuation in
@@ -75,7 +80,7 @@ final class JarvisChat {
                 }
                 let backend = Backend()
                 do {
-                    for try await piece in Self.stream(messages: messages, ollamaModel: model, backend: backend) {
+                    for try await piece in Self.stream(messages: messages, localMessages: localMessages, ollamaModel: model, backend: backend) {
                         buffer += piece
                         emit(Self.takeSentences(from: &buffer))
                     }
@@ -102,10 +107,11 @@ final class JarvisChat {
 
     /// The cloud model when it is chosen and set up, with Ollama taking over when it is slow or
     /// failing (`ChatFallback`); otherwise Ollama alone. `backend` names who answered, for the log.
-    private static func stream(messages: [[String: String]], ollamaModel: String,
+    /// `localMessages` are what Ollama gets: the same conversation with the no-search prompt.
+    private static func stream(messages: [[String: String]], localMessages: [[String: String]], ollamaModel: String,
                                backend: Backend) -> AsyncThrowingStream<String, Error> {
         let local = { @Sendable in
-            LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: messages, timeout: 10,
+            LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: localMessages, timeout: 10,
                                                   temperature: 0.6, maxTokens: 110))
         }
         guard ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() else {
@@ -167,7 +173,7 @@ final class JarvisChat {
     /// (page, selected mail, chat) are known; internet, weather and news only through the search.
     nonisolated private static func accessRule(_ context: [String], canSearch: Bool) -> String {
         if canSearch {
-            let search = "- Güncel bilgi (haber, skor, hava durumu, fiyat, yakın tarihli olay) gerekirse web_search aracıyla ara ve yalnızca sonuçlara dayanarak kısaca cevap ver; adres ya da kaynak adı okuma. Sonuçta yoksa bulamadığını söyle, uydurma."
+            let search = "- Güncel bilgi (haber, skor, hava durumu, fiyat, yakın tarihli olay) gerekirse web_search aracıyla ara ve yalnızca sonuçlara dayanarak kısaca cevap ver; adres ya da kaynak adı okuma. Skor, maç ya da olay sorulduğunda sonucun tarihine bak: kullanıcı bir gün söylediyse yalnızca o günün sonucunu, söylemediyse en yenisini söyle; önceki konuşmadaki cevabı tekrar etme. Sonuçta yoksa bulamadığını söyle, uydurma."
             return context.isEmpty
                 ? search + "\n- E-postaya ve takvime erişimin yok."
                 : search + "\n- Aşağıdaki \"Durum\" bilgileri gerçek ve şu anki; soru onlarla ilgiliyse (çalan şarkı, alarm, takvim, açık uygulama, ekrandaki sayfa, mail, sohbet ya da seçili metin) onlarla kısaca cevap ver, ilgisizse hiç bahsetme. Durumda olmayan bir şeyi biliyormuş gibi yapma."

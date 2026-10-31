@@ -16,7 +16,7 @@ enum WebSearch {
             "description": "İnternette güncel bilgi arar: haber, skor, hava durumu, fiyat, yakın tarihli olaylar.",
             "parameters": [
                 "type": "object",
-                "properties": ["query": ["type": "string", "description": "Arama sorgusu; gün önemliyse tarihi de yaz."]],
+                "properties": ["query": ["type": "string", "description": "Arama sorgusu. Kullanıcı bir gün söylediyse (\"31 Ekim\", \"dün\", \"bugün\") tarihi gün ay yıl olarak yaz, ör. \"31 Ekim 2026\"; yalnızca yıl yazma."]],
                 "required": ["query"],
             ] as [String: Any],
         ] as [String: Any],
