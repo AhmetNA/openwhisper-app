@@ -40,6 +40,7 @@ enum SoundAlikeCorrector {
         # Gerçek kelime olmayan bozulmalar her uygulamada Claude olur; "cloud" gibi gerçek kelimeler aşağıda.
         Claude = klod, klot, clode, klaud, kılod, kılot, kulod, culud, kulud, cılat, cılad, cılade, kılad, klat, klaat, kılaat, kılavd
         Claude Code = klod kod
+        Codex = kodeks
 
         @Claude
         Claude [klod] = cloud, clod, claud

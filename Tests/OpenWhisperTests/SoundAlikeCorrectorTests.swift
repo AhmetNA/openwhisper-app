@@ -76,6 +76,8 @@ final class SoundAlikeCorrectorTests: XCTestCase {
         // Real words stay what they are outside Claude.
         let text = "cloud'a yükle, Google Cloud'da kılık kıyafet, kan clot"
         XCTAssertEqual(SoundAlikeCorrector.correct(text, entries: inSafari, keeping: ["Google Cloud"]).0, text)
+        // "kodeks" is a Turkish word, but here it is always Codex.
+        XCTAssertEqual(SoundAlikeCorrector.correct("kodekse sor, Kodeksi aç", entries: inSafari).0, "Codex'e sor, Codex'i aç")
     }
 
     func testGlossaryNamesOnlyForUnknownWords() {
