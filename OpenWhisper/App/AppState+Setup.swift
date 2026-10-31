@@ -44,6 +44,7 @@ extension AppState {
         textInjector = TextInjector()
         ClipboardHistory.shared.start()
         flowBarController = FlowBarController(appState: self)
+        caretPenController = CaretPenController()
         typedRequestPanel = TypedRequestPanelController(appState: self)
         lockScreenIndicator = LockScreenIndicatorController(appState: self)
         syncFlowBarVisibility()

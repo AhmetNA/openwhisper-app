@@ -348,6 +348,30 @@ enum AXTextAccess {
         return (cfRange, err)
     }
 
+    /// The insertion point on screen (AX coordinates: top-left origin of the main display), or
+    /// nil when the app doesn't say. An empty range often comes back zero-sized, so the
+    /// character before the caret is asked instead and its right edge used.
+    static func caretRect(_ element: AXUIElement) -> CGRect? {
+        guard let range = readSelectedRange(element).range else { return nil }
+        let caret = range.location + range.length
+        if let rect = bounds(of: CFRange(location: caret, length: 0), in: element) { return rect }
+        guard caret > 0, let rect = bounds(of: CFRange(location: caret - 1, length: 1), in: element) else { return nil }
+        return CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height)
+    }
+
+    private static func bounds(of range: CFRange, in element: AXUIElement) -> CGRect? {
+        var range = range
+        guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
+        var ref: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &ref
+        ) == .success, let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        // A line is never taller than this; anything else is the whole field or junk.
+        guard AXValueGetValue(ref as! AXValue, .cgRect, &rect), rect.height > 0, rect.height < 120 else { return nil }
+        return rect
+    }
+
     private static func utf16Substring(_ value: String, range: CFRange) -> String? {
         guard range.location >= 0, range.length >= 0,
               range.location <= value.utf16.count,

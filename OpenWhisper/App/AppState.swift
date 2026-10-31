@@ -426,6 +426,9 @@ final class AppState {
     var textInjector: TextInjecting? = TextInjector()
     var hotkey: GlobalHotkey?
     var flowBarController: FlowBarController?
+    var caretPenController: CaretPenController?
+    /// Where the caret of the field being dictated into is, while that dictation is processed.
+    @ObservationIgnored var caretPenRect: CGRect?
     var lockScreenIndicator: LockScreenIndicatorController?
     var reminderManager: ReminderManager?
     var recordingTimer: Timer?

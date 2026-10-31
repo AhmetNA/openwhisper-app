@@ -504,6 +504,7 @@ extension AppState {
         wakeProbation = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
+        if let session = activeTranscriptionSession { startCaretPen(for: session) }
         owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
         let workItem = DispatchWorkItem { [weak self] in
             self?.stopRecording()
@@ -568,6 +569,7 @@ extension AppState {
         }
 
         recordingState = .transcribing
+        startCaretPen(for: session)
         owLog("[OpenWhisper] Finishing recording; waiting for background batches...")
     }
 

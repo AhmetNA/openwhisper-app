@@ -12,6 +12,15 @@ extension AppState {
     /// dictation (recording through transcribing/pasting), so the app runs invisibly in the
     /// background otherwise — the menu bar icon remains the only always-visible element.
     func syncFlowBarVisibility() {
+        if recordingState != .transcribing { caretPenRect = nil }
+        // A dictation being processed is drawn at its caret instead, when the app said where.
+        if let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
+           jarvisActivity == .none, !targetSpeakerAppendOfferActive,
+           caretPenController?.show(at: caretPenRect) == true {
+            flowBarController?.hide()
+            return
+        }
+        caretPenController?.hide()
         // Keep a reachable finish control onscreen while the system output is being heard,
         // even if the normal microphone flow bar is disabled in Settings.
         if systemAudioEnabled {
@@ -26,6 +35,24 @@ extension AppState {
             flowBarController?.hide()
         } else {
             flowBarController?.show()
+        }
+    }
+
+    /// Looks up the caret of the field a dictation goes into, so the processing pen is drawn
+    /// there. Off the main thread: AX calls can block on a busy app.
+    func startCaretPen(for session: RecordingTranscriptionSession) {
+        guard caretPenRect == nil, flowBarEnabled, !session.isVoiceCommand, session.trigger != .typed,
+              session.pasteContext.focusStatus != .notEditable else { return }
+        let context = session.pasteContext
+        Task {
+            let rect = await Task.detached {
+                let element = context.focusedElement ?? context.targetPID.flatMap { AXTextAccess.focusedElement(matchingPID: $0) }
+                return element.flatMap(AXTextAccess.caretRect)
+            }.value
+            owLog("[FlowBar] caret: \(rect.map { "\($0)" } ?? "unknown")")
+            guard let rect, recordingState == .transcribing else { return }
+            caretPenRect = rect
+            syncFlowBarVisibility()
         }
     }
 
