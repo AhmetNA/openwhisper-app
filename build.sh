@@ -43,7 +43,7 @@ cp Vendor/WebRTCAEC/LICENSE.abseil "$AEC_NOTICE_DIR/Abseil-LICENSE.txt"
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
 # SwiftPM stamps the binary with sdk == deployment target (14.2), which makes macOS
 # run it in compatibility mode and disables Liquid Glass. Re-stamp with the real SDK.
-SDK_VERSION="$(xcrun --show-sdk-version)"
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
 xcrun vtool -set-build-version macos 14.2 "$SDK_VERSION" -replace \
     -output "$APP_DIR/MacOS/OpenWhisper" "$APP_DIR/MacOS/OpenWhisper"
 cp "$DF_LIB_SRC" "$APP_DIR/MacOS/libdf.dylib"
