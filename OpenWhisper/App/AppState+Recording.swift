@@ -71,15 +71,6 @@ extension AppState {
         // A reply follow-up behaves like "Hey Jarvis" once the user speaks (full command,
         // Smart Turn endpoint); only its no-speech window is short.
         let wakeLikeSession = [.wakeWord, .jarvisKey, .followUp].contains(recordingTrigger)
-        // Smart Turn would take Jarvis's reply for the user's speech, and its clock can't be
-        // moved past the reply: a follow-up over the reply uses the level detector alone.
-        let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession && !overReply
-        let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
-        let isReplyFollowUp = armVoiceAutoStop && recordingTrigger == .followUp
-        var smartTurnConfig = SmartTurnEndpointDetector.Config()
-        // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
-        let ignoredLeadingSeconds: TimeInterval = deferredWake != nil ? 0 : mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
-        recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
         // A deferred wake keeps the listener's microphone for this session: changing to a
         // preferred Bluetooth mic here would discard the words spoken during model loading.
         let recordingInputDeviceUID = deferredWake?.inputUID ?? resolvedInputDeviceUID(for: recordingTrigger)
@@ -90,72 +81,12 @@ extension AppState {
         }
         // A handed-over wake stream is already live; a fresh Bluetooth capture is not.
         let waitsForLinkAudio = recordingInputIsBluetooth
-        var endpointFallbackConfig: VoiceEndpointDetector.Config = recordingInputIsBluetooth ? .closeTalk : .init()
-        // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
-        // incomplete-turn safety limit and also keeps a model failure bounded.
-        if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
-        if isDeletionConfirmation {
-            // Jarvis has just finished asking for confirmation: wait up to five seconds for
-            // speech, then close automatically. Once speech begins, leave enough room for a
-            // natural answer and stop quickly after it ends.
-            endpointFallbackConfig.noSpeechTimeout = 5
-            endpointFallbackConfig.maxDuration = 10
-            endpointFallbackConfig.silenceToStop = min(endpointFallbackConfig.silenceToStop, 0.8)
-            owLog("[Reminders] Listening for deletion confirmation (5 s response window)")
-        }
-        if isReplyFollowUp {
-            // Jarvis has just asked something back (or run a command the user may want to
-            // fix): no speech within the window closes the mic quietly. Both detectors need
-            // it — while Smart Turn is ready, it alone decides.
-            let window = commandFollowUp != nil ? Self.commandFollowUpWindow
-                : claudeMessage ? Self.claudeMessageWindow : Self.replyFollowUpWindow
-            endpointFallbackConfig.noSpeechTimeout = window
-            smartTurnConfig.noSpeechTimeout = window
-            if commandFollowUp != nil {
-                // A fix is a few words; vocals of the song just started must not keep it open.
-                endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
-                smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
-            }
-            if overReply {
-                // Jarvis is still speaking: nothing counts until `commandFollowUpReplyEnded`
-                // starts the window. These only bound a reply that never reports its end.
-                endpointFallbackConfig.noSpeechTimeout = 60
-                endpointFallbackConfig.maxDuration = 90
-            }
-            owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
-                         commandFollowUp != nil ? "a fix to the command" : claudeMessage ? "the Claude message" : "an answer", window))
-        }
-        voiceEndpointDetector = armVoiceAutoStop
-            ? VoiceEndpointDetector(
-                startTime: sessionStart,
-                config: endpointFallbackConfig,
-                ignoreUntil: overReply ? sessionStart + 60
-                    : ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
-            )
-            : nil
-        // An external mic over a video: only sound near the mic counts as speech. The endpoint
-        // samples carry the input gain unless the audio is unprocessed.
-        let farSoundFloorDB: Float? = recordingMic == .external && mediaPlaying
-            ? -40 + (bypassAudioProcessing ? 0 : 20 * log10(AudioSignalProcessor.inputGain))
-            : nil
-        smartTurnEndpointDetector = useSmartTurnEndpoint
-            ? SmartTurnEndpointDetector(
-                startTime: sessionStart,
-                config: smartTurnConfig,
-                ignoredLeadingSeconds: ignoredLeadingSeconds,
-                farSoundFloorDB: farSoundFloorDB
-            )
-            : nil
-        if let farSoundFloorDB {
-            owLog(String(format: "[SmartTurn] External mic over media: sound under %.0f dBFS counts as silence", farSoundFloorDB))
-        }
-        // Over a video or song only the user's voice keeps the session open, filter on or off:
-        // the speakers' residual after echo cancellation keeps Silero hearing "speech" forever.
-        // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
-        // Jarvis's reply (the window waits for it to end).
-        // An external mic: media pauses at once, and a YouTube video it leaves playing stays
-        // under `farSoundFloorDB`.
-        let watchesPlayback = mediaPlaying && recordingMic == .mac && !overReply
+        armEndpointDetectors(
+            sessionStart: sessionStart, trigger: recordingTrigger, armVoiceAutoStop: armVoiceAutoStop,
+            wakeLikeSession: wakeLikeSession, deferredWake: deferredWake != nil,
+            followsCommand: commandFollowUp != nil, claudeMessage: claudeMessage, overReply: overReply,
+            inputIsBluetooth: recordingInputIsBluetooth, mic: recordingMic
+        )
         // The buds' call-mode mic scores 0.2–0.35 against the Mac-mic profile and a USB mic
         // 0.33–0.43, so every batch was rejected: they are filtered only against their own profile.
         let sessionProfile = Self.sessionTargetSpeakerProfile(
@@ -166,50 +97,14 @@ extension AppState {
                 ? "[TargetSpeaker] \(recordingMic) input: speaker filter off (no \(recordingMic) profile)"
                 : "[TargetSpeaker] \(recordingMic) input: filtering against the \(recordingMic) profile")
         }
-        // The gate scores against the session mic's profile every 0.5 s and cuts the session after
-        // ~2 s of "someone else". Scoring only, so the raw mic runs it too. On an external mic it
-        // only logs until its profile is checked in noise; the buds' call-mode mic is left out.
-        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && [.mac, .external].contains(recordingMic)
-            && (targetSpeakerEnabled || watchesPlayback) && sessionProfile != nil
-            && !VoiceTestInjector.shared.bypassesSpeakerChecks
-            ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
-            : nil
-        ownVoiceCheckInFlight = false
-        lastOwnVoiceCheck = sessionStart
-        ownVoiceProfile = sessionProfile
-        ownVoiceGateLogsOnly = recordingMic != .mac
-        if ownVoiceStopGate != nil {
-            owLog("[OwnVoiceStop] Armed for wake-word session" + (watchesPlayback ? " (media playing: only your voice keeps it open)" : "")
-                  + (ownVoiceGateLogsOnly ? " (\(recordingMic) mic: log only)" : ""))
-        }
-
-        // The Settings switch decides for every trigger, voice sessions included. Buds are the
-        // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
-        // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
-        // So does an external mic, which Mac playback must not reach either.
-        // Not after a command: the user is judging the song or video it just started.
-        // A spoken "Jarvis" (often a false wake over the video) never pauses YouTube.
-        let pausesMedia = commandFollowUp == nil && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
-        // A "Jarvis" over media whose voice hasn't matched yet pauses nothing until it does.
-        let probationProfile = pausesMedia && recordingTrigger == .wakeWord && mediaPlaying
-            && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
-            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
-        wakeProbation = probationProfile.map { WakeProbation(startTime: sessionStart, profile: $0) }
-        // Scoring only, the audio is left alone: runs on the raw mic too.
-        lateWakeVoiceProfile = recordingTrigger == .wakeWord && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
-            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
-        lateWakeVoiceCheckInFlight = false
-        lastLateWakeVoiceCheck = sessionStart
-        lateWakeVoiceMatches = 0
-        wakeProbationCheckInFlight = false
-        lastWakeProbationCheck = sessionStart
-        if wakeProbation != nil {
-            owLog(String(format: "[WakeProbation] Media playing and the voice not matched yet: nothing paused, %.0f s for your voice", WakeProbation.window))
-        }
-        if pausesMedia {
-            recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord,
-                                 holdingPause: wakeProbation != nil)
-        }
+        armOwnVoiceStopGate(
+            sessionStart: sessionStart, mic: recordingMic, profile: sessionProfile,
+            armVoiceAutoStop: armVoiceAutoStop, wakeLikeSession: wakeLikeSession, overReply: overReply
+        )
+        let pausesMedia = pauseMediaForRecording(
+            sessionStart: sessionStart, trigger: recordingTrigger, mic: recordingMic,
+            profile: sessionProfile, followsCommand: commandFollowUp != nil
+        )
 
         // 1. Start microphone recording asynchronously off main thread FIRST — before any UI
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
@@ -377,6 +272,176 @@ extension AppState {
         activeTranscriptionSession = session
         pendingTranscriptionCount += 1
 
+        startTranscriptionQueue(for: session)
+
+        // 4. Start duration timer
+        startRecordingTimer()
+
+        // Dictation snapshot reset (instant if no active snapshot)
+        DictationSnapshot.shared.handleNewDictationStarting()
+
+
+    }
+
+    /// Sets up the voice auto-stop for a new recording: the level detector, and Smart Turn
+    /// for wake-like sessions.
+    private func armEndpointDetectors(
+        sessionStart: TimeInterval,
+        trigger recordingTrigger: RecordingTrigger,
+        armVoiceAutoStop: Bool,
+        wakeLikeSession: Bool,
+        deferredWake: Bool,
+        followsCommand: Bool,
+        claudeMessage: Bool,
+        overReply: Bool,
+        inputIsBluetooth recordingInputIsBluetooth: Bool,
+        mic recordingMic: TargetSpeakerMic
+    ) {
+        // Smart Turn would take Jarvis's reply for the user's speech, and its clock can't be
+        // moved past the reply: a follow-up over the reply uses the level detector alone.
+        let useSmartTurnEndpoint = armVoiceAutoStop && wakeLikeSession && !overReply
+        let isDeletionConfirmation = armVoiceAutoStop && recordingTrigger == .confirmation
+        let isReplyFollowUp = armVoiceAutoStop && recordingTrigger == .followUp
+        var smartTurnConfig = SmartTurnEndpointDetector.Config()
+        // Jarvis's own voice tail (or its echo on the Mac speakers) must not count as an answer.
+        let ignoredLeadingSeconds: TimeInterval = deferredWake ? 0 : mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
+        recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
+        var endpointFallbackConfig: VoiceEndpointDetector.Config = recordingInputIsBluetooth ? .closeTalk : .init()
+        // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
+        // incomplete-turn safety limit and also keeps a model failure bounded.
+        if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
+        if isDeletionConfirmation {
+            // Jarvis has just finished asking for confirmation: wait up to five seconds for
+            // speech, then close automatically. Once speech begins, leave enough room for a
+            // natural answer and stop quickly after it ends.
+            endpointFallbackConfig.noSpeechTimeout = 5
+            endpointFallbackConfig.maxDuration = 10
+            endpointFallbackConfig.silenceToStop = min(endpointFallbackConfig.silenceToStop, 0.8)
+            owLog("[Reminders] Listening for deletion confirmation (5 s response window)")
+        }
+        if isReplyFollowUp {
+            // Jarvis has just asked something back (or run a command the user may want to
+            // fix): no speech within the window closes the mic quietly. Both detectors need
+            // it — while Smart Turn is ready, it alone decides.
+            let window = followsCommand ? Self.commandFollowUpWindow
+                : claudeMessage ? Self.claudeMessageWindow : Self.replyFollowUpWindow
+            endpointFallbackConfig.noSpeechTimeout = window
+            smartTurnConfig.noSpeechTimeout = window
+            if followsCommand {
+                // A fix is a few words; vocals of the song just started must not keep it open.
+                endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
+                smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
+            }
+            if overReply {
+                // Jarvis is still speaking: nothing counts until `commandFollowUpReplyEnded`
+                // starts the window. These only bound a reply that never reports its end.
+                endpointFallbackConfig.noSpeechTimeout = 60
+                endpointFallbackConfig.maxDuration = 90
+            }
+            owLog(String(format: "[FollowUp] Listening for %@ (%.1f s window)",
+                         followsCommand ? "a fix to the command" : claudeMessage ? "the Claude message" : "an answer", window))
+        }
+        voiceEndpointDetector = armVoiceAutoStop
+            ? VoiceEndpointDetector(
+                startTime: sessionStart,
+                config: endpointFallbackConfig,
+                ignoreUntil: overReply ? sessionStart + 60
+                    : ignoredLeadingSeconds > 0 ? sessionStart + ignoredLeadingSeconds : nil
+            )
+            : nil
+        // An external mic over a video: only sound near the mic counts as speech. The endpoint
+        // samples carry the input gain unless the audio is unprocessed.
+        let farSoundFloorDB: Float? = recordingMic == .external && mediaPlaying
+            ? -40 + (bypassAudioProcessing ? 0 : 20 * log10(AudioSignalProcessor.inputGain))
+            : nil
+        smartTurnEndpointDetector = useSmartTurnEndpoint
+            ? SmartTurnEndpointDetector(
+                startTime: sessionStart,
+                config: smartTurnConfig,
+                ignoredLeadingSeconds: ignoredLeadingSeconds,
+                farSoundFloorDB: farSoundFloorDB
+            )
+            : nil
+        if let farSoundFloorDB {
+            owLog(String(format: "[SmartTurn] External mic over media: sound under %.0f dBFS counts as silence", farSoundFloorDB))
+        }
+    }
+
+    /// Arms the gate that ends a voice session once someone else is talking.
+    private func armOwnVoiceStopGate(
+        sessionStart: TimeInterval,
+        mic recordingMic: TargetSpeakerMic,
+        profile sessionProfile: TargetSpeakerProfile?,
+        armVoiceAutoStop: Bool,
+        wakeLikeSession: Bool,
+        overReply: Bool
+    ) {
+        // Over a video or song only the user's voice keeps the session open, filter on or off:
+        // the speakers' residual after echo cancellation keeps Silero hearing "speech" forever.
+        // Not for buds (the music is paused, and their mic isn't the enrolled one) or over
+        // Jarvis's reply (the window waits for it to end).
+        // An external mic: media pauses at once, and a YouTube video it leaves playing stays
+        // under `farSoundFloorDB`.
+        let watchesPlayback = mediaPlaying && recordingMic == .mac && !overReply
+        // The gate scores against the session mic's profile every 0.5 s and cuts the session after
+        // ~2 s of "someone else". Scoring only, so the raw mic runs it too. On an external mic it
+        // only logs until its profile is checked in noise; the buds' call-mode mic is left out.
+        ownVoiceStopGate = armVoiceAutoStop && wakeLikeSession && [.mac, .external].contains(recordingMic)
+            && (targetSpeakerEnabled || watchesPlayback) && sessionProfile != nil
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks
+            ? OwnVoiceStopGate(startTime: sessionStart, watchesPlayback: watchesPlayback)
+            : nil
+        ownVoiceCheckInFlight = false
+        lastOwnVoiceCheck = sessionStart
+        ownVoiceProfile = sessionProfile
+        ownVoiceGateLogsOnly = recordingMic != .mac
+        if ownVoiceStopGate != nil {
+            owLog("[OwnVoiceStop] Armed for wake-word session" + (watchesPlayback ? " (media playing: only your voice keeps it open)" : "")
+                  + (ownVoiceGateLogsOnly ? " (\(recordingMic) mic: log only)" : ""))
+        }
+    }
+
+    /// Pauses media for the recording (or holds the pause while a wake over media is on
+    /// probation). Returns whether the media pause applies to this recording.
+    private func pauseMediaForRecording(
+        sessionStart: TimeInterval,
+        trigger recordingTrigger: RecordingTrigger,
+        mic recordingMic: TargetSpeakerMic,
+        profile sessionProfile: TargetSpeakerProfile?,
+        followsCommand: Bool
+    ) -> Bool {
+        // The Settings switch decides for every trigger, voice sessions included. Buds are the
+        // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
+        // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
+        // So does an external mic, which Mac playback must not reach either.
+        // Not after a command: the user is judging the song or video it just started.
+        // A spoken "Jarvis" (often a false wake over the video) never pauses YouTube.
+        let pausesMedia = !followsCommand && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
+        // A "Jarvis" over media whose voice hasn't matched yet pauses nothing until it does.
+        let probationProfile = pausesMedia && recordingTrigger == .wakeWord && mediaPlaying
+            && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
+        wakeProbation = probationProfile.map { WakeProbation(startTime: sessionStart, profile: $0) }
+        // Scoring only, the audio is left alone: runs on the raw mic too.
+        lateWakeVoiceProfile = recordingTrigger == .wakeWord && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
+            && !VoiceTestInjector.shared.bypassesSpeakerChecks ? sessionProfile : nil
+        lateWakeVoiceCheckInFlight = false
+        lastLateWakeVoiceCheck = sessionStart
+        lateWakeVoiceMatches = 0
+        wakeProbationCheckInFlight = false
+        lastWakeProbationCheck = sessionStart
+        if wakeProbation != nil {
+            owLog(String(format: "[WakeProbation] Media playing and the voice not matched yet: nothing paused, %.0f s for your voice", WakeProbation.window))
+        }
+        if pausesMedia {
+            recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord,
+                                 holdingPause: wakeProbation != nil)
+        }
+        return pausesMedia
+    }
+
+    /// Queues the session behind the previous one and transcribes its batches as they arrive.
+    private func startTranscriptionQueue(for session: RecordingTranscriptionSession) {
         let previousTask = transcriptionQueueTail
         let transcriptionTask = Task { @MainActor [weak self] in
             let queueStartedAt = session.latency.timestamp()
@@ -404,8 +469,9 @@ extension AppState {
         session.task = transcriptionTask
         transcriptionQueueTail = transcriptionTask
         transcriptionQueueTailID = session.id
+    }
 
-        // 4. Start duration timer
+    private func startRecordingTimer() {
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.recordingState == .recording else { return }
@@ -418,11 +484,6 @@ extension AppState {
                 self.checkCommandOverReply()
             }
         }
-
-        // Dictation snapshot reset (instant if no active snapshot)
-        DictationSnapshot.shared.handleNewDictationStarting()
-
-
     }
 
     /// Schedules stopRecording() after a short tail delay (default 0.40s / 400ms) so that speech spoken
@@ -555,75 +616,15 @@ extension AppState {
             return
         }
 
-        let filtered: TargetSpeakerFilterResult
         // The batch's entry in `session.speakerBatches`; written to /tmp/openwhisper.log on every exit.
-        var speakerLogIndex: Int?
+        let (filtered, speakerLogIndex) = await filterTargetSpeaker(segment, segmentNumber: segmentNumber, session: session)
         func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
-            guard let speakerLogIndex else { return }
-            update(&session.speakerBatches[speakerLogIndex])
+            noteSpeakerBatch(session, at: speakerLogIndex, update)
         }
         defer {
             if let speakerLogIndex {
                 owLog("[Speakers] " + session.speakerBatches[speakerLogIndex].lines.joined(separator: " /"))
             }
-        }
-        if session.targetSpeakerEnabled {
-            owLog("[TargetSpeaker] Batch \(segmentNumber) filtering segment: samples=\(segment.samples.count), targetSpeakerEnabled=true, profileEmbeddings=\(session.targetSpeakerProfile?.embeddings.count ?? 0)")
-            let result = await targetSpeakerFilter.filter(
-                samples: segment.samples,
-                profile: session.targetSpeakerProfile,
-                enabled: true
-            )
-            // The filter's own verdict, before the wake-verified override below.
-            WakeClipLog.shared.update(session.wakeClipID) {
-                $0.filterDecisions.append(result.shortBypass ? "shortBypass" : "\(result.decision)")
-            }
-            // One coherent voice in a session whose "Jarvis" already matched the user: that
-            // voice is the user. Holding it for a "Bu benim sesimdi" tap only lost commands.
-            if session.wakeSpeakerVerified, result.decision == .singleSpeakerUncertain, !result.wasFailClosed {
-                owLog("[TargetSpeaker] Batch \(segmentNumber) single speaker, voice already matched at the wake word — accepting")
-                filtered = TargetSpeakerFilterResult(
-                    samples: segment.samples,
-                    acceptedSampleCount: segment.samples.count,
-                    hadVoiceActivity: result.hadVoiceActivity,
-                    decision: .accepted,
-                    wasFailClosed: false,
-                    errorDescription: nil,
-                    acceptedSampleRanges: [TargetSpeakerAcceptedRange(start: 0, end: segment.samples.count)]
-                )
-            } else {
-                filtered = result
-            }
-            owLog("[TargetSpeaker] Batch \(segmentNumber) filter result: decision=\(filtered.decision), acceptedSamples=\(filtered.acceptedSampleCount)/\(segment.samples.count), hadVoice=\(filtered.hadVoiceActivity), wasFailClosed=\(filtered.wasFailClosed)")
-            if filtered.wasFailClosed, let error = filtered.errorDescription {
-                lastError = error
-                targetSpeakerProfileStatus = "Filtre hata verdi — bu kayıt işlenmedi"
-                session.hadFailClosedPassthrough = true
-                owLog("[OpenWhisper] Target speaker filter failed closed: \(error)")
-            }
-            session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
-            let ownRanges: [TargetSpeakerAcceptedRange]?
-            switch filtered.decision {
-            case .accepted, .partial, .rejected, .noVoice: ownRanges = filtered.wasFailClosed ? nil : filtered.acceptedSampleRanges
-            default: ownRanges = nil
-            }
-            session.speakerBatches.append(SpeakerBatchLog(
-                batch: segmentNumber,
-                decision: filtered.wasFailClosed ? "filter error" : "\(filtered.decision)",
-                levels: SpeakerSplitLevels.measure(samples: segment.samples, overlapSampleCount: segment.overlapSampleCount, ownRanges: ownRanges)
-            ))
-            speakerLogIndex = session.speakerBatches.count - 1
-        } else {
-            owLog("[TargetSpeaker] Batch \(segmentNumber) targetSpeakerEnabled=false, bypassing filter")
-            filtered = TargetSpeakerFilterResult(
-                samples: segment.samples,
-                acceptedSampleCount: segment.samples.count,
-                hadVoiceActivity: true,
-                decision: .disabled,
-                wasFailClosed: false,
-                errorDescription: nil
-            )
-            session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
         }
 
         // Three distinct outcomes once the target-speaker gate is in play -- kept as separate
@@ -685,98 +686,16 @@ extension AppState {
             owLog("[OpenWhisper] Batch \(segmentNumber) has unresolved target-speaker ambiguity; trying timed overlap filtering")
         } else if isSingleSpeakerUncertain {
             session.hadSingleSpeakerUncertain = true
-            guard let candidate = filtered.confirmationCandidate else {
-                owLog("[OpenWhisper] Batch \(segmentNumber) was single-speaker uncertain without a candidate")
-                noteSpeakers { $0.notes.append("single speaker, uncertain, no candidate — not transcribed") }
-                return
-            }
-            if session.confirmationCandidate == nil {
-                session.confirmationCandidate = candidate
-            }
-            guard filtered.hadVoiceActivity else {
-                owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; confirmation transcription skipped")
-                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
-                return
-            }
-            do {
-                let candidateText = try await transcriber.transcribe(
-                    audioData: candidate.samples,
-                    language: language,
-                    overlapSampleCount: segment.overlapSampleCount
-                )
-                guard !session.isCancelled else { return }
-                let trimmedCandidateText = candidateText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmedCandidateText.isEmpty,
-                      !trimmedCandidateText.hasPrefix("[BLANK"),
-                      !trimmedCandidateText.hasPrefix("(BLANK") else { return }
-                session.confirmationTranscriptTexts.append(trimmedCandidateText)
-                noteSpeakers {
-                    $0.uncertainText = trimmedCandidateText
-                    $0.notes.append("single speaker, not matched to profile — held for \"Bu benim sesimdi\" confirmation")
-                }
-                owLog("[OpenWhisper] Batch \(segmentNumber) retained a single-speaker confirmation candidate")
-            } catch {
-                owLog("[OpenWhisper] Batch \(segmentNumber) confirmation transcription failed: \(error)")
-                noteSpeakers { $0.notes.append("confirmation transcription failed: \(error)") }
-            }
+            await holdSingleSpeakerCandidate(
+                segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                transcriber: transcriber, speakerLogIndex: speakerLogIndex
+            )
             return
         } else if isBelowThresholdRejection {
-            // Retain the original (unfiltered) audio in case the *whole* recording ends up
-            // rejected and needs explicit clipboard fallback. Capped here,
-            // streaming-style, at `maximumEnrollmentDuration` worth of samples (keeping the most
-            // recent audio) so a long multi-batch recording can't grow this without bound.
-            session.belowThresholdRejectedSamples.append(contentsOf: segment.samples)
-            let maxRetainedSamples = Int(
-                TargetSpeakerFilterConfiguration.maximumEnrollmentDuration
-                    * Double(TargetSpeakerFilterConfiguration.sampleRate)
-            )
-            if session.belowThresholdRejectedSamples.count > maxRetainedSamples {
-                session.belowThresholdRejectedSamples.removeFirst(
-                    session.belowThresholdRejectedSamples.count - maxRetainedSamples
-                )
-            }
-            // --- Early rejection UI: show "Ses eşleşmedi" IMMEDIATELY ---
-            // Don't wait for Whisper transcription; give the user instant feedback.
-            // Transcription still continues in the background for clipboard salvage.
-            if !session.earlyRejectionShown {
-                session.earlyRejectionShown = true
-                owLog("[TargetSpeaker] Batch \(segmentNumber) below threshold — processing for confirmation/salvage")
-                if recordingState == .transcribing {
-                    recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
-                }
-            }
-            guard filtered.hadVoiceActivity else {
-                owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
-                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
-                return
-            }
-            // What the Mac plays is never transcribed, shown or offered as "Bu benim sesimdi".
-            guard !session.speakersPlayed else {
-                // A called "Jarvis" (the speakers didn't say it, and Whisper confirmed a weak
-                // one): look for the user's command in the words. Nothing else is taken from it.
-                if session.trigger == .wakeWord, !session.wakeUnconfirmed {
-                    do {
-                        let heard = try await transcriber.transcribe(
-                            audioData: segment.samples,
-                            language: language,
-                            overlapSampleCount: segment.overlapSampleCount
-                        ).trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !session.isCancelled else { return }
-                        if !heard.isEmpty, !heard.hasPrefix("[BLANK"), !heard.hasPrefix("(BLANK") {
-                            session.playbackCommandTexts.append(heard)
-                        }
-                        owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; transcribed for a command only: '\(heard)'")
-                        noteSpeakers { $0.notes.append("rejected while media played, transcribed for a command only") }
-                    } catch {
-                        owLog("[OpenWhisper] Batch \(segmentNumber) command transcription over media failed: \(error)")
-                    }
-                    return
-                }
-                owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; Whisper skipped (speaker audio is never salvaged)")
-                noteSpeakers { $0.notes.append("rejected while media played, Whisper skipped") }
-                return
-            }
-            owLog("[OpenWhisper] Batch \(segmentNumber) below target-speaker threshold; transcribing for clipboard salvage only")
+            guard await keepRejectedBatchForSalvage(
+                segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                transcriber: transcriber, speakerLogIndex: speakerLogIndex
+            ) else { return }
         } else if isFailClosedPassthrough {
             owLog("[OpenWhisper] Batch \(segmentNumber) target-speaker gate failed closed; transcribing as normal dictation")
         }
@@ -784,150 +703,17 @@ extension AppState {
         do {
             let segmentText: String
             if shouldUseDiarization {
-                var timedTranscription: TimedTranscriptionResult?
-                // The speaker half of diarization needs only the audio: run it during the decode.
-                // On a 23 s dictation the two took 1.5 s and 1.4 s one after the other.
-                let diarization = targetSpeakerDiarization
-                let speakerAnalysis = session.targetSpeakerProfile.map { profile in
-                    Task {
-                        try await diarization.analyzeSpeakers(
-                            audioData: segment.samples,
-                            profile: profile
-                        )
-                    }
-                }
-                defer { speakerAnalysis?.cancel() }
-                do {
-                    let timed = try await transcriber.transcribeTimed(
-                        audioData: segment.samples,
-                        language: language,
-                        overlapSampleCount: segment.overlapSampleCount
-                    )
-                    timedTranscription = timed
-                    guard let profile = session.targetSpeakerProfile else {
-                        throw TargetSpeakerDiarizationError.incompatibleProfile(
-                            expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
-                            actual: "missing"
-                        )
-                    }
-                    session.hadDiarizationAttempt = true
-                    let diarized = try await targetSpeakerDiarization.diarizeAndFilter(
-                        audioData: segment.samples,
-                        transcription: timed,
-                        profile: profile,
-                        segmentAcceptedRanges: filtered.acceptedSampleRanges,
-                        analysis: try await speakerAnalysis?.value
-                    )
-                    let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    noteSpeakers {
-                        let others = TargetSpeakerDiarizationResult.render(words: diarized.rejectedWords)
-                        let uncertain = TargetSpeakerDiarizationResult.render(words: diarized.uncertainWords)
-                        $0.othersText = others.isEmpty ? nil : others
-                        $0.uncertainText = uncertain.isEmpty ? nil : uncertain
-                        $0.notes.append("word-level diarization: own \(diarized.acceptedWordCount), others \(diarized.rejectedWordCount), uncertain \(diarized.uncertainWordCount) words, overlap=\(diarized.hadOverlap)")
-                    }
-                    if diarized.acceptedWordCount > 0,
-                       !diarizedText.isEmpty,
-                       !diarizedText.hasPrefix("[BLANK"),
-                       !diarizedText.hasPrefix("(BLANK") {
-                        session.hadDiarizationTargetSpeech = true
-                        session.hadDiarizedOverlap = session.hadDiarizedOverlap || diarized.hadOverlap
-                        segmentText = diarizedText
-                        owLog("[OpenWhisper] Batch \(segmentNumber) diarized target words=\(diarized.acceptedWordCount) overlap=\(diarized.hadOverlap)")
-                    } else {
-                        owLog("[OpenWhisper] Batch \(segmentNumber) diarization found no safe target words")
-                        // No word timings means diarization never judged a single word, so an
-                        // ambiguous batch must not lose all its speech: use the target-only audio.
-                        let hadNoTimings = timed.words.isEmpty
-                            && !timed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        if hadNoTimings {
-                            owLog("[OpenWhisper] Batch \(segmentNumber) had text but no word timings; transcribing accepted target audio")
-                        }
-                        guard !isAmbiguousTargetMatch || hadNoTimings,
-                              filtered.hasAcceptedTargetSpeech else { return }
-                        segmentText = try await transcriber.transcribe(
-                            audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
-                            language: language,
-                            overlapSampleCount: segment.overlapSampleCount
-                        )
-                    }
-                } catch {
-                    session.hadDiarizationFailure = true
-                    lastError = error.localizedDescription
-                    owLog("[OpenWhisper] Batch \(segmentNumber) diarization failed; preserving masked target-speaker safety: \(error)")
-                    noteSpeakers {
-                        let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                        if !heard.isEmpty { $0.uncertainText = heard }
-                        $0.notes.append("diarization failed, words not split: \(error)")
-                    }
-                    let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    // A held Fn key is a deliberate dictation: when no speaker could be told apart
-                    // at all, the gate made no decision, so the text is pasted like a gate failure
-                    // instead of being lost (31.9 s Fn hold, 10 Oct 2026, 0 words pasted).
-                    if isAmbiguousTargetMatch, !heard.isEmpty,
-                       TargetSpeakerOutputGate.keepsUnidentifiedSpeech(trigger: session.trigger, error: error) {
-                        owLog("[OpenWhisper] Batch \(segmentNumber) no speaker identified in a deliberate dictation; keeping the whole text")
-                        noteSpeakers { $0.notes.append("no speaker identified — deliberate dictation, whole text kept") }
-                        session.hadFailClosedPassthrough = true
-                        segmentText = heard
-                    } else {
-                        // A partial result still has a safe identity-masked path. An ambiguous result
-                        // has no accepted target samples, so never transcribe its original mixed audio
-                        // and never offer it for confirmation.
-                        guard !isAmbiguousTargetMatch,
-                              filtered.hasAcceptedTargetSpeech else { return }
-                        if session.trigger != .confirmation, !heard.isEmpty,
-                           filtered.decision == .accepted, filtered.acceptedAllVoice {
-                            // The mask removed only silence, so it holds the same speech the first
-                            // decode heard: decoding it again cost ~0.5 s on short wake commands.
-                            owLog("[OpenWhisper] Batch \(segmentNumber) gate kept every voice run; reusing the first decode")
-                            segmentText = WhisperTranscriber.deduplicateRepetitivePhrases(in: heard)
-                        } else {
-                            if session.trigger == .confirmation, !heard.isEmpty {
-                                // A one-word answer is too short for diarization; masking its gaps turns
-                                // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
-                                session.heardVariants.append(heard)
-                            }
-                            let maskedText = try await transcriber.transcribe(
-                                audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
-                                language: language,
-                                overlapSampleCount: segment.overlapSampleCount
-                            )
-                            if session.trigger == .confirmation, !heard.isEmpty {
-                                session.heardVariants.append(maskedText)
-                                segmentText = heard
-                            } else {
-                                segmentText = maskedText
-                            }
-                        }
-                    }
-                }
+                guard let diarizedText = try await transcribeDiarized(
+                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                    transcriber: transcriber, isAmbiguousTargetMatch: isAmbiguousTargetMatch,
+                    speakerLogIndex: speakerLogIndex
+                ) else { return }
+                segmentText = diarizedText
             } else {
-                // Fail-closed and below-threshold results transcribe the original only in their
-                // established fallback paths. Normal accepted output uses identity-masked audio.
-                let samplesToTranscribe: [Float]
-                if isFailClosedPassthrough || isBelowThresholdRejection {
-                    samplesToTranscribe = segment.samples
-                } else {
-                    samplesToTranscribe = TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples
-                }
-                if let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
-                   let detector = session.previewEndpointDetector,
-                   preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
-                                   speechTime: session.doneLastSpeechTime, coverage: await detector.completedPreviewCoverage()),
-                   let prepared = await preview.task.value,
-                   !session.isCancelled,
-                   preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
-                                   speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
-                    segmentText = prepared
-                    owLog("[SpeechPreview] Reused confident decode; final speaker-filtered audio matched")
-                } else {
-                    segmentText = try await transcriber.transcribe(
-                        audioData: samplesToTranscribe,
-                        language: language,
-                        overlapSampleCount: segment.overlapSampleCount
-                    )
-                }
+                segmentText = try await transcribeMasked(
+                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                    transcriber: transcriber, useOriginalAudio: isFailClosedPassthrough || isBelowThresholdRejection
+                )
             }
             guard !session.isCancelled else { return }
             owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
@@ -957,6 +743,369 @@ extension AppState {
             noteSpeakers { $0.notes.append("Whisper failed: \(error)") }
             lastError = error.localizedDescription
         }
+    }
+
+    private func noteSpeakerBatch(
+        _ session: RecordingTranscriptionSession,
+        at speakerLogIndex: Int?,
+        _ update: (inout SpeakerBatchLog) -> Void
+    ) {
+        guard let speakerLogIndex else { return }
+        update(&session.speakerBatches[speakerLogIndex])
+    }
+
+    /// Runs the target-speaker gate on one batch. Returns its result and the batch's entry in
+    /// `session.speakerBatches` (nil when the gate is off).
+    private func filterTargetSpeaker(
+        _ segment: CompletedAudioSegment,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession
+    ) async -> (TargetSpeakerFilterResult, Int?) {
+        let filtered: TargetSpeakerFilterResult
+        guard session.targetSpeakerEnabled else {
+            owLog("[TargetSpeaker] Batch \(segmentNumber) targetSpeakerEnabled=false, bypassing filter")
+            filtered = TargetSpeakerFilterResult(
+                samples: segment.samples,
+                acceptedSampleCount: segment.samples.count,
+                hadVoiceActivity: true,
+                decision: .disabled,
+                wasFailClosed: false,
+                errorDescription: nil
+            )
+            session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
+            return (filtered, nil)
+        }
+        owLog("[TargetSpeaker] Batch \(segmentNumber) filtering segment: samples=\(segment.samples.count), targetSpeakerEnabled=true, profileEmbeddings=\(session.targetSpeakerProfile?.embeddings.count ?? 0)")
+        let result = await targetSpeakerFilter.filter(
+            samples: segment.samples,
+            profile: session.targetSpeakerProfile,
+            enabled: true
+        )
+        // The filter's own verdict, before the wake-verified override below.
+        WakeClipLog.shared.update(session.wakeClipID) {
+            $0.filterDecisions.append(result.shortBypass ? "shortBypass" : "\(result.decision)")
+        }
+        // One coherent voice in a session whose "Jarvis" already matched the user: that
+        // voice is the user. Holding it for a "Bu benim sesimdi" tap only lost commands.
+        if session.wakeSpeakerVerified, result.decision == .singleSpeakerUncertain, !result.wasFailClosed {
+            owLog("[TargetSpeaker] Batch \(segmentNumber) single speaker, voice already matched at the wake word — accepting")
+            filtered = TargetSpeakerFilterResult(
+                samples: segment.samples,
+                acceptedSampleCount: segment.samples.count,
+                hadVoiceActivity: result.hadVoiceActivity,
+                decision: .accepted,
+                wasFailClosed: false,
+                errorDescription: nil,
+                acceptedSampleRanges: [TargetSpeakerAcceptedRange(start: 0, end: segment.samples.count)]
+            )
+        } else {
+            filtered = result
+        }
+        owLog("[TargetSpeaker] Batch \(segmentNumber) filter result: decision=\(filtered.decision), acceptedSamples=\(filtered.acceptedSampleCount)/\(segment.samples.count), hadVoice=\(filtered.hadVoiceActivity), wasFailClosed=\(filtered.wasFailClosed)")
+        if filtered.wasFailClosed, let error = filtered.errorDescription {
+            lastError = error
+            targetSpeakerProfileStatus = "Filtre hata verdi — bu kayıt işlenmedi"
+            session.hadFailClosedPassthrough = true
+            owLog("[OpenWhisper] Target speaker filter failed closed: \(error)")
+        }
+        session.acceptedTargetSpeechSamples += filtered.acceptedSampleCount
+        let ownRanges: [TargetSpeakerAcceptedRange]?
+        switch filtered.decision {
+        case .accepted, .partial, .rejected, .noVoice: ownRanges = filtered.wasFailClosed ? nil : filtered.acceptedSampleRanges
+        default: ownRanges = nil
+        }
+        session.speakerBatches.append(SpeakerBatchLog(
+            batch: segmentNumber,
+            decision: filtered.wasFailClosed ? "filter error" : "\(filtered.decision)",
+            levels: SpeakerSplitLevels.measure(samples: segment.samples, overlapSampleCount: segment.overlapSampleCount, ownRanges: ownRanges)
+        ))
+        return (filtered, session.speakerBatches.count - 1)
+    }
+
+    /// A single voice the profile couldn't place: transcribed only to be offered for the
+    /// "Bu benim sesimdi" confirmation, never pasted.
+    private func holdSingleSpeakerCandidate(
+        _ segment: CompletedAudioSegment,
+        filtered: TargetSpeakerFilterResult,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession,
+        transcriber: WhisperTranscriptionService,
+        speakerLogIndex: Int?
+    ) async {
+        func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
+            noteSpeakerBatch(session, at: speakerLogIndex, update)
+        }
+        guard let candidate = filtered.confirmationCandidate else {
+            owLog("[OpenWhisper] Batch \(segmentNumber) was single-speaker uncertain without a candidate")
+            noteSpeakers { $0.notes.append("single speaker, uncertain, no candidate — not transcribed") }
+            return
+        }
+        if session.confirmationCandidate == nil {
+            session.confirmationCandidate = candidate
+        }
+        guard filtered.hadVoiceActivity else {
+            owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; confirmation transcription skipped")
+            noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
+            return
+        }
+        do {
+            let candidateText = try await transcriber.transcribe(
+                audioData: candidate.samples,
+                language: language,
+                overlapSampleCount: segment.overlapSampleCount
+            )
+            guard !session.isCancelled else { return }
+            let trimmedCandidateText = candidateText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedCandidateText.isEmpty,
+                  !trimmedCandidateText.hasPrefix("[BLANK"),
+                  !trimmedCandidateText.hasPrefix("(BLANK") else { return }
+            session.confirmationTranscriptTexts.append(trimmedCandidateText)
+            noteSpeakers {
+                $0.uncertainText = trimmedCandidateText
+                $0.notes.append("single speaker, not matched to profile — held for \"Bu benim sesimdi\" confirmation")
+            }
+            owLog("[OpenWhisper] Batch \(segmentNumber) retained a single-speaker confirmation candidate")
+        } catch {
+            owLog("[OpenWhisper] Batch \(segmentNumber) confirmation transcription failed: \(error)")
+            noteSpeakers { $0.notes.append("confirmation transcription failed: \(error)") }
+        }
+    }
+
+    /// A batch the gate rejected. Returns true when it should still be transcribed for
+    /// clipboard salvage.
+    private func keepRejectedBatchForSalvage(
+        _ segment: CompletedAudioSegment,
+        filtered: TargetSpeakerFilterResult,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession,
+        transcriber: WhisperTranscriptionService,
+        speakerLogIndex: Int?
+    ) async -> Bool {
+        func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
+            noteSpeakerBatch(session, at: speakerLogIndex, update)
+        }
+        // Retain the original (unfiltered) audio in case the *whole* recording ends up
+        // rejected and needs explicit clipboard fallback. Capped here,
+        // streaming-style, at `maximumEnrollmentDuration` worth of samples (keeping the most
+        // recent audio) so a long multi-batch recording can't grow this without bound.
+        session.belowThresholdRejectedSamples.append(contentsOf: segment.samples)
+        let maxRetainedSamples = Int(
+            TargetSpeakerFilterConfiguration.maximumEnrollmentDuration
+                * Double(TargetSpeakerFilterConfiguration.sampleRate)
+        )
+        if session.belowThresholdRejectedSamples.count > maxRetainedSamples {
+            session.belowThresholdRejectedSamples.removeFirst(
+                session.belowThresholdRejectedSamples.count - maxRetainedSamples
+            )
+        }
+        // --- Early rejection UI: show "Ses eşleşmedi" IMMEDIATELY ---
+        // Don't wait for Whisper transcription; give the user instant feedback.
+        // Transcription still continues in the background for clipboard salvage.
+        if !session.earlyRejectionShown {
+            session.earlyRejectionShown = true
+            owLog("[TargetSpeaker] Batch \(segmentNumber) below threshold — processing for confirmation/salvage")
+            if recordingState == .transcribing {
+                recordingState = pendingTranscriptionCount > 1 ? .transcribing : .idle
+            }
+        }
+        guard filtered.hadVoiceActivity else {
+            owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
+            noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
+            return false
+        }
+        // What the Mac plays is never transcribed, shown or offered as "Bu benim sesimdi".
+        guard !session.speakersPlayed else {
+            // A called "Jarvis" (the speakers didn't say it, and Whisper confirmed a weak
+            // one): look for the user's command in the words. Nothing else is taken from it.
+            if session.trigger == .wakeWord, !session.wakeUnconfirmed {
+                do {
+                    let heard = try await transcriber.transcribe(
+                        audioData: segment.samples,
+                        language: language,
+                        overlapSampleCount: segment.overlapSampleCount
+                    ).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !session.isCancelled else { return false }
+                    if !heard.isEmpty, !heard.hasPrefix("[BLANK"), !heard.hasPrefix("(BLANK") {
+                        session.playbackCommandTexts.append(heard)
+                    }
+                    owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; transcribed for a command only: '\(heard)'")
+                    noteSpeakers { $0.notes.append("rejected while media played, transcribed for a command only") }
+                } catch {
+                    owLog("[OpenWhisper] Batch \(segmentNumber) command transcription over media failed: \(error)")
+                }
+                return false
+            }
+            owLog("[OpenWhisper] Batch \(segmentNumber) rejected while media played; Whisper skipped (speaker audio is never salvaged)")
+            noteSpeakers { $0.notes.append("rejected while media played, Whisper skipped") }
+            return false
+        }
+        owLog("[OpenWhisper] Batch \(segmentNumber) below target-speaker threshold; transcribing for clipboard salvage only")
+        return true
+    }
+
+    /// Word-level decode that keeps only the target speaker's words. Returns nil when the
+    /// batch has nothing safe to keep.
+    private func transcribeDiarized(
+        _ segment: CompletedAudioSegment,
+        filtered: TargetSpeakerFilterResult,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession,
+        transcriber: WhisperTranscriptionService,
+        isAmbiguousTargetMatch: Bool,
+        speakerLogIndex: Int?
+    ) async throws -> String? {
+        func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
+            noteSpeakerBatch(session, at: speakerLogIndex, update)
+        }
+        var timedTranscription: TimedTranscriptionResult?
+        // The speaker half of diarization needs only the audio: run it during the decode.
+        // On a 23 s dictation the two took 1.5 s and 1.4 s one after the other.
+        let diarization = targetSpeakerDiarization
+        let speakerAnalysis = session.targetSpeakerProfile.map { profile in
+            Task {
+                try await diarization.analyzeSpeakers(
+                    audioData: segment.samples,
+                    profile: profile
+                )
+            }
+        }
+        defer { speakerAnalysis?.cancel() }
+        do {
+            let timed = try await transcriber.transcribeTimed(
+                audioData: segment.samples,
+                language: language,
+                overlapSampleCount: segment.overlapSampleCount
+            )
+            timedTranscription = timed
+            guard let profile = session.targetSpeakerProfile else {
+                throw TargetSpeakerDiarizationError.incompatibleProfile(
+                    expected: FluidAudioTargetSpeakerDiarizationService.modelIdentifier,
+                    actual: "missing"
+                )
+            }
+            session.hadDiarizationAttempt = true
+            let diarized = try await targetSpeakerDiarization.diarizeAndFilter(
+                audioData: segment.samples,
+                transcription: timed,
+                profile: profile,
+                segmentAcceptedRanges: filtered.acceptedSampleRanges,
+                analysis: try await speakerAnalysis?.value
+            )
+            let diarizedText = diarized.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            noteSpeakers {
+                let others = TargetSpeakerDiarizationResult.render(words: diarized.rejectedWords)
+                let uncertain = TargetSpeakerDiarizationResult.render(words: diarized.uncertainWords)
+                $0.othersText = others.isEmpty ? nil : others
+                $0.uncertainText = uncertain.isEmpty ? nil : uncertain
+                $0.notes.append("word-level diarization: own \(diarized.acceptedWordCount), others \(diarized.rejectedWordCount), uncertain \(diarized.uncertainWordCount) words, overlap=\(diarized.hadOverlap)")
+            }
+            if diarized.acceptedWordCount > 0,
+               !diarizedText.isEmpty,
+               !diarizedText.hasPrefix("[BLANK"),
+               !diarizedText.hasPrefix("(BLANK") {
+                session.hadDiarizationTargetSpeech = true
+                session.hadDiarizedOverlap = session.hadDiarizedOverlap || diarized.hadOverlap
+                owLog("[OpenWhisper] Batch \(segmentNumber) diarized target words=\(diarized.acceptedWordCount) overlap=\(diarized.hadOverlap)")
+                return diarizedText
+            }
+            owLog("[OpenWhisper] Batch \(segmentNumber) diarization found no safe target words")
+            // No word timings means diarization never judged a single word, so an
+            // ambiguous batch must not lose all its speech: use the target-only audio.
+            let hadNoTimings = timed.words.isEmpty
+                && !timed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if hadNoTimings {
+                owLog("[OpenWhisper] Batch \(segmentNumber) had text but no word timings; transcribing accepted target audio")
+            }
+            guard !isAmbiguousTargetMatch || hadNoTimings,
+                  filtered.hasAcceptedTargetSpeech else { return nil }
+            return try await transcriber.transcribe(
+                audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
+                language: language,
+                overlapSampleCount: segment.overlapSampleCount
+            )
+        } catch {
+            session.hadDiarizationFailure = true
+            lastError = error.localizedDescription
+            owLog("[OpenWhisper] Batch \(segmentNumber) diarization failed; preserving masked target-speaker safety: \(error)")
+            noteSpeakers {
+                let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !heard.isEmpty { $0.uncertainText = heard }
+                $0.notes.append("diarization failed, words not split: \(error)")
+            }
+            let heard = timedTranscription?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // A held Fn key is a deliberate dictation: when no speaker could be told apart
+            // at all, the gate made no decision, so the text is pasted like a gate failure
+            // instead of being lost (31.9 s Fn hold, 10 Oct 2026, 0 words pasted).
+            if isAmbiguousTargetMatch, !heard.isEmpty,
+               TargetSpeakerOutputGate.keepsUnidentifiedSpeech(trigger: session.trigger, error: error) {
+                owLog("[OpenWhisper] Batch \(segmentNumber) no speaker identified in a deliberate dictation; keeping the whole text")
+                noteSpeakers { $0.notes.append("no speaker identified — deliberate dictation, whole text kept") }
+                session.hadFailClosedPassthrough = true
+                return heard
+            }
+            // A partial result still has a safe identity-masked path. An ambiguous result
+            // has no accepted target samples, so never transcribe its original mixed audio
+            // and never offer it for confirmation.
+            guard !isAmbiguousTargetMatch,
+                  filtered.hasAcceptedTargetSpeech else { return nil }
+            if session.trigger != .confirmation, !heard.isEmpty,
+               filtered.decision == .accepted, filtered.acceptedAllVoice {
+                // The mask removed only silence, so it holds the same speech the first
+                // decode heard: decoding it again cost ~0.5 s on short wake commands.
+                owLog("[OpenWhisper] Batch \(segmentNumber) gate kept every voice run; reusing the first decode")
+                return WhisperTranscriber.deduplicateRepetitivePhrases(in: heard)
+            }
+            if session.trigger == .confirmation, !heard.isEmpty {
+                // A one-word answer is too short for diarization; masking its gaps turns
+                // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.
+                session.heardVariants.append(heard)
+            }
+            let maskedText = try await transcriber.transcribe(
+                audioData: TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples,
+                language: language,
+                overlapSampleCount: segment.overlapSampleCount
+            )
+            if session.trigger == .confirmation, !heard.isEmpty {
+                session.heardVariants.append(maskedText)
+                return heard
+            }
+            return maskedText
+        }
+    }
+
+    /// Decode without diarization, reusing the speech preview when it heard the same audio.
+    private func transcribeMasked(
+        _ segment: CompletedAudioSegment,
+        filtered: TargetSpeakerFilterResult,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession,
+        transcriber: WhisperTranscriptionService,
+        useOriginalAudio: Bool
+    ) async throws -> String {
+        // Fail-closed and below-threshold results transcribe the original only in their
+        // established fallback paths. Normal accepted output uses identity-masked audio.
+        let samplesToTranscribe: [Float]
+        if useOriginalAudio {
+            samplesToTranscribe = segment.samples
+        } else {
+            samplesToTranscribe = TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples
+        }
+        if let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
+           let detector = session.previewEndpointDetector,
+           preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
+                           speechTime: session.doneLastSpeechTime, coverage: await detector.completedPreviewCoverage()),
+           let prepared = await preview.task.value,
+           !session.isCancelled,
+           preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
+                           speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
+            owLog("[SpeechPreview] Reused confident decode; final speaker-filtered audio matched")
+            return prepared
+        }
+        return try await transcriber.transcribe(
+            audioData: samplesToTranscribe,
+            language: language,
+            overlapSampleCount: segment.overlapSampleCount
+        )
     }
 
     func releaseFollowUpSpotifyDuck() {
