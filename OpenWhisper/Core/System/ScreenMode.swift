@@ -31,7 +31,7 @@ enum ScreenMode {
         var words = ScreenActions.normalized(text).replacingOccurrences(of: "'", with: " ")
             .split(separator: " ").map(String.init).filter { $0 != "lütfen" }
         guard typeRequest(text) == nil, let last = words.popLast() else { return false }
-        if pressVerbs.contains(last) { return true }
+        if pressVerbs.contains(last) || ScreenActions.gluedPressName(last) != nil { return true }
         return ["mısın", "mısınız"].contains(last) && ["basar", "tıklar"].contains(words.last ?? "")
     }
 

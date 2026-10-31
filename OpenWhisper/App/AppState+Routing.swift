@@ -1033,7 +1033,8 @@ extension AppState {
                 owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(byModel ? " by the model" : "")")
                 self.lastTranscription = text
                 self.lastCommandUndo = []
-                if ScreenActions.isRisky(target.label) {
+                // "… bas" already is the go-ahead; only a bare name ("Gönder") is asked about.
+                if ScreenActions.isRisky(target.label), !saysClick {
                     self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
                     let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
                     let heard = await self.speakReply(prompt)

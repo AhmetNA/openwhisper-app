@@ -30,6 +30,14 @@ final class ScreenActionsTests: XCTestCase {
         XCTAssertTrue(ScreenActions.saysClick("gönder butonuna bas"))
         XCTAssertFalse(ScreenActions.saysClick("tamam"))
         XCTAssertFalse(ScreenActions.saysClick("yarın basına bakarız"))
+        XCTAssertTrue(ScreenActions.saysClick("Novanabas"))
+        XCTAssertFalse(ScreenActions.saysClick("Abbas"))
+    }
+
+    func testGluedPressFindsTheName() {
+        XCTAssertEqual(ScreenActions.spokenName("Novayabas"), "novaya")
+        XCTAssertEqual(ScreenActions.soundAlikeMatches("Novanabas", labels: ["Nova", "Cancel"]), [0])
+        XCTAssertEqual(ScreenActions.exactMatches("Kaydete bas", labels: ["Kaydet", "İptal"]), [0])
     }
 
     func testRiskyLabels() {

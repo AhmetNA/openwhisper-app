@@ -654,7 +654,7 @@ final class AppState {
     var lastInjectedText: String = ""
     /// What undoes the last command ("son komutu geri al"); empty when it can't be undone.
     @ObservationIgnored var lastCommandUndo: [VoiceCommand] = []
-    /// A risky on-screen button waiting for a spoken yes ("Gönder'e basayım mı?").
+    /// A risky on-screen button named without "bas", waiting for a spoken yes ("Gönder'e basayım mı?").
     @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date)?
     /// Screen mode (`ScreenMode`): after a press the mic stays open for the next step.
     var screenModeActive = false

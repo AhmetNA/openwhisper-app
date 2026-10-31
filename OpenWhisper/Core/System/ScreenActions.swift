@@ -193,15 +193,24 @@ enum ScreenActions {
 
     /// The name the user said, without the verb, the filler and the case ending's apostrophe.
     static func spokenName(_ text: String) -> String {
-        let words = normalized(text).split(separator: " ").map(String.init).filter { !fillers.contains($0) }
-        return words.joined(separator: " ")
+        var words = normalized(text).split(separator: " ").map(String.init)
+        if let last = words.last, let name = gluedPressName(last) { words[words.count - 1] = name }
+        return words.filter { !fillers.contains($0) }.joined(separator: " ")
+    }
+
+    /// Whisper glues a short "Nova'ya bas" into one word ("Novayabas", "Novanabas"): the name
+    /// before the "bas". Nil for any other word.
+    static func gluedPressName(_ word: String) -> String? {
+        let word = word.replacingOccurrences(of: "'", with: "")
+        guard word.count > 5, word.hasSuffix("bas"), !fillers.contains(word) else { return nil }
+        return String(word.dropLast(3))
     }
 
     /// "… tıkla", "… butonuna bas": clicking said outright, the only way in from a text field.
     static func saysClick(_ text: String) -> Bool {
         let words = normalized(text).replacingOccurrences(of: "'", with: " ").split(separator: " ").map(String.init)
         return words.contains { $0.hasPrefix("tıkla") || $0.hasPrefix("butonu") || $0.hasPrefix("butona") || $0.hasPrefix("düğme") }
-            || words.last.map { ["bas", "basar", "basın", "bassana"].contains($0) } ?? false
+            || words.last.map { ["bas", "basar", "basın", "bassana"].contains($0) || gluedPressName($0) != nil } ?? false
     }
 
     /// Whether reading the window is worth it at all: short enough to be a name, or talking
