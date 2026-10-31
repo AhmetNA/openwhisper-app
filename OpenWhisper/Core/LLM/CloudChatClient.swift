@@ -110,7 +110,8 @@ struct CloudChatClient: ChatStreaming {
             let task = Task {
                 do {
                     let call = try await stream(body: body, timeout: request.timeout, into: continuation)
-                    // One search per reply; a second call in the follow-up is ignored.
+                    // One search per reply. The follow-up goes without the tool: with it the
+                    // model only asks to search again, and `tool_choice: none` answers empty.
                     if let webSearchKey, call.name == WebSearch.toolName {
                         let query = call.query ?? ""
                         let found: String
@@ -122,6 +123,7 @@ struct CloudChatClient: ChatStreaming {
                             found = "Arama yapılamadı."
                         }
                         var followUp = body
+                        followUp["tools"] = nil
                         followUp["messages"] = Self.messages(request.messages, after: call, found: found)
                         _ = try await stream(body: followUp, timeout: request.timeout, into: continuation)
                     }

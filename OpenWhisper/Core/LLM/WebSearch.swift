@@ -23,7 +23,8 @@ enum WebSearch {
     ]
 
     static func body(query: String) -> [String: Any] {
-        ["query": query, "type": "fast", "numResults": 5, "contents": ["highlights": true]]
+        // `instant`: as fast as `fast` and as good for Jarvis's questions, at about half the price.
+        ["query": query, "type": "instant", "numResults": 5, "contents": ["highlights": true]]
     }
 
     static func search(_ query: String, key: String) async throws -> String {
