@@ -194,7 +194,7 @@ final class FlowBarController {
     }
 
     /// Re-measure after Observation/SwiftUI has rendered the new state (such as the
-    /// wider "transcribing" label) rather than reusing the waveform's former width.
+    /// wider "speaking" label) rather than reusing the waveform's former width.
     private func recenterAfterContentLayout() {
         guard !recenterScheduled else { return }
         recenterScheduled = true

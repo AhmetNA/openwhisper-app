@@ -191,11 +191,7 @@ struct FlowBarView: View {
     // MARK: - Transcribing
 
     private var transcribingContent: some View {
-        Text("transcribing")
-            .font(.custom("Bradley Hand", size: 16).weight(.medium))
-            .foregroundStyle(.white.opacity(0.85))
-            .padding(.horizontal, 6)
-            .frame(height: 26)
+        ProcessingWaveformView()
     }
 
     // MARK: - Speaking

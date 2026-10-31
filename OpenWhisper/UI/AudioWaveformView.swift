@@ -16,6 +16,31 @@ struct IdleWaveformView: View {
     }
 }
 
+/// Shown while a recording is turned into text: the same bars at rest, with a soft swell
+/// running left to right through them like the dots of "typing…".
+struct ProcessingWaveformView: View {
+    private let barCount = 14
+    private let period = 1.1
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+            // The crest starts off the left edge and leaves off the right before coming back.
+            let crest = phase * Double(barCount + 6) - 3
+            HStack(spacing: 2.5) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    let distance = Double(index) - crest
+                    let swell = exp(-distance * distance / 3)
+                    Capsule()
+                        .fill(Color.white.opacity(0.45 + 0.5 * swell))
+                        .frame(width: 2.5, height: 3.5 + 12 * swell)
+                }
+            }
+        }
+        .frame(height: 26, alignment: .center)
+    }
+}
+
 struct AudioWaveformView: View {
     let level: Float
     private let barWidth: CGFloat = 2.5
