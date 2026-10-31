@@ -958,16 +958,19 @@ extension AppState {
                 self.startVoiceSession(trigger: .confirmation)
             }
 
-            /// A goal of several steps on screen. A risky step is asked like a single press, and
-            /// the task ends there.
-            @MainActor func screenTask(client: CloudChatClient, model: String) async -> Bool {
+            /// A goal of several steps on screen. A risky step is asked like a single press; on
+            /// "evet" the task goes on from `history`.
+            @MainActor func screenTask(goal: String, history: [String] = [], client: CloudChatClient, model: String) async -> Bool {
                 session.latency.finishDecision(route: "çok adımlı ekran eylemi")
-                owLog("[Route] screen task: '\(trimmed)'")
+                owLog("[Route] screen task: '\(goal)'\(history.isEmpty ? "" : " (step \(history.count + 1))")")
                 self.lastTranscription = text
                 self.lastCommandUndo = []
                 self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
+                self.screenTaskCancelled = false
+                self.screenTaskRunning = true
                 let outcome = await ScreenTask.run(
-                    goal: trimmed, client: client, model: model,
+                    goal: goal, history: history, client: client, model: model,
+                    isCancelled: { self.screenTaskCancelled },
                     progress: { self.showFlowBarMessage($0, durationMs: 8000) },
                     type: { text, app in
                         await withCheckedContinuation { continuation in
@@ -977,6 +980,7 @@ extension AppState {
                             }
                         }
                     })
+                self.screenTaskRunning = false
                 switch outcome {
                 case .done:
                     self.showFlowBarMessage("Tamamlandı ✓", durationMs: 1500)
@@ -985,8 +989,11 @@ extension AppState {
                     owLog("[ScreenTask] Stopped: \(reason)")
                     self.showFlowBarMessage(reason, durationMs: 4000)
                     await self.speakReply(self.jarvisReply.failure(reason))
-                case .confirm(let target, let app):
-                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
+                case .cancelled:
+                    owLog("[ScreenTask] Stopped by the user")
+                    self.showFlowBarMessage("Durdurdum", durationMs: 1500)
+                case .confirm(let target, let app, let history):
+                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), (goal, history))
                     let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
                     let heard = await self.speakReply(prompt)
                     askFollowUp(prompt, heard: heard)
@@ -1040,7 +1047,7 @@ extension AppState {
                     pick = soundAlike[0]
                     owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
                 } else if let (client, model) = cloud {
-                    return await screenTask(client: client, model: model)
+                    return await screenTask(goal: trimmed, client: client, model: model)
                 } else if !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
                     pick = await ScreenActions.modelPick(trimmed, elements: elements)
@@ -1059,7 +1066,7 @@ extension AppState {
                 self.lastTranscription = text
                 self.lastCommandUndo = []
                 if ScreenActions.isRisky(target.label) {
-                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
+                    self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), nil)
                     let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
                     let heard = await self.speakReply(prompt)
                     askFollowUp(prompt, heard: heard)
@@ -1237,6 +1244,12 @@ extension AppState {
                     let pressed = ScreenActions.perform(pending.target)
                     self.showFlowBarMessage(pressed ? "“\(pending.target.label)” ✓" : "Basılamadı", durationMs: 1500)
                     if !pressed { await self.speakReply(self.jarvisReply.failure("Basamadım")) }
+                    // A multi-step task asked it: go on from here.
+                    if pressed, let task = pending.task, let (client, model) = CloudLLM.client() {
+                        try? await Task.sleep(nanoseconds: 600_000_000)
+                        _ = await screenTask(goal: task.goal, history: task.history + [ScreenTask.pressed(pending.target)],
+                                             client: client, model: model)
+                    }
                     return
                 }
                 self.pendingScreenPress = nil

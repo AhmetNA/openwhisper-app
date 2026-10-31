@@ -1169,6 +1169,11 @@ extension AppState {
             // fn+F5: the Fn half already started a dictation; drop it and run Jarvis instead.
             discardActiveRecording(reason: "Fn hold → Jarvis key")
         }
+        // A multi-step screen task is running: the key stops it.
+        if screenTaskRunning {
+            stopScreenTask()
+            return
+        }
         if hotkey.isIdle {
             guard recordingState != .recording else { return }
             owLog("[OpenWhisper] Voice session requested (Jarvis key)")
@@ -1178,6 +1183,15 @@ extension AppState {
             // No-op during a Fn hold.
             hotkey.externalStopHandsFree()
         }
+    }
+
+    /// Flow bar stop button and the Jarvis key during a multi-step screen task: it stops
+    /// before its next action.
+    func stopScreenTask() {
+        guard screenTaskRunning, !screenTaskCancelled else { return }
+        owLog("[ScreenTask] Stop requested")
+        screenTaskCancelled = true
+        showFlowBarMessage("Durduruluyor…", durationMs: 8000)
     }
 
     /// FlowBar stop button: finish and process, exactly like Enter/Space.

@@ -4,11 +4,10 @@ import ApplicationServices
 /// "Ayarlar'da bildirimleri kapat", "arama kutusuna kedi videoları yaz": a goal on screen that
 /// takes more than one press. Each step reads the front window again (`ScreenActions.elements`),
 /// asks the cloud model for one action on that list, and does it; indexes are never kept from
-/// one step to the next, since a press may open a sheet or another window. A risky press ends
-/// the loop and is asked first, like a single screen press.
+/// one step to the next, since a press may open a sheet or another window. It runs until the
+/// model says done or fail, the screen stops changing, or the user stops it. A risky press is
+/// asked first, like a single screen press; on "evet" the loop goes on from there.
 enum ScreenTask {
-    static let maxSteps = 5
-    static let timeLimit: TimeInterval = 25
 
     enum Action: Equatable {
         case press(Int)
@@ -20,8 +19,9 @@ enum ScreenTask {
     enum Outcome {
         case done
         case failed(String)
-        /// A risky element the model picked: asked before pressing, then the task ends.
-        case confirm(ScreenElement, NSRunningApplication)
+        case cancelled
+        /// A risky element the model picked: asked before pressing; `history` resumes the loop.
+        case confirm(ScreenElement, NSRunningApplication, history: [String])
     }
 
     // MARK: - Is it a goal
@@ -58,7 +58,8 @@ enum ScreenTask {
 
     static func prompt(goal: String, app: String, history: [String], elements: [ScreenElement]) -> String {
         let list = elements.enumerated().map { index, element in
-            "\(index + 1). \(element.kind) \"\(element.label)\" (\(element.region)\(element.inDialog ? ", iletişim kutusunda" : ""))"
+            let state = element.isOn.map { $0 ? ", açık" : ", kapalı" } ?? ""
+            return "\(index + 1). \(element.kind) \"\(element.label)\" (\(element.region)\(state)\(element.inDialog ? ", iletişim kutusunda" : ""))"
         }.joined(separator: "\n")
         let done = history.isEmpty ? "Henüz bir şey yapmadın." : history.enumerated().map { "\($0 + 1). \($1)" }.joined(separator: "\n")
         return """
@@ -99,6 +100,12 @@ enum ScreenTask {
         }
     }
 
+    /// What the step compares to see whether an action did anything: the labels and the
+    /// switches' states (turning a switch off changes no label).
+    static func fingerprint(_ elements: [ScreenElement]) -> [String] {
+        elements.map { element in element.label + (element.isOn.map { $0 ? "|1" : "|0" } ?? "") }
+    }
+
     /// Text to type only when the user said it: the model must not make any up.
     static func isSaid(_ text: String, in goal: String) -> Bool {
         let said = ScreenActions.normalized(text).replacingOccurrences(of: "'", with: "")
@@ -126,26 +133,44 @@ enum ScreenTask {
     // MARK: - The loop
 
     @MainActor
-    static func run(goal: String, client: any ChatStreaming, model: String,
+    static func run(goal: String, history: [String] = [], client: any ChatStreaming, model: String,
+                    isCancelled: () -> Bool,
                     progress: (String) -> Void,
                     type: (String, NSRunningApplication) async -> Bool) async -> Outcome {
-        let deadline = Date().addingTimeInterval(timeLimit)
-        var history: [String] = []
-        var lastLabels: [String]?
+        var history = history
+        var lastScreen: [String]?
         var lastWasPress = false
-        for step in 1...maxSteps {
-            guard Date() < deadline else { return .failed("Süre doldu") }
+        var pressedForNothing = false
+        var step = history.count
+        while true {
+            step += 1
+            guard !isCancelled() else { return .cancelled }
             guard let app = NSWorkspace.shared.frontmostApplication, !app.isTerminated,
                   app.bundleIdentifier != Bundle.main.bundleIdentifier, !RemoteControl.screenIsLocked else {
                 return .failed("Ekran değişti")
             }
-            let elements = ScreenActions.elements(of: app)
+            var elements = ScreenActions.elements(of: app)
+            if lastWasPress, fingerprint(elements) == lastScreen {
+                // Slow panes (System Settings) redraw late: look once more before deciding.
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !isCancelled() else { return .cancelled }
+                elements = ScreenActions.elements(of: app)
+                if fingerprint(elements) == lastScreen {
+                    // Twice in a row a press changed nothing: going on would only repeat it.
+                    if pressedForNothing { return .failed("Ekran değişmedi") }
+                    pressedForNothing = true
+                    if let last = history.popLast() { history.append(last + " ama ekranda bir şey değişmedi") }
+                } else {
+                    pressedForNothing = false
+                }
+            } else {
+                pressedForNothing = false
+            }
             guard !elements.isEmpty else { return .failed("Ekranda bir şey bulamadım") }
-            let labels = elements.map(\.label)
-            // The last press changed nothing on screen: going on would only repeat it.
-            if lastWasPress, lastLabels == labels { return .failed("Ekran değişmedi") }
             let promptText = prompt(goal: goal, app: app.localizedName ?? "?", history: Array(history.suffix(4)), elements: elements)
             guard let answer = await ask(promptText, client: client, model: model) else { return .failed("Bulut modeline ulaşamadım") }
+            // The user is most likely to stop it while the model thinks.
+            guard !isCancelled() else { return .cancelled }
             guard let action = parseStep(answer, count: elements.count) else { return .failed("Ne yapacağımı çıkaramadım") }
             switch action {
             case .done:
@@ -155,10 +180,10 @@ enum ScreenTask {
             case .press(let index):
                 let target = elements[index]
                 owLog("[ScreenTask] Step \(step): press \(target.kind) '\(target.label)'")
-                if ScreenActions.isRisky(target.label) { return .confirm(target, app) }
+                if ScreenActions.isRisky(target.label) { return .confirm(target, app, history: history) }
                 progress("Adım \(step): “\(target.label)”")
                 guard ScreenActions.perform(target) else { return .failed("“\(target.label)” basılamadı") }
-                history.append("“\(target.label)” \(target.kindDative) bastın")
+                history.append(pressed(target))
                 lastWasPress = true
             case .type(let index, let text):
                 let target = elements[index]
@@ -175,11 +200,15 @@ enum ScreenTask {
                 history.append("“\(target.label)” alanına \"\(text)\" yazdın")
                 lastWasPress = false
             }
-            lastLabels = labels
+            lastScreen = fingerprint(elements)
             // Give the window time to show what the action opened.
             try? await Task.sleep(nanoseconds: 600_000_000)
         }
-        return .failed("\(maxSteps) adımda bitiremedim")
+    }
+
+    /// The history line for a press, also for a risky one the user approved.
+    static func pressed(_ target: ScreenElement) -> String {
+        "“\(target.label)” \(target.kindDative) bastın"
     }
 
     /// Sets the field's value over Accessibility; where the app refuses, focuses it and pastes.

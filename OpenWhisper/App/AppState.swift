@@ -654,8 +654,13 @@ final class AppState {
     var lastInjectedText: String = ""
     /// What undoes the last command ("son komutu geri al"); empty when it can't be undone.
     @ObservationIgnored var lastCommandUndo: [VoiceCommand] = []
-    /// A risky on-screen button waiting for a spoken yes ("Gönder'e basayım mı?").
-    @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date)?
+    /// A risky on-screen button waiting for a spoken yes ("Gönder'e basayım mı?"). `task` is
+    /// set when a multi-step screen task asked it, and goes on after the press.
+    @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date,
+                                                 task: (goal: String, history: [String])?)?
+    /// A multi-step screen task is running (`ScreenTask`): the flow bar shows a stop button.
+    var screenTaskRunning = false
+    @ObservationIgnored var screenTaskCancelled = false
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     var swapTargetApp: NSRunningApplication?
