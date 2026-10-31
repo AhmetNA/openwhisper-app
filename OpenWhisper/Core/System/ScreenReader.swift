@@ -85,9 +85,16 @@ enum ScreenReader {
     /// tree doesn't show (canvases, games, many Electron views) is still on the screen.
     static func ocrTexts(of app: NSRunningApplication) async -> [ScreenText] {
         let start = Date()
-        guard let (lines, frame, _) = await recognizeFrontWindow(of: app) else { return [] }
-        let texts = lines.compactMap { line in
-            line.topCandidates(1).first.map { ScreenText(text: $0.string, candidate: $0, windowFrame: frame) }
+        // A capture once hung 25 s over a playing video: a press waits a few seconds at most.
+        let read = await JarvisContext.withTimeout(.seconds(4)) { () -> [ScreenText] in
+            guard let (lines, frame, _) = await recognizeFrontWindow(of: app) else { return [] }
+            return lines.compactMap { line in
+                line.topCandidates(1).first.map { ScreenText(text: $0.string, candidate: $0, windowFrame: frame) }
+            }
+        }
+        guard let texts = read else {
+            owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): gave up after 4 s")
+            return []
         }
         owLog("[ScreenReader] OCR of \(app.localizedName ?? "?"): \(texts.count) lines in \(Int(Date().timeIntervalSince(start) * 1000)) ms")
         return texts

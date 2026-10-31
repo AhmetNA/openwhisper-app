@@ -343,7 +343,7 @@ enum ScreenActions {
             return min(a.count, b.count) >= 5 && a.prefix(5) == b.prefix(5)
         }
         var best: (line: Int, range: Range<String.Index>, matched: Int, extra: Int)?
-        var tied = false
+        var tied: Int?
         for (index, line) in lines.enumerated() {
             var words: [(word: String, range: Range<String.Index>)] = []
             line.enumerateSubstrings(in: line.startIndex..., options: .byWords) { word, range, _, _ in
@@ -359,16 +359,18 @@ enum ScreenActions {
             if let current = best {
                 if (candidate.matched, -candidate.extra) > (current.matched, -current.extra) {
                     best = candidate
-                    tied = false
+                    tied = nil
                 } else if (candidate.matched, -candidate.extra) == (current.matched, -current.extra) {
-                    tied = true
+                    tied = index
                 }
             } else {
                 best = candidate
             }
         }
-        guard let best, !tied else {
-            if tied { owLog("[Screen] '\(said)' fits more than one text on the screenshot; none clicked") }
+        guard let best, tied == nil else {
+            if let best, let tied {
+                owLog("[Screen] '\(said)' fits more than one text on the screenshot ('\(lines[best.line])', '\(lines[tied])'); none clicked")
+            }
             return nil
         }
         return (best.line, best.range)
