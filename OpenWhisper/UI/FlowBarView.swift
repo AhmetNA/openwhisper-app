@@ -158,6 +158,12 @@ struct FlowBarView: View {
 
     private var recordingContent: some View {
         HStack(spacing: 8) {
+            // The mic stays open between steps on screen (`ScreenMode`).
+            if appState.screenModeActive {
+                Text("ekran modu")
+                    .font(.custom("Bradley Hand", size: 14).weight(.medium))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
             if appState.recordingInputReady {
                 AudioWaveformView(level: appState.audioLevel)
             } else {

@@ -373,16 +373,40 @@ enum ScreenActions {
     }
 
     static func modelPick(_ text: String, elements: [ScreenElement]) async -> Int? {
-        let request = LLMRequest(model: LLM.selectedModel, prompt: prompt(for: text, elements: elements),
-                                 timeout: 8, temperature: 0, maxTokens: 8, stop: ["\n"])
         let started = Date()
-        guard let answer = try? await LLM.default.generate(request) else {
+        // Cloud selected: the local model isn't woken for this; if the cloud fails, nothing is picked.
+        let reply: String?
+        if ChatBackend.selected == .cloud {
+            reply = await cloudPick(prompt(for: text, elements: elements))
+        } else {
+            let request = LLMRequest(model: LLM.selectedModel, prompt: prompt(for: text, elements: elements),
+                                     timeout: 8, temperature: 0, maxTokens: 8, stop: ["\n"])
+            reply = try? await LLM.default.generate(request)
+        }
+        guard let answer = reply else {
             owLog("[Screen] Model unavailable")
             return nil
         }
         let pick = parsePick(answer, count: elements.count)
         owLog("[Screen] Model answered '\(answer.trimmingCharacters(in: .whitespacesAndNewlines))' in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         return pick
+    }
+
+    private static func cloudPick(_ prompt: String) async -> String? {
+        guard let (client, model) = CloudLLM.client() else { return nil }
+        let request = LLMChatRequest(model: model, messages: [["role": "user", "content": prompt]],
+                                     timeout: 8, temperature: 0, maxTokens: 8)
+        do {
+            var answer = ""
+            for try await piece in client.streamChat(request) {
+                answer += piece
+                guard answer.count < 200 else { break }
+            }
+            return answer
+        } catch {
+            owLog("[Screen] Cloud failed: \(ChatFallback.describe(error))")
+            return nil
+        }
     }
 
     // MARK: - Acting

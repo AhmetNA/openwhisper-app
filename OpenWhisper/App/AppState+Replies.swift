@@ -249,18 +249,22 @@ extension AppState {
     /// the user is judging what the command started.
     /// `overReply`: Jarvis's reply is starting now; the window opens with it and runs until 2 s
     /// after it (`commandFollowUpReplyEnded`). Returns true when the mic opened.
+    /// `keepAlive`: screen mode heard no step this time; the mic reopens without counting it
+    /// as an action.
     @discardableResult
     func listenAfterCommand(domain: CommandFollowUp.Domain?, after session: RecordingTranscriptionSession,
-                            overReply: Bool = false) -> Bool {
+                            overReply: Bool = false, keepAlive: Bool = false) -> Bool {
         guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled, recordingState != .recording,
               hotkey?.isIdle == true, microphoneGranted else { return false }
+        if screenModeActive, !keepAlive { noteScreenModeAction() }
         // Opening the buds' mic puts them in call mode, which would break the reply playing in
         // them: there the window opens after the reply (the caller's fallback).
         if overReply, Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .followUp)) {
             owLog("[FollowUp] Bluetooth input; opening the mic after the reply instead")
             return false
         }
-        let chain = session.followsCommand ? commandFollowUpChain + 1 : 1
+        // Screen mode has no limit on steps: it ends on a closer or `ScreenMode.silence`.
+        let chain = session.followsCommand && !screenModeActive ? commandFollowUpChain + 1 : 1
         guard chain <= Self.maxCommandFollowUps else {
             owLog("[FollowUp] \(Self.maxCommandFollowUps) command follow-ups in a row; not listening again")
             return false
@@ -274,5 +278,31 @@ extension AppState {
         // The recording starts a moment later (`startRecording` consumes both flags).
         startVoiceSession(trigger: .followUp)
         return hotkey?.isIdle == false
+    }
+
+    /// A step was done on screen: screen mode is on, `ScreenMode.silence` counts from now.
+    func noteScreenModeAction() {
+        if !screenModeActive { owLog("[ScreenMode] On") }
+        screenModeActive = true
+        let stamp = Date()
+        screenModeLastAction = stamp
+        // A recording that never finished must not leave the mode on.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(ScreenMode.silence + ScreenMode.maxDuration + 5))
+            guard let self, self.screenModeActive, self.screenModeLastAction == stamp,
+                  self.recordingState != .recording else { return }
+            self.endScreenMode("nothing for \(Int(ScreenMode.silence)) s")
+        }
+    }
+
+    func endScreenMode(_ reason: String) {
+        guard screenModeActive else { return }
+        owLog("[ScreenMode] Off: \(reason)")
+        screenModeActive = false
+    }
+
+    /// Screen mode: what is left of `ScreenMode.silence` since the last step.
+    var screenModeWindow: TimeInterval {
+        max(3, ScreenMode.silence - Date().timeIntervalSince(screenModeLastAction))
     }
 }

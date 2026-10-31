@@ -41,7 +41,14 @@ extension AppState {
                 pendingWakeSpeakerVerified = session.wakeSpeakerVerified
                 startVoiceSession(trigger: .jarvisKey)
             } else if let commandFollowUp, !followUpOpenedOverReply {
-                listenAfterCommand(domain: commandFollowUp, after: session)
+                if !listenAfterCommand(domain: commandFollowUp, after: session) { endScreenMode("the mic did not reopen") }
+            } else if screenModeActive, !followUpOpenedOverReply {
+                // No step this time (silence, noise, not a command): listen on until
+                // `ScreenMode.silence` after the last step. Any other session ends the mode.
+                if !(session.followsCommand && Date().timeIntervalSince(screenModeLastAction) < ScreenMode.silence - 1
+                     && listenAfterCommand(domain: nil, after: session, keepAlive: true)) {
+                    endScreenMode(session.followsCommand ? "nothing for \(Int(ScreenMode.silence)) s" : "another recording")
+                }
             }
         }
         // Media paused when a voice session started plays again only after its command
@@ -963,7 +970,9 @@ extension AppState {
             /// outright (there "tamam" is dictation), and never from a mic left open after a
             /// command or over playing media, where a TV's "tamam" must not press anything.
             @MainActor func screenAction() async -> Bool {
-                guard session.acceptsCommands, !session.takesOnlyCommands, !session.heardOnlyOverPlayback,
+                // Screen mode's open mic is for exactly this.
+                let screenModeStep = screenModeActive && session.followsCommand
+                guard session.acceptsCommands, !session.takesOnlyCommands || screenModeStep, !session.heardOnlyOverPlayback,
                       !RemoteControl.screenIsLocked, let app = session.targetApp, !app.isTerminated,
                       app.bundleIdentifier != Bundle.main.bundleIdentifier,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
@@ -1026,8 +1035,13 @@ extension AppState {
                 }
                 let pressed = ScreenActions.perform(target)
                 self.showFlowBarMessage(pressed ? "“\(target.label)” ✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
-                if session.isVoiceCommand {
-                    await self.speakReply(pressed ? self.jarvisReply.ack() : self.jarvisReply.failure("Basamadım"))
+                // A Jarvis press opens screen mode: the mic stays open for the next step, and
+                // a spoken "tamam" would only slow it down.
+                if session.isVoiceCommand, pressed {
+                    self.noteScreenModeAction()
+                    commandFollowUp = .some(nil)
+                } else if session.isVoiceCommand {
+                    await self.speakReply(self.jarvisReply.failure("Basamadım"))
                 }
                 return true
             }
@@ -1196,11 +1210,25 @@ extension AppState {
                     let pressed = ScreenActions.perform(pending.target)
                     self.showFlowBarMessage(pressed ? "“\(pending.target.label)” ✓" : "Basılamadı", durationMs: 1500)
                     if !pressed { await self.speakReply(self.jarvisReply.failure("Basamadım")) }
+                    if pressed, session.isVoiceCommand {
+                        self.noteScreenModeAction()
+                        commandFollowUp = .some(nil)
+                    }
                     return
                 }
                 self.pendingScreenPress = nil
                 facts.pendingScreenPress = false
                 route = VoiceRouter.route(text, facts: facts)
+            }
+
+            // Screen mode: "tamamdır", "harikasın" end it, whatever else they would route to.
+            if screenModeActive, session.followsCommand, ScreenMode.isCloser(trimmed) {
+                session.latency.finishDecision(route: "ekran modu, bitti")
+                owLog("[ScreenMode] Closer: '\(trimmed)'")
+                self.lastTranscription = text
+                endScreenMode("closer")
+                await say(self.jarvisReply.ack(), durationMs: 1500)
+                return
             }
 
             // The mic stayed open after a command: only a command is taken from it, never
@@ -1220,6 +1248,26 @@ extension AppState {
                 // fallback is dropped in `dictateOrChat`.
                 case .command, .commands, .meta, .voiceTest, .spotifyOrConversation: break
                 default:
+                    // Screen mode: not a command, so a step on screen ("… yaz", "şuna bas").
+                    if screenModeActive, session.followsCommand, !session.heardOnlyOverPlayback {
+                        if let typing = ScreenMode.typeRequest(trimmed) {
+                            owLog("[ScreenMode] Type\(typing.send ? " and send" : ""): \(typing.text.count) chars")
+                            self.lastTranscription = text
+                            let delivered = await pasteAsDictation(typing.text, targetApp: session.targetApp,
+                                                                   pasteContext: session.pasteContext, send: typing.send)
+                            if delivered, typing.send {
+                                endScreenMode("sent")
+                                await say(self.jarvisReply.agent(sent: true), durationMs: 1500)
+                            } else if delivered {
+                                self.noteScreenModeAction()
+                                commandFollowUp = .some(nil)
+                            } else {
+                                await say(self.jarvisReply.failure("Yazamadım"), durationMs: 3000)
+                            }
+                            return
+                        }
+                        if await screenAction() { return }
+                    }
                     owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
                     session.latency.finishDecision(route: "komut sonrası, komut değil")
                     dismissFlowBarMessage()

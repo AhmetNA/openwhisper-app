@@ -656,6 +656,9 @@ final class AppState {
     @ObservationIgnored var lastCommandUndo: [VoiceCommand] = []
     /// A risky on-screen button waiting for a spoken yes ("Gönder'e basayım mı?").
     @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date)?
+    /// Screen mode (`ScreenMode`): after a press the mic stays open for the next step.
+    var screenModeActive = false
+    @ObservationIgnored var screenModeLastAction = Date.distantPast
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     var swapTargetApp: NSRunningApplication?

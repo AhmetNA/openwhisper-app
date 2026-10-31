@@ -323,14 +323,16 @@ extension AppState {
             // Jarvis has just asked something back (or run a command the user may want to
             // fix): no speech within the window closes the mic quietly. Both detectors need
             // it — while Smart Turn is ready, it alone decides.
-            let window = followsCommand ? Self.commandFollowUpWindow
+            let window = followsCommand ? (screenModeActive ? screenModeWindow : Self.commandFollowUpWindow)
                 : claudeMessage ? Self.claudeMessageWindow : Self.replyFollowUpWindow
             endpointFallbackConfig.noSpeechTimeout = window
             smartTurnConfig.noSpeechTimeout = window
             if followsCommand {
                 // A fix is a few words; vocals of the song just started must not keep it open.
-                endpointFallbackConfig.maxDuration = Self.commandFollowUpMaxDuration
-                smartTurnConfig.maxDuration = Self.commandFollowUpMaxDuration
+                // Screen mode: "… yaz ve gönder" carries a whole message.
+                let maxDuration = screenModeActive ? ScreenMode.maxDuration : Self.commandFollowUpMaxDuration
+                endpointFallbackConfig.maxDuration = maxDuration
+                smartTurnConfig.maxDuration = maxDuration
             }
             if overReply {
                 // Jarvis is still speaking: nothing counts until `commandFollowUpReplyEnded`
@@ -414,9 +416,10 @@ extension AppState {
         // exception: their mic hears the music played into the ear (measured 16 Oct 2026: SNR
         // −2 dB under Spotify, transcribed as Icelandic), so it pauses at once whatever the switch.
         // So does an external mic, which Mac playback must not reach either.
-        // Not after a command: the user is judging the song or video it just started.
+        // Not after a command: the user is judging the song or video it just started. Screen
+        // mode does: its steps type and press, and playback must never reach them.
         // A spoken "Jarvis" (often a false wake over the video) never pauses YouTube.
-        let pausesMedia = !followsCommand && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
+        let pausesMedia = (!followsCommand || screenModeActive) && (audioDuckingEnabled || (recordingMic != .mac && mediaPlaying))
         // A "Jarvis" over media whose voice hasn't matched yet pauses nothing until it does.
         let probationProfile = pausesMedia && recordingTrigger == .wakeWord && mediaPlaying
             && !pendingWakeSpeakerVerified && targetSpeakerGuardsWakeWord
@@ -1496,8 +1499,8 @@ extension AppState {
               let detector = voiceEndpointDetector else { return }
         let now = CACurrentMediaTime()
         var config = detector.config
-        config.noSpeechTimeout = Self.commandFollowUpWindow
-        config.maxDuration = Self.commandFollowUpMaxDuration
+        config.noSpeechTimeout = screenModeActive ? screenModeWindow : Self.commandFollowUpWindow
+        config.maxDuration = screenModeActive ? ScreenMode.maxDuration : Self.commandFollowUpMaxDuration
         voiceEndpointDetector = VoiceEndpointDetector(
             startTime: now, config: config, ignoreUntil: now + Self.replyFollowUpEchoGuard)
         owLog(String(format: "[FollowUp] Reply finished; listening %.1f s more for a fix", Self.commandFollowUpWindow))
