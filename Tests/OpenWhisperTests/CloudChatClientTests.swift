@@ -49,6 +49,12 @@ final class CloudChatClientTests: XCTestCase {
         XCTAssertEqual(WebSearch.results(from: Data(#"{"results":[]}"#.utf8)), "Sonuç bulunamadı.")
     }
 
+    func testOneLongPageDoesNotHideTheOthers() {
+        let long = String(repeating: "a", count: 5000)
+        let data = Data(#"{"results":[{"title":"Eski","highlights":["\#(long)"]},{"title":"Yeni","publishedDate":"2026-10-31T18:00:00Z","highlights":["1-2"]}]}"#.utf8)
+        XCTAssertTrue(WebSearch.results(from: data).contains("2. Yeni (2026-10-31)"))
+    }
+
     // MARK: - Fallback
 
     private static func pieces(_ items: [String], thenThrow error: Error? = nil,

@@ -7,6 +7,8 @@ enum WebSearch {
     static let endpoint = URL(string: "https://api.exa.ai/search")!
     /// What the spoken answer is built from; more only slows the second request.
     private static let maxChars = 3000
+    /// Per page, so one long page can't hide the others (and their dates) from the model.
+    private static let maxPassageChars = 450
 
     /// The tool as the OpenAI `tools` field describes it.
     static let tool: [String: Any] = [
@@ -46,7 +48,7 @@ enum WebSearch {
         var out = ""
         for (index, result) in results.enumerated() {
             let date = (result["publishedDate"] as? String).map { " (\($0.prefix(10)))" } ?? ""
-            let passages = (result["highlights"] as? [String] ?? []).joined(separator: " … ")
+            let passages = (result["highlights"] as? [String] ?? []).joined(separator: " … ").prefix(maxPassageChars)
             out += "\(index + 1). \(result["title"] as? String ?? "")\(date) \(result["url"] as? String ?? "")\n\(passages)\n"
         }
         return String(out.prefix(maxChars))
