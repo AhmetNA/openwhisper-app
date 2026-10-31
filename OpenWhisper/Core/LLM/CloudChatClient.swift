@@ -166,8 +166,9 @@ struct CloudChatClient: ChatStreaming {
 /// keeps the reply, since Jarvis may already be speaking it.
 enum ChatFallback {
     static let deadline: TimeInterval = 1.5
-    /// When the cloud model can search (`WebSearch`).
-    static let searchDeadline: TimeInterval = 3
+    /// When the cloud model can search (`WebSearch`). At 3 s a "who scored?" follow-up went to
+    /// Ollama, which can't search and said it didn't know.
+    static let searchDeadline: TimeInterval = 5
 
     /// `onFallback` gets the reason ("1500 ms without an answer", "HTTP 503") before Ollama starts.
     static func stream(primary: @escaping @Sendable () -> AsyncThrowingStream<String, Error>,
