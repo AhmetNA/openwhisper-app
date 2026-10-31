@@ -168,11 +168,11 @@ struct LockScreenIndicatorView: View {
                     CubicKeyframe(1, duration: 1.4)
                 }
                 if listening {
-                    JarvisCore(color: .white, active: true, size: 180, period: 2.5)
+                    JarvisCore(color: .white, active: true, size: 110, period: 2.5)
                         .matchedGeometryEffect(id: "core", in: coreSpace)
-                        .frame(width: 180, height: 180)
-                        .scaleEffect(1 + voice * 0.15)
-                        .shadow(color: .white.opacity(0.3 + voice * 0.5), radius: 20 + voice * 30)
+                        .frame(width: 110, height: 110)
+                        .scaleEffect(1 + voice * 0.1)
+                        .shadow(color: .white.opacity(0.3 + voice * 0.5), radius: 12 + voice * 18)
                         .animation(.easeOut(duration: 0.15), value: voice)
                         // The middle of the lock screen belongs to other apps (Vorssaint).
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.3)
