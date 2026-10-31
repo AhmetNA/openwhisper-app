@@ -740,6 +740,8 @@ extension AppState {
                     entry.ownText = trimmedSegmentText
                     if isFailClosedPassthrough {
                         entry.notes.append("filter error — whole text kept as normal dictation, not split")
+                    } else if skipsScreenStepDiarization && entry.levels.others.seconds >= 0.3 {
+                        entry.notes.append("other voices masked out, their words not transcribed (screen step, diarization skipped)")
                     } else if !shouldUseDiarization && entry.levels.others.seconds >= 0.3 {
                         entry.notes.append("other voices masked out, their words not transcribed (diarization not ready)")
                     }

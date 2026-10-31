@@ -65,7 +65,11 @@ extension AppState {
                 // Respect the enrolled-speaker gate before accepting a spoken control word.
                 if session.targetSpeakerEnabled, let profile = session.targetSpeakerProfile {
                     let score = try await self.targetSpeakerFilter.wakeSpeakerScore(samples: samples, profile: profile)
-                    guard score >= TargetSpeakerFilter.wakeThreshold else { return }
+                    guard score >= TargetSpeakerFilter.wakeThreshold else {
+                        owLog(String(format: "[FastStop] '%@' not your voice (%.2f < %.2f); waiting for the silence",
+                                     text, score, TargetSpeakerFilter.wakeThreshold))
+                        return
+                    }
                 }
                 guard self.recordingState == .recording, self.activeTranscriptionSession === session,
                       !session.isCancelled, session.doneLastSpeechTime == speechTime else { return }
