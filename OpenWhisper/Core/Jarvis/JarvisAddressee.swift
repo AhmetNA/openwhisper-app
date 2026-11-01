@@ -13,7 +13,8 @@ enum TextFocusStatus: String, Sendable, Equatable {
 /// (he answers out loud) or dictating / talking to someone else (the text is typed). Typing is
 /// the safe side: only a clearly addressed question or request reaches the chat.
 enum JarvisAddressee {
-    private static let locale = Locale(identifier: "tr_TR")
+    /// English keeps its dotted "I" ("I'm talking to you").
+    private static var locale: Locale { CommandLanguage.locale }
 
     enum DefaultRoute: String, Equatable, Sendable {
         case type
@@ -55,8 +56,16 @@ enum JarvisAddressee {
         options: [.caseInsensitive])
 
     /// A question mark, a Turkish question particle ("mı", "musun") or a question word.
+    // English: a question mark, or a question word or auxiliary at the start.
+    private static let englishQuestionRegex = try! NSRegularExpression(
+        pattern: #"\?|^\s*(?:(?:hey\s+)?jarvis[\s,]+)?(?:what|who|whom|whose|when|where|why|how|which|is|are|am|was|were|do|does|did|can|could|would|will|should|shall|may|might|have|has|had)\b"#,
+        options: [.caseInsensitive])
+
     static func looksLikeQuestion(_ text: String) -> Bool {
         let lowered = text.lowercased(with: locale)
+        if CommandLanguage.isEnglish {
+            return englishQuestionRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
+        }
         return questionRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered)) != nil
     }
 
@@ -105,8 +114,14 @@ enum JarvisAddressee {
         body(afterLeadingMatch: CommandLanguage.isEnglish ? englishLeadingTypeRegex : leadingTypeRegex, in: text)
     }
 
+    // "answer me: …", "I'm talking to you, …", "let's chat …".
+    private static let englishExplicitChatRegex: NSRegularExpression = {
+        let pattern = #"^\s*(?:answer\s+me|jarvis\s+question|question\s+for\s+jarvis|ask\s+jarvis|i'?m\s+talking\s+to\s+you|i\s+am\s+talking\s+to\s+you|let'?s\s+chat|let'?s\s+talk)\b[\s:,.;-]*"#
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
     static func explicitChatCommand(_ text: String) -> String? {
-        body(afterLeadingMatch: explicitChatRegex, in: text)
+        body(afterLeadingMatch: CommandLanguage.isEnglish ? englishExplicitChatRegex : explicitChatRegex, in: text)
     }
 
     private static func body(afterLeadingMatch regex: NSRegularExpression, in text: String) -> String? {

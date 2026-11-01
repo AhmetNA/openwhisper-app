@@ -143,9 +143,13 @@ enum VoiceRouter {
             // user talk to Jarvis without first clicking away from the field.
             if let chatText = JarvisAddressee.explicitChatCommand(trimmed) { return .chat(chatText) }
             // In a text field a greeting stays dictation ("Selam nasılsın?" typed into WhatsApp).
-            if facts.focus != .editable, let greeting = JarvisReply.greeting(in: trimmed) { return .greeting(greeting) }
+            let english = CommandLanguage.isEnglish
+            if facts.focus != .editable,
+               let greeting = english ? EnglishChatCommands.greeting(in: trimmed) : JarvisReply.greeting(in: trimmed) {
+                return .greeting(greeting)
+            }
             if let test = VoiceTestCommand.parse(trimmed, active: facts.voiceTestActive) { return .voiceTest(test) }
-            if let meta = JarvisReply.meta(in: trimmed) { return .meta(meta) }
+            if let meta = english ? EnglishChatCommands.meta(in: trimmed) : JarvisReply.meta(in: trimmed) { return .meta(meta) }
             if let memory = UserMemoryCommand.parse(trimmed) { return .memory(memory) }
             if let query = TimeQuery.parse(trimmed) { return .pastConversation(query) }
             // A destructive reminder action is always two-step: while a confirmation is

@@ -115,6 +115,7 @@ enum UserMemoryCommand: Equatable, Sendable {
     case forgetAll
 
     static func parse(_ text: String) -> UserMemoryCommand? {
+        if CommandLanguage.isEnglish { return parseEnglish(text) }
         let locale = Locale(identifier: "tr_TR")
         var lower = text.lowercased(with: locale).trimmingCharacters(in: .whitespacesAndNewlines)
         for lead in ["hey jarvis", "jarvis"] where lower.hasPrefix(lead) {
@@ -156,6 +157,50 @@ enum UserMemoryCommand: Equatable, Sendable {
         // "Hatırla" exactly, never "hatırlat" (reminders).
         if let fact = capture(#"^(?:bunu|şunu|şöyle)?\s*(?:hatırla|aklında\s+tut|aklında\s+bulunsun|unutma)(?:\s+ki)?\s*[:,]?\s+(.+)$"#)
             ?? capture(#"^(.+?)[,.]?\s+(?:bunu|şunu)\s+(?:hatırla|aklında\s+tut|unutma)$"#) {
+            return .remember(fact)
+        }
+        return nil
+    }
+
+    /// "Remember that my sister is Dilay", "my name is Ahmet", "what do you know about me",
+    /// "forget that". "Remember to …" and "don't forget to …" are reminders, not facts.
+    private static func parseEnglish(_ text: String) -> UserMemoryCommand? {
+        let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: #"^(?:hey\s+)?jarvis[\s,.]*"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .trimmingCharacters(in: CharacterSet(charactersIn: " .!?,"))
+        let bare = spoken.lowercased(with: Locale(identifier: "en_US"))
+            .replacingOccurrences(of: "what's", with: "what is")
+        func capture(_ pattern: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                  let match = regex.firstMatch(in: spoken, range: NSRange(spoken.startIndex..., in: spoken)),
+                  let range = Range(match.range(at: 1), in: spoken) else { return nil }
+            let value = String(spoken[range]).trimmingCharacters(in: CharacterSet(charactersIn: " :,.-"))
+            return value.isEmpty ? nil : value
+        }
+
+        if ["what do you know about me", "what do you remember", "what do you remember about me",
+            "what is in your memory", "tell me what you know about me", "what have you remembered"].contains(bare) {
+            return .recall
+        }
+        if ["forget everything about me", "forget everything you know about me", "forget everything",
+            "clear your memory", "erase your memory", "wipe your memory"].contains(bare) {
+            return .forgetAll
+        }
+        if ["forget that", "forget it", "forget what i just said", "forget the last thing", "forget the last thing i said"].contains(bare) {
+            return .forgetLast
+        }
+        if let topic = capture(#"^forget (?:about |that )?(.+)$"#) { return .forget(topic) }
+        if let name = capture(#"^my name is (\p{L}+(?:\s+\p{L}+)?)$"#) {
+            let display = name.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+            return .remember(UserMemory.namePrefix + display)
+        }
+        if let name = capture(#"^call me (\p{L}+)$"#) {
+            return .remember("Kullanıcı kendisine \"\(name.prefix(1).uppercased() + name.dropFirst())\" diye hitap edilmesini istiyor")
+        }
+        guard !bare.hasPrefix("remember to"), !bare.hasPrefix("don't forget to") else { return nil }
+        if let fact = capture(#"^(?:please\s+)?(?:remember|keep in mind|note|don't forget|make a note)(?:\s+that)?\s*[:,]?\s+(.+)$"#)
+            ?? capture(#"^(.+?)[,.]?\s+remember (?:that|this)$"#) {
             return .remember(fact)
         }
         return nil

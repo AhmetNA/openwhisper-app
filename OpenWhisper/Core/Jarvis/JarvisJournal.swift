@@ -116,6 +116,7 @@ struct TimeQuery: Equatable, Sendable {
     let label: String
 
     nonisolated static func parse(_ text: String, now: Date = Date()) -> TimeQuery? {
+        if CommandLanguage.isEnglish { return parseEnglish(text, now: now) }
         let locale = Locale(identifier: "tr_TR")
         let tokens = text.lowercased(with: locale)
             .components(separatedBy: CharacterSet.letters.union(.decimalDigits).inverted)
@@ -123,6 +124,67 @@ struct TimeQuery: Equatable, Sendable {
         let joined = " " + tokens.joined(separator: " ") + " "
         guard recallVerbs.contains(where: { joined.contains(" \($0) ") }) else { return nil }
         return range(in: joined, now: now)
+    }
+
+    /// "What did we talk about yesterday?", "what did I ask you last week?", "do you remember what
+    /// I said on Monday?": a past time and a recall phrase together, as in Turkish.
+    private nonisolated static let englishRecallPhrases = [
+        "did i say", "i said", "did i tell you", "i told you", "did we talk", "we talked", "were we talking",
+        "did we discuss", "we discussed", "did i ask", "i asked", "did i mention", "i mentioned", "have we talked",
+        "do you remember",
+    ]
+
+    private nonisolated static func parseEnglish(_ text: String, now: Date) -> TimeQuery? {
+        let tokens = text.lowercased(with: Locale(identifier: "en_US"))
+            .components(separatedBy: CharacterSet.letters.union(.decimalDigits).inverted)
+            .filter { !$0.isEmpty }
+        let joined = " " + tokens.joined(separator: " ") + " "
+        func has(_ phrase: String) -> Bool { joined.contains(" \(phrase) ") }
+        guard englishRecallPhrases.contains(where: has) else { return nil }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        calendar.firstWeekday = 2
+        let today = calendar.startOfDay(for: now)
+        func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: today)! }
+        func days(_ from: Int, _ to: Int, _ label: String) -> TimeQuery {
+            TimeQuery(interval: DateInterval(start: day(from), end: min(day(to), now)), label: label)
+        }
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: now)!.start
+        let monthStart = calendar.dateInterval(of: .month, for: now)!.start
+        let englishNumbers = ["a": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "ten": 10]
+
+        if let match = joined.range(of: #" (\d+|a|one|two|three|four|five|six|seven|ten) (days?|weeks?) ago"#, options: .regularExpression) {
+            let parts = joined[match].split(separator: " ")
+            let count = Int(parts[0]) ?? englishNumbers[String(parts[0])] ?? 1
+            if parts[1].hasPrefix("day") { return days(-count, -count + 1, "\(count) day\(count == 1 ? "" : "s") ago") }
+            let start = calendar.date(byAdding: .weekOfYear, value: -count, to: weekStart)!
+            return TimeQuery(interval: DateInterval(start: start, end: calendar.date(byAdding: .weekOfYear, value: 1, to: start)!),
+                             label: "\(count) week\(count == 1 ? "" : "s") ago")
+        }
+        if has("the day before yesterday") || has("day before yesterday") { return days(-2, -1, "the day before yesterday") }
+        if has("yesterday") || has("last night") { return days(-1, 0, "yesterday") }
+        if has("today") || has("this morning") || has("this afternoon") || has("this evening") || has("earlier") {
+            return TimeQuery(interval: DateInterval(start: today, end: now), label: "today")
+        }
+        if has("last week") {
+            let start = calendar.date(byAdding: .weekOfYear, value: -1, to: weekStart)!
+            return TimeQuery(interval: DateInterval(start: start, end: weekStart), label: "last week")
+        }
+        if has("this week") { return TimeQuery(interval: DateInterval(start: weekStart, end: now), label: "this week") }
+        if has("last month") {
+            let start = calendar.date(byAdding: .month, value: -1, to: monthStart)!
+            return TimeQuery(interval: DateInterval(start: start, end: monthStart), label: "last month")
+        }
+        if has("this month") { return TimeQuery(interval: DateInterval(start: monthStart, end: now), label: "this month") }
+        if has("recently") || has("lately") || has("the other day") { return days(-14, 1, "recently") }
+        let weekdays = ["monday": 2, "tuesday": 3, "wednesday": 4, "thursday": 5, "friday": 6, "saturday": 7, "sunday": 1]
+        for (name, weekday) in weekdays where has(name) {
+            var back = (calendar.component(.weekday, from: now) - weekday + 7) % 7
+            if back == 0 { back = 7 }
+            return days(-back, -back + 1, "on \(name.prefix(1).uppercased() + name.dropFirst())")
+        }
+        return nil
     }
 
     /// Past forms only; "hatırlat" (reminders) and "unut" (memory) are not here.
