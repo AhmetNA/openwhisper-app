@@ -37,6 +37,8 @@ final class EnglishMediaCommandTests: XCTestCase {
         XCTAssertEqual(intent("Volume 30"), .setVolume(30))
         XCTAssertEqual(intent("Turn the volume up"), .adjustVolume(20))
         XCTAssertEqual(intent("Turn the music down a bit"), .adjustVolume(-10))
+        XCTAssertEqual(intent("Increase the volume"), .adjustVolume(20))
+        XCTAssertEqual(intent("Lower the volume a bit"), .adjustVolume(-10))
         XCTAssertEqual(intent("What song is this?"), .currentTrack)
         XCTAssertEqual(intent("What's playing?"), .currentTrack)
         XCTAssertEqual(intent("Like this song"), .likeCurrentTrack)

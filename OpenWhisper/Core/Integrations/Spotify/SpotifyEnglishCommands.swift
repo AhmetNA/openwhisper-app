@@ -84,7 +84,7 @@ extension SpotifyManager {
         return request.searchQueries.isEmpty ? nil : .search(request)
     }
 
-    /// "set the volume to 40", "volume 30", "turn it up", "turn the music down a bit".
+    /// "set the volume to 40", "volume 30", "turn it up", "increase the volume", "turn the music down a bit".
     private static func englishVolume(_ words: [String]) -> ExplicitSpotifyIntent? {
         let all = Set(words)
         if all.contains("volume"), let value = words.compactMap(Int.init).first, (0...100).contains(value),
@@ -93,11 +93,12 @@ extension SpotifyManager {
             return .setVolume(value)
         }
         let allowed: Set<String> = ["turn", "it", "the", "music", "volume", "song", "spotify", "up", "down", "a",
-                                    "bit", "little", "lot", "louder", "quieter", "softer", "make", "more"]
+                                    "bit", "little", "lot", "louder", "quieter", "softer", "make", "more",
+                                    "increase", "raise", "decrease", "lower", "reduce"]
         guard words.allSatisfy(allowed.contains),
               all.contains("volume") || all.contains("turn") || all.contains("make") else { return nil }
-        let up = !all.isDisjoint(with: ["up", "louder"])
-        let down = !all.isDisjoint(with: ["down", "quieter", "softer"])
+        let up = !all.isDisjoint(with: ["up", "louder", "increase", "raise"])
+        let down = !all.isDisjoint(with: ["down", "quieter", "softer", "decrease", "lower", "reduce"])
         guard up != down else { return nil }
         let step = all.contains("lot") ? 30 : !all.isDisjoint(with: ["bit", "little"]) ? 10 : 20
         return .adjustVolume(up ? step : -step)
