@@ -146,6 +146,28 @@ enum AgentCommandParser {
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
+    // While the dictation language is English (`CommandLanguage`): "Open a new session.",
+    // "start a new chat in Codex", "in Claude Code, open a new session". The app may come
+    // before or after, so two patterns: a named group can't appear twice in one.
+    private static let englishNewSessionRegexes: [NSRegularExpression] = {
+        let lead = #"^(?:hey )?(?:jarvis )?(?:please )?(?:(?:can|could|would) you )?"#
+        let app = "(?:in|on) (?:the )?\(names)(?: app)?"
+        let open = #"(?:open|start|create|begin|make)(?: up)? (?:a |another )?(?:new|fresh) (?:session|chat|conversation|thread)"#
+        let tail = #"(?: (?:please|now))?$"#
+        return ["\(lead)(?:\(app) )?\(open)\(tail)", "\(lead)\(open) \(app)\(tail)"]
+            .map { try! NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+    }()
+
+    private static func parseEnglishNewSession(_ text: String) -> AgentDictation? {
+        let cleaned = text.lowercased(with: CommandLanguage.locale)
+            .replacingOccurrences(of: #"[!?.,;"]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        let range = NSRange(cleaned.startIndex..., in: cleaned)
+        guard let match = englishNewSessionRegexes.lazy.compactMap({ $0.firstMatch(in: cleaned, range: range) }).first else { return nil }
+        return AgentDictation(target: targetApp(for: match) ?? .claudeCode, body: "", send: false, session: .new)
+    }
+
     // Also accept the natural form "Codex'e merhaba ... gönder". This fallback requires an
     // explicit trailing send verb below, so "Claude'a geçtim" can never become a message.
     private static let directTargetRegex: NSRegularExpression = {
@@ -328,6 +350,7 @@ enum AgentCommandParser {
     }
 
     private static func parse(_ text: String, allowProject: Bool) -> AgentDictation? {
+        if CommandLanguage.isEnglish, let dictation = parseEnglishNewSession(text) { return dictation }
         if allowProject, let dictation = parseWithProject(text) { return dictation }
         var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var target: AgentApp?
