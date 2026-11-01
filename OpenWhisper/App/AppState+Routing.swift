@@ -13,9 +13,9 @@ extension AppState {
     func reportUnrecognizedRecording(_ session: RecordingTranscriptionSession) async {
         session.latency.markOutput("konuşma anlaşılamadı; gönderilmedi")
         guard !session.isCancelled, !session.takesOnlyCommands else { return }
-        let message = "Konuşmanı anlayamadım; metin çıkarılamadı. Mikrofonu kontrol edip tekrar dene."
+        let message = "Anlayamadım, tekrar dene."
         lastError = message
-        showFlowBarMessage(message, durationMs: 8000)
+        showFlowBarMessage(message, durationMs: 3000)
         owLog("[Result] Recognition failed; user notified, nothing pasted or copied")
         if session.isVoiceCommand, recordingState != .recording {
             await speakReply(message)
