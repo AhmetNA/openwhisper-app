@@ -275,6 +275,7 @@ final class SpotifyManager: @unchecked Sendable {
     static func explicitIntent(in text: String) -> ExplicitSpotifyIntent? {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return nil }
+        if CommandLanguage.isEnglish, let english = englishIntent(in: text) { return english }
 
         if mentionVetoAllows(normalized),
            let extended = extendedIntent(normalized) ?? queueIntentFromRules(normalized) {
@@ -807,7 +808,9 @@ final class SpotifyManager: @unchecked Sendable {
     /// reply follow-up keeps it: "Hey Javis, sesi son seviyeye çıkar", 10 Oct 2026) and
     /// mangled command verbs repaired.
     static func commandModeText(_ text: String) -> String {
-        repairCommandVerbMishearing(WakeWordVerifier.strippingLeadingWakeWord(text))
+        let text = WakeWordVerifier.strippingLeadingWakeWord(text)
+        // The repairs are Turkish verb endings.
+        return CommandLanguage.isEnglish ? text : repairCommandVerbMishearing(text)
     }
 
     /// "sesi yüzde elli yap" → "sesi yüzde 50 yap": volume targets are read as digits.
@@ -853,7 +856,8 @@ final class SpotifyManager: @unchecked Sendable {
     /// (up to the 15 s timeout in the log of 28 Oct 2026).
     static func isCommandCandidate(_ text: String) -> Bool {
         let normalized = normalize(text)
-        return spokenWordCount(normalized) <= maxNaturalWordCount
+        // English needs more small words: "can you play Shape of You by Ed Sheeran on Spotify".
+        return spokenWordCount(normalized) <= (CommandLanguage.isEnglish ? 14 : maxNaturalWordCount)
             && mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
             && mayHaveCommandEvidence(repairCommandVerbMishearing(repairPlayVerbMishearing(text)))
     }
@@ -903,8 +907,10 @@ final class SpotifyManager: @unchecked Sendable {
         // stays unloaded; if it fails, the rules and SetFit decide alone.
         let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
         let llmAvailable = ollamaAvailable || cloud != nil
-        // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down.
-        let modelAvailable = llmAvailable || SetFitDecider.isActive
+        // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down. Its
+        // heads learned Turkish, and a confident wrong answer would cancel the LLM.
+        let setFit = SetFitDecider.isActive && !CommandLanguage.isEnglish
+        let modelAvailable = llmAvailable || setFit
         let command = commandMode && rules == nil && modelAvailable && isCommandCandidate(text)
         let promotion = rules == nil && modelAvailable && isPromotionCandidate(text)
         // Cheapest checks first: the word test, then the playback query (which never
@@ -931,14 +937,14 @@ final class SpotifyManager: @unchecked Sendable {
             nil
         }
         let llmName = cloud == nil ? "Ollama" : "Cloud"
-        var parse = SetFitDecider.isActive ? await setFitParse(text, ollamaAvailable: llmAvailable) : nil
+        var parse = setFit ? await setFitParse(text, ollamaAvailable: llmAvailable) : nil
         if parse != nil {
             llm?.cancel()
         } else if let llm {
             parse = await llm.value
             if let parse { owLog("[Spotify] \(llmName) parse for '\(text)': \(parse)") }
             // A search SetFit left to the LLM goes ahead with the rule-based split.
-            if parse == nil, cloud != nil, SetFitDecider.isActive {
+            if parse == nil, cloud != nil, setFit {
                 parse = await setFitParse(text, ollamaAvailable: false)
             }
         }

@@ -151,7 +151,8 @@ enum SpotifyRequestParser {
 
     /// The residue of a search command with command/filler words removed.
     static func freeTextQuery(_ residue: String) -> String {
-        words(residue)
+        if CommandLanguage.isEnglish { return englishRequest(residue).freeText }
+        return words(residue)
             .map(\.stem)
             .filter { !searchJunkWords.contains($0) }
             .joined(separator: " ")
@@ -160,6 +161,7 @@ enum SpotifyRequestParser {
     /// Deterministic fallback used when Ollama is unavailable, times out, or returns a
     /// name that isn't in the transcript.
     static func requestFromRules(_ residue: String) -> SpotifySearchRequest {
+        if CommandLanguage.isEnglish { return englishRequest(residue) }
         let all = words(residue)
         let isPlaylist = all.contains { playlistNouns.contains($0.stem) }
         let isAlbum = !isPlaylist && all.contains { albumNouns.contains($0.stem) }

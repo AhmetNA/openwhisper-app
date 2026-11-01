@@ -608,6 +608,7 @@ enum SystemCommandParser {
     /// "videoyu 5. dakikaya al", "video hızını 1.5 yap", "altyazıyı aç", "sonraki video".
     /// From the raw text: cleaning would turn "1.5" and "5." apart.
     static func parseVideoRequest(_ text: String) -> VideoAction? {
+        if CommandLanguage.isEnglish, let action = EnglishVideoCommands.parse(text) { return action }
         let raw = text.lowercased(with: locale)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: #"[!?;"“”]"#, with: " ", options: .regularExpression)
