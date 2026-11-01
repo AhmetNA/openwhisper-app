@@ -52,6 +52,37 @@ final class ScreenQuestionTests: XCTestCase {
         XCTAssertFalse(answer.isEmpty)
     }
 
+    @MainActor
+    func testLivePhilipsPriceRegression() async throws {
+        guard ProcessInfo.processInfo.environment["SCREEN_PHILIPS_LIVE"] == "1" else { throw XCTSkip("Live Exa/Ollama regression") }
+        UserDefaults.standard.addSuite(named: "com.openwhisper.app")
+        defer { UserDefaults.standard.removeSuite(named: "com.openwhisper.app") }
+        UserDefaults.standard.setVolatileDomain([ChatBackend.defaultsKey: "ollama"], forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.removeVolatileDomain(forName: UserDefaults.argumentDomain) }
+        let lines = ["Pencere başlığı: Philips 5500 Serisi LatteGo Tam Otomatik Espresso Makinesi Fiyatı",
+                     "Safari sekmesi: Philips 5500 Serisi LatteGo Tam Otomatik Espresso Makinesi — https://www.hepsiburada.com/philips-5500-serisi-lattego-tam-otomatik-espresso-makinesi-20-sicak-ve-soguk-icecek-renkli-dokunmatik-ekran-ep5543-80-p-HBCV0000670A50",
+                     "Sayfadan: Philips 5500 Serisi LatteGo Tam Otomatik Espresso Makinesi 20 Sıcak ve Soğuk İçecek, Renkli Dokunmatik Ekran, EP5543/80. Satıcı: Ayağıma Getir."]
+        let prepared = await ScreenQuestion.prepare(for: "bu ürün daha ucuza satılıyor mu", lines: lines, model: ScreenQuestion.localVisionModel, app: nil)
+        print("PHILIPS EVIDENCE: \(prepared.prompt)")
+        print("PHILIPS ANSWER: \(prepared.answer ?? "nil")")
+        XCTAssertTrue(prepared.prompt.contains("akakce.com/"))
+        XCTAssertNotNil(prepared.answer)
+        XCTAssertFalse(prepared.answer?.contains("bulamadım") ?? true)
+        XCTAssertTrue(prepared.answer?.contains("TL") ?? false)
+    }
+
+    func testModelIdentityIgnoresMarketingButPreservesVariant() {
+        let merchant = "Philips 5500 Serisi LatteGo Tam Otomatik Espresso Makinesi 20 Sıcak ve Soğuk İçecek Renkli Dokunmatik Ekran EP5543/80"
+        XCTAssertEqual(ProductMatch.searchName(merchant), "Philips EP5543/80")
+        for title in ["Philips EP5543/80 5500 LatteGo Kahve Makinesi", "Philips 5500 Serisi LatteGo EP5543-80 Tam Otomatik Espresso Makinesi"] {
+            XCTAssertTrue(ProductMatch.matches(product: merchant, title: title))
+        }
+        XCTAssertFalse(ProductMatch.matches(product: merchant, title: "Philips EP5543/90 LatteGo"))
+        XCTAssertFalse(ProductMatch.matches(product: merchant, title: "Philips EP5544/80 LatteGo"))
+        XCTAssertFalse(ProductMatch.matches(product: merchant, title: "Philips Kahve Makineleri"))
+        XCTAssertEqual(ProductMatch.primaryPageModel(in: ["Safari sekmesi: Philips — https://www.hepsiburada.com/philips-ep5543-80-p-HBCV0000670A50?tracking=AB123456"]), "ep5543-80")
+    }
+
     func testIntentDistinguishesDescriptionFromPrice() {
         for question in ["bu ürün ne", "bu ne", "bu ürün ne işe yarıyor", "bunun amacı nedir"] {
             XCTAssertTrue(ScreenQuestion.matches(question), question)

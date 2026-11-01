@@ -32,7 +32,7 @@ enum WebSearch {
         if priceComparison {
             body["type"] = "auto"
             body["numResults"] = 3
-            body["contents"] = ["text": ["maxCharacters": 6000], "maxAgeHours": 0] as [String: Any]
+            body["contents"] = ["text": ["maxCharacters": 18000], "maxAgeHours": 0] as [String: Any]
         }
         return body
     }
@@ -63,14 +63,15 @@ enum WebSearch {
             if let product {
                 let title = compact(result["title"] as? String ?? "")
                 if priceComparison {
-                    let tokens = product.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map { compact(String($0)) }
-                        .filter { !["kadin", "erkek", "renk", "ve", "icin"].contains($0) && !$0.isEmpty }
-                    guard !tokens.isEmpty, tokens.allSatisfy({ title.contains($0) }) else { return false }
+                    guard ProductMatch.matches(product: product, title: result["title"] as? String ?? "") else { return false }
                 } else if !title.contains(compact(product)) { return false }
             }
             if let excludingPage, let page = URL(string: excludingPage), let url = URL(string: result["url"] as? String ?? ""),
                page.host == url.host && page.path == url.path { return false }
             return true
+        }
+        if priceComparison {
+            owLog("[PriceSearch] product=\(product ?? "?") candidates=\(results.count) accepted=\(filtered.count) titles=\(results.compactMap { $0["title"] as? String }.joined(separator: " | "))")
         }
         guard !filtered.isEmpty else { return "Tam eşleşen ek kaynak bulunamadı." }
         for (index, result) in filtered.enumerated() {
@@ -83,9 +84,20 @@ enum WebSearch {
                     $0.trimmingCharacters(in: .whitespaces).range(of: #"^(?:[0-5](?:[.,]\d+)?|[★☆⭐]+)$"#, options: .regularExpression) == nil
                 }.joined(separator: "\n")
             }
+            if priceComparison { passageText = pricePassage(passageText) }
             let passages = passageText.prefix(priceComparison ? 4000 : maxPassageChars)
             out += "\(index + 1). \(result["title"] as? String ?? "")\(date) \(result["url"] as? String ?? "")\n\(passages)\n"
         }
         return String(out.prefix(priceComparison ? 8000 : maxChars))
     }
+    /// Comparison-site navigation can consume the entire excerpt before the first offer.
+    /// Preserve a little context before actual currency prices, not thousands of menu items.
+    static func pricePassage(_ text: String) -> String {
+        guard let price = text.range(of: #"\d[\d.,]*\s*(?:TL|₺)"#, options: [.regularExpression, .caseInsensitive]) else {
+            return "Ürün sayfası bulundu; satıcı fiyatları bu içerikte okunamadı."
+        }
+        let start = text.index(price.lowerBound, offsetBy: -500, limitedBy: text.startIndex) ?? text.startIndex
+        return String(text[start...].prefix(4000))
+    }
+
 }
