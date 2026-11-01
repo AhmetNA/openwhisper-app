@@ -10,6 +10,44 @@ final class AkakcePricesTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    func testActualTefalAndDysonOffers() throws {
+        for (fixture, product, seller, price) in [
+            ("tefal-other", "TEFAL K13305 Manuel Rondo 500 ml Siyah", "n11/n11", 699.0),
+            ("dyson", "Dyson V12 Detect Slim™ Absolute Kablosuz Süpürge (Sarı/Nikel)", "MediaMarkt", 25999.0)
+        ] {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: "akakce-" + fixture + "-prices", withExtension: "html", subdirectory: "Fixtures"))
+            let result = AkakcePrices.parse(html: try String(contentsOf: url), product: product, pageURL: page)
+            XCTAssertEqual(result.offers.first(where: { $0.seller == seller })?.price, price)
+            if fixture == "tefal-other" {
+                XCTAssertFalse(result.offers.contains { $0.price == 742.03 || $0.price == 749 || $0.price == 752 })
+            }
+        }
+    }
+
+    func testShortModelsAccessoriesAndMisheardProduct() {
+        let product = "Dyson V12 Detect Slim™ Absolute Kablosuz Süpürge (Sarı/Nikel)"
+        XCTAssertTrue(ProductMatch.matches(product: product, title: "Dyson V12 Detect Slim Absolute Şarjlı Dikey Süpürge"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "Dyson V12 Detect Slim Absolute Yedek Hepa Filtre"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "DYSON için V12 Detect Slim Absolute Filtresi"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "Dyson V15 Detect Slim Absolute"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "Dyson V12 Motorhead"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "Dyson V12 Detect Slim Absolute Plus"))
+        XCTAssertFalse(ProductMatch.matches(product: product, title: "Dyson V12 Detect Slim Absolute - Bosch Unlimited 10 BCS1041WAC Karşılaştırması"))
+        XCTAssertTrue(ScreenQuestion.matches("Buyurun başka bir yerde daha ucuza satılıyor mu?"))
+        XCTAssertFalse(ScreenQuestion.matches("Buyurun hoş geldiniz"))
+        XCTAssertFalse(ScreenQuestion.matches("Buyurun başka yerde ucuz ürünü aç"))
+    }
+
+    func testLiveTefalAndDysonSearch() async throws {
+        guard ProcessInfo.processInfo.environment["PRICE_LIVE"] == "1" else { throw XCTSkip("Opt-in network test") }
+        for product in ["TEFAL K13305 Manuel Rondo 500 ml Siyah", "Dyson V12 Detect Slim™ Absolute Kablosuz Süpürge (Sarı/Nikel)"] {
+            let result = try await AkakcePrices.search(product: product)
+            XCTAssertFalse(result.offers.isEmpty, product)
+            if product.hasPrefix("Dyson") { XCTAssertTrue(result.offers.allSatisfy { $0.price > 20000 }, "Accessory admitted") }
+            print("LIVE_PRICE", product, result.offers.min(by: { $0.price < $1.price }).map { "\($0.seller): \($0.price)" } ?? "EMPTY")
+        }
+    }
+
     func testPriceExcerptSkipsMenusButKeepsMerchant() {
         let content = String(repeating: "navigation ", count: 1500) + "Satıcı Örnek Mağaza: 1250 TL ücretsiz kargo"
         let excerpt = WebSearch.pricePassage(content)

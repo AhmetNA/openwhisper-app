@@ -71,6 +71,25 @@ final class ScreenQuestionTests: XCTestCase {
         XCTAssertTrue(prepared.answer?.contains("TL") ?? false)
     }
 
+    @MainActor
+    func testLiveRecentPriceFailures() async throws {
+        guard ProcessInfo.processInfo.environment["PRICE_FLOW_LIVE"] == "1" else { throw XCTSkip("Live model/search regression") }
+        UserDefaults.standard.addSuite(named: "com.openwhisper.app")
+        defer { UserDefaults.standard.removeSuite(named: "com.openwhisper.app") }
+        UserDefaults.standard.setVolatileDomain([ChatBackend.defaultsKey: "ollama"], forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.removeVolatileDomain(forName: UserDefaults.argumentDomain) }
+        for (product, question) in [
+            ("TEFAL K13305 Manuel Rondo 500 ml Siyah", "Buyurun başka bir yerde daha ucuza var mı?"),
+            ("Dyson V12 Detect Slim™ Absolute Kablosuz Süpürge (Sarı/Nikel)", "Bu ürün daha ucuza başka bir yerde var mı?")
+        ] {
+            XCTAssertTrue(ScreenQuestion.matches(question))
+            let prepared = await ScreenQuestion.prepare(for: question, lines: ["Pencere başlığı: " + product, "Sayfadan: " + product], model: ScreenQuestion.localVisionModel, app: nil)
+            print("RECENT_PRICE_FLOW", product, prepared.answer ?? "nil")
+            XCTAssertTrue(prepared.answer?.contains("TL") ?? false)
+            XCTAssertFalse(prepared.answer?.contains("bulamadım") ?? true)
+        }
+    }
+
     func testModelIdentityIgnoresMarketingButPreservesVariant() {
         let merchant = "Philips 5500 Serisi LatteGo Tam Otomatik Espresso Makinesi 20 Sıcak ve Soğuk İçecek Renkli Dokunmatik Ekran EP5543/80"
         XCTAssertEqual(ProductMatch.searchName(merchant), "Philips EP5543/80")

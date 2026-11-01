@@ -9,7 +9,8 @@ enum ScreenQuestion {
 
     static func matches(_ text: String) -> Bool {
         let words = ScreenActions.normalized(text).split(separator: " ").map(String.init)
-        guard !Set(words).isDisjoint(with: ["bu", "bunu", "bunun", "burada", "şu", "şunu", "şunun", "ekrandaki"]) else { return false }
+        let misheardProduct = words.first == "buyurun" && words.contains("başka") && words.contains(where: { $0.hasPrefix("ucuz") })
+        guard misheardProduct || !Set(words).isDisjoint(with: ["bu", "bunu", "bunun", "burada", "şu", "şunu", "şunun", "ekrandaki"]) else { return false }
         let commands: Set<String> = ["aç", "kapat", "sil", "bas", "tıkla", "gönder", "yaz", "oynat", "çal", "kaydır", "indir", "kaydet", "kopyala"]
         guard Set(words).isDisjoint(with: commands), ScreenMode.typeRequest(text) == nil,
               !words.contains(where: { $0.hasPrefix("açar") || $0.hasPrefix("basar") || $0.hasPrefix("tıklar") || $0.hasPrefix("siler") || $0.hasPrefix("gönderir") }) else { return false }

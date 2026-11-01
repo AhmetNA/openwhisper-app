@@ -45,7 +45,7 @@ enum AkakcePrices {
     static func productLinks(html: String, product: String) -> [URL] {
         var seen = Set<String>()
         return captures(#"(?is)<a\b([^>]*)>"#, in: html).compactMap { attributes in
-            guard let title = attribute("title", in: attributes), ProductMatch.matches(product: product, title: title),
+            guard let title = attribute("title", in: attributes), ProductMatch.candidateMatches(product: product, title: title),
                   let href = attribute("href", in: attributes),
                   let url = URL(string: href, relativeTo: URL(string: "https://www.akakce.com"))?.absoluteURL,
                   ["www.akakce.com", "akakce.com"].contains(url.host ?? ""),
@@ -59,13 +59,13 @@ enum AkakcePrices {
         func visit(_ value: Any) {
             if let list = value as? [Any] { list.forEach(visit); return }
             guard let object = value as? [String: Any] else { return }
-            if object["@type"] as? String == "Product" { products.append(object) }
+            if ["Product", "ProductGroup"].contains(object["@type"] as? String ?? "") { products.append(object) }
             if let graph = object["@graph"] { visit(graph) }
         }
         for script in captures(#"(?is)<script\b[^>]*type\s*=\s*["']application/ld\+json["'][^>]*>(.*?)</script>"#, in: html) {
             if let object = try? JSONSerialization.jsonObject(with: Data(script.utf8)) { visit(object) }
         }
-        guard let object = products.first(where: { ProductMatch.matches(product: product, title: $0["name"] as? String ?? "") }),
+        guard let object = products.first(where: { ProductMatch.candidateMatches(product: product, title: $0["name"] as? String ?? "") }),
               let aggregate = object["offers"] as? [String: Any], let rows = aggregate["offers"] as? [[String: Any]] else {
             return Result(evidence: "\(pageURL.absoluteString): eşleşen ürünün satıcı teklifleri okunamadı.", offers: [])
         }
@@ -77,7 +77,15 @@ enum AkakcePrices {
                   ["TRY", "TL"].contains(row["priceCurrency"] as? String ?? ""),
                   let seller = (row["seller"] as? [String: Any])?["name"] as? String, !seller.isEmpty,
                   let price = number(row["price"]), price > 0, price.isFinite else { continue }
-            let ship = shipping.first { $0.seller == seller && abs($0.price - price) < 0.005 }?.shipping.flatMap { $0 >= 0 && $0.isFinite ? $0 : nil }
+            let detail = shipping.first { $0.seller == seller && abs($0.price - price) < 0.005 }
+            // Some comparison pages group several colors/models. Validate each offer's
+            // own listing, not recommendations or another seller's matching code.
+            if let name = detail?.name, !name.isEmpty {
+                guard ProductMatch.matches(product: product, title: name) else { continue }
+            } else {
+                guard object["@type"] as? String == "Product", ProductMatch.matches(product: product, title: object["name"] as? String ?? "") else { continue }
+            }
+            let ship = detail?.shipping.flatMap { $0 >= 0 && $0.isFinite ? $0 : nil }
             let priceText = String(format: "%.2f", price).replacingOccurrences(of: ".", with: ",")
             let quote = "\(seller): \(priceText) TL. " + (ship == 0 ? "Ücretsiz kargo." : "Kargo: \(ship.map(String.init(describing:)) ?? "bilinmiyor").")
             offers.append(ScreenQuestion.Offer(seller: seller, price: price, shipping: ship, source: "akakce.com", quote: quote))
@@ -86,7 +94,7 @@ enum AkakcePrices {
         return Result(evidence: "Ürün: \(name)\nKaynak URL: \(pageURL.absoluteString)\n" + offers.map(\.quote).joined(separator: "\n"), offers: offers)
     }
 
-    private struct ShippingRow { let seller: String; let price: Double; let shipping: Double? }
+    private struct ShippingRow { let seller: String; let price: Double; let shipping: Double?; let name: String }
 
     /// Shipping is not included in Akakçe's JSON-LD. Join its public hydration data to
     /// JSON-LD by the exact merchant AND price; never transfer one seller's free shipping.
@@ -105,7 +113,7 @@ enum AkakcePrices {
                       let price = number(unwrap(row["price"])) else { return nil }
                 let nick = unwrap(row["pgNick"]) as? String ?? ""
                 let seller = nick.isEmpty ? marketplace : marketplace + "/" + nick
-                return ShippingRow(seller: seller, price: price, shipping: number(unwrap(row["shipPrice"])))
+                return ShippingRow(seller: seller, price: price, shipping: number(unwrap(row["shipPrice"])), name: unwrap(row["pgName"]) as? String ?? "")
             }
         }
         return []

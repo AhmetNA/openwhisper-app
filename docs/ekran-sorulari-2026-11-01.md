@@ -42,3 +42,11 @@ Kullanıcının 1 Kasım 2026 16:50 denemesi logdan yeniden üretildi. Hepsibura
 - Akakçe HTML yapısı değişebilir; okuyucu eşleşme veya veri doğrulaması başarısızsa fiyat uydurmaz. İnternetteki tüm satıcılarda kesin en düşük fiyat garantisi verilmez; yanıt okunan eşleşen teklifler için geçerlidir.
 
 Gerçek ürünle canlı test, Akakçe'den 10 teklif okuyup Trendyol üzerindeki ALDIMGİTTİ satıcısının 21.350 TL teklifini seçti. Aynı veride Ayağıma Getir 22.532,13 TL idi (test anındaki değişebilir fiyatlar). Test, logdan alınan ürün bilgileri + gerçek ağ çağrıları + yerel E2B ile yürütüldü; mikrofon/TTS akışının yeniden denenmesi değildir. Küçültülmüş gerçek sayfa verisi `Fixtures/akakce-philips-prices.html` altında satıcı/kargo/model regresyonu için saklandı.
+
+### Son canlı denemelerdeki Tefal/Dyson düzeltmesi
+
+17:05–17:06 logları üç ayrı hatayı gösterdi: “bu ürün” ASR'da “buyurun” olarak geldiğinde ekran akışı atlanıyordu; V12 gibi kısa kodlar tanınmıyordu; Tefal K13305 Akakçe başlığında bulunmadığından aday açılmıyordu. Dar kapsamlı “buyurun + başka + ucuz” soru eşlemesi eklendi (komutlar hâlâ hariç). Kısa kodlarda Detect Slim Absolute gibi model adları korunuyor. “Manuel 500” gibi kelime/ölçü birleşimleri kod sayılmıyor.
+
+Akakçe aday keşfi ile teklif doğrulaması ayrıldı. ProductGroup sayfaları da okunuyor; satıcı ve fiyatla eşlenen `pgName` üzerinden her teklifin kendi modeli doğrulanıyor. Renkleri aynı sayfada toplayan Tefal sayfasındaki K1330355, K1330404 ve K13307 teklifleri K13305 yerine kullanılmıyor. Dyson filtre/filtresi/boru gibi aksesuarlar ve karşılaştırma başlıkları eleniyor.
+
+Canlı doğrudan arama: Tefal K13305 n11/n11 699 TL; Dyson V12 Detect Slim Absolute MediaMarkt 25.999 TL (2026-11-01 test anı). İlk geliştirme denemesinde yanlışlıkla kabul edilen 881 TL'lik filtre, eklenen aksesuar regresyonuyla yakalanıp düzeltildi. Gerçek sayfalardan sadeleştirilmiş iki fixture eklendi. Exa + yerel model + doğrudan Akakçe hazırlama akışı Tefal, Dyson ve Philips için geçti: 22 test, 2 opt-in test atlandı, hata yok. Testler kayıtlı ekran metniyle çalıştırıldı; bu turda gerçek mikrofon veya ekran yakalama yeniden denenmedi.
