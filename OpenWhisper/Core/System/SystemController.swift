@@ -306,23 +306,36 @@ enum SystemController {
     /// Sends a real scroll-wheel event without changing the frontmost app or pointer position.
     /// Line-based scrolling follows the target app's own scrolling behavior and works in both
     /// native views and Chromium/Electron content such as Codex.
+    /// Half the front window ("kaydır"), most of it ("çok kaydır"), glided over ~0.45 s rather
+    /// than jumped: 7 lines at once moved too little, too abruptly to follow.
     private static func scroll(up: Bool, large: Bool) -> String {
         SystemCommandParser.lastScrollUp = up
         guard AXIsProcessTrusted() else {
             return "Ekran kaydırılamadı: Erişilebilirlik izni gerekli"
         }
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: nil,
-            units: .line,
-            wheelCount: 1,
-            wheel1: up ? (large ? 21 : 7) : (large ? -21 : -7),
-            wheel2: 0,
-            wheel3: 0
-        ) else {
-            return "Ekran kaydırılamadı"
+        let window = NSWorkspace.shared.frontmostApplication.flatMap(ScreenReader.focusedWindow(of:))
+        let frame = window.flatMap { ScreenReader.node($0).frame }
+        let height = frame?.height ?? NSScreen.main?.visibleFrame.height ?? 800
+        let distance = height * (large ? 0.9 : 0.5)
+        // Over the window itself, not wherever the pointer happens to be.
+        let point = frame.map { CGPoint(x: $0.midX, y: $0.midY) }
+        DispatchQueue.global(qos: .userInteractive).async {
+            let steps = 24
+            var moved = 0.0
+            for step in 1...steps {
+                // Ease in and out: slow start, fast middle, slow end.
+                let target = distance * (1 - cos(Double(step) / Double(steps) * .pi)) / 2
+                let delta = Int32((target - moved).rounded())
+                moved += Double(delta)
+                if delta != 0, let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                                   wheel1: up ? delta : -delta, wheel2: 0, wheel3: 0) {
+                    if let point { event.location = point }
+                    event.post(tap: .cghidEventTap)
+                }
+                usleep(19_000)
+            }
         }
-        event.post(tap: .cghidEventTap)
-        owLog("[System] Scroll \(up ? "up" : "down") \(large ? "large" : "normal")")
+        owLog("[System] Scroll \(up ? "up" : "down") \(Int(distance)) pt")
         return up ? "Yukarı kaydırıldı" : "Aşağı kaydırıldı"
     }
 
