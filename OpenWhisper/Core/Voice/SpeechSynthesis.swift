@@ -131,6 +131,7 @@ enum SpeechProviders {
         LocalPhononProvider.descriptor,
         LocalOmniVoiceProvider.descriptor,
         LocalEMALightningProvider.descriptor,
+        LocalAhenkCepProvider.descriptor,
         GeminiSpeechProvider.descriptor,
     ]
 

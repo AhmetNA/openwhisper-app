@@ -98,7 +98,7 @@ final class WhatsAppWatcher {
         let people = worthSaying(chatIDs, in: chats)
         guard !people.isEmpty else { return nil }
         return Announcement(chatIDs: people.map(\.id),
-                            text: "Sen yokken " + text(for: people) { max($0.unread, 1) })
+                            text: (CommandLanguage.isEnglish ? "While you were away, " : "Sen yokken ") + text(for: people) { max($0.unread, 1) })
     }
 
     /// Not archived, still unread (a chat read on the phone is no news). Groups count too.
@@ -109,6 +109,15 @@ final class WhatsAppWatcher {
 
     private static func text(for people: [WhatsAppStore.Chat], count: (WhatsAppStore.Chat) -> Int) -> String {
         let names = people.map(WhatsAppController.spokenName)
+        if CommandLanguage.isEnglish {
+            switch people.count {
+            case 1:
+                let n = count(people[0])
+                return n == 1 ? "a message from \(names[0]), shall I read it?" : "\(n) messages from \(names[0]), shall I read them?"
+            case 2: return "messages from \(names[0]) and \(names[1]), shall I read them?"
+            default: return "new messages from \(people.count) people, shall I read them?"
+            }
+        }
         switch people.count {
         case 1:
             let n = count(people[0])

@@ -67,7 +67,7 @@ final class SpeechSynthesisProviderTests: XCTestCase {
     }
 
     func testRegistryListsBothProvidersWithGeminiModels() {
-        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "phonon", "local", "ema", "gemini"])
+        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "phonon", "local", "ema", "ahenk", "gemini"])
         XCTAssertEqual(SpeechProviders.descriptor(for: "gemini").models.map(\.id),
                        ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"])
         XCTAssertFalse(SpeechProviders.descriptor(for: "local").needsAPIKey)
@@ -114,6 +114,19 @@ final class SpeechSynthesisProviderTests: XCTestCase {
         XCTAssertNotEqual(provider.cacheIdentity, LocalOmniVoiceProvider.shared.cacheIdentity)
         XCTAssertNotEqual(provider.cacheIdentity, LocalEMALightningProvider.shared.cacheIdentity)
         XCTAssertNotEqual(LocalPocketTTSProvider.port, LocalEMALightningProvider.port)
+    }
+
+    @MainActor
+    func testAhenkSelectionPersistsAndUsesAnIsolatedServer() {
+        store.providerID = "ahenk"
+        let reopened = SpeechSettingsStore(defaults: UserDefaults(suiteName: suiteName)!, secrets: secrets)
+        XCTAssertEqual(reopened.providerID, "ahenk")
+        XCTAssertTrue(reopened.makeProvider() === LocalAhenkCepProvider.shared)
+        XCTAssertEqual(LocalAhenkCepProvider.shared.replyLanguage, .turkish)
+        XCTAssertNotEqual(LocalAhenkCepProvider.shared.cacheIdentity, LocalEMALightningProvider.shared.cacheIdentity)
+        let ports = LocalModelServer.allPorts()
+        XCTAssertTrue(ports.contains(LocalAhenkCepProvider.port))
+        XCTAssertEqual(ports.count, Set(ports).count)
     }
 
     func testProviderAndModelSurviveARestart() {

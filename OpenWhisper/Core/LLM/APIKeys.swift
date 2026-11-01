@@ -113,7 +113,7 @@ enum APIKeys {
     /// The test is one real search.
     static let exa = APIKeyProvider(
         id: "exa", title: "Exa",
-        purpose: "Jarvis'in internette araması (bulut sohbetiyle).",
+        purpose: "Jarvis'in internette araması (yerel ve bulut sohbetiyle).",
         placeholder: "API anahtarı", expectedPrefix: nil,
         service: "com.openwhisper.app.search", account: "exa.api_key",
         needsAddress: false, fixedTestURL: WebSearch.endpoint, keyHeader: "x-api-key",

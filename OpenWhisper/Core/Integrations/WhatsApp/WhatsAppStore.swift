@@ -210,12 +210,25 @@ enum WhatsAppStore {
             return raw
         }
         // A document goes by its name only; no media content is ever read.
-        if type == 8, let fileName, !fileName.isEmpty { return "Belge: \(fileName)" }
+        if type == 8, let fileName, !fileName.isEmpty { return "\(CommandLanguage.isEnglish ? "Document" : "Belge"): \(fileName)" }
         return mediaLabel(type)
     }
 
     /// What a media message was, by `ZMESSAGETYPE`; nil for group events and calls.
     static func mediaLabel(_ type: Int) -> String? {
+        if CommandLanguage.isEnglish {
+            switch type {
+            case 1: return "Photo"
+            case 2: return "Video"
+            case 3: return "Voice message"
+            case 4: return "Contact card"
+            case 5: return "Location"
+            case 8: return "Document"
+            case 11: return "GIF"
+            case 15: return "Sticker"
+            default: return nil
+            }
+        }
         switch type {
         case 1: return "Fotoğraf"
         case 2: return "Video"

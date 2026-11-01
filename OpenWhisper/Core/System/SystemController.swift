@@ -409,9 +409,9 @@ enum SystemController {
 
     private static func timeNow() -> String {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "tr_TR")
+        formatter.locale = CommandLanguage.locale
         formatter.dateFormat = "HH:mm, d MMMM EEEE"
-        return "Saat \(formatter.string(from: Date()))"
+        return "\(CommandLanguage.isEnglish ? "It's" : "Saat") \(formatter.string(from: Date()))"
     }
 
     // MARK: - Helpers

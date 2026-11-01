@@ -32,15 +32,15 @@ final class JarvisChat {
     /// `model` is the Ollama model, used alone or when the cloud model fails.
     func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
-        // Ollama has no search: its prompt says so, or it answers "searched" facts from history.
+        // Both backends can use Exa; local orchestration also supports models without tools.
         let conversation = { (canSearch: Bool) in
             [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
                                                              canSearch: canSearch)]]
                 + (canSearch ? self.history : self.history.map { $0.filter { $0.key != CloudChatClient.searchedKey } })
                 + [["role": "user", "content": text]]
         }
-        let messages = conversation(Self.cloudReady && APIKeys.exa.hasKey)
-        let localMessages = conversation(false)
+        let messages = conversation(APIKeys.exa.hasKey)
+        let localMessages = messages
 
         lastReply = nil
         return AsyncStream { continuation in
@@ -108,12 +108,14 @@ final class JarvisChat {
     // MARK: - Models
 
     /// The cloud model when it is chosen and set up, with Ollama taking over when it is slow or
-    /// failing (`ChatFallback`); otherwise Ollama alone. `backend` names who answered, for the log.
-    /// `localMessages` are what Ollama gets: the same conversation with the no-search prompt.
+    /// failing (`ChatFallback`); otherwise the local model with search. `backend` names who answered, for the log.
+    /// Local search is also used when the cloud falls back to Ollama.
     private static func stream(messages: [[String: String]], localMessages: [[String: String]], ollamaModel: String,
                                backend: Backend) -> AsyncThrowingStream<String, Error> {
+        let localClient = LocalSearchChatClient(client: LLM.default, key: APIKeys.exa.key(),
+                                                onSearch: { backend.searched = $0 })
         let local = { @Sendable in
-            LLM.default.streamChat(LLMChatRequest(model: ollamaModel, messages: localMessages, timeout: 10,
+            localClient.streamChat(LLMChatRequest(model: ollamaModel, messages: localMessages, timeout: 10,
                                                   temperature: 0.6, maxTokens: 110))
         }
         guard ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() else {
@@ -131,7 +133,7 @@ final class JarvisChat {
                                                  temperature: 0.6, maxTokens: 110))
             },
             fallback: local,
-            // Deciding to search takes the cloud model 0.7–2 s, sometimes more; Ollama can't search.
+            // Deciding to search takes the cloud model 0.7–2 s, sometimes more; local search starts only if the cloud falls back.
             deadline: client.webSearchKey == nil ? ChatFallback.deadline : ChatFallback.searchDeadline,
             onFallback: { reason in
                 owLog("[Chat] Cloud \(model): \(reason), falling back to Ollama")
@@ -158,7 +160,7 @@ final class JarvisChat {
 
     // MARK: - Text
 
-    /// `canSearch`: the cloud model has the `web_search` tool (`WebSearch`).
+    /// `canSearch`: search is available through a cloud tool or local orchestration.
     nonisolated static func systemPrompt(now: Date, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = [],
                                          canSearch: Bool = false) -> String {
         let formatter = DateFormatter()

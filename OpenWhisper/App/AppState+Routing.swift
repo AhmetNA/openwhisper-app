@@ -1242,7 +1242,7 @@ extension AppState {
             if session.acceptsCommands, session.sendsToRecappedSession == nil,
                !facts.pendingDeletion, !facts.pendingWhatsAppSend, !RemoteControl.screenIsLocked,
                let reply = await CloudSessionNavigation.handle(trimmed, front: session.targetApp) {
-                session.latency.finishDecision(route: "bulut sohbet geçişi")
+                session.latency.finishDecision(route: "sohbet geçişi")
                 self.lastTranscription = text
                 if reply == CloudSessionNavigation.newChatOpened || reply == CloudSessionNavigation.switchedChat, session.isVoiceCommand {
                     conversationContinuationApp = NSWorkspace.shared.frontmostApplication

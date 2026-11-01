@@ -63,4 +63,90 @@ final class CloudSessionNavigationTests: XCTestCase {
         XCTAssertNil(match("Model sohbetine geç"))
         XCTAssertNil(match("Spotify zaman aşımı sohbetine geç", current: "3"))
     }
+
+    func testLocalDecisionUsesSchemaAndValidatesDestination() async throws {
+        let local = NavigationModelFake()
+        local.answer = #"{"action":"open","id":"a"}"#
+        let result = try await CloudSessionNavigation.modelDecision("Önceki sohbete geç", agent: .codex,
+            candidates: candidates, currentID: "b", cloud: nil, localModel: "local-test", localClient: local)
+        XCTAssertEqual(result?.id, "a")
+        XCTAssertEqual(local.requests.first?.model, "local-test")
+        XCTAssertNotNil(local.requests.first?.schema)
+        XCTAssertTrue(local.requests.first?.prompt.contains("Arayüz") == true)
+        XCTAssertEqual(local.streamCount, 0)
+        local.answer = #"{"action":"open","id":"invented"}"#
+        let invalid = try await CloudSessionNavigation.modelDecision("Sohbete geç", agent: .claudeCode,
+            candidates: candidates, currentID: "b", cloud: nil, localModel: "local-test", localClient: local)
+        XCTAssertNil(invalid)
+    }
+
+    func testLocalRejectsUnrelatedCandidate() async throws {
+        let local = NavigationModelFake()
+        local.answer = #"{"action":"open","id":"a"}"#
+        local.verification = #"{"matches":false}"#
+        let result = try await CloudSessionNavigation.modelDecision("Vergi sohbetini aç", agent: .codex,
+            candidates: candidates, currentID: "b", cloud: nil, localModel: "local-test", localClient: local)
+        XCTAssertEqual(result?.action, "ambiguous")
+        XCTAssertNil(result?.id)
+        XCTAssertEqual(local.requests.count, 2)
+    }
+
+    func testCloudDecisionUsesSameValidatorWithoutCallingLocal() async throws {
+        let cloud = NavigationModelFake()
+        let local = NavigationModelFake()
+        cloud.answer = #"{"action":"open","id":"a"}"#
+        let result = try await CloudSessionNavigation.modelDecision("Önceki sohbete geç", agent: .codex,
+            candidates: candidates, currentID: "b", cloud: (cloud, "cloud-test"), localModel: "local-test", localClient: local)
+        XCTAssertEqual(result?.id, "a")
+        XCTAssertEqual(cloud.streamCount, 1)
+        XCTAssertTrue(local.requests.isEmpty)
+    }
+
+    func testLiveLocalNavigationDecisions() async throws {
+        guard ProcessInfo.processInfo.environment["JARVIS_LIVE_NAV_TEST"] == "1" else { throw XCTSkip("Live Ollama test is opt-in") }
+        // Synthetic history: exercise decisions without opening or modifying real chats.
+        let chats: [CloudSessionNavigation.Candidate] = [
+            .init(id: "a", title: "Ses modeli", activity: 1, excerpt: "Mikrofon ve konuşma tanıma sorununu düzelttik."),
+            .init(id: "b", title: "Arayüz", activity: 2, excerpt: "Ayarlar ekranındaki renkleri değiştirdik.")
+        ]
+        for (text, current, action, id) in [
+            ("Önceki sohbete geç", "b", "open", "a"),
+            ("Yeni sohbet aç", "b", "new", ""),
+            ("Mikrofon sorununu düzelttiğimiz sohbeti aç", "b", "open", "a"),
+            ("Hiçbir sohbeti açma", "b", "none", ""),
+            ("Vergi beyannamesi konuştuğumuz sohbeti aç", "b", "ambiguous", ""),
+            ("Yemek tarifi konuştuğumuz sohbeti aç", "b", "ambiguous", "")
+        ] {
+            let result = try await CloudSessionNavigation.modelDecision(text, agent: .codex, candidates: chats,
+                currentID: current, cloud: nil, localModel: LLM.selectedModel)
+            if action == "ambiguous" {
+                // Both an explicit ambiguity and a rejected decision ask for clarification.
+                XCTAssertTrue(result == nil || result?.action == "ambiguous", text)
+            } else {
+                XCTAssertEqual(result?.action, action, text)
+            }
+            XCTAssertEqual(result?.id ?? "", id, text)
+        }
+    }
+}
+
+
+private final class NavigationModelFake: LLMClient, ChatStreaming, @unchecked Sendable {
+    var answer = ""
+    var verification = #"{"matches":true}"#
+    var requests: [LLMRequest] = []
+    var streamCount = 0
+    func generate(_ request: LLMRequest) async throws -> String {
+        requests.append(request)
+        if (request.schema?["properties"] as? [String: Any])?["matches"] != nil { return verification }
+        return answer
+    }
+    func chat(_ request: LLMChatRequest) async throws -> String { answer }
+    func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
+        streamCount += 1
+        return AsyncThrowingStream { $0.yield(answer); $0.finish() }
+    }
+    func installedModels(timeout: TimeInterval) async throws -> [String] { [] }
+    func load(model: String, timeout: TimeInterval) async throws {}
+    func unload(model: String, timeout: TimeInterval) async throws {}
 }
