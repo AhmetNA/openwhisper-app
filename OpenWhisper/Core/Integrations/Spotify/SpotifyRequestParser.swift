@@ -130,7 +130,7 @@ enum SpotifyRequestParser {
     /// "Tarkan'ın" searches as "tarkan" rather than the never-matching "tarkanın".
     private static func words(_ residue: String) -> [Word] {
         residue
-            .lowercased(with: Locale(identifier: "tr_TR"))
+            .lowercased(with: CommandLanguage.locale)
             // Whisper sometimes detaches the case suffix ("Spotify da Neighborhood"), and
             // English puts a preposition before it ("Daft Punk on Spotify", "… from Spotify"); both leftovers
             // would otherwise end up inside the search query.

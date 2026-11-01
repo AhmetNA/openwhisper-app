@@ -24,6 +24,21 @@ final class SpotifyDecisionTests: XCTestCase {
         XCTAssertNil(SpotifyManager.explicitIntent(in: "open the settings"))
     }
 
+    func testEnglishDictationLanguageKeepsTheDottedI() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.string(forKey: "language")
+        defer { defaults.set(saved, forKey: "language") }
+
+        defaults.set("en", forKey: "language")
+        guard case .search(let english)? = decide("Play Imagine Dragons on Spotify", nil) else { return XCTFail() }
+        XCTAssertEqual(english.freeText, "imagine dragons")
+
+        // Turkish keeps Turkish casing: "Işık" is "ışık".
+        defaults.set("tr", forKey: "language")
+        guard case .search(let turkish)? = decide("Spotify'da Işık çal", nil) else { return XCTFail() }
+        XCTAssertEqual(turkish.freeText, "ışık")
+    }
+
     func testVetoOnlyAppliesToBroadIntentsWithoutSpotifyAddress() {
         let none = Parse(intent: .none)
         XCTAssertNil(decide("Müziği durdur", none))

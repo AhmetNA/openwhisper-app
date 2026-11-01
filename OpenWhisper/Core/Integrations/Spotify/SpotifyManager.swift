@@ -35,7 +35,7 @@ final class SpotifyManager: @unchecked Sendable {
     // MARK: - Normalization
 
     static func normalize(_ text: String) -> String {
-        var lower = text.lowercased(with: Locale(identifier: "tr_TR"))
+        var lower = text.lowercased(with: CommandLanguage.locale)
         lower = lower.trimmingCharacters(in: .whitespacesAndNewlines)
         while let last = lower.unicodeScalars.last, CharacterSet(charactersIn: ".!?,;:").contains(last) {
             lower.removeLast()
