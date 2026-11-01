@@ -1005,10 +1005,41 @@ extension AppState {
                     // "bu butonuna bas" names nothing: no screenshot can find it.
                     guard session.isVoiceCommand, saysClick || screenModeStep,
                           !ScreenActions.spokenName(trimmed).isEmpty else { return await notFound() }
-                    mark = CACurrentMediaTime()
-                    var hit = await ScreenActions.findText(trimmed, in: app)
-                    stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
-                    if let found = hit, ScreenActions.isRisky(found.label), !saysClick { hit = nil }
+                    @MainActor func readText() async -> (label: String, point: CGPoint)? {
+                        mark = CACurrentMediaTime()
+                        let found = await ScreenActions.findText(trimmed, in: app)
+                        stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
+                        if let found, ScreenActions.isRisky(found.label), !saysClick { return nil }
+                        return found
+                    }
+                    // A named icon ("mikrofona bas") is no text on screen: the icon model goes first.
+                    let namesIcon = saysClick && IconClassifier.iconClass(for: trimmed) != nil
+                    var hit = namesIcon ? nil : await readText()
+                    // An icon without words: the icon model, on this Mac, in ~0.2 s.
+                    if hit == nil, saysClick {
+                        mark = CACurrentMediaTime()
+                        let icon = await ScreenActions.iconPick(trimmed, in: app)
+                        stepParts.append(("simge modeli", CACurrentMediaTime() - mark))
+                        if let icon, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                            session.latency.finishDecision(route: "ekran eylemi, simge modeli")
+                            owLog("[Route] screen action: icon '\(icon.label)' by the icon model")
+                            self.lastTranscription = text
+                            self.lastCommandUndo = []
+                            mark = CACurrentMediaTime()
+                            let pressed = ScreenActions.perform(icon)
+                            stepParts.append(("basma", CACurrentMediaTime() - mark))
+                            self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
+                            self.showFlowBarMessage(pressed ? "✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
+                            if pressed {
+                                self.noteScreenModeAction()
+                                commandFollowUp = .some(nil)
+                            } else {
+                                await self.speakReply(self.jarvisReply.failure("Basamadım"))
+                            }
+                            return true
+                        }
+                    }
+                    if hit == nil, namesIcon { hit = await readText() }
                     if hit == nil, saysClick {
                         self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 12000)
                         mark = CACurrentMediaTime()
@@ -1054,7 +1085,11 @@ extension AppState {
                 } else if soundAlike.count == 1 {
                     pick = soundAlike[0]
                     owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
-                } else if !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
+                } else if !(exact.isEmpty && saysClick && IconClassifier.iconClass(for: trimmed) != nil
+                            && !labels.contains { ScreenActions.isGrounded(trimmed, label: $0) }),
+                          !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
+                    // A named icon no label speaks of skips the language model (0.5–2 s): the icon
+                    // model in `pressByText` knows icons better.
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
                     mark = CACurrentMediaTime()
                     pick = await ScreenActions.modelPick(trimmed, elements: elements)

@@ -136,4 +136,15 @@ final class ScreenActionsTests: XCTestCase {
         XCTAssertTrue(ScreenActions.isGrounded("Ayarlarda bildirimleri kapat", label: "Notifications"))
         XCTAssertEqual(ScreenActions.spokenName("bu butonuna bas"), "")
     }
+
+    func testIconNames() {
+        XCTAssertEqual(IconClassifier.iconClass(for: "mikrofona bas"), "microphone")
+        XCTAssertEqual(IconClassifier.iconClass(for: "çarpıya tıkla"), "close")
+        XCTAssertEqual(IconClassifier.iconClass(for: "üç noktaya bas"), "more")
+        XCTAssertEqual(IconClassifier.iconClass(for: "geri sar butonuna bas"), "previous")
+        XCTAssertEqual(IconClassifier.iconClass(for: "geri butonuna bas"), "back")
+        XCTAssertEqual(IconClassifier.iconClass(for: "dosya ekle butonuna bas"), "attach")
+        XCTAssertEqual(IconClassifier.iconClass(for: "+ butonuna bas"), "add")
+        XCTAssertNil(IconClassifier.iconClass(for: "Software Update'e bas"))
+    }
 }

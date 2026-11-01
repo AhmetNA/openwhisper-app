@@ -1,0 +1,111 @@
+[
+  {
+    "shortDescription" : "Mac UI icon classes",
+    "metadataOutputVersion" : "3.0",
+    "outputSchema" : [
+      {
+        "isOptional" : "0",
+        "formattedType" : "String",
+        "type" : "String",
+        "name" : "target",
+        "shortDescription" : ""
+      },
+      {
+        "isOptional" : "0",
+        "keyType" : "String",
+        "formattedType" : "Dictionary (String → Double)",
+        "type" : "Dictionary",
+        "name" : "targetProbability",
+        "shortDescription" : ""
+      }
+    ],
+    "version" : "1",
+    "modelParameters" : [
+
+    ],
+    "author" : "OpenWhisper",
+    "specificationVersion" : 8,
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "14.0",
+      "tvOS" : "17.0",
+      "visionOS" : "1.0",
+      "watchOS" : "unavailable",
+      "iOS" : "17.0",
+      "macCatalyst" : "17.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_imageClassifier",
+      "structure" : [
+        {
+          "name" : "MLModelType_visionFeaturePrint"
+        },
+        {
+          "name" : "MLModelType_glmClassifier"
+        }
+      ]
+    },
+    "inputSchema" : [
+      {
+        "height" : "360",
+        "colorspace" : "BGR",
+        "isOptional" : "0",
+        "width" : "360",
+        "isColor" : "1",
+        "formattedType" : "Image (Color 360 × 360)",
+        "hasSizeFlexibility" : "0",
+        "type" : "Image",
+        "shortDescription" : "",
+        "name" : "image"
+      }
+    ],
+    "classLabels" : [
+      "account",
+      "add",
+      "attach",
+      "back",
+      "camera",
+      "close",
+      "copy",
+      "delete",
+      "download",
+      "edit",
+      "emoji",
+      "favorite",
+      "filter",
+      "forward",
+      "fullscreen",
+      "help",
+      "info",
+      "microphone",
+      "minimize",
+      "more",
+      "next",
+      "notifications",
+      "other",
+      "pause",
+      "play",
+      "previous",
+      "refresh",
+      "repeat",
+      "scroll_down",
+      "search",
+      "send",
+      "settings",
+      "share",
+      "shuffle",
+      "sidebar",
+      "stop",
+      "view_mode",
+      "volume"
+    ],
+    "generatedClassName" : "IconClassifier",
+    "userDefinedMetadata" : {
+      "com.apple.createml.version" : "27.2.0"
+    },
+    "method" : "predict"
+  }
+]

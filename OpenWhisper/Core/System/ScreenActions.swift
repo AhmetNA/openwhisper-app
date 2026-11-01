@@ -408,6 +408,44 @@ enum ScreenActions {
         return false
     }
 
+    /// Icon-sized controls in `app`'s front window, named or not: what `IconClassifier` looks at.
+    static func iconCandidates(of app: NSRunningApplication) -> [ScreenElement] {
+        guard let window = ScreenReader.focusedWindow(of: app), let windowFrame = frame(of: window) else { return [] }
+        var found: [ScreenElement] = []
+        var visited = 0
+        func walk(_ node: AXUIElement, depth: Int) {
+            guard found.count < 150, visited < 5000, depth < 50 else { return }
+            visited += 1
+            let role = ScreenReader.string(node, kAXRoleAttribute) ?? ""
+            if ["AXButton", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXRadioButton"].contains(role) || (role == "AXImage" && hasPress(node)),
+               let box = frame(of: node), (8...64).contains(box.width), (8...64).contains(box.height),
+               (0.5...2).contains(box.width / box.height), windowFrame.intersects(box), isEnabled(node) {
+                found.append(ScreenElement(element: node, role: role, label: ownLabel(of: node) ?? "", region: region(of: box, in: windowFrame), inDialog: false))
+            }
+            for child in ScreenReader.children(node) { walk(child, depth: depth + 1) }
+        }
+        walk(window, depth: 0)
+        return found
+    }
+
+    /// "Mikrofona bas": the button that looks like the icon named, by the icon model. Nil when
+    /// the words name no icon or no button looks like it.
+    static func iconPick(_ said: String, in app: NSRunningApplication) async -> ScreenElement? {
+        guard let iconClass = IconClassifier.iconClass(for: said) else { return nil }
+        let started = Date()
+        let candidates = iconCandidates(of: app)
+        guard !candidates.isEmpty, let (image, windowFrame, _) = await ScreenReader.captureFrontWindow(of: app) else {
+            owLog("[Icons] No buttons to look at for \(iconClass)")
+            return nil
+        }
+        let frames = candidates.map { frame(of: $0.element) ?? .zero }
+        let best = IconClassifier.best(iconClass, among: frames, in: image, windowFrame: windowFrame)
+        owLog(String(format: "[Icons] %@ among %d buttons: %@ in %d ms", iconClass, candidates.count,
+                     best.map { String(format: "'%@' %.2f", candidates[$0.index].label, $0.confidence) } ?? "none",
+                     Int(Date().timeIntervalSince(started) * 1000)))
+        return best.map { candidates[$0.index] }
+    }
+
     // MARK: - Icons, by a vision model
 
     /// The center of the box a vision model answered, on a 0–1000 scale of the image. Qwen-VL

@@ -35,6 +35,7 @@ let package = Package(
             resources: [
                 .process("Resources"),
                 .copy("Models/smart_turn.mlmodelc"),
+                .copy("Models/IconClassifier.mlmodelc"),
                 .copy("Models/SmartTurn-LICENSE.txt")
             ],
             linkerSettings: [
