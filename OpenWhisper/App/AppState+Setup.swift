@@ -174,6 +174,7 @@ extension AppState {
         setupWhatsAppAnnouncements()
         setupClaudePermissions()
         owLog("[OpenWhisper] Ready!")
+        IconClassifier.warmUp()
     }
 
     func downloadedTranscriptionModelNames() -> [String] {

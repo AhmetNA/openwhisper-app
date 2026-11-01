@@ -53,26 +53,41 @@ enum IconClassifier {
     static func best(_ iconClass: String, among frames: [CGRect], in image: CGImage, windowFrame: CGRect) -> (index: Int, confidence: Float)? {
         guard let model, !frames.isEmpty else { return nil }
         let scale = CGFloat(image.width) / windowFrame.width
-        var scores: [(index: Int, confidence: Float)] = []
-        for (index, frame) in frames.enumerated() {
+        // All buttons at once, on every core: ~4 ms each one after another.
+        var confidences = [Float](repeating: 0, count: frames.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: frames.count) { index in
             // As in training: 3 pt around the control, letterboxed to 64×64.
-            let local = frame.offsetBy(dx: -windowFrame.minX, dy: -windowFrame.minY).insetBy(dx: -3, dy: -3)
+            let local = frames[index].offsetBy(dx: -windowFrame.minX, dy: -windowFrame.minY).insetBy(dx: -3, dy: -3)
             let rect = CGRect(x: local.minX * scale, y: local.minY * scale, width: local.width * scale, height: local.height * scale)
                 .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            guard rect.width >= 20, rect.height >= 20, let crop = image.cropping(to: rect).flatMap(letterboxed) else { continue }
+            guard rect.width >= 20, rect.height >= 20, let crop = image.cropping(to: rect).flatMap(letterboxed) else { return }
             let request = VNCoreMLRequest(model: model)
             request.imageCropAndScaleOption = .scaleFit
             try? VNImageRequestHandler(cgImage: crop).perform([request])
             let confidence = (request.results as? [VNClassificationObservation])?.first { $0.identifier == iconClass }?.confidence ?? 0
-            scores.append((index, confidence))
+            lock.withLock { confidences[index] = confidence }
         }
-        let ranked = scores.sorted { $0.confidence > $1.confidence }
+        let ranked = confidences.enumerated().map { (index: $0.offset, confidence: $0.element) }.sorted { $0.confidence > $1.confidence }
         guard let top = ranked.first, top.confidence >= 0.5 else { return nil }
         if ranked.count > 1, ranked[1].confidence > top.confidence - 0.1 {
             owLog(String(format: "[Icons] Two buttons look like %@ (%.2f, %.2f); none pressed", iconClass, top.confidence, ranked[1].confidence))
             return nil
         }
         return top
+    }
+
+    /// Loads the model and Vision's feature extractor once, at launch, so the first "mikrofona
+    /// bas" doesn't wait for them.
+    static func warmUp() {
+        DispatchQueue.global(qos: .utility).async {
+            let started = Date()
+            guard let model, let blank = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                                                   space: CGColorSpaceCreateDeviceRGB(),
+                                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?.makeImage() else { return }
+            try? VNImageRequestHandler(cgImage: blank).perform([VNCoreMLRequest(model: model)])
+            owLog("[Icons] Model ready in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        }
     }
 
     private static func letterboxed(_ source: CGImage) -> CGImage? {

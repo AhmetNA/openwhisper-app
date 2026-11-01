@@ -1005,41 +1005,35 @@ extension AppState {
                     // "bu butonuna bas" names nothing: no screenshot can find it.
                     guard session.isVoiceCommand, saysClick || screenModeStep,
                           !ScreenActions.spokenName(trimmed).isEmpty else { return await notFound() }
-                    @MainActor func readText() async -> (label: String, point: CGPoint)? {
-                        mark = CACurrentMediaTime()
-                        let found = await ScreenActions.findText(trimmed, in: app)
-                        stepParts.append(("ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
-                        if let found, ScreenActions.isRisky(found.label), !saysClick { return nil }
-                        return found
-                    }
-                    // A named icon ("mikrofona bas") is no text on screen: the icon model goes first.
+                    // OCR and the icon model look at the screen at the same time, not one after the
+                    // other; a named icon ("mikrofona bas") is no text, so there the icon's pick wins.
                     let namesIcon = saysClick && IconClassifier.iconClass(for: trimmed) != nil
-                    var hit = namesIcon ? nil : await readText()
-                    // An icon without words: the icon model, on this Mac, in ~0.2 s.
-                    if hit == nil, saysClick {
+                    mark = CACurrentMediaTime()
+                    async let textFound = ScreenActions.findText(trimmed, in: app)
+                    async let iconFound = saysClick ? await ScreenActions.iconPick(trimmed, in: app) : nil
+                    var hit = await textFound
+                    let icon = await iconFound
+                    stepParts.append((saysClick ? "OCR + simge modeli (aynı anda)" : "ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
+                    if let found = hit, ScreenActions.isRisky(found.label), !saysClick { hit = nil }
+                    if let icon, namesIcon || hit == nil,
+                       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                        session.latency.finishDecision(route: "ekran eylemi, simge modeli")
+                        owLog("[Route] screen action: icon '\(icon.label)' by the icon model")
+                        self.lastTranscription = text
+                        self.lastCommandUndo = []
                         mark = CACurrentMediaTime()
-                        let icon = await ScreenActions.iconPick(trimmed, in: app)
-                        stepParts.append(("simge modeli", CACurrentMediaTime() - mark))
-                        if let icon, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
-                            session.latency.finishDecision(route: "ekran eylemi, simge modeli")
-                            owLog("[Route] screen action: icon '\(icon.label)' by the icon model")
-                            self.lastTranscription = text
-                            self.lastCommandUndo = []
-                            mark = CACurrentMediaTime()
-                            let pressed = ScreenActions.perform(icon)
-                            stepParts.append(("basma", CACurrentMediaTime() - mark))
-                            self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
-                            self.showFlowBarMessage(pressed ? "✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
-                            if pressed {
-                                self.noteScreenModeAction()
-                                commandFollowUp = .some(nil)
-                            } else {
-                                await self.speakReply(self.jarvisReply.failure("Basamadım"))
-                            }
-                            return true
+                        let pressed = ScreenActions.perform(icon)
+                        stepParts.append(("basma", CACurrentMediaTime() - mark))
+                        self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
+                        self.showFlowBarMessage(pressed ? "✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
+                        if pressed {
+                            self.noteScreenModeAction()
+                            commandFollowUp = .some(nil)
+                        } else {
+                            await self.speakReply(self.jarvisReply.failure("Basamadım"))
                         }
+                        return true
                     }
-                    if hit == nil, namesIcon { hit = await readText() }
                     if hit == nil, saysClick {
                         self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 12000)
                         mark = CACurrentMediaTime()
