@@ -15,7 +15,8 @@ enum DictationEdit: Equatable, Sendable {
     case replace(old: String, new: String)
     case pressReturn
 
-    private static let locale = Locale(identifier: "tr_TR")
+    /// English keeps its dotted "I" ("delete what I said").
+    private static var locale: Locale { CommandLanguage.locale }
 
     private static let deleteAllPhrases: Set<String> = [
         "yazdığımı sil", "son yazdığımı sil", "yazdığını sil", "son yazdığını sil",
@@ -41,18 +42,21 @@ enum DictationEdit: Equatable, Sendable {
 
     /// "Enter'a bas" needs no dictation before it.
     static func isReturn(_ text: String) -> Bool {
-        returnPhrases.contains(folded(text))
+        if CommandLanguage.isEnglish { return englishReturnPhrases.contains(folded(text)) }
+        return returnPhrases.contains(folded(text))
     }
 
     /// "Sil", "alanı temizle" need no dictation before it either.
     static func isClearField(_ text: String) -> Bool {
-        clearFieldPhrases.contains(folded(text))
+        if CommandLanguage.isEnglish { return englishClearFieldPhrases.contains(folded(text)) }
+        return clearFieldPhrases.contains(folded(text))
     }
 
     /// The edit `text` asks for on `dictation`, the text just pasted. A replacement only counts
     /// when its old words are really in the dictation; otherwise "raporu hazır yap" is plain
     /// dictation.
     static func parse(_ text: String, dictation: String) -> DictationEdit? {
+        if CommandLanguage.isEnglish { return englishEdit(text, dictation: dictation) }
         let phrase = folded(text)
         if returnPhrases.contains(phrase) { return .pressReturn }
         if clearFieldPhrases.contains(phrase) { return .clearField }
@@ -196,6 +200,49 @@ enum DictationEdit: Equatable, Sendable {
     private static func matchingCase(_ new: String, of old: String) -> String {
         guard let first = old.first, first.isUppercase, let newFirst = new.first, newFirst.isLowercase else { return new }
         return String(newFirst).uppercased(with: locale) + new.dropFirst()
+    }
+
+    // MARK: - English
+
+    // While the dictation language is English (`CommandLanguage`): "undo", "delete the last
+    // word", "press enter", "replace Monday with Tuesday".
+    private static let englishDeleteAllPhrases: Set<String> = [
+        "undo", "undo that", "scratch that", "take that back", "delete what i said", "delete what i just said",
+        "delete what i wrote", "delete what i just wrote",
+    ]
+    private static let englishClearFieldPhrases: Set<String> = [
+        "delete", "delete that", "delete it", "delete this", "delete everything", "delete all", "delete all of it",
+        "clear", "clear it", "clear everything", "clear the field", "clear the text", "clear the text box", "clear all",
+        "erase", "erase that", "erase it", "erase everything",
+    ]
+    private static let englishDeleteLastWordPhrases: Set<String> = [
+        "delete the last word", "delete last word", "remove the last word", "erase the last word",
+    ]
+    private static let englishDeleteLastSentencePhrases: Set<String> = [
+        "delete the last sentence", "delete last sentence", "remove the last sentence", "erase the last sentence",
+    ]
+    private static let englishReturnPhrases: Set<String> = [
+        "enter", "press enter", "hit enter", "press return", "hit return", "press the enter key",
+    ]
+
+    private static func englishEdit(_ text: String, dictation: String) -> DictationEdit? {
+        let phrase = folded(text).replacingOccurrences(of: #"^(?:jarvis |please )+|(?: please)$"#, with: "", options: .regularExpression)
+        if englishReturnPhrases.contains(phrase) { return .pressReturn }
+        if englishClearFieldPhrases.contains(phrase) { return .clearField }
+        if englishDeleteAllPhrases.contains(phrase) { return .deleteAll }
+        if englishDeleteLastWordPhrases.contains(phrase) { return .deleteLastWord }
+        if englishDeleteLastSentencePhrases.contains(phrase) { return .deleteLastSentence }
+        // "replace Monday with Tuesday", "change Ahmed to Ahmet": only when the old words are there.
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".!?")))
+        guard cleaned.split(separator: " ").count <= 10,
+              let regex = try? NSRegularExpression(pattern: #"^(?:replace|change|swap) (.+?) (?:with|to|into|for) (.+)$"#, options: .caseInsensitive),
+              let match = regex.firstMatch(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)),
+              let oldRange = Range(match.range(at: 1), in: cleaned), let newRange = Range(match.range(at: 2), in: cleaned)
+        else { return nil }
+        let old = String(cleaned[oldRange]).replacingOccurrences(of: #"^(?:the word |the )"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let new = String(cleaned[newRange])
+        guard !["this", "that", "it"].contains(old.lowercased()), let found = occurrence(of: old, in: dictation) else { return nil }
+        return .replace(old: found, new: matchingCase(new, of: found))
     }
 
     private static func folded(_ text: String) -> String {

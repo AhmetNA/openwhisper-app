@@ -330,6 +330,9 @@ final class ReminderManager {
     /// Only a short, explicit answer can authorize a pending destructive action. Negative
     /// forms are checked first so "onaylamıyorum" can never be mistaken for approval.
     nonisolated static func deletionConfirmationDecision(_ text: String) -> DeletionConfirmationDecision {
+        if CommandLanguage.isEnglish {
+            return EnglishAnswers.decision(text).map { $0 ? .approve : .reject } ?? .unclear
+        }
         var answer = foldForMatching(text)
         if answer.hasPrefix("jarvis ") {
             answer.removeFirst("jarvis ".count)

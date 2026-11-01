@@ -88,8 +88,21 @@ enum JarvisAddressee {
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }()
 
+    // English (`CommandLanguage`): "type here: see you", "write this down …", "type …".
+    // "write me a poem" stays a request to Jarvis.
+    private static let englishLeadingTypeRegex: NSRegularExpression = {
+        let pattern = #"^\s*(?:(?:type|write)\s+(?:here|this(?:\s+(?:down|here))?|the\s+following|down)\b[\s:,.;-]*|type\b[\s:,.;-]+)"#
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
+    // "… type that", "… and write it down".
+    private static let englishTrailingTypeRegex: NSRegularExpression = {
+        let pattern = #"[\s,;:.!?\-"'“”]*(?:\band\s+)?\b(?:type|write)\s+(?:that|it|this)(?:\s+(?:down|here|please))?[\s.!?,;:"'“”]*$"#
+        return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }()
+
     static func leadingTypeCommand(_ text: String) -> String? {
-        body(afterLeadingMatch: leadingTypeRegex, in: text)
+        body(afterLeadingMatch: CommandLanguage.isEnglish ? englishLeadingTypeRegex : leadingTypeRegex, in: text)
     }
 
     static func explicitChatCommand(_ text: String) -> String? {
@@ -130,6 +143,12 @@ enum JarvisAddressee {
     /// The text before a trailing "yaz" command, or nil when the text doesn't end with one.
     static func trailingTypeCommand(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if CommandLanguage.isEnglish {
+            guard let match = englishTrailingTypeRegex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+                  let cut = Range(match.range, in: trimmed)?.lowerBound else { return nil }
+            let body = String(trimmed[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return body.isEmpty ? nil : body
+        }
         let lowered = trimmed.lowercased(with: locale)
         guard lowered.utf16.count == trimmed.utf16.count,
               let match = typeRegex.firstMatch(in: lowered, range: NSRange(lowered.startIndex..., in: lowered))

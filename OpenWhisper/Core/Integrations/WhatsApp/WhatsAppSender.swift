@@ -332,6 +332,7 @@ final class WhatsAppSender {
 
     /// Only a short, plain answer counts; anything else is asked once more.
     static func decision(_ text: String) -> Decision {
+        if CommandLanguage.isEnglish { return EnglishAnswers.decision(text).map { $0 ? .approve : .reject } ?? .unclear }
         let answer = normalizedAnswer(text)
         let rejections: Set<String> = [
             "hayir", "hayir gonderme", "gonderme", "yollama", "iptal", "iptal et", "vazgec", "vazgectim",
@@ -348,6 +349,7 @@ final class WhatsAppSender {
 
     /// The answer to "okuyayım mı?".
     static func readDecision(_ text: String) -> Decision {
+        if CommandLanguage.isEnglish { return EnglishAnswers.decision(text).map { $0 ? .approve : .reject } ?? .unclear }
         let answer = normalizedAnswer(text)
         let rejections: Set<String> = [
             "hayir", "okuma", "sonra", "sonra oku", "simdi degil", "gerek yok", "bosver", "bos ver", "istemiyorum",

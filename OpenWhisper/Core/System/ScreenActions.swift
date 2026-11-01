@@ -177,7 +177,18 @@ enum ScreenActions {
     // MARK: - Matching what was said
 
     /// Words around the name: "Kaydet'e tıklar mısın", "şu gönder butonuna bas lütfen".
-    private static let fillers: Set<String> = [
+    private static var fillers: Set<String> { CommandLanguage.isEnglish ? englishFillers : turkishFillers }
+    private static var screenWords: Set<String> { CommandLanguage.isEnglish ? englishScreenWords : turkishScreenWords }
+    /// "press the Send button", "click on Submit", "can you tap OK".
+    private static let englishFillers: Set<String> = [
+        "jarvis", "hey", "please", "can", "could", "you", "the", "a", "on", "this", "that",
+        "press", "click", "tap", "hit", "button", "link", "tab", "option", "icon", "menu",
+    ]
+    private static let englishScreenWords: Set<String> = [
+        "click", "press", "tap", "hit", "select", "check", "button", "link", "menu", "tab", "checkbox", "icon",
+        "top", "bottom", "first", "second", "third", "last", "blue", "red", "green", "on screen",
+    ]
+    private static let turkishFillers: Set<String> = [
         "jarvis", "hey", "lütfen", "şuna", "şunu", "buna", "bunu", "şu", "bu", "bir", "hadi",
         "butonuna", "butona", "butonu", "buton", "düğmesine", "düğmeye", "düğmesi", "düğme", "tuşuna", "tuşu",
         "linkine", "linke", "bağlantısına", "bağlantıya", "seçeneğine", "seçeneği", "sekmesine", "sekmesi",
@@ -185,7 +196,7 @@ enum ScreenActions {
         "mısın", "misin", "musun", "müsün", "mısınız", "misiniz",
     ]
     /// Words that say "the screen" without naming anything on it.
-    private static let screenWords: Set<String> = [
+    private static let turkishScreenWords: Set<String> = [
         "tıkla", "tıklar", "tıklayın", "bas", "basar", "basın", "seç", "seçer", "işaretle", "onayla", "iptal", "kapat",
         "aç", "gir", "git", "buton", "butonuna", "butonu", "düğme", "düğmesine", "link", "linke", "linkine", "bağlantı",
         "menü", "menüyü", "sekme", "sekmeye", "kutucuğu", "kutuyu", "çarpı", "çarpıya", "sağ", "sağdaki", "sol",
@@ -206,13 +217,16 @@ enum ScreenActions {
     /// before the "bas". Nil for any other word.
     static func gluedPressName(_ word: String) -> String? {
         let word = word.replacingOccurrences(of: "'", with: "")
-        guard word.count > 5, word.hasSuffix("bas"), !fillers.contains(word) else { return nil }
+        guard !CommandLanguage.isEnglish, word.count > 5, word.hasSuffix("bas"), !fillers.contains(word) else { return nil }
         return String(word.dropLast(3))
     }
 
     /// "… tıkla", "… butonuna bas": clicking said outright, the only way in from a text field.
     static func saysClick(_ text: String) -> Bool {
         let words = normalized(text).replacingOccurrences(of: "'", with: " ").split(separator: " ").map(String.init)
+        if CommandLanguage.isEnglish {
+            return words.contains { ["click", "tap", "button"].contains($0) } || ["press", "hit"].contains(words.first ?? "")
+        }
         return words.contains { $0.hasPrefix("tıkla") || $0.hasPrefix("butonu") || $0.hasPrefix("butona") || $0.hasPrefix("düğme") }
             || words.last.map { ["bas", "basar", "basın", "bassana"].contains($0) || gluedPressName($0) != nil } ?? false
     }
@@ -641,6 +655,7 @@ enum ScreenActions {
 
     /// The answer to "… basayım mı?": true / false, nil when it is no answer (a new request).
     static func confirmation(_ text: String) -> Bool? {
+        if CommandLanguage.isEnglish { return EnglishAnswers.decision(text) }
         let answer = normalized(text).split(separator: " ").filter { !["jarvis", "lütfen", "efendim"].contains($0) }.joined(separator: " ")
         if ["hayır", "basma", "iptal", "iptal et", "vazgeç", "vazgeçtim", "dur", "yok", "olmaz", "boş ver", "istemiyorum", "gerek yok"].contains(answer) {
             return false

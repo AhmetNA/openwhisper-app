@@ -87,6 +87,7 @@ enum ClaudePermission {
     /// Only a plain yes allows: a call that runs code is never approved on a guess. A "no" may
     /// carry what to do instead. Nil when the answer is neither.
     static func answer(_ text: String) -> Answer? {
+        if CommandLanguage.isEnglish { return englishAnswer(text) }
         let words = words(text).filter { !fillers.contains($0) }
         guard let first = words.first else { return nil }
         let joined = words.joined(separator: " ")
@@ -95,6 +96,23 @@ enum ClaudePermission {
         }
         if joined.contains("her zaman") || joined.contains("bir daha sorma") { return .always }
         return allowAnswers.contains(joined) ? .allow : nil
+    }
+
+    /// English: "yes", "always allow", "no, run the tests first".
+    private static func englishAnswer(_ text: String) -> Answer? {
+        let words = EnglishAnswers.words(text).filter { !["jarvis", "please"].contains($0) }
+        let joined = words.joined(separator: " ")
+        if joined.contains("always allow") || joined.contains("don't ask again") || joined.contains("allow always") {
+            return .always
+        }
+        if let first = words.first, ["no", "don't", "deny", "stop", "cancel", "nope"].contains(first) {
+            // What follows the no is what to do instead.
+            let rest = text.replacingOccurrences(of: #"^\W*(?:jarvis\W+)?(?:no|nope|don't|deny|stop|cancel)\b\W*"#, with: "",
+                                                 options: [.regularExpression, .caseInsensitive])
+                .trimmingCharacters(in: CharacterSet.letters.inverted)
+            return .deny(rest.split(separator: " ").count >= 2 ? rest : nil)
+        }
+        return EnglishAnswers.decision(text) == true ? .allow : nil
     }
 
     /// "Hayır, önce testleri çalıştır." → "önce testleri çalıştır"; nil for a bare no.
