@@ -37,6 +37,9 @@ enum TimerCommandParser {
     /// "ne kadar kaldı" is about it.
     static func parse(_ text: String, ringing: Bool = false, active: Bool = false,
                       now: Date = Date(), calendar: Calendar = .current) -> Command? {
+        if CommandLanguage.isEnglish {
+            return EnglishTimeCommands.timer(text, ringing: ringing, active: active, now: now, calendar: calendar)
+        }
         let t = normalize(text)
         guard !t.isEmpty, t.split(separator: " ").count <= maxWords else { return nil }
 

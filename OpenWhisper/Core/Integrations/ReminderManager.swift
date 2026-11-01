@@ -375,7 +375,10 @@ final class ReminderManager {
         owLog("[Reminders] Processing: \(text)")
 
         let parsed: ParsedReminder
-        if let detParsed = TurkishDateParser.parse(text) {
+        if CommandLanguage.isEnglish, let english = EnglishTimeCommands.reminder(text) {
+            owLog("[Reminders] Parsed English — task: \(english.task), date: \(english.fireDate)")
+            parsed = ParsedReminder(task: english.task, fireDate: english.fireDate)
+        } else if let detParsed = TurkishDateParser.parse(text) {
             owLog("[Reminders] Parsed deterministically — task: \(detParsed.task), date: \(detParsed.fireDate)")
             parsed = ParsedReminder(task: detParsed.task, fireDate: detParsed.fireDate)
         } else if let llmParsed = await parseWithOllama(text: text) {
