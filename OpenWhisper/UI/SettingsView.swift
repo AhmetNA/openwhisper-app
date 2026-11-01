@@ -304,7 +304,8 @@ struct SettingsView: View {
 
     private var languageSection: some View {
         @Bindable var appState = appState
-        return HStack {
+        return VStack(alignment: .leading, spacing: 6) {
+        HStack {
         Label("Yazıya dökme dili", systemImage: "globe")
         Spacer()
         Picker("", selection: $appState.language) {
@@ -342,6 +343,12 @@ struct SettingsView: View {
         .labelsHidden()
         .frame(width: 150)
     }
+        if appState.language == "en" {
+            Text("Jarvis İngilizce konuşur (Phonon 31m sesi).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
     }
 
     private var interfaceLanguageSection: some View {
@@ -351,18 +358,13 @@ struct SettingsView: View {
                 Spacer()
                 Picker("", selection: Binding(get: { interfaceLanguage }, set: {
                     interfaceLanguage = $0
-                    InterfaceLanguage.set($0, appState: appState)
+                    InterfaceLanguage.set($0)
                 })) {
                     Text(verbatim: "Türkçe").tag("tr")
                     Text(verbatim: "English").tag("en")
                 }
                 .labelsHidden()
                 .frame(width: 150)
-            }
-            if interfaceLanguage == "en" {
-                Text("Jarvis İngilizce konuşur (Phonon 31m sesi).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             if interfaceLanguage != InterfaceLanguage.launched {
                 HStack {

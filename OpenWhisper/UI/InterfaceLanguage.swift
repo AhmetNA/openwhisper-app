@@ -4,8 +4,6 @@ import AppKit
 /// `AppleLanguages` at launch, so a change takes effect after a relaunch.
 enum InterfaceLanguage {
     static let key = "interfaceLanguage"
-    /// Voice provider in use before English switched it to Phonon; restored on Turkish.
-    private static let previousVoiceKey = "voiceProviderBeforeEnglish"
 
     static var current: String { UserDefaults.standard.string(forKey: key) ?? "tr" }
 
@@ -17,20 +15,10 @@ enum InterfaceLanguage {
         UserDefaults.standard.set([current], forKey: "AppleLanguages")
     }
 
-    @MainActor
-    static func set(_ language: String, appState: AppState) {
+    static func set(_ language: String) {
         guard language != current else { return }
         UserDefaults.standard.set(language, forKey: key)
         apply()
-        let phonon = LocalPhononProvider.descriptor.id
-        if language == "en" {
-            if appState.voiceProviderID != phonon {
-                UserDefaults.standard.set(appState.voiceProviderID, forKey: previousVoiceKey)
-            }
-            appState.voiceProviderID = phonon
-        } else if appState.voiceProviderID == phonon {
-            appState.voiceProviderID = UserDefaults.standard.string(forKey: previousVoiceKey) ?? SpeechProviders.defaultID
-        }
     }
 
     static func relaunch() {

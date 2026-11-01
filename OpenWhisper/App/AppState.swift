@@ -57,6 +57,7 @@ final class AppState {
     var language: String {
         didSet {
             UserDefaults.standard.set(language, forKey: "language")
+            if language != oldValue { switchReplyVoice(english: language == "en") }
             if damgaEnabled && language == "tr" {
                 Task { await DamgaNormalizer.shared.prepare() }
             } else {
@@ -64,6 +65,23 @@ final class AppState {
             }
         }
     }
+    /// Voice provider in use before English switched it to Phonon; restored on any other language.
+    private static let voiceBeforeEnglishKey = "voiceProviderBeforeEnglish"
+
+    /// English commands get English replies, spoken by Phonon; leaving English restores the
+    /// voice used before.
+    private func switchReplyVoice(english: Bool) {
+        let phonon = LocalPhononProvider.descriptor.id
+        if english {
+            if voiceProviderID != phonon {
+                UserDefaults.standard.set(voiceProviderID, forKey: Self.voiceBeforeEnglishKey)
+            }
+            voiceProviderID = phonon
+        } else if voiceProviderID == phonon {
+            voiceProviderID = UserDefaults.standard.string(forKey: Self.voiceBeforeEnglishKey) ?? SpeechProviders.defaultID
+        }
+    }
+
     /// Raw mic. Starts on and is not persisted (user's choice), even though it also skips
     /// `AudioSignalProcessor.inputGain` and a quiet raw mic can decode to hallucinations.
     var bypassAudioProcessing = true
