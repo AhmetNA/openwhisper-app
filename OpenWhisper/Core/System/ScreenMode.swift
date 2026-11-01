@@ -23,6 +23,12 @@ enum ScreenMode {
         return closers.contains(words.joined(separator: " "))
     }
 
+    /// "Tekrar bas", "bir daha bas", "yine ona bas": the same button as the last step.
+    static func isRepeat(_ text: String) -> Bool {
+        let words = " " + ScreenActions.normalized(text) + " "
+        return [" tekrar ", " bir daha ", " yine ", " aynı ", " gene "].contains { words.contains($0) }
+    }
+
     private static let pressVerbs: Set<String> = ["bas", "basın", "bassana", "tıkla", "tıklayın", "tıklasana"]
 
     /// "Ayarlar'a bas", "geri butonuna tıklar mısın": the step is said in full, so the mic can

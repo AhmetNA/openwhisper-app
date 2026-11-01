@@ -659,6 +659,9 @@ final class AppState {
     /// Screen mode (`ScreenMode`): after a press the mic stays open for the next step.
     var screenModeActive = false
     @ObservationIgnored var screenModeLastAction = Date.distantPast
+    /// The button screen mode last pressed, and the icon it was asked for: "mikrofona bas" again
+    /// presses it again, though pressing changed its look (Claude's mic turns into a stop).
+    @ObservationIgnored var screenModeLastPress: (element: ScreenElement, iconClass: String?)?
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     var swapTargetApp: NSRunningApplication?

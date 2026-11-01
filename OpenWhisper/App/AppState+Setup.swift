@@ -119,6 +119,7 @@ extension AppState {
                 self?.startVoiceSession()
             }
         }
+        hotkey?.onScreenModeExit = { [weak self] in self?.exitScreenModeByKey() }
         hotkey?.jarvisKey = jarvisHotkey
         hotkey?.typedRequestKey = typedRequestHotkey
         hotkey?.onTypedRequestKey = { [weak self] in

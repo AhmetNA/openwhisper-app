@@ -983,6 +983,25 @@ extension AppState {
                 guard ScreenActions.worthLooking(trimmed) else { return false }
                 let stepStarted = CACurrentMediaTime()
                 var stepParts: [(String, TimeInterval)] = []
+                // "Mikrofona bas" again, or "tekrar bas": the button pressed last, though pressing
+                // may have changed its look (Claude's mic turned into a stop and was not found).
+                if screenModeStep, ScreenActions.saysClick(trimmed), let last = screenModeLastPress, ScreenReader.node(last.element.element).frame != nil,
+                   ScreenMode.isRepeat(trimmed) || (last.iconClass != nil && IconClassifier.iconClass(for: trimmed) == last.iconClass) {
+                    session.latency.finishDecision(route: "ekran eylemi, aynı düğme")
+                    owLog("[Route] screen action: '\(last.element.label)' again")
+                    self.lastTranscription = text
+                    let pressed = ScreenActions.perform(last.element)
+                    self.logScreenStep(session, pressed ? "aynı düğmeye basıldı" : "basılamadı", startedAt: stepStarted,
+                                       [("basma", CACurrentMediaTime() - stepStarted)])
+                    self.showFlowBarMessage(pressed ? "✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
+                    if pressed {
+                        self.noteScreenModeAction()
+                        commandFollowUp = .some(nil)
+                    } else {
+                        await self.speakReply(self.jarvisReply.failure("Basamadım"))
+                    }
+                    return true
+                }
                 // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
                 let saysClick = ScreenActions.saysClick(trimmed)
                 // Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
@@ -1023,6 +1042,7 @@ extension AppState {
                         self.lastCommandUndo = []
                         mark = CACurrentMediaTime()
                         let pressed = ScreenActions.perform(icon)
+                        if pressed { self.screenModeLastPress = (icon, IconClassifier.iconClass(for: trimmed)) }
                         stepParts.append(("basma", CACurrentMediaTime() - mark))
                         self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
                         self.showFlowBarMessage(pressed ? "✓" : "Basılamadı", durationMs: pressed ? 1500 : 3000)
@@ -1114,6 +1134,7 @@ extension AppState {
                 }
                 mark = CACurrentMediaTime()
                 let pressed = ScreenActions.perform(target)
+                if pressed { self.screenModeLastPress = (target, IconClassifier.iconClass(for: trimmed)) }
                 stepParts.append(("basma", CACurrentMediaTime() - mark))
                 if session.isVoiceCommand {
                     self.logScreenStep(session, pressed ? "basıldı" : "basılamadı", startedAt: stepStarted, stepParts)

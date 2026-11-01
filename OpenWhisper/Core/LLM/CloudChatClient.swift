@@ -169,6 +169,8 @@ struct CloudChatClient: ChatStreaming {
                                  thinkingOff: thinkingOff)
         body["messages"] = messages
         body["stream"] = false
+        // qwen3-vl-30b: "'reasoning_effort' parametresini desteklemiyor" (HTTP 400).
+        body["reasoning_effort"] = nil
         let (data, response) = try await URLSession.shared.data(for: request(path: "chat/completions", body: body, timeout: timeout))
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else {

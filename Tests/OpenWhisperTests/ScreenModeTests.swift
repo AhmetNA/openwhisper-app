@@ -57,4 +57,10 @@ final class ScreenModeTests: XCTestCase {
         XCTAssertEqual(ScreenMode.fieldTypeRequest("adres çubuğuna youtube.com yaz ve gönder")?.send, true)
         XCTAssertNil(ScreenMode.fieldTypeRequest("kedi videoları yaz"))
     }
+
+    func testRepeatPress() {
+        XCTAssertTrue(ScreenMode.isRepeat("tekrar bas"))
+        XCTAssertTrue(ScreenMode.isRepeat("bir daha mikrofona bas"))
+        XCTAssertFalse(ScreenMode.isRepeat("mikrofona bas"))
+    }
 }

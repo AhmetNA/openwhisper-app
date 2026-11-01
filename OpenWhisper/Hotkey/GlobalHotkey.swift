@@ -49,6 +49,9 @@ final class GlobalHotkey {
     }
     /// Fired when the typed request shortcut is pressed; AppState opens or closes the panel.
     var onTypedRequestKey: (() -> Void)?
+    /// Screen mode is on: Fn or Esc ends it. Esc is then kept from the app; Fn starts no dictation.
+    var screenModeKeys = false
+    var onScreenModeExit: (() -> Void)?
     private var typedRequestModifierArmed = false
 
     /// NX_SYSDEFINED — has no case in Swift's CGEventType.
@@ -142,7 +145,9 @@ final class GlobalHotkey {
     private func handleFunctionKeyChanged(isPressed: Bool) {
         switch mode {
         case .idle:
-            if isPressed {
+            if isPressed, screenModeKeys {
+                DispatchQueue.main.async { self.onScreenModeExit?() }
+            } else if isPressed {
                 let now = CACurrentMediaTime()
                 GlobalHotkey.lastFnPressUptime = now
                 owLog("[Perf] [FnKeyDown] Fn key pressed down at t=\(String(format: "%.3f", now))")
@@ -156,8 +161,9 @@ final class GlobalHotkey {
                 onRelease()
             }
         case .handsFree:
-            // Hands-free recording ignores Fn presses — only Space toggles it off.
-            break
+            // Hands-free recording ignores Fn presses — only Space toggles it off. Screen mode's
+            // open mic is the exception: Fn ends the mode.
+            if isPressed, screenModeKeys { DispatchQueue.main.async { self.onScreenModeExit?() } }
         }
     }
 
@@ -436,6 +442,10 @@ final class GlobalHotkey {
                 return Unmanaged.passUnretained(event)
             }
 
+            if keyCode == 53, type == .keyDown, me.screenModeKeys {
+                DispatchQueue.main.async { me.onScreenModeExit?() }
+                return nil
+            }
             if keyCode == 49 {
                 if me.handleSpaceKeyDown(flags: event.flags) {
                     return nil

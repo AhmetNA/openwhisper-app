@@ -284,6 +284,7 @@ extension AppState {
     func noteScreenModeAction() {
         if !screenModeActive { owLog("[ScreenMode] On") }
         screenModeActive = true
+        hotkey?.screenModeKeys = true
         let stamp = Date()
         screenModeLastAction = stamp
         // A recording that never finished must not leave the mode on.
@@ -295,10 +296,23 @@ extension AppState {
         }
     }
 
+    /// Fn or Esc in screen mode: the mode ends and its open mic closes without a transcript.
+    func exitScreenModeByKey() {
+        guard screenModeActive else { return }
+        endScreenMode("Fn/Esc")
+        if recordingState == .recording, hotkey?.trigger == .followUp {
+            hotkey?.externalCancelHandsFree()
+            discardActiveRecording(reason: "screen mode ended by key")
+        }
+        showFlowBarMessage("Ekran modu kapandı", durationMs: 1500)
+    }
+
     func endScreenMode(_ reason: String) {
         guard screenModeActive else { return }
         owLog("[ScreenMode] Off: \(reason)")
         screenModeActive = false
+        screenModeLastPress = nil
+        hotkey?.screenModeKeys = false
     }
 
     /// One line per Jarvis screen step: where the time went between the end of speech and the
