@@ -33,19 +33,85 @@ final class ScreenQuestionTests: XCTestCase {
                      "Safari sekmesi: Eylülün Takısı Kadın Gold Renk Taşlı Dorika Kalp Bileklik — https://www.trendyol.com/eylulun-takisi/kadin-gold-renk-tasli-dorika-kalp-bileklik-p-843948876",
                      "Sayfadan: Satıcı: Eylülün Takısı. Normal fiyat: 199,70 TL. Trendyol Plus'a özel sepette: 189,71 TL. Zirkon taş, çelik, suya dayanıklı. Puan: 3.8, 417 değerlendirme."]
         }
-        let evidence = await ScreenQuestion.context(for: "bu bileklik nasıl", lines: lines, model: ScreenQuestion.localVisionModel, app: fixture ? nil : app)
+        let question = ProcessInfo.processInfo.environment["SCREEN_QUESTION_TEXT"] ?? "bu bileklik nasıl"
+        let prepared = await ScreenQuestion.prepare(for: question, lines: lines, model: ScreenQuestion.localVisionModel, app: fixture ? nil : app)
+        let evidence = prepared.prompt
         print("LIVE EVIDENCE \(backend): \(evidence)")
         XCTAssertTrue(evidence.contains("Arama sonuçları:"))
         XCTAssertTrue(evidence.lowercased().contains("dorika"))
-        let messages = [["role": "system", "content": evidence], ["role": "user", "content": "bu bileklik nasıl?"]]
+        let messages = [["role": "system", "content": evidence], ["role": "user", "content": question]]
         let answer: String
-        if backend == "cloud", let (client, model) = CloudLLM.client() {
+        if let direct = prepared.answer {
+            answer = direct
+        } else if backend == "cloud", let (client, model) = CloudLLM.client() {
             answer = try await client.complete(model: model, messages: messages, timeout: 20, maxTokens: 300)
         } else {
             answer = try await LLM.default.chat(LLMChatRequest(model: ScreenQuestion.localVisionModel, messages: messages, timeout: 30, temperature: 0, maxTokens: 300))
         }
         print("LIVE ANSWER \(backend): \(answer)")
         XCTAssertFalse(answer.isEmpty)
+    }
+
+    func testIntentDistinguishesDescriptionFromPrice() {
+        for question in ["bu ürün ne", "bu ne", "bu ürün ne işe yarıyor", "bunun amacı nedir"] {
+            XCTAssertTrue(ScreenQuestion.matches(question), question)
+            XCTAssertEqual(ScreenQuestion.intent(question), .describe, question)
+        }
+        for question in ["bu ürün başka bir yerde daha ucuza var mı", "bunun en ucuzu nerede", "bu ürün ne kadar", "bu ürünün fiyatı kaç"] {
+            XCTAssertTrue(ScreenQuestion.matches(question), question)
+            XCTAssertEqual(ScreenQuestion.intent(question), .price, question)
+        }
+        XCTAssertEqual(ScreenQuestion.intent("bu bileklik nasıl"), .review)
+        XCTAssertEqual(ScreenQuestion.intent("burada ne anlatılıyor"), .summary)
+    }
+
+    @MainActor
+    func testDescriptionDoesNotRequireProductModelOrSearch() async {
+        let result = await ScreenQuestion.context(for: "bu ürün ne", lines: ["Sayfadan: Dorika Kalp Bileklik, bileğe takılan aksesuar."], model: "unreachable-test-model", app: nil)
+        XCTAssertTrue(result.contains("ne işe yaradığını"))
+        XCTAssertTrue(result.contains("Dorika Kalp Bileklik"))
+        XCTAssertFalse(result.contains("Arama sonuçları:"))
+    }
+
+    func testOfferRankingAndGrounding() {
+        let evidence = "Kaynak: cimri.com\nBeta Elektronik 1.400 TL ücretsiz kargo.\nKaynak: akakce.com\nAlfa Teknoloji 1.500 TL ücretsiz kargo."
+        let raw = #"[{"seller":"Alfa Teknoloji","price":1500,"shipping":0,"source":"akakce.com","quote":"Alfa Teknoloji 1.500 TL ücretsiz kargo."},{"seller":"Beta Elektronik","price":1400,"shipping":0,"source":"cimri.com","quote":"Beta Elektronik 1.400 TL ücretsiz kargo."}]"#
+        let reply = ScreenQuestion.offerReply(raw: raw, evidence: evidence, currentPrice: 1300)
+        XCTAssertTrue(reply.contains("Beta Elektronik"))
+        XCTAssertTrue(reply.contains("1.400 TL"))
+        XCTAssertTrue(reply.contains("daha ucuz değil"))
+        XCTAssertFalse(reply.contains("Alfa Teknoloji"))
+        XCTAssertTrue(ScreenQuestion.offerReply(raw: raw, evidence: "no such offers").contains("bulamadım"))
+        XCTAssertEqual(ScreenQuestion.money("1.299,90"), 1299.9)
+    }
+
+    func testPriceSearchRequestsComparisonDomainAndFreshSellerText() {
+        let body = WebSearch.body(query: "ürün", domains: ["akakce.com"], priceComparison: true)
+        XCTAssertEqual(body["includeDomains"] as? [String], ["akakce.com"])
+        let contents = body["contents"] as? [String: Any]
+        XCTAssertEqual(contents?["maxAgeHours"] as? Int, 0)
+        XCTAssertNotNil(contents?["text"])
+        let data = Data(#"{"results":[{"title":"Model X fiyatları","url":"https://www.akakce.com/model-x.html","text":"Satıcı: Örnek Mağaza. Fiyat: 1250 TL. Kargo: ücretsiz."}]}"#.utf8)
+        let evidence = WebSearch.results(from: data, priceComparison: true)
+        XCTAssertTrue(evidence.contains("Örnek Mağaza"))
+        XCTAssertTrue(evidence.contains("1250 TL"))
+    }
+
+    /// Model-behaviour check with synthetic offers, never real price claims.
+    func testLiveDescriptionAndNamedCheapestSeller() async throws {
+        guard ProcessInfo.processInfo.environment["SCREEN_INTENT_LIVE"] == "1" else { throw XCTSkip("Opt-in local model check") }
+        let item = ScreenQuestion.Identity(product: "Deneme X100 256GB Siyah", store: "Ekran Mağazası", price: "2000 TL")
+        let prompt = ScreenQuestion.pricePrompt(item: item, results: "Kaynak: akakce.com\nDeneme X100 256GB Siyah, stokta, Alfa Teknoloji, 1500 TL, ücretsiz kargo.\nKaynak: cimri.com\nDeneme X100 256GB Siyah, stokta, Beta Elektronik, 1400 TL, ücretsiz kargo.\nKaynak: epey.com\nDeneme X100 128GB Siyah, Gama, 1100 TL. Bunlar sentetik test teklifleridir.")
+        let answer = await ScreenQuestion.priceAnswer(prompt: prompt, model: ScreenQuestion.localVisionModel)
+        print("PRICE INTENT FIXTURE ANSWER: \(answer)")
+        XCTAssertTrue(answer.contains("Beta Elektronik"))
+        XCTAssertTrue(answer.contains("1400") || answer.contains("1.400"))
+        XCTAssertFalse(answer.contains("Gama"))
+        XCTAssertFalse(answer.contains("Alfa Teknoloji"))
+        let description = try await LLM.default.chat(LLMChatRequest(model: ScreenQuestion.localVisionModel, messages: [["role": "system", "content": ScreenQuestion.descriptionPrompt(source: "Kadın Gold Renk Taşlı Dorika Kalp Bileklik")], ["role": "user", "content": "bu ürün ne"]], timeout: 30, temperature: 0, maxTokens: 250))
+        print("DESCRIPTION INTENT FIXTURE ANSWER: \(description)")
+        XCTAssertTrue(description.lowercased().contains("bilek"))
+        XCTAssertFalse(description.lowercased().contains("bulamadım"))
     }
 
     @MainActor

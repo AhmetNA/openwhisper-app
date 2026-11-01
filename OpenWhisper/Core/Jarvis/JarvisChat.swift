@@ -49,8 +49,11 @@ final class JarvisChat {
             let task = Task { @MainActor in
                 let started = Date()
                 var messages = initialMessages
+                var directAnswer: String?
                 if screenQuestion {
-                    let evidence = await ScreenQuestion.context(for: text, lines: context, model: model, app: screenApp)
+                    let prepared = await ScreenQuestion.prepare(for: text, lines: context, model: model, app: screenApp)
+                    directAnswer = prepared.answer
+                    let evidence = prepared.prompt
                     messages = [["role": "system", "content": "Sen Jarvis’sin. Sesli yanıt veriyorsun; markdown kullanma. " + Self.languageRule(language) + "\n" + evidence],
                                 ["role": "user", "content": text]]
                     guard !Task.isCancelled else { continuation.finish(); return }
@@ -90,11 +93,16 @@ final class JarvisChat {
                 }
                 let backend = Backend()
                 do {
+                    if let directAnswer {
+                        backend.set("verified price offers")
+                        emit([directAnswer])
+                    } else {
                     for try await piece in Self.stream(messages: messages, localMessages: localMessages, ollamaModel: model, backend: backend, allowSearch: !screenQuestion) {
                         buffer += piece
                         emit(Self.takeSentences(from: &buffer))
                     }
                     emit([buffer])
+                    }
                 } catch is CancellationError {
                 } catch {
                     owLog("[Chat] \(backend.value) request failed: \(error.localizedDescription)")
