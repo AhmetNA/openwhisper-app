@@ -214,6 +214,28 @@ final class RecordingMediaControllerTests: XCTestCase {
         XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8 * 0.3, accuracy: 0.001)
     }
 
+    func testConfirmedWakeOverASparedVideoDipsLikeAnUnheldWake() {
+        let transport = LeftoverTransport()
+        transport.leftPlaying = true
+        let volume = MockVolumeController()
+        let scheduler = TestRampScheduler()
+        let ducker = AudioDucker(volumeController: volume, scheduler: scheduler)
+        let controller = RecordingMediaController(transport: transport, pauseDelay: 0, ducker: ducker)
+
+        controller.begin(sparingYouTube: true, holdingPause: true)
+        controller.confirmPause()
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8 * 0.9, accuracy: 0.001)
+
+        controller.end()
+        controller.waitUntilIdle()
+        ducker.flushQueueForTesting()
+        for _ in 0..<100 { scheduler.triggerTick() }
+        ducker.flushQueueForTesting()
+        XCTAssertEqual(volume.writtenVolumes.last ?? 0, 0.8, accuracy: 0.0001)
+    }
+
     func testConfirmingADelayedPauseRunsItOnce() {
         let transport = Transport()
         let controller = RecordingMediaController(transport: transport, pauseDelay: 0.05)

@@ -60,6 +60,8 @@ final class RecordingMediaController {
 
     /// A held pause turns the volume down this much (to 30%) while the wake is unconfirmed.
     static let holdDuck: Float = 0.7
+    /// A wake session's dip for the YouTube video it leaves playing.
+    static let youTubeDip: Float = 0.1
 
     init(transport: RecordingMediaTransport = NowPlayingTransport(), pauseDelay: TimeInterval = 2,
          ducker: AudioDucker = .shared) {
@@ -74,14 +76,14 @@ final class RecordingMediaController {
     /// instead, so a false "Jarvis" barely disturbs it.
     /// `holdingPause` (a "Jarvis" over media whose voice isn't confirmed yet, `WakeProbation`)
     /// pauses nothing: the volume drops by `holdDuck` until `confirmPause()` pauses (and brings
-    /// it back once nothing is left playing), or `end()` restores it with every player left as it was.
+    /// it back once nothing is left playing, or to `youTubeDip` over a spared video), or `end()` restores it with every player left as it was.
     func begin(immediately: Bool = false, sparingYouTube: Bool = false, holdingPause: Bool = false) {
         queue.async { [self] in
             guard !active else { return }
             active = true
             leftRunning.withLock { $0 = true }
             if holdingPause || sparingYouTube {
-                ducker.duck(by: holdingPause ? Self.holdDuck : 0.1)
+                ducker.duck(by: holdingPause ? Self.holdDuck : Self.youTubeDip)
                 volumeDucked = true
                 holdDucked = holdingPause
             }
@@ -98,6 +100,13 @@ final class RecordingMediaController {
                     self.ducker.restore()
                     self.volumeDucked = false
                     self.holdDucked = false
+                } else if self.holdDucked, sparingYouTube {
+                    // A spared YouTube video always counts as left playing, so the branch above
+                    // never ran for a wake: the reply played at 30% (1 Nov 2026: system 37%,
+                    // heard 9%). Drop to the dip an unheld wake session uses instead.
+                    self.ducker.duck(by: Self.youTubeDip)
+                    self.holdDucked = false
+                    owLog("[RecordingMedia] Wake confirmed over a spared video; volume dip back to \(Int(Self.youTubeDip * 100))%")
                 }
                 owLog("[RecordingMedia] Tracking \(self.receipts.count) paused player(s)" + (result.leftPlaying ? "; something is still playing" : ""))
             }
