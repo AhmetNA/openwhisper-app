@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Free conversation with Jarvis ("Selam diyebilir misin?", "Kara deliği kısaca anlat") through
 /// a cloud model (chosen in Settings) with the local Ollama model as its fallback. Used only for "Jarvis" sessions that are neither a command nor
@@ -39,13 +40,22 @@ final class JarvisChat {
                 + (canSearch ? self.history : self.history.map { $0.filter { $0.key != CloudChatClient.searchedKey } })
                 + [["role": "user", "content": text]]
         }
-        let messages = conversation(APIKeys.exa.hasKey)
-        let localMessages = messages
+        let screenQuestion = ScreenQuestion.matches(text)
+        let screenApp = screenQuestion ? NSWorkspace.shared.frontmostApplication : nil
+        let initialMessages = conversation(!screenQuestion && APIKeys.exa.hasKey)
 
         lastReply = nil
         return AsyncStream { continuation in
             let task = Task { @MainActor in
                 let started = Date()
+                var messages = initialMessages
+                if screenQuestion {
+                    let evidence = await ScreenQuestion.context(for: text, lines: context, model: model, app: screenApp)
+                    messages = [["role": "system", "content": "Sen Jarvis’sin. Sesli yanıt veriyorsun; markdown kullanma. " + Self.languageRule(language) + "\n" + evidence],
+                                ["role": "user", "content": text]]
+                    guard !Task.isCancelled else { continuation.finish(); return }
+                }
+                let localMessages = messages
                 var full = ""
                 var buffer = ""
                 var firstSentenceMs: Int?
@@ -80,7 +90,7 @@ final class JarvisChat {
                 }
                 let backend = Backend()
                 do {
-                    for try await piece in Self.stream(messages: messages, localMessages: localMessages, ollamaModel: model, backend: backend) {
+                    for try await piece in Self.stream(messages: messages, localMessages: localMessages, ollamaModel: model, backend: backend, allowSearch: !screenQuestion) {
                         buffer += piece
                         emit(Self.takeSentences(from: &buffer))
                     }
@@ -111,26 +121,26 @@ final class JarvisChat {
     /// failing (`ChatFallback`); otherwise the local model with search. `backend` names who answered, for the log.
     /// Local search is also used when the cloud falls back to Ollama.
     private static func stream(messages: [[String: String]], localMessages: [[String: String]], ollamaModel: String,
-                               backend: Backend) -> AsyncThrowingStream<String, Error> {
-        let localClient = LocalSearchChatClient(client: LLM.default, key: APIKeys.exa.key(),
+                               backend: Backend, allowSearch: Bool = true) -> AsyncThrowingStream<String, Error> {
+        let localClient = LocalSearchChatClient(client: LLM.default, key: allowSearch ? APIKeys.exa.key() : nil,
                                                 onSearch: { backend.searched = $0 })
         let local = { @Sendable in
             localClient.streamChat(LLMChatRequest(model: ollamaModel, messages: localMessages, timeout: 10,
-                                                  temperature: 0.6, maxTokens: 110))
+                                                  temperature: 0.6, maxTokens: allowSearch ? 110 : 300))
         }
         guard ChatBackend.selected == .cloud, let (cloud, model) = CloudLLM.client() else {
             backend.set("ollama \(ollamaModel)")
             return local()
         }
         var searching = cloud
-        searching.webSearchKey = APIKeys.exa.key()
+        searching.webSearchKey = allowSearch ? APIKeys.exa.key() : nil
         searching.onSearch = { backend.searched = $0 }
         let client = searching
         backend.set("cloud \(model)")
         return ChatFallback.stream(
             primary: {
                 client.streamChat(LLMChatRequest(model: model, messages: messages, timeout: 10,
-                                                 temperature: 0.6, maxTokens: 110))
+                                                 temperature: 0.6, maxTokens: allowSearch ? 110 : 300))
             },
             fallback: local,
             // Deciding to search takes the cloud model 0.7–2 s, sometimes more; local search starts only if the cloud falls back.

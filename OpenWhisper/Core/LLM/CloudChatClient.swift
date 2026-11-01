@@ -163,14 +163,18 @@ struct CloudChatClient: ChatStreaming {
         }
     }
 
-    /// One answer, whole, to `messages` whose content may hold images (`image_url` parts).
-    func complete(model: String, messages: [[String: Any]], timeout: TimeInterval, maxTokens: Int) async throws -> String {
-        var body = Self.chatBody(LLMChatRequest(model: model, messages: [], timeout: timeout, temperature: 0, maxTokens: maxTokens),
-                                 thinkingOff: thinkingOff)
+    static func completionBody(model: String, messages: [[String: Any]], maxTokens: Int, thinkingOff: Bool = true) -> [String: Any] {
+        var body = chatBody(LLMChatRequest(model: model, messages: [], timeout: 10, temperature: 0, maxTokens: maxTokens), thinkingOff: thinkingOff)
         body["messages"] = messages
         body["stream"] = false
-        // qwen3-vl-30b: "'reasoning_effort' parametresini desteklemiyor" (HTTP 400).
+        // The vision endpoint rejects reasoning_effort, even when its value is "none".
         body["reasoning_effort"] = nil
+        return body
+    }
+
+    /// One answer, whole, to `messages` whose content may hold images (`image_url` parts).
+    func complete(model: String, messages: [[String: Any]], timeout: TimeInterval, maxTokens: Int) async throws -> String {
+        let body = Self.completionBody(model: model, messages: messages, maxTokens: maxTokens, thinkingOff: thinkingOff)
         let (data, response) = try await URLSession.shared.data(for: request(path: "chat/completions", body: body, timeout: timeout))
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else {

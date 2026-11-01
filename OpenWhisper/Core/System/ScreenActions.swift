@@ -504,9 +504,9 @@ enum ScreenActions {
         var yFirst = false
         let answer: String?
         let backend: String
-        if ChatBackend.selected == .cloud, let (client, chatModel) = CloudLLM.client() {
+        if ChatBackend.selected == .cloud, let (client, _) = CloudLLM.client() {
             // A vision model from the server's list when there is one; the chat model may see no images.
-            let model = CloudLLM.cachedModels.first { $0.lowercased().contains("vl") } ?? chatModel
+            let model = ScreenQuestion.cloudVisionModel
             backend = model
             let content: [[String: Any]] = [
                 ["type": "text", "text": prompt(#"{"bbox_2d": [x1, y1, x2, y2]}"#)],
@@ -531,7 +531,7 @@ enum ScreenActions {
         return CGPoint(x: frame.minX + point.x / 1000 * frame.width, y: frame.minY + point.y / 1000 * frame.height)
     }
 
-    private static func jpegBase64(_ image: CGImage, maxWidth: Int) -> String? {
+    static func jpegBase64(_ image: CGImage, maxWidth: Int) -> String? {
         let scale = min(1, Double(maxWidth) / Double(image.width))
         let width = Int(Double(image.width) * scale), height = Int(Double(image.height) * scale)
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,

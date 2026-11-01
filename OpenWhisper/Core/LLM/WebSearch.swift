@@ -30,7 +30,7 @@ enum WebSearch {
         ["query": query, "type": "instant", "numResults": 5, "contents": ["highlights": true]]
     }
 
-    static func search(_ query: String, key: String) async throws -> String {
+    static func search(_ query: String, key: String, product: String? = nil, excludingPage: String? = nil) async throws -> String {
         var request = URLRequest(url: endpoint, timeoutInterval: 6)
         request.httpMethod = "POST"
         request.setValue(key, forHTTPHeaderField: "x-api-key")
@@ -39,17 +39,36 @@ enum WebSearch {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else { throw LLMError.http(status) }
-        return results(from: data)
+        return results(from: data, product: product, excludingPage: excludingPage)
     }
 
     /// One line per page (title, date, address) and its passages, for the model to read.
-    static func results(from data: Data) -> String {
+    static func results(from data: Data, product: String? = nil, excludingPage: String? = nil) -> String {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let results = json["results"] as? [[String: Any]], !results.isEmpty else { return "Sonuç bulunamadı." }
         var out = ""
-        for (index, result) in results.enumerated() {
+        func compact(_ text: String) -> String {
+            text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "tr_TR"))
+                .replacingOccurrences(of: "ı", with: "i")
+                .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+        }
+        let filtered = results.filter { result in
+            if let product, !compact(result["title"] as? String ?? "").contains(compact(product)) { return false }
+            if let excludingPage, let page = URL(string: excludingPage), let url = URL(string: result["url"] as? String ?? ""),
+               page.host == url.host && page.path == url.path { return false }
+            return true
+        }
+        guard !filtered.isEmpty else { return "Tam eşleşen ek kaynak bulunamadı." }
+        for (index, result) in filtered.enumerated() {
             let date = (result["publishedDate"] as? String).map { " (\($0.prefix(10)))" } ?? ""
-            let passages = (result["highlights"] as? [String] ?? []).joined(separator: " … ").prefix(maxPassageChars)
+            var passageText = (result["highlights"] as? [String] ?? []).joined(separator: " … ")
+            if product != nil {
+                // A bare catalog rating is not evidence of customer experiences.
+                passageText = passageText.components(separatedBy: "\n").filter {
+                    $0.trimmingCharacters(in: .whitespaces).range(of: #"^(?:[0-5](?:[.,]\d+)?|[★☆⭐]+)$"#, options: .regularExpression) == nil
+                }.joined(separator: "\n")
+            }
+            let passages = passageText.prefix(maxPassageChars)
             out += "\(index + 1). \(result["title"] as? String ?? "")\(date) \(result["url"] as? String ?? "")\n\(passages)\n"
         }
         return String(out.prefix(maxChars))
