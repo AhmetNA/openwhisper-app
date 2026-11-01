@@ -15,21 +15,21 @@ extension AppState {
     /// after the user typed or clicked elsewhere, must not erase their own text.
     /// Returns what happened, for the Flow bar.
     func runDictationEdit(_ edit: DictationEdit, targetApp: NSRunningApplication?) async -> (status: String, done: Bool) {
-        guard let injector = textInjector as? TextInjector else { return ("Yapılamadı", false) }
+        guard let injector = textInjector as? TextInjector else { return (L("Yapılamadı", "Couldn't do it"), false) }
         guard let targetApp, !targetApp.isTerminated,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == targetApp.processIdentifier else {
             owLog("[DictationEdit] \(edit): the target app is no longer in front")
-            return ("Yazdığım uygulama önde değil", false)
+            return (L("Yazdığım uygulama önde değil", "The app I typed into isn't in front"), false)
         }
         if edit == .pressReturn {
             let pressed = injector.pressReturn(inPID: targetApp.processIdentifier)
-            return pressed ? ("Enter", true) : ("Enter'a basılamadı", false)
+            return pressed ? ("Enter", true) : (L("Enter'a basılamadı", "Couldn't press Enter"), false)
         }
         if edit == .clearField {
             // Cmd+A only inside a text field: elsewhere it would select a page or files.
             guard AXTextAccess.focusedEditableElement(matchingPID: targetApp.processIdentifier) != nil else {
                 owLog("[DictationEdit] clearField: no editable field in front")
-                return ("Metin kutusu bulunamadı", false)
+                return (L("Metin kutusu bulunamadı", "Text box not found"), false)
             }
             DictationSnapshot.shared.invalidateForSwap()
             swapPair = nil
@@ -41,14 +41,14 @@ extension AppState {
         }
 
         guard let dictation = editableDictation(in: targetApp) else {
-            return ("Düzeltecek bir yazı yok", false)
+            return (L("Düzeltecek bir yazı yok", "No text to fix"), false)
         }
         guard let edited = edit.applied(to: dictation) else {
             owLog("[DictationEdit] \(edit) changes nothing in '\(dictation)'")
-            return ("Değişecek bir şey yok", false)
+            return (L("Değişecek bir şey yok", "Nothing to change"), false)
         }
         guard caretFollows(dictation, in: targetApp) else {
-            return ("Son yazdığım yerinde değil; dokunmadım", false)
+            return (L("Son yazdığım yerinde değil; dokunmadım", "What I typed last has moved; I left it alone"), false)
         }
 
         // A voice edit is not a correction the user typed: don't learn from it. Option+Z's
@@ -78,7 +78,7 @@ extension AppState {
                 continuation.resume()
             }
         }
-        return ("Düzeltildi", true)
+        return (L("Düzeltildi", "Fixed"), true)
     }
 
     /// Whether the focused field's text right before the caret is `dictation`, with nothing

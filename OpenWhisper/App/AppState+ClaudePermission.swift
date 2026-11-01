@@ -86,13 +86,13 @@ extension AppState {
     func answerClaudePermission(_ pending: PendingClaudePermission, with text: String) async {
         guard pending.continuation != nil else {
             owLog("[ClaudePermission] Answer came after Claude decided: '\(text)'")
-            showFlowBarMessage("Claude'da zaten cevaplandı.", durationMs: 2500)
+            showFlowBarMessage(L("Claude'da zaten cevaplandı.", "Already answered in Claude."), durationMs: 2500)
             return
         }
         guard let answer = ClaudePermission.answer(text) else {
             owLog("[ClaudePermission] Unclear answer: '\(text)'")
             resolveClaudePermission(nil, id: pending.id, reason: "unclear answer")
-            await speakReply("Anlamadım; karar Claude'un penceresinde.")
+            await speakReply(L("Anlamadım; karar Claude'un penceresinde.", "I didn't catch that; the decision is in Claude's window."))
             return
         }
         owLog("[ClaudePermission] Answer: \(answer)")

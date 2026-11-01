@@ -431,6 +431,8 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     private func english(for text: String) async -> (String, fixed: Bool)? {
         if let fixed = ReplyTranslator.fixedEnglish(text) { return (fixed, true) }
         if ReplyTranslator.isClearlyEnglish(text) { return (text, true) }
+        // Commands in English get their statuses and replies written in English.
+        if CommandLanguage.isEnglish, !ReplyTranslator.hasTurkishMarks(text) { return (text, false) }
         let started = Date()
         let translated: String?
         if let translator {

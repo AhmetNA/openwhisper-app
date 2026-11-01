@@ -48,6 +48,8 @@ struct JarvisReply {
     /// Endings of `SystemController` statuses that mean it didn't work: "değiştirilemedi",
     /// "çalıştırılamadı", "bulunamadı", "Bağlı kulaklık yok".
     private static let failureMarkers = ["emedi", "amadı", " yok"]
+    /// The same in English statuses: "Couldn't change the brightness", "Safari not found", "No headset connected".
+    private static let englishFailureMarkers = ["couldn't", "can't", "not found", " no ", "didn't"]
 
     // MARK: - Per route
 
@@ -61,7 +63,7 @@ struct JarvisReply {
              .whatsAppConversation, .whatsAppSearch:
             return answer(Self.speakable(Self.shortened(status, for: command)))
         case .disableWakeWord:
-            return Self.isFailure(status) ? failure(Self.speakable(status)) : answer("Sesle uyandırmayı kapattım.")
+            return Self.isFailure(status) ? failure(Self.speakable(status)) : answer(L("Sesle uyandırmayı kapattım.", "Voice wake-up is off."))
         case .unlockRequest:
             return answer(Self.speakable(status))
         case .displayWake:
@@ -69,13 +71,14 @@ struct JarvisReply {
         case .calendarEvent:
             // Say the date and time back, so a wrong hour is caught right away.
             if Self.isFailure(status) { return failure(Self.speakable(status)) }
-            return answer(Self.speakable(status.replacingOccurrences(of: "Takvime eklendi:", with: "Takvime ekledim:")))
+            return answer(Self.speakable(status.replacingOccurrences(of: "Takvime eklendi:", with: "Takvime ekledim:")
+                .replacingOccurrences(of: "Added to the calendar:", with: "I added to the calendar:")))
         case .browser(let action):
             // A summary or a search query may contain "yok"; only the fixed statuses are failures.
             if BrowserController.failures.contains(status) || YouTubeList.failures.contains(status) {
                 return failure(Self.speakable(status))
             }
-            if case .youtubeTitle = action, status.hasPrefix("Açılıyor:") { return answer(status) }
+            if case .youtubeTitle = action, status.hasPrefix(FileFinder.openingPrefix) { return answer(status) }
             if YouTubeList.isListing(status) { return answer(status) }
             if action == .summarize { return answer(Self.speakable(Self.shortened(status, for: command))) }
             return ack()
@@ -85,7 +88,7 @@ struct JarvisReply {
             return Self.isFailure(status) ? failure(Self.speakable(status)) : nil
         case .video(let action):
             if status == BrowserController.youTubeNeedsVideo { return answer(status) }
-            if VideoController.failures.contains(status) || status.hasPrefix("Tam ekran yalnızca") || status == "Tam ekran yapılamadı" { return failure(Self.speakable(status)) }
+            if VideoController.failures.contains(status) || VideoController.isFullscreenFailure(status) { return failure(Self.speakable(status)) }
             switch action {
             case .remaining: return answer(Self.speakable(status))
             // Pausing or silencing it: a short ack. Anything that keeps it playing stays silent,
@@ -96,19 +99,19 @@ struct JarvisReply {
         case .openFile:
             // The name says which file it picked, so a wrong guess is caught at once. A file
             // name may contain "yok"; only the fixed statuses are failures.
-            guard status.hasPrefix("Açılıyor: ") else { return failure(Self.speakable(status)) }
-            let name = String(status.dropFirst("Açılıyor: ".count))
-            return answer("Açıyorum: " + Self.speakable((name as NSString).deletingPathExtension) + ".")
+            guard status.hasPrefix(FileFinder.openingPrefix) else { return failure(Self.speakable(status)) }
+            let name = String(status.dropFirst(FileFinder.openingPrefix.count))
+            return answer(L("Açıyorum: ", "Opening ") + Self.speakable((name as NSString).deletingPathExtension) + ".")
         case .window, .reading(.stop):
             // The window moving, or the voice stopping, is the answer.
             return Self.isFailure(status) ? failure(Self.speakable(status)) : nil
         case .reading:
             // The reading itself follows.
-            return status.hasPrefix("Okunuyor") || status == "Okumaya devam ediliyor" ? nil : failure(Self.speakable(status))
+            return status.hasPrefix(SystemController.readingPrefix) || status == SystemController.readingResumed ? nil : failure(Self.speakable(status))
         default:
             if Self.isFailure(status) { return failure(Self.speakable(status)) }
             // "Safari zaten kapalı": worth saying instead of a plain ack.
-            if status.lowercased(with: Locale(identifier: "tr_TR")).contains("zaten") {
+            if status.lowercased(with: CommandLanguage.locale).contains(L("zaten", "already")) {
                 return answer(Self.speakable(status))
             }
             return ack()
@@ -117,8 +120,8 @@ struct JarvisReply {
 
     /// A scene: one sentence for all of its steps, naming the ones that didn't work.
     mutating func scene(_ name: String, failed: [String]) -> String {
-        guard !failed.isEmpty else { return addressing("\(name) hazır.") }
-        return answer("\(name) hazır, ama şunlar olmadı: \(failed.joined(separator: ", ")).")
+        guard !failed.isEmpty else { return addressing(L("\(name) hazır.", "\(name) is ready.")) }
+        return answer(L("\(name) hazır, ama şunlar olmadı: ", "\(name) is ready, but these didn't work: ") + "\(failed.joined(separator: ", ")).")
     }
 
     /// Spotify: a short ack, never a description of what plays. The caller holds the music
@@ -150,24 +153,25 @@ struct JarvisReply {
 
     /// "Biten sohbete geç": which chat is open now.
     mutating func finishedChat(_ title: String) -> String {
-        addressing(title.isEmpty ? pick("gecis") : "\(title) sohbetine geçtim.")
+        addressing(title.isEmpty ? pick("gecis") : L("\(title) sohbetine geçtim.", "Switched to \(title)."))
     }
 
     /// "Bitirme projesine geç" / "Bitirme projesinde yeni session aç" with nothing to write.
     mutating func agentProject(_ name: String, isNew: Bool) -> String {
-        addressing(isNew ? "\(name) projesinde yeni session açtım." : "\(name) projesine geçtim.")
+        addressing(isNew ? L("\(name) projesinde yeni session açtım.", "Opened a new session in \(name).")
+                   : L("\(name) projesine geçtim.", "Switched to \(name)."))
     }
 
     /// `when` is the reminder's time ("bugün 15:46"), nil when it couldn't be set. Saying the
     /// time back catches a misheard one right away.
     mutating func reminder(at when: String?) -> String? {
-        guard let when else { return failure("hatırlatıcıyı kuramadım") }
-        return answer("Not ettim, \(when) hatırlatırım")
+        guard let when else { return failure(L("hatırlatıcıyı kuramadım", "I couldn't set the reminder")) }
+        return answer(L("Not ettim, \(when) hatırlatırım", "Noted, I'll remind you \(when)"))
     }
 
     /// A reminder came due: "Patron, hatırlatma: toplantı."
     mutating func reminderDue(_ task: String) -> String {
-        "Patron, hatırlatma: \(Self.speakable(task))."
+        L("Patron, hatırlatma: ", "Sir, a reminder: ") + "\(Self.speakable(task))."
     }
 
     /// The status `TimerManager.perform` returned, as a sentence; a stop is a plain ack.
@@ -178,39 +182,42 @@ struct JarvisReply {
 
     /// "Patron, 20 dakika doldu." / "Patron, çay için süre doldu." / "Patron, alarm çalıyor."
     mutating func timerFired(label: String?, seconds: Int?) -> String {
-        if let label { return "Patron, \(label) için süre doldu." }
-        if let seconds { return "Patron, \(SpokenDuration.spoken(seconds)) doldu." }
-        return "Patron, alarm çalıyor."
+        if let label { return L("Patron, \(label) için süre doldu.", "Sir, time is up for \(label).") }
+        if let seconds { return L("Patron, \(SpokenDuration.spoken(seconds)) doldu.", "Sir, \(SpokenDuration.spoken(seconds)) are up.") }
+        return L("Patron, alarm çalıyor.", "Sir, the alarm is ringing.")
     }
 
     mutating func reminderDeletion(_ result: ReminderManager.DeletionResult) -> String {
         switch result {
         case .confirmationRequired(let matches):
             if matches.count == 1, let name = matches.first {
-                return "\(name) hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?"
+                return L("\(name) hatırlatıcısını silmek üzereyim. Onaylıyor musunuz?", "I'm about to delete the reminder \(name). Do you confirm?")
             }
             let names = matches.prefix(3).joined(separator: ", ")
-            return "\(matches.count) hatırlatıcıyı silmek üzereyim: \(names). Onaylıyor musunuz?"
+            return L("\(matches.count) hatırlatıcıyı silmek üzereyim: \(names). Onaylıyor musunuz?",
+                     "I'm about to delete \(matches.count) reminders: \(names). Do you confirm?")
         case .deleted(let count, let appleVerified):
             if appleVerified {
-                return addressing(count == 1 ? pick("hatirlatici") : "\(count) hatırlatıcıyı sildim.")
+                return addressing(count == 1 ? pick("hatirlatici") : L("\(count) hatırlatıcıyı sildim.", "Deleted \(count) reminders."))
             }
-            return failure("yerel hatırlatıcıyı sildim fakat Apple Hatırlatıcılar kaydını doğrulayamadım")
+            return failure(L("yerel hatırlatıcıyı sildim fakat Apple Hatırlatıcılar kaydını doğrulayamadım",
+                             "I deleted the local reminder but couldn't verify it in Apple Reminders"))
         case .notFound:
-            return failure("eşleşen bir hatırlatıcı bulamadım")
+            return failure(L("eşleşen bir hatırlatıcı bulamadım", "I couldn't find a matching reminder"))
         case .ambiguous(let matches):
             let names = matches.prefix(3).joined(separator: ", ")
-            return failure("birden fazla eşleşme buldum: \(names); hangisini sileceğinizi söyleyin")
+            return failure(L("birden fazla eşleşme buldum: \(names); hangisini sileceğinizi söyleyin",
+                             "I found more than one match: \(names); tell me which one to delete"))
         case .cancelled:
-            return "İptal ettim. Hiçbir hatırlatıcı silinmedi."
+            return L("İptal ettim. Hiçbir hatırlatıcı silinmedi.", "Cancelled. No reminder was deleted.")
         case .confirmationUnclear:
-            return "Anlayamadım. Silmemi onaylıyor musunuz? Evet ya da hayır deyin."
+            return L("Anlayamadım. Silmemi onaylıyor musunuz? Evet ya da hayır deyin.", "I didn't catch that. Shall I delete it? Say yes or no.")
         case .notConfirmed:
-            return "Onay vermediğiniz için hiçbir hatırlatıcı silmedim."
+            return L("Onay vermediğiniz için hiçbir hatırlatıcı silmedim.", "You didn't confirm, so I deleted nothing.")
         case .confirmationExpired:
-            return "Onay süresi doldu. Hiçbir hatırlatıcı silmedim."
+            return L("Onay süresi doldu. Hiçbir hatırlatıcı silmedim.", "The confirmation timed out. I deleted nothing.")
         case .failed:
-            return failure("hatırlatıcıları kontrol edemedim")
+            return failure(L("hatırlatıcıları kontrol edemedim", "I couldn't check the reminders"))
         }
     }
 
@@ -316,19 +323,19 @@ struct JarvisReply {
     mutating func memory(_ command: UserMemoryCommand, facts: [String], removed: Int = 0) -> String {
         switch command {
         case .remember(let fact) where fact.hasPrefix(UserMemory.namePrefix):
-            return "Memnun oldum, \(fact.dropFirst(UserMemory.namePrefix.count))."
+            return L("Memnun oldum, ", "Nice to meet you, ") + "\(fact.dropFirst(UserMemory.namePrefix.count))."
         case .remember:
             return addressing(pick("not"))
         case .recall:
-            guard !facts.isEmpty else { return addressing("Henüz bana kendinizle ilgili bir şey söylemediniz.") }
+            guard !facts.isEmpty else { return addressing(L("Henüz bana kendinizle ilgili bir şey söylemediniz.", "You haven't told me anything about yourself yet.")) }
             let recent = facts.suffix(6).map { $0.hasSuffix(".") ? $0 : $0 + "." }
-            return "Bildiklerim şunlar: " + recent.joined(separator: " ")
+            return L("Bildiklerim şunlar: ", "Here is what I know: ") + recent.joined(separator: " ")
         case .forget:
-            return removed > 0 ? addressing(pick("unutma")) :addressing("Bununla ilgili bir şey hatırlamıyorum.")
+            return removed > 0 ? addressing(pick("unutma")) :addressing(L("Bununla ilgili bir şey hatırlamıyorum.", "I don't remember anything about that."))
         case .forgetLast:
-            return removed > 0 ? addressing("Son söylediğinizi unuttum.") : addressing("Hafızamda bir şey yok zaten.")
+            return removed > 0 ? addressing(L("Son söylediğinizi unuttum.", "I forgot what you said last.")) : addressing(L("Hafızamda bir şey yok zaten.", "There is nothing in my memory anyway."))
         case .forgetAll:
-            return addressing("Hafızamı temizledim.")
+            return addressing(L("Hafızamı temizledim.", "I cleared my memory."))
         }
     }
 
@@ -356,8 +363,8 @@ struct JarvisReply {
 
     /// "Geçen hafta ne demiştim?" with nothing in the journal for that time.
     mutating func nothingRecalled(_ label: String) -> String {
-        let when = label.prefix(1).uppercased(with: Locale(identifier: "tr_TR")) + label.dropFirst()
-        return addressing("\(when) konuştuğumuz bir şey kaydımda yok.")
+        let when = label.prefix(1).uppercased(with: CommandLanguage.locale) + label.dropFirst()
+        return addressing(L("\(when) konuştuğumuz bir şey kaydımda yok.", "I have no record of what we talked about \(label)."))
     }
 
     // MARK: - Greetings
@@ -424,7 +431,7 @@ struct JarvisReply {
     }
 
     mutating func failure(_ reason: String) -> String {
-        addressing("Maalesef, \(Self.lowercasedFirst(reason)).")
+        addressing(L("Maalesef, ", "Sorry, ") + "\(Self.lowercasedFirst(reason)).")
     }
 
     /// Appends ", patron" to the sentence at `addressChance`, never on two replies in a row.
@@ -441,6 +448,11 @@ struct JarvisReply {
     // MARK: - Text shaping
 
     static func isFailure(_ status: String) -> Bool {
+        // A status still in Turkish counts by the Turkish markers either way.
+        if CommandLanguage.isEnglish {
+            let lower = " " + status.lowercased(with: CommandLanguage.locale)
+            if englishFailureMarkers.contains(where: { lower.contains($0) }) { return true }
+        }
         let lower = status.lowercased(with: Locale(identifier: "tr_TR"))
         return failureMarkers.contains { lower.contains($0) }
     }
@@ -452,15 +464,15 @@ struct JarvisReply {
         case .mailReadUnread:
             let items = status.components(separatedBy: " · ")
             guard items.count > 1 else { return status }
-            return "\(items.count) okunmamış mail, ilki \(items[0])"
+            return L("\(items.count) okunmamış mail, ilki \(items[0])", "\(items.count) unread mails, the first: \(items[0])")
         case .mailReadLatest:
             // The flow bar has more; about two sentences of the mail are enough to hear.
             guard status.count > 260 else { return status }
             let cut = status.prefix(260)
             if let end = cut.lastIndex(where: { ".!?".contains($0) }), cut.distance(from: cut.startIndex, to: end) > 80 {
-                return String(cut[...end]) + " Devamı ekranda."
+                return String(cut[...end]) + L(" Devamı ekranda.", " The rest is on screen.")
             }
-            return String(cut) + "… Devamı ekranda."
+            return String(cut) + L("… Devamı ekranda.", "… The rest is on screen.")
         case .briefing:
             return status.count > 140 ? (status.components(separatedBy: " — ").first ?? status) : status
         case .browser(.summarize):
@@ -475,7 +487,8 @@ struct JarvisReply {
     /// Flow-bar punctuation read aloud badly: "%80" → "yüzde 80", "—" / "·" → commas.
     static func speakable(_ text: String) -> String {
         var out = text
-            .replacingOccurrences(of: #"%\s?(\d+)"#, with: "yüzde $1", options: .regularExpression)
+            .replacingOccurrences(of: #"%\s?(\d+)"#, with: L("yüzde $1", "$1 percent"), options: .regularExpression)
+            .replacingOccurrences(of: #"(\d+)\s?%"#, with: L("yüzde $1", "$1 percent"), options: .regularExpression)
             .replacingOccurrences(of: " — ", with: ", ")
             .replacingOccurrences(of: " · ", with: ", ")
             .replacingOccurrences(of: "—", with: ", ")
@@ -489,7 +502,10 @@ struct JarvisReply {
         // Keep names ("Wi-Fi", "Safari") as they are; only a plain Turkish word is lowered.
         let rest = text.dropFirst()
         let firstWord = text.prefix { !$0.isWhitespace }.dropFirst()
-        if firstWord.contains(where: { $0.isUppercase || "-'’".contains($0) }) { return text }
-        return String(first).lowercased(with: Locale(identifier: "tr_TR")) + rest
+        // In English an apostrophe is "Couldn't", not a suffix on a name; "I" stays a capital.
+        let keeps = CommandLanguage.isEnglish ? "-" : "-'’"
+        if firstWord.contains(where: { $0.isUppercase || keeps.contains($0) }) { return text }
+        if CommandLanguage.isEnglish, text.hasPrefix("I ") || text.hasPrefix("I'") || text == "I" { return text }
+        return String(first).lowercased(with: CommandLanguage.locale) + rest
     }
 }

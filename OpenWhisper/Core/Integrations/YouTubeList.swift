@@ -23,12 +23,12 @@ enum YouTubeList {
     /// "İkinciyi aç" still works this long after the list was read, with the wake word.
     static let lifetime: TimeInterval = 10 * 60
 
-    nonisolated static let notFound = "YouTube'da video bulamadım"
-    nonisolated static let noList = "Okunmuş bir video listesi yok"
-    nonisolated static let outOfRange = "Listede o sırada video yok"
-    nonisolated static let noMore = "Başka video yok"
-    nonisolated static let jsOff = "Safari'de Apple Events'ten JavaScript'e izin kapalı"
-    nonisolated static let failures: Set<String> = [notFound, noList, outOfRange, noMore, jsOff]
+    nonisolated static var notFound: String { L("YouTube'da video bulamadım", "I couldn't find a video on YouTube") }
+    nonisolated static var noList: String { L("Okunmuş bir video listesi yok", "No video list was read") }
+    nonisolated static var outOfRange: String { L("Listede o sırada video yok", "There is no video at that place in the list") }
+    nonisolated static var noMore: String { L("Başka video yok", "There are no more videos") }
+    nonisolated static var jsOff: String { L("Safari'de Apple Events'ten JavaScript'e izin kapalı", "Safari's Allow JavaScript from Apple Events is off") }
+    nonisolated static var failures: Set<String> { [notFound, noList, outOfRange, noMore, jsOff] }
 
     @MainActor private static var videos: [Video] = []
     @MainActor private static var offset = 0
@@ -80,12 +80,12 @@ enum YouTubeList {
         let address = "https://www.youtube.com/watch?v=\(video.id)"
         // The tab that shows the list becomes the video; any other tab is left alone.
         let reused = await Task.detached { OSAScriptRunner.run(["-e", replaceTabScript(address)], timeout: 4) }.value
-        let done = "Açılıyor: \(shortTitle(video.title))"
+        let done = FileFinder.openingPrefix + shortTitle(video.title)
         if reused == "ok" {
             owLog("[YouTube] Opened \(address) in the list's tab")
             return done
         }
-        guard let url = URL(string: address) else { return "Adres açılamadı" }
+        guard let url = URL(string: address) else { return BrowserController.badAddress }
         let status = await opened(url)
         return BrowserController.failures.contains(status) ? status : done
     }
@@ -97,9 +97,8 @@ enum YouTubeList {
         let result = await Task.detached { OSAScriptRunner.run(["-e", videoTabScript], timeout: 4) }.value
         owLog("[YouTube] Back to the video tab → \(result ?? "script failed")")
         switch result {
-        case "playing": return "YouTube'daki videoya geçildi"
-        case "started": return "Video kaldığı yerden devam ediyor"
-        case "switched": return "YouTube'daki videoya geçildi"
+        case "playing", "switched": return L("YouTube'daki videoya geçildi", "Switched to the YouTube video")
+        case "started": return L("Video kaldığı yerden devam ediyor", "The video plays on from where it was")
         default: return nil
         }
     }
@@ -148,7 +147,7 @@ enum YouTubeList {
             OSAScriptRunner.run(["-e", BrowserController.youTubeTabScript], timeout: 4)
         }.value
         guard tab != "missing" else { return nil }
-        guard tab == "found" else { return "Safari'ye ulaşılamadı" }
+        guard tab == "found" else { return BrowserController.unreachable }
         let script = readScript(path: nil, visibleOnly: true)
         let output = await Task.detached { OSAScriptRunner.run(["-e", script], timeout: 4) }.value
         if output == "jsoff" { return jsOff }
@@ -157,9 +156,9 @@ enum YouTubeList {
         let result = await Task.detached {
             OSAScriptRunner.run(["-e", replaceTabScript(address)], timeout: 4)
         }.value
-        guard result == "ok" else { return "Adres açılamadı" }
+        guard result == "ok" else { return BrowserController.badAddress }
         owLog("[YouTube] Title match '\(title)' → '\(video.title)'")
-        return "Açılıyor: \(shortTitle(video.title))"
+        return FileFinder.openingPrefix + shortTitle(video.title)
     }
 
     /// Query-word coverage favors partial titles; edit distance tolerates ASR spelling.
@@ -246,14 +245,15 @@ enum YouTubeList {
             // Search results are often one channel; its name is said once.
             let repeated = place > 0 && videos[index - 1].channel.map(shortTitle) == channel
             guard !channel.isEmpty, !repeated else {
-                return place == 0 ? "\(firstUnnamed)\(title)" : "Bir de şu var: \(title)"
+                return place == 0 ? "\(firstUnnamed)\(title)" : L("Bir de şu var: ", "And this one: ") + title
             }
+            if CommandLanguage.isEnglish { return place == 0 ? "\(channel)\(postedMarker)\(title)" : "\(channel) also\(postedMarker)\(title)" }
             return place == 0 ? "\(channel)\(postedMarker)\(title)" : "\(channel) \(also(channel))\(postedMarker)\(title)"
         }.joined(separator: " ")
     }
 
-    private static let postedMarker = " bir video atmış: "
-    private static let firstUnnamed = "Şu video var: "
+    private static var postedMarker: String { L(" bir video atmış: ", " posted a video: ") }
+    private static var firstUnnamed: String { L("Şu video var: ", "There is this video: ") }
 
     /// "da" or "de" after a name, by its last vowel.
     private static func also(_ name: String) -> String {

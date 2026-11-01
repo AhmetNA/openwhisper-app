@@ -5,7 +5,9 @@ import Foundation
 /// is a plain listing of that folder; a name or a time ("geçen hafta düzenlediğim rapor")
 /// asks Spotlight (`mdfind`), which is instant and needs nothing kept in memory.
 enum FileFinder {
-    static let notFound = "Dosya bulunamadı"
+    static var notFound: String { L("Dosya bulunamadı", "File not found") }
+    /// "Açılıyor: rapor.pdf"; `JarvisReply` reads the name back from it.
+    static var openingPrefix: String { L("Açılıyor: ", "Opening: ") }
 
     static func open(_ query: FileQuery) async -> String {
         let found = await Task.detached(priority: .userInitiated) { newest(query) }.value
@@ -14,7 +16,7 @@ enum FileFinder {
             return notFound
         }
         owLog("[Files] Opening \(url.path)")
-        return NSWorkspace.shared.open(url) ? "Açılıyor: \(url.lastPathComponent)" : "\(url.lastPathComponent) açılamadı"
+        return NSWorkspace.shared.open(url) ? openingPrefix + url.lastPathComponent : L("\(url.lastPathComponent) açılamadı", "Couldn't open \(url.lastPathComponent)")
     }
 
     nonisolated static func newest(_ query: FileQuery, now: Date = Date()) -> URL? {

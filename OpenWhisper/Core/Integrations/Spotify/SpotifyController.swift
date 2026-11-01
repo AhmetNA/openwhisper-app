@@ -58,9 +58,9 @@ final class SpotifyController: @unchecked Sendable {
             "Oynatma",
             web: {
                 try await self.withDeviceFallback { try await SpotifyWebAPI.shared.resumePlayback(deviceID: $0) }
-                return "Müzik oynatılıyor"
+                return L("Müzik oynatılıyor", "Music playing")
             },
-            appleScript: { self.runSpotifyCommand("play").map { _ in "Müzik oynatılıyor" } }
+            appleScript: { self.runSpotifyCommand("play").map { _ in L("Müzik oynatılıyor", "Music playing") } }
         )
     }
 
@@ -69,7 +69,7 @@ final class SpotifyController: @unchecked Sendable {
             "Durdurma",
             web: {
                 try await SpotifyWebAPI.shared.pausePlayback()
-                return "Müzik durduruldu"
+                return L("Müzik durduruldu", "Music paused")
             },
             appleScript: {
                 self.runAppleScript(Self.pauseScript).flatMap { output in
@@ -84,8 +84,8 @@ final class SpotifyController: @unchecked Sendable {
 
     static func pauseMessage(_ state: String?) -> String? {
         switch state {
-        case "alreadyPaused": return "Müzik zaten duraklatılmış"
-        case "paused": return "Müzik durduruldu"
+        case "alreadyPaused": return L("Müzik zaten duraklatılmış", "The music is already paused")
+        case "paused": return L("Müzik durduruldu", "Music paused")
         default: return nil
         }
     }
@@ -107,9 +107,9 @@ final class SpotifyController: @unchecked Sendable {
             "Sonraki şarkı",
             web: {
                 try await SpotifyWebAPI.shared.skipToNext()
-                return "Sonraki şarkıya geçildi"
+                return L("Sonraki şarkıya geçildi", "Next song")
             },
-            appleScript: { self.runSpotifyCommand("next track").map { _ in "Sonraki şarkıya geçildi" } }
+            appleScript: { self.runSpotifyCommand("next track").map { _ in L("Sonraki şarkıya geçildi", "Next song") } }
         )
     }
 
@@ -118,24 +118,24 @@ final class SpotifyController: @unchecked Sendable {
             "Önceki şarkı",
             web: {
                 try await SpotifyWebAPI.shared.skipToPrevious()
-                return "Önceki şarkıya geçildi"
+                return L("Önceki şarkıya geçildi", "Previous song")
             },
-            appleScript: { self.runSpotifyCommand("previous track").map { _ in "Önceki şarkıya geçildi" } }
+            appleScript: { self.runSpotifyCommand("previous track").map { _ in L("Önceki şarkıya geçildi", "Previous song") } }
         )
     }
 
     func setVolume(_ volume: Int) async -> SpotifyActionResult {
         guard (0...100).contains(volume) else {
-            return .failure("Geçersiz ses seviyesi: 0-100 arası olmalı")
+            return .failure(L("Geçersiz ses seviyesi: 0-100 arası olmalı", "Invalid volume: it must be 0-100"))
         }
         return await perform(
             "Ses ayarı",
             web: {
                 try await SpotifyWebAPI.shared.setVolume(volume)
-                return "Spotify sesi %\(volume) yapıldı"
+                return L("Spotify sesi %\(volume) yapıldı", "Spotify volume \(volume)%")
             },
             appleScript: {
-                self.runSpotifyCommand("set sound volume to \(volume)").map { _ in "Spotify sesi %\(volume) yapıldı" }
+                self.runSpotifyCommand("set sound volume to \(volume)").map { _ in L("Spotify sesi %\(volume) yapıldı", "Spotify volume \(volume)%") }
             }
         )
     }
@@ -178,7 +178,7 @@ final class SpotifyController: @unchecked Sendable {
                 try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
                 if await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
                     owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "")")
-                    return .success("beğenilen şarkılar çalıyor")
+                    return .success(L("beğenilen şarkılar çalıyor", "playing your liked songs"))
                 }
                 owLog("[SpotifyController] Liked songs accepted but Spotify is not playing them")
             } catch {
@@ -186,7 +186,7 @@ final class SpotifyController: @unchecked Sendable {
             }
         }
         openLikedSongsPage()
-        return .failure("beğenilen şarkılar açıldı ama çalınamadı")
+        return .failure(L("beğenilen şarkılar açıldı ama çalınamadı", "liked songs opened but couldn't play"))
     }
 
     private func likedSongsStart(shuffle: Bool) async -> String? {
@@ -350,7 +350,7 @@ final class SpotifyController: @unchecked Sendable {
     private static func describe(name: String, artist: String, album: String?, isPlaying: Bool) -> String {
         let label = artist.isEmpty ? name : "\(artist) — \(name)"
         let albumPart = album.map { $0.isEmpty ? "" : " (\($0))" } ?? ""
-        return "\(isPlaying ? "Çalıyor" : "Duraklatıldı"): ♪ \(label)\(albumPart)"
+        return "\(isPlaying ? L("Çalıyor", "Playing") : L("Duraklatıldı", "Paused")): ♪ \(label)\(albumPart)"
     }
 
     // MARK: - Search & play
@@ -365,7 +365,7 @@ final class SpotifyController: @unchecked Sendable {
         defer { owLog(String(format: "[SpotifyLatency] search/play total %.0f ms", Date().timeIntervalSince(started) * 1000)) }
         let queries = request.searchQueries
         guard !queries.isEmpty else {
-            return .failure("Arama sorgusu boş olamaz")
+            return .failure(L("Arama sorgusu boş olamaz", "The search can't be empty"))
         }
         if request.kind == .playlist || request.kind == .freeText,
            SpotifyRequestParser.namesLikedSongs("\(request.title) \(request.freeText)") {
@@ -403,7 +403,7 @@ final class SpotifyController: @unchecked Sendable {
             let shown = request.displayText.isEmpty ? queries[queries.count - 1] : request.displayText
             return openInSpotify(
                 "spotify:search:\(shown)",
-                message: "Otomatik çalma yapılamadı. \"\(shown)\" için arama ekranı açıldı."
+                message: L("Otomatik çalma yapılamadı. \"\(shown)\" için arama ekranı açıldı.", "Couldn't play it automatically. Opened the search for \"\(shown)\".")
             )
         }
 
@@ -418,7 +418,7 @@ final class SpotifyController: @unchecked Sendable {
         }
         return openInSpotify(
             item.uri,
-            message: "\(result.message). Spotify'da açıldı: \(Self.label(for: item))"
+            message: "\(result.message). " + L("Spotify'da açıldı: ", "Opened in Spotify: ") + Self.label(for: item)
         )
     }
 
@@ -462,7 +462,7 @@ final class SpotifyController: @unchecked Sendable {
     /// plays the single track (Spotify's own Autoplay setting decides what follows).
     func playTrack(_ track: SpotifyWebAPI.TrackResult) async -> SpotifyActionResult {
         guard Self.isValidTrackURI(track.uri) else {
-            return .failure("Geçersiz Spotify şarkı adresi")
+            return .failure(L("Geçersiz Spotify şarkı adresi", "Invalid Spotify song address"))
         }
         let message = "♪ \(Self.label(for: track))"
         return await perform(
@@ -501,7 +501,7 @@ final class SpotifyController: @unchecked Sendable {
             try await SpotifyWebAPI.shared.skipToNext()
             return message
         case let ahead?:
-            return "Sıraya eklendi, önünde \(ahead) şarkı var: \(message)"
+            return L("Sıraya eklendi, önünde \(ahead) şarkı var: ", "Queued, \(ahead) songs ahead of it: ") + message
         }
     }
 
@@ -512,11 +512,11 @@ final class SpotifyController: @unchecked Sendable {
     /// Plays an artist, album or playlist as a context, so Spotify keeps going through it.
     func playContext(_ item: SpotifyWebAPI.TrackResult, type: SpotifyWebAPI.SearchType) async -> SpotifyActionResult {
         guard Self.isValidContextURI(item.uri) else {
-            return .failure("Geçersiz Spotify adresi")
+            return .failure(L("Geçersiz Spotify adresi", "Invalid Spotify address"))
         }
         let message: String
         switch type {
-        case .artist: message = "♪ \(item.name) — popüler şarkılar"
+        case .artist: message = "♪ \(item.name) — " + L("popüler şarkılar", "popular songs")
         case .album: message = "💿 \(Self.label(for: item))"
         case .playlist, .track: message = "📃 \(item.name)"
         }
@@ -550,7 +550,7 @@ final class SpotifyController: @unchecked Sendable {
         guard let encoded = spotifyURI.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: encoded),
               NSWorkspace.shared.open(url) else {
-            return .failure("Spotify açılamadı")
+            return .failure(L("Spotify açılamadı", "Couldn't open Spotify"))
         }
         return .success(message)
     }
@@ -586,15 +586,15 @@ final class SpotifyController: @unchecked Sendable {
         }
 
         guard let trackURI, Self.isValidTrackURI(trackURI) else {
-            return .failure("Şu an çalan bir şarkı bulunamadı")
+            return .failure(L("Şu an çalan bir şarkı bulunamadı", "No song is playing right now"))
         }
 
         do {
             try await SpotifyWebAPI.shared.saveToLibrary(uri: trackURI)
-            let name = trackName.map { "\"\($0)\"" } ?? "Çalan şarkı"
-            return .success("\(name) Beğenilen Şarkılar'a eklendi ❤️")
+            let name = trackName.map { "\"\($0)\"" } ?? L("Çalan şarkı", "The current song")
+            return .success(L("\(name) Beğenilen Şarkılar'a eklendi ❤️", "\(name) added to Liked Songs ❤️"))
         } catch {
-            return .failure("Beğenilenlere eklenemedi: \(Self.reason(for: error))")
+            return .failure(L("Beğenilenlere eklenemedi: ", "Couldn't add it to Liked Songs: ") + Self.reason(for: error))
         }
     }
 
@@ -629,7 +629,7 @@ final class SpotifyController: @unchecked Sendable {
                 // command and only the response was lost. Repeating it over AppleScript
                 // could then skip two tracks, so only fall back when it surely didn't run.
                 if !readOnly, !Self.definitelyNotExecuted(error) {
-                    return .failure("\(action) başarısız: \(webFailure!)")
+                    return .failure(L("\(action) başarısız: ", "\(action) failed: ") + webFailure!)
                 }
             }
         } else if webAPIPlayerUnavailable, !readOnly {
@@ -638,7 +638,7 @@ final class SpotifyController: @unchecked Sendable {
 
         guard Self.appleScriptFallbackEnabled else {
             let reason = webFailure ?? SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage
-            return .failure("\(action) başarısız: \(reason)")
+            return .failure(L("\(action) başarısız: ", "\(action) failed: ") + reason)
         }
 
         switch appleScript() {
@@ -706,11 +706,11 @@ final class SpotifyController: @unchecked Sendable {
             case .disabled:
                 return SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage
             case .permissionDenied:
-                return "Spotify kontrolü için izin gerekli — Sistem Ayarları > Gizlilik ve Güvenlik > Otomasyon > Jarvis > Spotify açık olmalı."
+                return L("Spotify kontrolü için izin gerekli — Sistem Ayarları > Gizlilik ve Güvenlik > Otomasyon > Jarvis > Spotify açık olmalı.", "Spotify control needs permission — System Settings > Privacy & Security > Automation > Jarvis > Spotify must be on.")
             case .appNotRunning:
-                return "Spotify çalışmıyor görünüyor."
+                return L("Spotify çalışmıyor görünüyor.", "Spotify doesn't seem to be running.")
             case .other(let number, _):
-                return "Spotify komutu başarısız oldu (\(number))."
+                return L("Spotify komutu başarısız oldu (\(number)).", "The Spotify command failed (\(number)).")
             }
         }
     }
@@ -762,20 +762,21 @@ extension SpotifyController {
     static func spokenDuration(_ seconds: Int) -> String {
         let h = seconds / 3600, m = seconds % 3600 / 60, s = seconds % 60
         var parts: [String] = []
-        if h > 0 { parts.append("\(h) saat") }
-        if m > 0 { parts.append("\(m) dakika") }
-        if s > 0 || parts.isEmpty { parts.append("\(s) saniye") }
+        let english = CommandLanguage.isEnglish
+        if h > 0 { parts.append(english ? "\(h) hour\(h == 1 ? "" : "s")" : "\(h) saat") }
+        if m > 0 { parts.append(english ? "\(m) minute\(m == 1 ? "" : "s")" : "\(m) dakika") }
+        if s > 0 || parts.isEmpty { parts.append(english ? "\(s) second\(s == 1 ? "" : "s")" : "\(s) saniye") }
         return parts.joined(separator: " ")
     }
 
     func setShuffle(_ on: Bool) async -> SpotifyActionResult {
-        let message = on ? "Karışık çalma açıldı" : "Karışık çalma kapatıldı"
+        let message = on ? L("Karışık çalma açıldı", "Shuffle on") : L("Karışık çalma kapatıldı", "Shuffle off")
         return await perform(
             "Karışık çalma",
             web: {
                 // Setting it again could drop the user's Smart Shuffle.
                 if let state = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(), state.shuffle == on {
-                    return on ? "Karışık çalma zaten açık" : "Karışık çalma zaten kapalı"
+                    return on ? L("Karışık çalma zaten açık", "Shuffle is already on") : L("Karışık çalma zaten kapalı", "Shuffle is already off")
                 }
                 try await SpotifyWebAPI.shared.setShuffle(on, deviceID: nil)
                 return message
@@ -787,9 +788,9 @@ extension SpotifyController {
     func setRepeat(_ mode: SpotifyRepeatMode) async -> SpotifyActionResult {
         let message: String
         switch mode {
-        case .track: message = "Bu şarkı tekrar edecek"
-        case .context: message = "Liste tekrar edecek"
-        case .off: message = "Tekrar kapatıldı"
+        case .track: message = L("Bu şarkı tekrar edecek", "This song will repeat")
+        case .context: message = L("Liste tekrar edecek", "The list will repeat")
+        case .off: message = L("Tekrar kapatıldı", "Repeat off")
         }
         return await perform(
             "Tekrar",
@@ -800,7 +801,7 @@ extension SpotifyController {
             appleScript: {
                 // AppleScript has one on/off switch; it can't repeat a single song.
                 guard mode != .track else {
-                    return .failure(.other(errorNumber: 0, message: "Tek şarkıyı tekrar için Spotify hesabını bağlaman gerekiyor"))
+                    return .failure(.other(errorNumber: 0, message: L("Tek şarkıyı tekrar için Spotify hesabını bağlaman gerekiyor", "Repeating one song needs your Spotify account connected")))
                 }
                 return self.runSpotifyCommand("set repeating to \(mode == .context)").map { _ in message }
             }
@@ -810,9 +811,9 @@ extension SpotifyController {
     func seek(_ seek: SpotifySeek) async -> SpotifyActionResult {
         let message: String
         switch seek {
-        case .to(0): message = "Başa sarıldı"
-        case .to(let s): message = "\(Self.spokenDuration(s)) noktasına gidildi"
-        case .by(let d): message = "\(Self.spokenDuration(abs(d))) \(d > 0 ? "ileri" : "geri") sarıldı"
+        case .to(0): message = L("Başa sarıldı", "Back to the start")
+        case .to(let s): message = L("\(Self.spokenDuration(s)) noktasına gidildi", "Jumped to \(Self.spokenDuration(s))")
+        case .by(let d): message = L("\(Self.spokenDuration(abs(d))) \(d > 0 ? "ileri" : "geri") sarıldı", "\(d > 0 ? "Forward" : "Back") \(Self.spokenDuration(abs(d)))")
         }
         return await perform(
             "Sarma",
@@ -849,13 +850,13 @@ extension SpotifyController {
         guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
         let queries = request.kind == .track || request.kind == .freeText ? request.searchQueries : [request.freeText]
         guard let track = await firstSearchHit(queries: queries.filter { !$0.isEmpty }, type: .track) else {
-            return .failure("\(request.displayText) bulunamadı")
+            return .failure(L("\(request.displayText) bulunamadı", "\(request.displayText) not found"))
         }
         do {
             try await SpotifyWebAPI.shared.addToQueue(uri: track.uri)
-            return .success("Sıraya eklendi: \(Self.label(for: track))")
+            return .success(L("Sıraya eklendi: ", "Queued: ") + Self.label(for: track))
         } catch {
-            return .failure("Sıraya eklenemedi: \(Self.reason(for: error))")
+            return .failure(L("Sıraya eklenemedi: ", "Couldn't queue it: ") + Self.reason(for: error))
         }
     }
 
@@ -863,12 +864,12 @@ extension SpotifyController {
         guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
         do {
             guard let current = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
-                return .failure("Şu an çalan bir şarkı yok")
+                return .failure(L("Şu an çalan bir şarkı yok", "No song is playing right now"))
             }
             try await SpotifyWebAPI.shared.removeFromLibrary(uri: current.track.uri)
-            return .success("\(current.track.name) beğenilenlerden çıkarıldı")
+            return .success(L("\(current.track.name) beğenilenlerden çıkarıldı", "\(current.track.name) removed from Liked Songs"))
         } catch {
-            return .failure("Beğenilenlerden çıkarılamadı: \(Self.reason(for: error))")
+            return .failure(L("Beğenilenlerden çıkarılamadı: ", "Couldn't remove it from Liked Songs: ") + Self.reason(for: error))
         }
     }
 
@@ -920,11 +921,11 @@ extension SpotifyController {
         guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
         do {
             guard let playlist = try await findPlaylist(named: name, writable: false) else {
-                return .failure("\(name) adında bir listen bulunamadı")
+                return .failure(L("\(name) adında bir listen bulunamadı", "No playlist of yours named \(name) found"))
             }
             return await playContext(SpotifyWebAPI.TrackResult(uri: playlist.uri, name: playlist.name, artist: ""), type: .playlist)
         } catch {
-            return .failure("Listelerin okunamadı: \(Self.reason(for: error))")
+            return .failure(L("Listelerin okunamadı: ", "Couldn't read your playlists: ") + Self.reason(for: error))
         }
     }
 
@@ -932,10 +933,10 @@ extension SpotifyController {
         guard webAPIConnected else { return .failure(SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage) }
         do {
             guard let current = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
-                return .failure("Şu an çalan bir şarkı yok")
+                return .failure(L("Şu an çalan bir şarkı yok", "No song is playing right now"))
             }
             guard let playlist = try await findPlaylist(named: name, writable: true) else {
-                return .failure("\(name) adında sana ait bir liste bulunamadı")
+                return .failure(L("\(name) adında sana ait bir liste bulunamadı", "No playlist of yours named \(name) found"))
             }
             try await SpotifyWebAPI.shared.addToPlaylist(id: playlist.id, uri: current.track.uri)
             return .success("\(current.track.name), \(playlist.name) listesine eklendi")
@@ -947,11 +948,11 @@ extension SpotifyController {
     // MARK: Library
 
     func playSavedAlbum() async -> SpotifyActionResult {
-        await playRandom(from: { try await SpotifyWebAPI.shared.fetchSavedAlbums() }, type: .album, empty: "Kaydedilmiş albümün yok")
+        await playRandom(from: { try await SpotifyWebAPI.shared.fetchSavedAlbums() }, type: .album, empty: L("Kaydedilmiş albümün yok", "You have no saved albums"))
     }
 
     func playFollowedArtist() async -> SpotifyActionResult {
-        await playRandom(from: { try await SpotifyWebAPI.shared.fetchFollowedArtists() }, type: .artist, empty: "Takip ettiğin sanatçı yok")
+        await playRandom(from: { try await SpotifyWebAPI.shared.fetchFollowedArtists() }, type: .artist, empty: L("Takip ettiğin sanatçı yok", "You follow no artists"))
     }
 
     private func playRandom(
@@ -974,7 +975,7 @@ extension SpotifyController {
         do {
             let current = (try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying())?.track.uri
             guard let track = try await SpotifyWebAPI.shared.fetchRecentTracks().first(where: { $0.uri != current }) else {
-                return .failure("Son dinlenen bir şarkı bulunamadı")
+                return .failure(L("Son dinlenen bir şarkı bulunamadı", "No recently played song found"))
             }
             return await playTrack(track)
         } catch {
@@ -990,14 +991,14 @@ extension SpotifyController {
             let devices = try await SpotifyWebAPI.shared.fetchAvailableDevices()
             let matching = devices.filter { kind.connectTypes.contains($0.type.lowercased()) }
             guard let device = matching.first(where: { !$0.isActive }) ?? matching.first else {
-                return .failure("Spotify'da bir \(kind.spokenName) görünmüyor; o cihazda Spotify'ı açıp tekrar dene")
+                return .failure(L("Spotify'da bir \(kind.spokenName) görünmüyor; o cihazda Spotify'ı açıp tekrar dene", "Spotify shows no \(kind.spokenName); open Spotify on it and try again"))
             }
-            if device.isActive { return .success("Müzik zaten \(device.name) cihazında çalıyor") }
+            if device.isActive { return .success(L("Müzik zaten \(device.name) cihazında çalıyor", "The music is already playing on \(device.name)")) }
             try await SpotifyWebAPI.shared.transferPlayback(toDevice: device.id)
             owLog("[SpotifyController] Playback moved to \(device.name) (\(device.type))")
-            return .success("Müzik \(device.name) cihazına geçti")
+            return .success(L("Müzik \(device.name) cihazına geçti", "The music moved to \(device.name)"))
         } catch {
-            return .failure("Müzik taşınamadı: \(Self.reason(for: error))")
+            return .failure(L("Müzik taşınamadı: ", "Couldn't move the music: ") + Self.reason(for: error))
         }
     }
 
@@ -1010,25 +1011,25 @@ extension SpotifyController {
             web: {
                 if question == .nextUp {
                     guard let next = try await SpotifyWebAPI.shared.fetchQueue().first else {
-                        return "Sırada şarkı görünmüyor"
+                        return L("Sırada şarkı görünmüyor", "There is no song in the queue")
                     }
-                    return "Sıradaki şarkı: \(Self.label(for: next))"
+                    return L("Sıradaki şarkı: ", "Up next: ") + Self.label(for: next)
                 }
                 guard let state = try await SpotifyWebAPI.shared.fetchCurrentlyPlaying() else {
-                    return "Şu an Spotify'da bir şey çalmıyor"
+                    return L("Şu an Spotify'da bir şey çalmıyor", "Nothing is playing on Spotify right now")
                 }
                 switch question {
                 case .device:
-                    guard state.isPlaying else { return "Şu an Spotify'da bir şey çalmıyor" }
-                    return "Şu an \(state.deviceName ?? "bilinmeyen bir cihaz") cihazında çalıyor"
+                    guard state.isPlaying else { return L("Şu an Spotify'da bir şey çalmıyor", "Nothing is playing on Spotify right now") }
+                    return L("Şu an \(state.deviceName ?? "bilinmeyen bir cihaz") cihazında çalıyor", "Playing on \(state.deviceName ?? "an unknown device")")
                 case .album:
-                    guard let album = state.album, !album.isEmpty else { return "Bu şarkının albüm bilgisi yok" }
-                    return "Bu şarkı \(album) albümünden"
+                    guard let album = state.album, !album.isEmpty else { return L("Bu şarkının albüm bilgisi yok", "There is no album info for this song") }
+                    return L("Bu şarkı \(album) albümünden", "This song is from \(album)")
                 case .timeLeft:
                     guard let duration = state.durationMs, let progress = state.progressMs else {
-                        return "Kalan süreyi bilemiyorum"
+                        return L("Kalan süreyi bilemiyorum", "I can't tell the time left")
                     }
-                    return "Şarkının bitmesine \(Self.spokenDuration(max(0, duration - progress) / 1000)) var"
+                    return L("Şarkının bitmesine \(Self.spokenDuration(max(0, duration - progress) / 1000)) var", "\(Self.spokenDuration(max(0, duration - progress) / 1000)) left in the song")
                 case .nextUp:
                     return ""
                 }
@@ -1038,10 +1039,10 @@ extension SpotifyController {
                 switch question {
                 case .album:
                     return self.runAppleScript("tell application \"Spotify\" to return album of current track")
-                        .map { "Bu şarkı \($0 ?? "") albümünden" }
+                        .map { L("Bu şarkı \($0 ?? "") albümünden", "This song is from \($0 ?? "")") }
                 case .timeLeft:
                     return self.runAppleScript("tell application \"Spotify\" to return ((duration of current track) / 1000 - player position) as integer")
-                        .map { "Şarkının bitmesine \(Self.spokenDuration(Int($0 ?? "") ?? 0)) var" }
+                        .map { L("Şarkının bitmesine \(Self.spokenDuration(Int($0 ?? "") ?? 0)) var", "\(Self.spokenDuration(Int($0 ?? "") ?? 0)) left in the song") }
                 case .device, .nextUp:
                     return .failure(.other(errorNumber: 0, message: SpotifyWebAPI.SpotifyAPIError.notConnected.userMessage))
                 }

@@ -14,8 +14,9 @@ import IOKit.pwr_mgt
 final class RemoteControl {
     /// On battery below this the Mac is let sleep again, so a forgotten switch can't drain it.
     static let minimumBatteryPercent = 20
-    static let unlockAnswer = "Kilidi sesle açamam; Apple Watch ile ya da şifrenizle açabilirsiniz"
-    static let lockedAnswer = "Mac kilitli; bunu kilidi açınca yapabilirim"
+    static var unlockAnswer: String { L("Kilidi sesle açamam; Apple Watch ile ya da şifrenizle açabilirsiniz",
+                                        "I can't unlock by voice; use your Apple Watch or your password") }
+    static var lockedAnswer: String { L("Mac kilitli; bunu kilidi açınca yapabilirim", "The Mac is locked; I can do that once it's unlocked") }
 
     /// Whether the assertion is held now; false while switched off or on low battery.
     private(set) var isHoldingAwake = false

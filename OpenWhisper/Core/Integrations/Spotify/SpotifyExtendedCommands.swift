@@ -28,10 +28,10 @@ enum SpotifyDeviceKind: String, Equatable, Sendable {
 
     var spokenName: String {
         switch self {
-        case .phone: return "telefon"
-        case .speaker: return "hoparlör"
-        case .computer: return "bilgisayar"
-        case .tv: return "televizyon"
+        case .phone: return L("telefon", "phone")
+        case .speaker: return L("hoparlör", "speaker")
+        case .computer: return L("bilgisayar", "computer")
+        case .tv: return L("televizyon", "TV")
         case .tablet: return "tablet"
         }
     }

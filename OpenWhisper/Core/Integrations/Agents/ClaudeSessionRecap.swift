@@ -56,7 +56,7 @@ enum ClaudeSessionRecap {
         if let lastMessage { lines.append("Asistanın son mesajı:\n\(String(lastMessage.prefix(3000)))") }
         return """
         Aşağıda bir \(appName) kodlama oturumunun son durumu var. Kullanıcıya sesli okunacak, en fazla iki kısa \
-        Türkçe cümlelik bir özet yaz: ne yapıldı, ne kaldı ya da ne bekleniyor. Kod, dosya yolu, commit kodu, \
+        \(L("Türkçe", "İngilizce")) cümlelik bir özet yaz: ne yapıldı, ne kaldı ya da ne bekleniyor. Kod, dosya yolu, commit kodu, \
         markdown, madde işareti kullanma; teknik adları sade söyle. Yalnızca özeti yaz.
 
         \(lines.joined(separator: "\n"))

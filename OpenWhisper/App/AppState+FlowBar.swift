@@ -59,7 +59,8 @@ extension AppState {
 
     func showFlowBarMessage(_ message: String, durationMs: Int = 1500) {
         flowBarMessageTask?.cancel()
-        flowBarMessage = message
+        // Jarvis's acks are kept in Turkish for the voice's table; shown, they are English too.
+        flowBarMessage = CommandLanguage.isEnglish ? ReplyTranslator.fixedEnglish(message) ?? message : message
         syncFlowBarVisibility()
         flowBarMessageTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(durationMs))
@@ -99,21 +100,21 @@ extension AppState {
     func clipboardOnlyMessage(for reason: ClipboardOnlyReason) -> String {
         switch reason {
         case .accessibilityUnavailable:
-            return "Yapıştırılamadı — erişim izni gerekli (metin panoda)"
+            return L("Yapıştırılamadı — erişim izni gerekli (metin panoda)", "Couldn't paste — Accessibility permission needed (text on the clipboard)")
         case .targetApplicationUnavailable, .targetApplicationTerminated, .targetApplicationChanged:
-            return "Yapıştırılamadı — hedef uygulama kullanılamıyor (metin panoda)"
+            return L("Yapıştırılamadı — hedef uygulama kullanılamıyor (metin panoda)", "Couldn't paste — the target app is unavailable (text on the clipboard)")
         case .noSafeEditableDestination:
-            return "Yapıştırılamadı — düzenlenebilir alan bulunamadı (metin panoda)"
+            return L("Yapıştırılamadı — düzenlenebilir alan bulunamadı (metin panoda)", "Couldn't paste — no editable field found (text on the clipboard)")
         case .targetFieldChanged:
-            return "Yapıştırılamadı — hedef alan değişmiş (metin panoda)"
+            return L("Yapıştırılamadı — hedef alan değişmiş (metin panoda)", "Couldn't paste — the target field changed (text on the clipboard)")
         case .activationTimedOut:
-            return "Yapıştırılamadı — hedef uygulama etkinleştirilemedi (metin panoda)"
+            return L("Yapıştırılamadı — hedef uygulama etkinleştirilemedi (metin panoda)", "Couldn't paste — couldn't activate the target app (text on the clipboard)")
         case .clipboardWriteFailed:
-            return "Yapıştırılamadı — pano yazılamadı"
+            return L("Yapıştırılamadı — pano yazılamadı", "Couldn't paste — couldn't write the clipboard")
         case .emptyText:
-            return "Yapıştırılamadı — metin yok"
+            return L("Yapıştırılamadı — metin yok", "Couldn't paste — no text")
         case .pasteEventUnavailable:
-            return "Yapıştırılamadı — metin panoda"
+            return L("Yapıştırılamadı — metin panoda", "Couldn't paste — text on the clipboard")
         }
     }
 }

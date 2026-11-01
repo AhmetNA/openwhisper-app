@@ -268,7 +268,17 @@ final class JarvisChat {
 
     /// Spoken in turn so the same sentence isn't heard again and again. Each ends in "?", so
     /// Jarvis then listens for the answer (`awaitsAnswer`).
-    nonisolated static let unrecognizedCommandReplies = [
+    nonisolated static var unrecognizedCommandReplies: [String] {
+        CommandLanguage.isEnglish ? englishUnrecognizedCommandReplies : turkishUnrecognizedCommandReplies
+    }
+
+    private nonisolated static let englishUnrecognizedCommandReplies = [
+        "I couldn't take that as a command, sir, could you say it more clearly?",
+        "I couldn't match that to a command, could you put it another way?",
+        "I couldn't tell which task you meant, could you say it again?",
+    ]
+
+    private nonisolated static let turkishUnrecognizedCommandReplies = [
         unrecognizedCommandReply,
         "Bunu bir komuta bağlayamadım, başka türlü söyler misin?",
         "Hangi işi istediğini çıkaramadım efendim, bir daha söyler misin?",
@@ -276,7 +286,17 @@ final class JarvisChat {
     ]
 
     /// The model didn't understand the user; its sentence is replaced by one of these.
-    nonisolated static let notUnderstoodReplies = [
+    nonisolated static var notUnderstoodReplies: [String] {
+        CommandLanguage.isEnglish ? englishNotUnderstoodReplies : turkishNotUnderstoodReplies
+    }
+
+    private nonisolated static let englishNotUnderstoodReplies = [
+        "I didn't catch that, sir, could you say it more clearly?",
+        "I missed that, could you say it again?",
+        "Sorry, I didn't hear that clearly. Could you say it once more?",
+    ]
+
+    private nonisolated static let turkishNotUnderstoodReplies = [
         "Anlayamadım patron, biraz daha açık söyler misin?",
         "Tam seçemedim, bir daha söyler misin?",
         "Kaçırdım galiba, tekrar eder misin?",

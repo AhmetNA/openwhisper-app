@@ -9,11 +9,13 @@ enum BrowserController {
     static let bundleID = "com.apple.Safari"
 
     /// Fixed statuses, so `JarvisReply` can tell a failed summary from a summary.
-    nonisolated static let noPage = "Safari'de açık sayfa yok"
-    nonisolated static let unreadable = "Sayfa okunamadı"
-    nonisolated static let summaryFailed = "Sayfa özetlenemedi"
-    nonisolated static let notFront = "Safari önde olmadığı için yapamadım"
-    nonisolated static let failures: Set<String> = [noPage, unreadable, summaryFailed, notFront, "Safari'ye ulaşılamadı", "Adres açılamadı"]
+    nonisolated static var noPage: String { L("Safari'de açık sayfa yok", "No page open in Safari") }
+    nonisolated static var unreadable: String { L("Sayfa okunamadı", "Couldn't read the page") }
+    nonisolated static var summaryFailed: String { L("Sayfa özetlenemedi", "Couldn't summarize the page") }
+    nonisolated static var notFront: String { L("Safari önde olmadığı için yapamadım", "Safari isn't in front, so I didn't do it") }
+    nonisolated static var unreachable: String { L("Safari'ye ulaşılamadı", "Couldn't reach Safari") }
+    nonisolated static var badAddress: String { L("Adres açılamadı", "Couldn't open the address") }
+    nonisolated static var failures: Set<String> { [noPage, unreadable, summaryFailed, notFront, unreachable, badAddress] }
 
     static func perform(_ action: BrowserAction) async -> String {
         switch action {
@@ -27,12 +29,12 @@ enum BrowserController {
                         tell front window to set current tab to (make new tab)
                     end if
                 end tell
-                """, done: "Yeni sekme açıldı")
+                """, done: L("Yeni sekme açıldı", "New tab opened"))
         case .closeTab:
             // Closing a tab in a Safari window hidden behind Chrome would be a surprise.
             guard isFront else { return notFront }
             guard hasWindow() else { return noPage }
-            return run(#"tell application "Safari" to close current tab of front window"#, done: "Sekme kapatıldı")
+            return run(#"tell application "Safari" to close current tab of front window"#, done: L("Sekme kapatıldı", "Tab closed"))
         case .reload:
             guard hasWindow() else { return noPage }
             return run("""
@@ -40,7 +42,7 @@ enum BrowserController {
                     set current to current tab of front window
                     set URL of current to (URL of current)
                 end tell
-                """, done: "Sayfa yenilendi")
+                """, done: L("Sayfa yenilendi", "Page reloaded"))
         case .nextTab, .previousTab:
             guard hasWindow() else { return noPage }
             let step = action == .nextTab ? "(i mod n) + 1" : "((i - 2 + n) mod n) + 1"
@@ -52,26 +54,27 @@ enum BrowserController {
                         set current tab to tab (\(step))
                     end tell
                 end tell
-                """, done: action == .nextTab ? "Sonraki sekme" : "Önceki sekme")
+                """, done: action == .nextTab ? L("Sonraki sekme", "Next tab") : L("Önceki sekme", "Previous tab"))
         case .back, .forward:
             // No AppleScript verb for history; ⌘[ / ⌘] would hit another app if Safari isn't in front.
             guard isFront else { return notFront }
             let key = action == .back ? "[" : "]"
             return run(#"tell application "System Events" to keystroke "\#(key)" using command down"#,
-                       done: action == .back ? "Geri gidildi" : "İleri gidildi")
+                       done: action == .back ? L("Geri gidildi", "Went back") : L("İleri gidildi", "Went forward"))
         case .open(let address):
-            guard let url = URL(string: address) else { return "Adres açılamadı" }
-            return await open(url, done: "\(url.host ?? address) açıldı")
+            guard let url = URL(string: address) else { return badAddress }
+            return await open(url, done: L("\(url.host ?? address) açıldı", "Opened \(url.host ?? address)"))
         case .search(let engine, let query):
-            guard let url = searchURL(engine, query) else { return "Adres açılamadı" }
-            let searching = "\(engine == .youtube ? "YouTube" : "Google")'da aranıyor: \(query)"
+            guard let url = searchURL(engine, query) else { return badAddress }
+            let searching = L("\(engine == .youtube ? "YouTube" : "Google")'da aranıyor: \(query)",
+                              "Searching \(engine == .youtube ? "YouTube" : "Google") for: \(query)")
             guard engine == .youtube else { return await open(url, done: searching) }
             let status = await YouTubeList.read(url, path: "/results") { await open($0, done: searching) }
             // The results are on screen even when they couldn't be read.
             return status == YouTubeList.notFound ? searching : status
         case .youtubeHome:
-            guard let url = URL(string: "https://www.youtube.com/") else { return "Adres açılamadı" }
-            return await YouTubeList.read(url, path: "/") { await open($0, done: "YouTube açıldı") }
+            guard let url = URL(string: "https://www.youtube.com/") else { return badAddress }
+            return await YouTubeList.read(url, path: "/") { await open($0, done: L("YouTube açıldı", "YouTube opened")) }
         case .youtubeOpen:
             if let status = await YouTubeList.returnToVideo() { return status }
             return await perform(.youtubeHome)
@@ -81,7 +84,7 @@ enum BrowserController {
             if let status = await YouTubeList.playTitle(title) { return status }
             return await perform(.search(.youtube, title))
         case .youtubePick(let number):
-            return await YouTubeList.play(number) { await open($0, done: "Video açıldı") }
+            return await YouTubeList.play(number) { await open($0, done: L("Video açıldı", "Video opened")) }
         case .summarize:
             return await summarizeCurrentPage()
         }
@@ -129,7 +132,7 @@ enum BrowserController {
         guard let summary = await ollamaSummary(title: page.title, text: String(text.prefix(maxPageCharacters))) else {
             return summaryFailed
         }
-        OpenWhisperNotification.post(title: "Özet — \(page.title)", body: summary, isError: false, identifierPrefix: "page-summary")
+        OpenWhisperNotification.post(title: L("Özet — ", "Summary — ") + page.title, body: summary, isError: false, identifierPrefix: "page-summary")
         return summary
     }
 
@@ -174,7 +177,7 @@ enum BrowserController {
 
     private static func ollamaSummary(title: String, text: String) async -> String? {
         let prompt = """
-            Aşağıda bir sayfanın metni var. Sayfanın ne anlattığını Türkçe, en fazla 2 kısa \
+            Aşağıda bir sayfanın metni var. Sayfanın ne anlattığını \(L("Türkçe", "İngilizce")), en fazla 2 kısa \
             cümleyle özetle. Sadece özeti yaz; giriş cümlesi, başlık, madde işareti kullanma.
 
             Sayfa başlığı: \(title)
@@ -203,7 +206,7 @@ enum BrowserController {
 
     static func open(_ url: URL, done: String) async -> String {
         guard let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
-            return "Safari'ye ulaşılamadı"
+            return unreachable
         }
         do {
             _ = try await NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: .init())
@@ -211,20 +214,20 @@ enum BrowserController {
             return done
         } catch {
             owLog("[Browser] Open failed: \(error)")
-            return "Adres açılamadı"
+            return badAddress
         }
     }
 
     /// An explicitly named YouTube player must not fall back to unrelated media when
     /// YouTube is closed. Open its home page and let the user choose a video first.
-    nonisolated static let youTubeNeedsVideo = "YouTube açıldı; önce bir video seçmelisin"
+    nonisolated static var youTubeNeedsVideo: String { L("YouTube açıldı; önce bir video seçmelisin", "YouTube is open; pick a video first") }
 
     static func prepareYouTubeVideo() async -> String? {
         let result = await Task.detached {
             OSAScriptRunner.run(["-e", youTubeTabScript], timeout: 4)
         }.value
         if result == "found" { return nil }
-        if result != "missing" { return "Safari'ye ulaşılamadı" }
+        if result != "missing" { return unreachable }
         return await open(URL(string: "https://www.youtube.com/")!, done: youTubeNeedsVideo)
     }
 
@@ -270,7 +273,7 @@ enum BrowserController {
         NSAppleScript(source: source)?.executeAndReturnError(&error)
         if let error {
             owLog("[Browser] AppleScript failed: \(error)")
-            return "Safari'ye ulaşılamadı"
+            return unreachable
         }
         owLog("[Browser] \(done)")
         return done

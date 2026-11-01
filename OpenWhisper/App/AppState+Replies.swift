@@ -23,7 +23,7 @@ extension AppState {
         timers.onReminderDue = { [weak self] reminder in
             Task { @MainActor in
                 guard let self else { return }
-                self.showFlowBarMessage("Hatırlatma: \(reminder.task)", durationMs: 8000)
+                self.showFlowBarMessage(L("Hatırlatma: ", "Reminder: ") + reminder.task, durationMs: 8000)
                 await self.speakReply(self.jarvisReply.reminderDue(reminder.task))
             }
         }
@@ -146,8 +146,8 @@ extension AppState {
     func chatReply(to text: String, recalled: [String] = []) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable || JarvisChat.cloudReady else {
             owLog("[Chat] Neither Ollama nor the cloud model available")
-            showFlowBarMessage("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum")
-            await speakReply(jarvisReply.failure("yerel model şu an kapalı"))
+            showFlowBarMessage(L("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum", "Ollama is off and no cloud model is set, I can't chat"))
+            await speakReply(jarvisReply.failure(L("yerel model şu an kapalı", "the local model is off right now")))
             return (nil, false)
         }
         jarvisActivity = .thinking
@@ -304,7 +304,7 @@ extension AppState {
             hotkey?.externalCancelHandsFree()
             discardActiveRecording(reason: "screen mode ended by key")
         }
-        showFlowBarMessage("Ekran modu kapandı", durationMs: 1500)
+        showFlowBarMessage(L("Ekran modu kapandı", "Screen mode off"), durationMs: 1500)
     }
 
     func endScreenMode(_ reason: String) {

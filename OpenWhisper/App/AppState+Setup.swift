@@ -80,7 +80,7 @@ extension AppState {
         // than the ones confirming something was actually learned or explicitly rejected.
         DictationSnapshot.shared.onManualReviewResult = { [weak self] message in
             let shortMessages: Set<String> = [
-                "karşılaştırılacak dikte yok", "değişiklik yok", "uygun düzeltme bulunamadı", "metin okunamadı"
+                DictationSnapshot.nothingToCompare, DictationSnapshot.noChange, DictationSnapshot.noFittingFix, DictationSnapshot.unreadableText
             ]
             let durationMs = shortMessages.contains(message) ? 2000 : 2500
             self?.showFlowBarMessage(message, durationMs: durationMs)

@@ -80,37 +80,45 @@ final class TimerManager {
         switch command {
         case .start(let seconds, let label):
             let timer = add(JarvisTimer(id: UUID(), fireDate: now.addingTimeInterval(TimeInterval(seconds)), label: label, seconds: seconds))
+            if CommandLanguage.isEnglish {
+                let what = label.map { " about \($0)" } ?? ""
+                return "I'll let you know\(what) in \(SpokenDuration.spoken(seconds)), at \(Self.clock(timer.fireDate, now: now))"
+            }
             let what = label.map { "\($0) için " } ?? ""
             return "\(SpokenDuration.spoken(seconds)) sonra \(what)haber veririm, saat \(Self.clock(timer.fireDate, now: now))"
         case .alarm(let date, let label):
             let timer = add(JarvisTimer(id: UUID(), fireDate: date, label: label, seconds: nil))
-            return "Alarm kuruldu: \(Self.clock(timer.fireDate, now: now, sayDay: true))"
+            return L("Alarm kuruldu: ", "Alarm set: ") + Self.clock(timer.fireDate, now: now, sayDay: true)
         case .remaining:
-            guard let next = timers.first else { return "Kurulu bir alarm yok" }
+            guard let next = timers.first else { return L("Kurulu bir alarm yok", "No alarm is set") }
             let left = Self.spokenLeft(next.fireDate.timeIntervalSince(now))
+            if CommandLanguage.isEnglish {
+                let others = timers.count > 1 ? ". \(timers.count) alarms in all" : ""
+                return "\(left) left\(next.label.map { " for \($0)" } ?? "")\(others)"
+            }
             let others = timers.count > 1 ? ". Toplam \(timers.count) alarm var" : ""
             return "\(next.label.map { "\($0) için " } ?? "")\(left) kaldı\(others)"
         case .cancel(let all):
             if ringing != nil, !all {
                 stopRinging()
-                return "Alarmı kapattım"
+                return L("Alarmı kapattım", "Alarm stopped")
             }
             guard !timers.isEmpty || ringing != nil else {
-                return "Jarvis'te kurulu alarm yok. Saat uygulamasındaki alarmları oradan kapatabilirsin"
+                return L("Jarvis'te kurulu alarm yok. Saat uygulamasındaki alarmları oradan kapatabilirsin", "No alarm is set in Jarvis. Alarms in the Clock app are turned off there")
             }
             let removed = all ? timers : Array(timers.prefix(1))
             remove(removed)
             if all { stopRinging() }
-            return removed.count > 1 ? "\(removed.count) alarmı iptal ettim" : "Alarmı iptal ettim"
+            return removed.count > 1 ? L("\(removed.count) alarmı iptal ettim", "Cancelled \(removed.count) alarms") : L("Alarmı iptal ettim", "Alarm cancelled")
         case .stop:
-            guard ringing != nil else { return "Çalan bir alarm yok" }
+            guard ringing != nil else { return noRinging }
             stopRinging()
-            return "Tamam"
+            return L("Tamam", "Okay")
         case .snooze(let seconds):
-            guard let current = ringing else { return "Çalan bir alarm yok" }
+            guard let current = ringing else { return noRinging }
             stopRinging()
             _ = add(JarvisTimer(id: UUID(), fireDate: now.addingTimeInterval(TimeInterval(seconds)), label: current.label, seconds: current.seconds))
-            return "\(SpokenDuration.spoken(seconds)) sonra tekrar haber veririm"
+            return L("\(SpokenDuration.spoken(seconds)) sonra tekrar haber veririm", "I'll remind you again in \(SpokenDuration.spoken(seconds))")
         }
     }
 
@@ -245,6 +253,8 @@ final class TimerManager {
 
     // MARK: - Wording
 
+    private var noRinging: String { L("Çalan bir alarm yok", "No alarm is ringing") }
+
     /// "15:51", or "yarın 07:00" / "17 Ekim Cumartesi 07:00" when it isn't today.
     nonisolated static func clock(_ date: Date, now: Date = Date(), sayDay: Bool = false, calendar: Calendar = .current) -> String {
         let time = DateFormatter()
@@ -252,11 +262,11 @@ final class TimerManager {
         let hm = time.string(from: date)
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
         switch days {
-        case 0: return sayDay ? "bugün \(hm)" : hm
-        case 1: return "yarın \(hm)"
+        case 0: return sayDay ? L("bugün \(hm)", "today \(hm)") : hm
+        case 1: return L("yarın \(hm)", "tomorrow \(hm)")
         default:
             let day = DateFormatter()
-            day.locale = Locale(identifier: "tr_TR")
+            day.locale = CommandLanguage.locale
             day.dateFormat = "d MMMM EEEE"
             return "\(day.string(from: date)) \(hm)"
         }
@@ -265,6 +275,6 @@ final class TimerManager {
     /// Time left, rounded up to the minute above one minute ("12 dakika", "45 saniye").
     nonisolated static func spokenLeft(_ interval: TimeInterval) -> String {
         let seconds = max(1, Int(interval.rounded(.up)))
-        return seconds < 60 ? "\(seconds) saniye" : SpokenDuration.spoken(Int((Double(seconds) / 60).rounded(.up)) * 60)
+        return seconds < 60 ? SpokenDuration.spoken(seconds) : SpokenDuration.spoken(Int((Double(seconds) / 60).rounded(.up)) * 60)
     }
 }

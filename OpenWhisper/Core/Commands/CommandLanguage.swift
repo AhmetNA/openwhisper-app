@@ -9,3 +9,9 @@ enum CommandLanguage {
     /// search finds.
     static var locale: Locale { Locale(identifier: isEnglish ? "en_US" : "tr_TR") }
 }
+
+/// A status, reply or flow-bar text in the command language: `english` when commands are
+/// spoken in English, else `turkish`.
+func L(_ turkish: String, _ english: String) -> String {
+    CommandLanguage.isEnglish ? english : turkish
+}

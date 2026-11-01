@@ -56,12 +56,12 @@ extension AppState {
         }
         guard microphoneNoticeInitialized, uid != lastNotifiedMicrophoneUID else { return }
         if let device {
-            let prefix = recordingState == .recording ? "Sonraki kayıt" : "Mikrofon"
+            let prefix = recordingState == .recording ? L("Sonraki kayıt", "Next recording") : L("Mikrofon", "Microphone")
             microphoneFlowNotice = "\(prefix): \(device.name)"
         } else {
-            microphoneFlowNotice = "Mikrofon bağlantısı yok"
+            microphoneFlowNotice = L("Mikrofon bağlantısı yok", "No microphone connected")
         }
-        presentMicrophoneFlowNotice(microphoneFlowNotice ?? "Mikrofon bağlantısı yok")
+        presentMicrophoneFlowNotice(microphoneFlowNotice ?? L("Mikrofon bağlantısı yok", "No microphone connected"))
     }
 
     func systemInputDeviceChanged() {

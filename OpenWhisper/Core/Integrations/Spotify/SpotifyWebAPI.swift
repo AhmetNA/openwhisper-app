@@ -177,31 +177,31 @@ actor SpotifyWebAPI {
         var userMessage: String {
             switch self {
             case .missingCredentials:
-                return "Spotify Client ID/Secret girilmemiş, Ayarlar > Spotify'dan ekle"
+                return L("Spotify Client ID/Secret girilmemiş, Ayarlar > Spotify'dan ekle", "No Spotify Client ID/Secret, add them in Settings > Spotify")
             case .invalidCredentials:
-                return "Spotify kimlik bilgileri hatalı"
+                return L("Spotify kimlik bilgileri hatalı", "The Spotify credentials are wrong")
             case .rateLimited:
-                return "Spotify API çok fazla istek nedeniyle geçici olarak kısıtladı"
+                return L("Spotify API çok fazla istek nedeniyle geçici olarak kısıtladı", "The Spotify API is rate limiting for now")
             case .network:
-                return "Ağ hatası"
+                return L("Ağ hatası", "Network error")
             case .noResults:
-                return "Sonuç bulunamadı"
+                return L("Sonuç bulunamadı", "No results found")
             case .notConnected:
-                return "Bu komut için Ayarlar > Spotify'dan hesabını bağlaman gerekiyor"
+                return L("Bu komut için Ayarlar > Spotify'dan hesabını bağlaman gerekiyor", "This needs your account connected in Settings > Spotify")
             case .authorizationFailed(let detail):
-                return "Bağlantı başarısız: \(detail)"
+                return L("Bağlantı başarısız: ", "Connection failed: ") + detail
             case .alreadyInProgress:
-                return "Zaten bir bağlantı denemesi sürüyor — tarayıcıda tamamlayın ya da birkaç dakika bekleyin"
+                return L("Zaten bir bağlantı denemesi sürüyor — tarayıcıda tamamlayın ya da birkaç dakika bekleyin", "A connection is already in progress — finish it in the browser or wait a few minutes")
             case .scopeInsufficient:
-                return "Bu komut için ek izin gerekiyor — Ayarlar > Spotify'dan yeniden bağlan"
+                return L("Bu komut için ek izin gerekiyor — Ayarlar > Spotify'dan yeniden bağlan", "This needs more permission — reconnect in Settings > Spotify")
             case .noActiveDevice:
-                return "Spotify'da aktif bir cihaz bulunamadı — Spotify'ı açıp bir kez manuel çalmayı dene, sonra tekrar söyle"
+                return L("Spotify'da aktif bir cihaz bulunamadı — Spotify'ı açıp bir kez manuel çalmayı dene, sonra tekrar söyle", "No active Spotify device found — open Spotify, play something once, then ask again")
             case .premiumRequired:
-                return "Bu komut Spotify Web API üzerinden Spotify Premium gerektiriyor"
+                return L("Bu komut Spotify Web API üzerinden Spotify Premium gerektiriyor", "This needs Spotify Premium")
             case .playerRestricted:
-                return "Spotify bu cihazda bu işleme izin vermiyor"
+                return L("Spotify bu cihazda bu işleme izin vermiyor", "Spotify doesn't allow that on this device")
             case .unexpected(let detail):
-                return "Beklenmeyen hata: \(detail)"
+                return L("Beklenmeyen hata: ", "Unexpected error: ") + detail
             }
         }
     }

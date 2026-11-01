@@ -8,12 +8,18 @@ import Foundation
 /// players (Chrome, Stremio, IINA) and for Safari without that setting.
 enum VideoController {
     static let safariBundleID = "com.apple.Safari"
-    static let notFound = "Oynatılan video bulunamadı"
-    static let javaScriptOff = "Safari'de Apple Events'ten JavaScript izni kapalı"
-    static let unreachable = "Safari'ye ulaşılamadı"
-    static let noButton = "Bu videoda o düğme yok"
-    static let outOfRange = "Video o kadar uzun değil"
-    static let failures: Set<String> = [notFound, javaScriptOff, unreachable, noButton, outOfRange, BrowserController.notFront, BrowserController.youTubeNeedsVideo]
+    static var notFound: String { L("Oynatılan video bulunamadı", "No playing video found") }
+    static var javaScriptOff: String { L("Safari'de Apple Events'ten JavaScript izni kapalı", "Safari's Allow JavaScript from Apple Events is off") }
+    static var unreachable: String { L("Safari'ye ulaşılamadı", "Couldn't reach Safari") }
+    static var noButton: String { L("Bu videoda o düğme yok", "This video has no such button") }
+    static var outOfRange: String { L("Video o kadar uzun değil", "The video isn't that long") }
+    static var failures: Set<String> { [notFound, javaScriptOff, unreachable, noButton, outOfRange, BrowserController.notFront, BrowserController.youTubeNeedsVideo] }
+    private static var fullscreenFailed: String { L("Tam ekran yapılamadı", "Couldn't go full screen") }
+    private static var fullscreenOnlyYouTube: String { L("Tam ekran yalnızca YouTube'da", "Full screen works only on YouTube") }
+
+    static func isFullscreenFailure(_ status: String) -> Bool {
+        status == fullscreenFailed || status == fullscreenOnlyYouTube
+    }
 
     static func perform(_ action: VideoAction, onlyYouTube: Bool = false) async -> String {
         await Task.detached(priority: .userInitiated) { performBlocking(action, onlyYouTube: onlyYouTube) }.value
@@ -42,25 +48,27 @@ enum VideoController {
 
     private static func status(for action: VideoAction, result: String) -> String {
         switch action {
-        case .play: return "Video oynatılıyor"
-        case .pause: return "Video durduruldu"
-        case .restart: return "Video başa sarıldı"
+        case .play: return playing
+        case .pause: return paused
+        case .restart: return L("Video başa sarıldı", "Video restarted")
         case .seekBy(let seconds):
-            return "\(Self.duration(abs(seconds))) \(seconds < 0 ? "geri" : "ileri") sarıldı"
-        case .seekTo(let seconds): return "Video \(Self.clock(seconds)) konumuna alındı"
+            return L("\(Self.duration(abs(seconds))) \(seconds < 0 ? "geri" : "ileri") sarıldı",
+                     "\(seconds < 0 ? "Back" : "Forward") \(Self.duration(abs(seconds)))")
+        case .seekTo(let seconds): return L("Video \(Self.clock(seconds)) konumuna alındı", "Video at \(Self.clock(seconds))")
         case .speed, .speedStep:
             let rate = Double(result) ?? 1
-            return rate == 1 ? "Video normal hızda" : "Video hızı \(Self.rate(rate))x"
-        case .mute(let mute): return mute ? "Videonun sesi kapatıldı" : "Videonun sesi açıldı"
-        case .subtitles(let on): return on ? "Altyazı açıldı" : "Altyazı kapatıldı"
-        case .next: return "Sonraki video"
-        case .fullscreen: return "Tam ekran"
+            return rate == 1 ? L("Video normal hızda", "Video at normal speed") : L("Video hızı \(Self.rate(rate))x", "Video speed \(Self.rate(rate))x")
+        case .mute(let mute): return mute ? L("Videonun sesi kapatıldı", "Video muted") : L("Videonun sesi açıldı", "Video unmuted")
+        case .subtitles(let on): return on ? L("Altyazı açıldı", "Subtitles on") : L("Altyazı kapatıldı", "Subtitles off")
+        case .next: return L("Sonraki video", "Next video")
+        case .fullscreen: return fullscreenOn
         case .remaining:
             let parts = result.split(separator: "|").compactMap { Double($0) }
             guard parts.count == 2 else { return notFound }
-            guard parts[1].isFinite, parts[1] > 0 else { return "Bu canlı yayın, süresi yok" }
+            guard parts[1].isFinite, parts[1] > 0 else { return L("Bu canlı yayın, süresi yok", "This is a live stream, it has no length") }
             let left = max(0, Int(parts[1] - parts[0]))
-            return "Videonun bitmesine \(Self.duration(left)) var, toplam \(Self.duration(Int(parts[1])))"
+            return L("Videonun bitmesine \(Self.duration(left)) var, toplam \(Self.duration(Int(parts[1])))",
+                     "\(Self.duration(left)) left of \(Self.duration(Int(parts[1])))")
         }
     }
 
@@ -201,10 +209,10 @@ enum VideoController {
         let result = OSAScriptRunner.run(["-e", source])
         owLog("[Video] fullscreen → \(result ?? "script failed")")
         switch result {
-        case "on", "sent": return "Tam ekran"
-        case "off": return "Tam ekrandan çıkıldı"
-        case "unchanged": return "Tam ekran yapılamadı"
-        case "nobutton": return "Tam ekran yalnızca YouTube'da"
+        case "on", "sent": return fullscreenOn
+        case "off": return L("Tam ekrandan çıkıldı", "Left full screen")
+        case "unchanged": return fullscreenFailed
+        case "nobutton": return fullscreenOnlyYouTube
         default: return unreachable
         }
     }
@@ -228,14 +236,18 @@ enum VideoController {
         if action == .pause {
             guard let playing = players.first(where: \.isPlaying) else {
                 // The recording already paused it; not resuming it is the pause.
-                return players.isEmpty ? nil : "Video durduruldu"
+                return players.isEmpty ? nil : self.paused
             }
-            return bridge.send(.pause, to: playing) ? "Video durduruldu" : nil
+            return bridge.send(.pause, to: playing) ? self.paused : nil
         }
-        if players.contains(where: \.isPlaying) { return "Video oynatılıyor" }
+        if players.contains(where: \.isPlaying) { return self.playing }
         guard let paused = players.first, bridge.send(.play, to: paused) else { return nil }
-        return "Video oynatılıyor"
+        return self.playing
     }
+
+    private static var playing: String { L("Video oynatılıyor", "Video playing") }
+    private static var paused: String { L("Video durduruldu", "Video paused") }
+    private static var fullscreenOn: String { L("Tam ekran", "Full screen") }
 
     // MARK: - Formatting
 
@@ -243,10 +255,11 @@ enum VideoController {
     static func duration(_ seconds: Int) -> String {
         let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
         var parts: [String] = []
-        if h > 0 { parts.append("\(h) saat") }
-        if m > 0 { parts.append("\(m) dakika") }
-        if s > 0 && h == 0 { parts.append("\(s) saniye") }
-        return parts.isEmpty ? "0 saniye" : parts.joined(separator: " ")
+        let english = CommandLanguage.isEnglish
+        if h > 0 { parts.append(english ? "\(h) hour\(h == 1 ? "" : "s")" : "\(h) saat") }
+        if m > 0 { parts.append(english ? "\(m) minute\(m == 1 ? "" : "s")" : "\(m) dakika") }
+        if s > 0 && h == 0 { parts.append(english ? "\(s) second\(s == 1 ? "" : "s")" : "\(s) saniye") }
+        return parts.isEmpty ? L("0 saniye", "0 seconds") : parts.joined(separator: " ")
     }
 
     static func clock(_ seconds: Int) -> String {

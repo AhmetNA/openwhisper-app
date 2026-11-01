@@ -10,9 +10,9 @@ enum SystemController {
     static func perform(_ command: SystemCommand, disableWakeWord: (() -> Void)? = nil) async -> String {
         switch command {
         case .disableWakeWord:
-            guard let disableWakeWord else { return "Sesle uyandırma kapatılamadı" }
+            guard let disableWakeWord else { return L("Sesle uyandırma kapatılamadı", "Couldn't turn off voice wake-up") }
             disableWakeWord()
-            return "Sesle uyandırmayı kapattım. Yeniden açmak için Jarvis ayarlarını kullanabilirsin."
+            return L("Sesle uyandırmayı kapattım. Yeniden açmak için Jarvis ayarlarını kullanabilirsin.", "Voice wake-up is off. You can turn it back on in Jarvis settings.")
         case .wifi(let on): return setWiFi(on)
         case .bluetooth(let on): return await setBluetooth(on)
         case .headset(let connect): return await setHeadset(connected: connect)
@@ -21,10 +21,10 @@ enum SystemController {
         case .darkMode(let on): return setDarkMode(on)
         case .scroll(let up, let large): return scroll(up: up, large: large)
         case .lockScreen: return lockScreen()
-        case .displaySleep: return run("/usr/bin/pmset", ["displaysleepnow"], done: "Ekran kapatıldı")
-        case .displayWake: return RemoteControl.wakeDisplay() ? "Ekran açıldı" : "Ekran açılamadı"
+        case .displaySleep: return run("/usr/bin/pmset", ["displaysleepnow"], done: L("Ekran kapatıldı", "Display off"))
+        case .displayWake: return RemoteControl.wakeDisplay() ? L("Ekran açıldı", "Display on") : L("Ekran açılamadı", "Couldn't wake the display")
         case .unlockRequest: return RemoteControl.unlockAnswer
-        case .sleep: return run("/usr/bin/pmset", ["sleepnow"], done: "Uyku moduna geçiliyor")
+        case .sleep: return run("/usr/bin/pmset", ["sleepnow"], done: L("Uyku moduna geçiliyor", "Going to sleep"))
         case .screenSaver: return openScreenSaver()
         case .screenshot: return takeScreenshot()
         case .battery: return batteryStatus()
@@ -34,7 +34,7 @@ enum SystemController {
         case .forceQuitApp(let name): return forceQuitApp(name)
         case .switchToApp(let name): return await switchToApp(name)
         case .switchToAgent(let agent):
-            return await AgentAppActivator.activate(agent) != nil ? "\(agent.displayName) önde" : "\(agent.displayName) açılamadı"
+            return await AgentAppActivator.activate(agent) != nil ? frontStatus(agent.displayName) : L("\(agent.displayName) açılamadı", "Couldn't open \(agent.displayName)")
         case .mailCount: return await mailCount()
         case .mailCheck:
             await MailController.checkForNewMail()
@@ -56,7 +56,7 @@ enum SystemController {
             await DailyBriefing.notify(summary)
             return summary.headline
         case .mailMarkAllRead:
-            return await MailController.markAllRead() ? "Tüm mailler okundu işaretlendi" : "Mail'e erişilemedi"
+            return await MailController.markAllRead() ? L("Tüm mailler okundu işaretlendi", "All mail marked as read") : noMailAccess
         case .calendarEvent(let event): return await CalendarController.add(event)
         case .browser(let action): return await BrowserController.perform(action)
         case .video(let action): return await VideoController.perform(action)
@@ -65,15 +65,18 @@ enum SystemController {
         case .clipboard(.openLink): return await ClipboardHistory.shared.openLatestLink()
         case .reading(let action): return read(action)
         // Run by the command runner, which needs the session (`AppState.runScene`, WhatsApp).
-        case .scene(let name): return "\(name) sahnesi burada çalıştırılamaz"
-        case .clipboard(.sendWhatsApp): return "Pano buradan gönderilemez"
+        case .scene(let name): return L("\(name) sahnesi burada çalıştırılamaz", "The \(name) scene can't run here")
+        case .clipboard(.sendWhatsApp): return L("Pano buradan gönderilemez", "The clipboard can't be sent from here")
         }
     }
 
     // MARK: - Reading
 
-    static let nothingToRead = "Okunacak metin bulunamadı"
-    static let nothingToResume = "Devam edecek bir okuma yok"
+    nonisolated static var nothingToRead: String { L("Okunacak metin bulunamadı", "No text found to read") }
+    nonisolated static var nothingToResume: String { L("Devam edecek bir okuma yok", "No reading to resume") }
+    /// "Okunuyor: <title>"; `JarvisReply` stays silent on it, the reading follows.
+    nonisolated static var readingPrefix: String { L("Okunuyor", "Reading") }
+    nonisolated static var readingResumed: String { L("Okumaya devam ediliyor", "Resuming the reading") }
 
     /// Loads or checks the reading; the caller starts it after its reply (`ArticleReader.start`).
     private static func read(_ action: ReadingAction) -> String {
@@ -81,12 +84,12 @@ enum SystemController {
         switch action {
         case .start:
             guard let title = reader.load() else { return nothingToRead }
-            return "Okunuyor: \(title)"
+            return "\(readingPrefix): \(title)"
         case .resume:
-            return reader.isPaused ? "Okumaya devam ediliyor" : nothingToResume
+            return reader.isPaused ? readingResumed : nothingToResume
         case .stop:
             reader.stop()
-            return "Okuma durdu"
+            return L("Okuma durdu", "Reading stopped")
         }
     }
 
@@ -114,43 +117,47 @@ enum SystemController {
         do {
             try process.run()
             owLog("[System] Running shortcut '\(name)'")
-            return "“\(name)” çalıştırılıyor"
+            return L("“\(name)” çalıştırılıyor", "Running “\(name)”")
         } catch {
             owLog("[System] Shortcut '\(name)' failed: \(error)")
-            return "“\(name)” çalıştırılamadı"
+            return L("“\(name)” çalıştırılamadı", "Couldn't run “\(name)”")
         }
     }
 
     // MARK: - Mail
 
     private static func mailCount() async -> String {
-        guard let count = await MailController.unreadCount() else { return "Mail'e erişilemedi" }
-        return count == 0 ? "Okunmamış mail yok" : "\(count) okunmamış mail"
+        guard let count = await MailController.unreadCount() else { return noMailAccess }
+        return count == 0 ? noUnreadMail : L("\(count) okunmamış mail", count == 1 ? "1 unread mail" : "\(count) unread mails")
     }
 
     private static func mailLatest() async -> String {
         if let unread = await MailController.unreadMessages(limit: 1)?.first {
-            return "Yeni: \(unread.sender) — \(unread.subject)"
+            return L("Yeni: ", "New: ") + "\(unread.sender) — \(unread.subject)"
         }
-        guard let newest = await MailController.newestMessage() else { return "Mail bulunamadı" }
-        return "Son mail: \(newest.sender) — \(newest.subject)"
+        guard let newest = await MailController.newestMessage() else { return L("Mail bulunamadı", "No mail found") }
+        return L("Son mail: ", "Latest mail: ") + "\(newest.sender) — \(newest.subject)"
     }
 
     private static func mailOpen() async -> String {
-        if await MailController.openNewestUnread() { return "Son okunmamış mail açıldı" }
+        if await MailController.openNewestUnread() { return L("Son okunmamış mail açıldı", "Opened the latest unread mail") }
         if let url = appURL("Mail") {
             _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
-        return "Okunmamış mail yok, Mail açıldı"
+        return L("Okunmamış mail yok, Mail açıldı", "No unread mail, opened Mail")
     }
 
     /// The flow bar shows up to this much of the mail text; Jarvis says less (`JarvisReply`).
     private static let mailBodyLimit = 400
 
     private static func mailReadLatest() async -> String {
-        guard let mail = await MailController.newestMessageWithBody() else { return "Mail'e erişilemedi" }
+        guard let mail = await MailController.newestMessageWithBody() else { return noMailAccess }
         var text = mail.body
         if text.count > mailBodyLimit { text = String(text.prefix(mailBodyLimit)) + "…" }
+        if CommandLanguage.isEnglish {
+            let subject = mail.subject.isEmpty ? "no subject" : "subject: \(mail.subject)"
+            return "From \(mail.sender), \(subject). \(text.isEmpty ? "The text is empty." : text)"
+        }
         let subject = mail.subject.isEmpty ? "konusuz" : "konu: \(mail.subject)"
         return text.isEmpty ? "Gönderen \(mail.sender), \(subject). Metin boş."
             : "Gönderen \(mail.sender), \(subject). \(text)"
@@ -158,9 +165,14 @@ enum SystemController {
 
     /// `name` is as heard ("Ahmet"); the answer uses the sender's own name from Mail.
     private static func mailFrom(_ name: String) async -> String {
-        guard let found = await MailController.messages(from: name) else { return "Mail'e erişilemedi" }
-        guard let newest = found.first else { return "Son maillerde gönderen \(name) olan mail yok" }
+        guard let found = await MailController.messages(from: name) else { return noMailAccess }
+        guard let newest = found.first else { return L("Son maillerde gönderen \(name) olan mail yok", "No recent mail from \(name)") }
         let unread = found.filter(\.unread).count
+        if CommandLanguage.isEnglish {
+            let count = found.count == 1 ? "1 mail" : "\(found.count) mails"
+            let unreadPart = unread == 0 ? "" : unread == found.count ? ", all unread" : ", \(unread) unread"
+            return "\(newest.message.sender): \(count)\(unreadPart). The latest: \(newest.message.subject)"
+        }
         let count = found.count == 1 ? "1 mail" : "\(found.count) mail"
         let unreadPart = unread == 0 ? "" : unread == found.count ? ", hepsi okunmamış" : ", \(unread) tanesi okunmamış"
         return "\(newest.message.sender): \(count)\(unreadPart). Sonuncusu: \(newest.message.subject)"
@@ -168,15 +180,19 @@ enum SystemController {
 
     /// Never sends: the draft opens in Mail and the user presses Send there.
     private static func mailReplyDraft(_ text: String) async -> String {
-        guard let original = await MailController.openReplyDraft(text) else { return "Cevap taslağı açılamadı" }
+        guard let original = await MailController.openReplyDraft(text) else { return L("Cevap taslağı açılamadı", "Couldn't open a reply draft") }
+        if CommandLanguage.isEnglish {
+            return text.isEmpty ? "I opened an empty reply to \(original.sender), you can write it before sending"
+                : "The reply draft to \(original.sender) is ready. Press Send in Mail to send it"
+        }
         let to = "\(original.sender) adlı kişiye"
         return text.isEmpty ? "\(to) boş cevap açtım, göndermeden önce yazabilirsin"
             : "\(to) cevap taslağı hazır. Göndermek için Mail'de Gönder'e bas"
     }
 
     private static func mailReadUnread() async -> String {
-        guard let messages = await MailController.unreadMessages(limit: 3) else { return "Mail'e erişilemedi" }
-        guard !messages.isEmpty else { return "Okunmamış mail yok" }
+        guard let messages = await MailController.unreadMessages(limit: 3) else { return noMailAccess }
+        guard !messages.isEmpty else { return noUnreadMail }
         return messages.map { "\($0.sender): \($0.subject)" }.joined(separator: " · ")
     }
 
@@ -201,24 +217,32 @@ enum SystemController {
             .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    private static var noMailAccess: String { L("Mail'e erişilemedi", "Couldn't reach Mail") }
+    private static var noUnreadMail: String { L("Okunmamış mail yok", "No unread mail") }
+
+    /// "Safari önde": also how the runner tells the switch worked.
+    nonisolated static func frontStatus(_ name: String) -> String { L("\(name) önde", "\(name) in front") }
+    private static func notFound(_ name: String) -> String { L("\(name) bulunamadı", "\(name) not found") }
+    private static func alreadyClosed(_ name: String) -> String { L("\(name) zaten kapalı", "\(name) is already closed") }
+
     // MARK: - Apps
 
     private static func openApp(_ name: String) -> String {
-        guard let url = appURL(name) else { return "\(name) bulunamadı" }
+        guard let url = appURL(name) else { return notFound(name) }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
             if let error { owLog("[System] Open \(name) failed: \(error)") }
         }
         owLog("[System] Open \(name)")
-        return "\(name) açılıyor"
+        return L("\(name) açılıyor", "Opening \(name)")
     }
 
     /// Opens the app with activation (which also switches to its full-screen Space and
     /// launches it if needed) and waits until it is frontmost: a chained "… ve videoyu
     /// başlat" must run in it, not in the app that was in front before.
     private static func switchToApp(_ name: String) async -> String {
-        guard let url = appURL(name) else { return "\(name) bulunamadı" }
+        guard let url = appURL(name) else { return notFound(name) }
         let bundleID = Bundle(url: url)?.bundleIdentifier
-        if let bundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { return "\(name) zaten önde" }
+        if let bundleID, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID { return L("\(name) zaten önde", "\(name) is already in front") }
         let wasRunning = bundleID.map { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty } ?? false
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -227,7 +251,7 @@ enum SystemController {
             pid = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
         } catch {
             owLog("[System] Switch to \(name) failed: \(error)")
-            return "\(name) açılamadı"
+            return L("\(name) açılamadı", "Couldn't open \(name)")
         }
         let deadline = Date().addingTimeInterval(wasRunning ? 2 : 10)
         while Date() < deadline {
@@ -235,29 +259,29 @@ enum SystemController {
                 // Let its window come up and take keyboard focus before the next command.
                 try? await Task.sleep(nanoseconds: wasRunning ? 200_000_000 : 1_000_000_000)
                 owLog("[System] Switched to \(name) (launched: \(!wasRunning))")
-                return "\(name) önde"
+                return frontStatus(name)
             }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         owLog("[System] \(name) did not come to the front in time")
-        return "\(name) öne gelemedi"
+        return L("\(name) öne gelemedi", "\(name) didn't come to the front")
     }
 
     private static func quitApp(_ name: String) -> String {
-        guard let url = appURL(name), let bundleID = Bundle(url: url)?.bundleIdentifier else { return "\(name) bulunamadı" }
+        guard let url = appURL(name), let bundleID = Bundle(url: url)?.bundleIdentifier else { return notFound(name) }
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        guard !running.isEmpty else { return "\(name) zaten kapalı" }
+        guard !running.isEmpty else { return alreadyClosed(name) }
         // A normal quit: the app can still ask to save unsaved work.
         running.forEach { $0.terminate() }
         owLog("[System] Quit \(name)")
-        return "\(name) kapatılıyor"
+        return L("\(name) kapatılıyor", "Quitting \(name)")
     }
 
     /// Kills the app with SIGKILL together with everything that belongs to it: helper processes
     /// whose executable lives inside the .app bundle (Chrome/Electron renderers, crash
     /// reporters) and every descendant the app spawned. Unsaved work is lost.
     private static func forceQuitApp(_ name: String) -> String {
-        guard let url = appURL(name) else { return "\(name) bulunamadı" }
+        guard let url = appURL(name) else { return notFound(name) }
         let bundlePath = url.resolvingSymlinksInPath().path + "/"
         let processes = allProcesses()
         var targets = Set(processes.filter { $0.path.hasPrefix(bundlePath) }.map(\.pid))
@@ -275,10 +299,10 @@ enum SystemController {
             ancestor = processes.first { $0.pid == ancestor }?.ppid ?? 1
         }
         targets.subtract(protected)
-        guard !targets.isEmpty else { return "\(name) zaten kapalı" }
+        guard !targets.isEmpty else { return alreadyClosed(name) }
         let killed = targets.filter { kill($0, SIGKILL) == 0 }
         owLog("[System] Force quit \(name): killed \(killed.count)/\(targets.count) processes")
-        return killed.isEmpty ? "\(name) kapatılamadı" : "\(name) zorla kapatıldı"
+        return killed.isEmpty ? L("\(name) kapatılamadı", "Couldn't quit \(name)") : L("\(name) zorla kapatıldı", "Force quit \(name)")
     }
 
     private struct ProcessEntry { let pid: pid_t; let ppid: pid_t; let path: String }
@@ -311,7 +335,7 @@ enum SystemController {
     private static func scroll(up: Bool, large: Bool) -> String {
         SystemCommandParser.lastScrollUp = up
         guard AXIsProcessTrusted() else {
-            return "Ekran kaydırılamadı: Erişilebilirlik izni gerekli"
+            return L("Ekran kaydırılamadı: Erişilebilirlik izni gerekli", "Couldn't scroll: Accessibility permission needed")
         }
         let window = NSWorkspace.shared.frontmostApplication.flatMap(ScreenReader.focusedWindow(of:))
         let frame = window.flatMap { ScreenReader.node($0).frame }
@@ -336,7 +360,7 @@ enum SystemController {
             }
         }
         owLog("[System] Scroll \(up ? "up" : "down") \(Int(distance)) pt")
-        return up ? "Yukarı kaydırıldı" : "Aşağı kaydırıldı"
+        return up ? L("Yukarı kaydırıldı", "Scrolled up") : L("Aşağı kaydırıldı", "Scrolled down")
     }
 
     private typealias GetBrightness = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
@@ -352,27 +376,30 @@ enum SystemController {
         let display = CGMainDisplayID()
         var current: Float = 0
         guard let getBrightness, let setBrightnessFunction, getBrightness(display, &current) == 0 else {
-            return "Parlaklık değiştirilemedi"
+            return brightnessFailed
         }
         let target = level.map { Float($0) / 100 } ?? min(1, max(0.05, current + (up ? 0.2 : -0.2)))
-        guard setBrightnessFunction(display, target) == 0 else { return "Parlaklık değiştirilemedi" }
+        guard setBrightnessFunction(display, target) == 0 else { return brightnessFailed }
         owLog(String(format: "[System] Brightness %.2f → %.2f", current, target))
-        return "Parlaklık %\(Int((target * 100).rounded()))"
+        let percent = Int((target * 100).rounded())
+        return L("Parlaklık %\(percent)", "Brightness \(percent)%")
     }
+
+    private static var brightnessFailed: String { L("Parlaklık değiştirilemedi", "Couldn't change the brightness") }
 
     private static func lockScreen() -> String {
         typealias Lock = @convention(c) () -> Void
         let login = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_NOW)
-        guard let symbol = dlsym(login, "SACLockScreenImmediate") else { return "Ekran kilitlenemedi" }
+        guard let symbol = dlsym(login, "SACLockScreenImmediate") else { return L("Ekran kilitlenemedi", "Couldn't lock the screen") }
         unsafeBitCast(symbol, to: Lock.self)()
         owLog("[System] Screen locked")
-        return "Ekran kilitlendi"
+        return L("Ekran kilitlendi", "Screen locked")
     }
 
     private static func openScreenSaver() -> String {
         let url = URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app")
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-        return "Ekran koruyucu açıldı"
+        return L("Ekran koruyucu açıldı", "Screen saver on")
     }
 
     /// Saved to the Desktop like ⌘⇧3, without the shutter sound.
@@ -380,17 +407,17 @@ enum SystemController {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
         let path = NSHomeDirectory() + "/Desktop/Ekran Görüntüsü \(formatter.string(from: Date())).png"
-        return run("/usr/sbin/screencapture", ["-x", path], done: "Ekran görüntüsü masaüstüne kaydedildi")
+        return run("/usr/sbin/screencapture", ["-x", path], done: L("Ekran görüntüsü masaüstüne kaydedildi", "Screenshot saved to the Desktop"))
     }
 
     private static func setMute(_ mute: Bool) -> String {
-        runAppleScript("set volume output muted \(mute)") ? (mute ? "Ses kapatıldı" : "Ses açıldı") : "Ses değiştirilemedi"
+        runAppleScript("set volume output muted \(mute)") ? (mute ? L("Ses kapatıldı", "Sound muted") : L("Ses açıldı", "Sound on")) : L("Ses değiştirilemedi", "Couldn't change the sound")
     }
 
     /// Asks for "System Events" automation access the first time.
     private static func setDarkMode(_ on: Bool) -> String {
         let script = "tell application \"System Events\" to tell appearance preferences to set dark mode to \(on)"
-        return runAppleScript(script) ? (on ? "Karanlık mod açıldı" : "Aydınlık mod açıldı") : "Görünüm değiştirilemedi"
+        return runAppleScript(script) ? (on ? L("Karanlık mod açıldı", "Dark mode on") : L("Aydınlık mod açıldı", "Light mode on")) : L("Görünüm değiştirilemedi", "Couldn't change the appearance")
     }
 
     // MARK: - Queries
@@ -401,10 +428,10 @@ enum SystemController {
         guard let source = sources.first,
               let description = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
               let capacity = description[kIOPSCurrentCapacityKey] as? Int
-        else { return "Pil bilgisi yok" }
+        else { return L("Pil bilgisi yok", "No battery info") }
         let charging = description[kIOPSIsChargingKey] as? Bool ?? false
         let onAC = description[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
-        return "Pil %\(capacity)" + (charging ? ", şarj oluyor" : onAC ? ", prizde" : "")
+        return L("Pil %\(capacity)", "Battery \(capacity)%") + (charging ? L(", şarj oluyor", ", charging") : onAC ? L(", prizde", ", plugged in") : "")
     }
 
     private static func timeNow() -> String {
@@ -426,7 +453,7 @@ enum SystemController {
             return done
         } catch {
             owLog("[System] \(tool) failed: \(error)")
-            return "Yapılamadı"
+            return L("Yapılamadı", "Couldn't do it")
         }
     }
 
@@ -442,17 +469,17 @@ enum SystemController {
     private static func setWiFi(_ on: Bool) -> String {
         guard let interface = CWWiFiClient.shared().interface() else {
             owLog("[System] No Wi-Fi interface")
-            return "Wi-Fi bulunamadı"
+            return L("Wi-Fi bulunamadı", "Wi-Fi not found")
         }
         // As with Bluetooth: say so when nothing changes, instead of "açıldı" for a no-op.
-        if interface.powerOn() == on { return on ? "Wi-Fi zaten açık" : "Wi-Fi zaten kapalı" }
+        if interface.powerOn() == on { return on ? L("Wi-Fi zaten açık", "Wi-Fi is already on") : L("Wi-Fi zaten kapalı", "Wi-Fi is already off") }
         do {
             try interface.setPower(on)
             owLog("[System] Wi-Fi \(on ? "on" : "off")")
-            return on ? "Wi-Fi açıldı" : "Wi-Fi kapatıldı"
+            return on ? L("Wi-Fi açıldı", "Wi-Fi on") : L("Wi-Fi kapatıldı", "Wi-Fi off")
         } catch {
             owLog("[System] Wi-Fi power change failed: \(error)")
-            return "Wi-Fi değiştirilemedi"
+            return L("Wi-Fi değiştirilemedi", "Couldn't change Wi-Fi")
         }
     }
 
@@ -472,21 +499,23 @@ enum SystemController {
     private static func setBluetooth(_ on: Bool) async -> String {
         guard let getPower, let setPower else {
             owLog("[System] Bluetooth power functions unavailable")
-            return "Bluetooth değiştirilemedi"
+            return bluetoothFailed
         }
-        if (getPower() != 0) == on { return on ? "Bluetooth zaten açık" : "Bluetooth zaten kapalı" }
+        if (getPower() != 0) == on { return on ? L("Bluetooth zaten açık", "Bluetooth is already on") : L("Bluetooth zaten kapalı", "Bluetooth is already off") }
         setPower(on ? 1 : 0)
         // The controller takes a moment to switch; confirm instead of assuming.
         for _ in 0..<20 {
             try? await Task.sleep(for: .milliseconds(150))
             if (getPower() != 0) == on {
                 owLog("[System] Bluetooth \(on ? "on" : "off")")
-                return on ? "Bluetooth açıldı" : "Bluetooth kapatıldı"
+                return on ? L("Bluetooth açıldı", "Bluetooth on") : L("Bluetooth kapatıldı", "Bluetooth off")
             }
         }
         owLog("[System] Bluetooth power did not change (still \(getPower()))")
-        return "Bluetooth değiştirilemedi"
+        return bluetoothFailed
     }
+
+    private static var bluetoothFailed: String { L("Bluetooth değiştirilemedi", "Couldn't change Bluetooth") }
 
     // MARK: - Headset
 
@@ -503,24 +532,24 @@ enum SystemController {
         let devices = audioDevices()
         if connect {
             if let already = devices.first(where: { $0.isConnected() }) {
-                return "\(already.name ?? "Kulaklık") zaten bağlı"
+                return L("\(already.name ?? "Kulaklık") zaten bağlı", "\(already.name ?? "The headset") is already connected")
             }
             // The most recently used paired audio device.
             guard let device = devices.max(by: { ($0.recentAccessDate() ?? .distantPast) < ($1.recentAccessDate() ?? .distantPast) }) else {
-                return "Eşleşmiş kulaklık yok"
+                return L("Eşleşmiş kulaklık yok", "No paired headset")
             }
-            let name = device.name ?? "Kulaklık"
+            let name = device.name ?? L("Kulaklık", "Headset")
             let status = await Task.detached { device.openConnection() }.value
             owLog("[System] Connect \(name): \(status)")
-            return status == kIOReturnSuccess ? "\(name) bağlandı" : "\(name) bağlanamadı"
+            return status == kIOReturnSuccess ? L("\(name) bağlandı", "\(name) connected") : L("\(name) bağlanamadı", "Couldn't connect \(name)")
         }
         let connected = devices.filter { $0.isConnected() }
-        guard !connected.isEmpty else { return "Bağlı kulaklık yok" }
+        guard !connected.isEmpty else { return L("Bağlı kulaklık yok", "No headset connected") }
         for device in connected {
             let status = device.closeConnection()
             owLog("[System] Disconnect \(device.name ?? "?"): \(status)")
         }
         let names = connected.compactMap(\.name).joined(separator: ", ")
-        return "\(names.isEmpty ? "Kulaklık" : names) bağlantısı kesildi"
+        return L("\(names.isEmpty ? "Kulaklık" : names) bağlantısı kesildi", "\(names.isEmpty ? "Headset" : names) disconnected")
     }
 }

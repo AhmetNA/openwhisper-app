@@ -85,13 +85,17 @@ enum ReplyTranslator {
     /// least two common English words making up 30% of it. Anything unsure counts as Turkish
     /// and gets translated, which costs a little time but never reads Turkish in English.
     static func isClearlyEnglish(_ text: String) -> Bool {
-        if text.contains(where: { turkishLetters.contains($0) }) { return false }
-        let range = NSRange(text.startIndex..., in: text)
-        if turkishSuffix.firstMatch(in: text, range: range) != nil { return false }
+        if hasTurkishMarks(text) { return false }
         let words = text.lowercased().replacingOccurrences(of: "’", with: "'")
             .split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "'") }).map(String.init)
         let english = words.filter { englishWords.contains($0) }.count
         return !words.isEmpty && english >= 2 && Double(english) / Double(words.count) >= 0.3
+    }
+
+    /// Turkish letters or a Turkish suffix after an apostrophe.
+    static func hasTurkishMarks(_ text: String) -> Bool {
+        if text.contains(where: { turkishLetters.contains($0) }) { return true }
+        return turkishSuffix.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
     // MARK: - Ollama

@@ -73,8 +73,8 @@ final class ClipboardHistory {
     }
 
     func openLatestLink() async -> String {
-        guard let url = latestLink else { return "Panoda link yok" }
+        guard let url = latestLink else { return L("Panoda link yok", "No link on the clipboard") }
         owLog("[Clipboard] Opening the latest copied link")
-        return await BrowserController.open(url, done: "Panodaki link açılıyor")
+        return await BrowserController.open(url, done: L("Panodaki link açılıyor", "Opening the link from the clipboard"))
     }
 }

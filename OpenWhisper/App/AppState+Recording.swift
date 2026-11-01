@@ -196,7 +196,7 @@ extension AppState {
                     if self?.nextTranscriptionID == sessionID {
                         self?.activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "model unavailable")
                     }
-                    self?.showFlowBarMessage("Gürültü engelleme henüz hazır değildi, bu kayıt engelsiz işlendi")
+                    self?.showFlowBarMessage(L("Gürültü engelleme henüz hazır değildi, bu kayıt engelsiz işlendi", "Noise cancelling wasn't ready yet, this recording was processed without it"))
                 }
             }
         }

@@ -99,9 +99,17 @@ enum SpokenDuration {
 
     /// "20 dakika", "1 saat 30 dakika", "yarım saat", "45 saniye" — for spoken replies.
     static func spoken(_ seconds: Int) -> String {
-        if seconds < 60 { return "\(seconds) saniye" }
         let hours = seconds / 3600
         let minutes = (seconds % 3600 + 30) / 60
+        if CommandLanguage.isEnglish {
+            func unit(_ n: Int, _ word: String) -> String { "\(n) \(word)\(n == 1 ? "" : "s")" }
+            if seconds < 60 { return unit(seconds, "second") }
+            if hours == 0 { return minutes == 30 ? "half an hour" : unit(minutes, "minute") }
+            if minutes == 0 { return unit(hours, "hour") }
+            if minutes == 30 { return "\(hours) and a half hours" }
+            return "\(unit(hours, "hour")) \(unit(minutes, "minute"))"
+        }
+        if seconds < 60 { return "\(seconds) saniye" }
         if hours == 0 { return minutes == 30 ? "yarım saat" : "\(minutes) dakika" }
         if minutes == 0 { return "\(hours) saat" }
         if minutes == 30 { return "\(hours) buçuk saat" }

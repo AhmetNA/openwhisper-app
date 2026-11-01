@@ -25,6 +25,11 @@ import Observation
 @Observable
 @MainActor
 final class DictationSnapshot {
+    nonisolated static var nothingToCompare: String { L("karşılaştırılacak dikte yok", "no dictation to compare") }
+    nonisolated static var unreadableText: String { L("metin okunamadı", "couldn't read the text") }
+    nonisolated static var noChange: String { L("değişiklik yok", "no change") }
+    nonisolated static var noFittingFix: String { L("uygun düzeltme bulunamadı", "no fitting correction found") }
+
 
     static let shared = DictationSnapshot()
 
@@ -380,7 +385,7 @@ final class DictationSnapshot {
 
         guard let retained = lastReviewableText else {
             owLog("[Corrections] Manual review — no active snapshot and no retained pasted text")
-            onManualReviewResult?("karşılaştırılacak dikte yok")
+            onManualReviewResult?(DictationSnapshot.nothingToCompare)
             return
         }
 
@@ -388,13 +393,13 @@ final class DictationSnapshot {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let element = AXTextAccess.focusedElement() else {
                 owLog("[Corrections] Manual review (re-anchored) — no focused AX element")
-                Task { @MainActor in self?.onManualReviewResult?("metin okunamadı") }
+                Task { @MainActor in self?.onManualReviewResult?(DictationSnapshot.unreadableText) }
                 return
             }
             let valueResult = AXTextAccess.readString(element, kAXValueAttribute as CFString)
             guard let fieldText = valueResult.value else {
                 owLog("[Corrections] Manual review (re-anchored) — value unreadable (\(AXTextAccess.describe(valueResult.error)))")
-                Task { @MainActor in self?.onManualReviewResult?("metin okunamadı") }
+                Task { @MainActor in self?.onManualReviewResult?(DictationSnapshot.unreadableText) }
                 return
             }
             Task { @MainActor in
@@ -411,7 +416,7 @@ final class DictationSnapshot {
     private func reviewRetained(pastedText: String, appliedPairs: [(wrong: String, right: String)], fieldText: String) {
         guard fieldText != pastedText else {
             owLog("[Corrections] Manual review (re-anchored) — no change, nothing to learn")
-            onManualReviewResult?("değişiklik yok")
+            onManualReviewResult?(DictationSnapshot.noChange)
             return
         }
 
@@ -427,7 +432,7 @@ final class DictationSnapshot {
         owLog("[Corrections] Manual review (re-anchored) — LCS coverage \(String(format: "%.2f", coverage)) of retained text's words")
         guard coverage >= 0.5 else {
             owLog("[Corrections] Manual review (re-anchored) — coverage below 50%, refusing to diff against what looks like an unrelated field")
-            onManualReviewResult?("karşılaştırılacak dikte yok")
+            onManualReviewResult?(DictationSnapshot.nothingToCompare)
             return
         }
 
@@ -488,7 +493,7 @@ final class DictationSnapshot {
             guard let newFieldText else {
                 owLog("[Corrections] Reread skipped (gen \(boxed.generation)) — element/value unreadable (\(AXTextAccess.describe(valueResult.error)))")
                 if manual {
-                    Task { @MainActor in self?.onManualReviewResult?("metin okunamadı") }
+                    Task { @MainActor in self?.onManualReviewResult?(DictationSnapshot.unreadableText) }
                 }
                 return
             }
@@ -516,7 +521,7 @@ final class DictationSnapshot {
         let oldField = boxed.fieldTextAtPaste
         guard newFieldText != oldField else {
             owLog("[Corrections] Reread (gen \(boxed.generation), \(reason)) — no change, nothing to learn")
-            if manual { onManualReviewResult?("değişiklik yok") }
+            if manual { onManualReviewResult?(DictationSnapshot.noChange) }
             return
         }
 
@@ -533,7 +538,7 @@ final class DictationSnapshot {
                 // softAnchorRange always returns an in-bounds range in practice; stay defensive
                 // rather than diffing garbage if that assumption is ever wrong.
                 owLog("[Corrections] Reread (gen \(boxed.generation), \(reason)) — manual soft anchor produced an invalid range, skipping")
-                onManualReviewResult?("metin okunamadı")
+                onManualReviewResult?(DictationSnapshot.unreadableText)
                 return
             }
             oldSlice = boxed.pastedText
@@ -571,7 +576,7 @@ final class DictationSnapshot {
 
         guard newSlice != oldSlice else {
             owLog("[Corrections] Reread (gen \(boxed.generation), \(reason)) — pasted span unchanged, nothing to learn")
-            if manual { onManualReviewResult?("değişiklik yok") }
+            if manual { onManualReviewResult?(DictationSnapshot.noChange) }
             return
         }
 
@@ -687,7 +692,7 @@ final class DictationSnapshot {
 
         guard !accepted.isEmpty else {
             owLog("[Corrections] \(logLabel) — diff found \(raws.count) raw substitution(s) (\(raws.count - nonReversalRaws.count) reversal(s) excluded), 0 accepted")
-            return manual ? "uygun düzeltme bulunamadı" : nil
+            return manual ? DictationSnapshot.noFittingFix : nil
         }
 
         var newlyLearnedCount = 0
@@ -753,24 +758,24 @@ final class DictationSnapshot {
         guard manual else { return nil }
 
         if newlyLearnedCount == 1, let pair = learnedPairs.first {
-            return "öğrenildi: \(pair.wrong) → \(pair.right)"
+            return L("öğrenildi: ", "learned: ") + "\(pair.wrong) → \(pair.right)"
         } else if newlyLearnedCount > 1 {
-            return "\(newlyLearnedCount) düzeltme öğrenildi"
+            return L("\(newlyLearnedCount) düzeltme öğrenildi", "\(newlyLearnedCount) corrections learned")
         } else if alreadyActivePairs.count == 1, let pair = alreadyActivePairs.first {
             // Report the truth rather than a failure: the pair IS active, this press just had
             // nothing left to write (usually because the automatic AXObserver path got there
             // first, or because the user pressed twice).
             return "zaten aktif: \(pair.wrong) → \(pair.right)"
         } else if alreadyActivePairs.count > 1 {
-            return "\(alreadyActivePairs.count) düzeltme zaten aktif"
+            return L("\(alreadyActivePairs.count) düzeltme zaten aktif", "\(alreadyActivePairs.count) corrections already active")
         } else if sawProtected {
-            return "korumalı kelime, öğrenilmedi"
+            return L("korumalı kelime, öğrenilmedi", "protected word, not learned")
         } else if sawCycle {
-            return "döngü riski, öğrenilmedi"
+            return L("döngü riski, öğrenilmedi", "loop risk, not learned")
         } else if sawDisabled {
-            return "bu düzeltme kapatılmış"
+            return L("bu düzeltme kapatılmış", "this correction is turned off")
         } else {
-            return "uygun düzeltme bulunamadı"
+            return DictationSnapshot.noFittingFix
         }
     }
 

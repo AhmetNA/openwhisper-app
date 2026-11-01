@@ -6,10 +6,10 @@ import ApplicationServices
 @MainActor
 enum WindowManager {
     static func perform(_ action: WindowAction) async -> String {
-        guard AXIsProcessTrusted() else { return "Pencereleri taşımak için Erişilebilirlik izni gerekli" }
-        guard let app = await targetApp(action.app) else { return "\(action.app ?? "Öndeki uygulama") bulunamadı" }
-        let name = app.localizedName ?? action.app ?? "Pencere"
-        guard let window = await mainWindow(of: app) else { return "\(name) penceresi bulunamadı" }
+        guard AXIsProcessTrusted() else { return L("Pencereleri taşımak için Erişilebilirlik izni gerekli", "Moving windows needs Accessibility permission") }
+        guard let app = await targetApp(action.app) else { return L("\(action.app ?? "Öndeki uygulama") bulunamadı", "\(action.app ?? "The front app") not found") }
+        let name = app.localizedName ?? action.app ?? L("Pencere", "Window")
+        guard let window = await mainWindow(of: app) else { return L("\(name) penceresi bulunamadı", "\(name) window not found") }
         let done: Bool
         // "Tam ekran yap" a second time leaves it, as YouTube's "f" does.
         let leavesFullscreen = action.position == .fullscreen && bool(window, "AXFullScreen")
@@ -23,20 +23,20 @@ enum WindowManager {
                 try? await Task.sleep(for: .milliseconds(800))
             }
             guard let frame = target(for: action.position, from: frame(of: window)) else {
-                return "Başka bir ekran yok"
+                return L("Başka bir ekran yok", "There is no other display")
             }
             done = setFrame(window, frame)
         }
         app.activate()
         AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         owLog("[Window] \(name) → \(action.position.rawValue): \(done ? "done" : "failed")")
-        guard done else { return "\(name) penceresi taşınamadı" }
+        guard done else { return L("\(name) penceresi taşınamadı", "Couldn't move the \(name) window") }
         switch action.position {
-        case .left: return "\(name) solda"
-        case .right: return "\(name) sağda"
-        case .maximize: return "\(name) ekranı kaplıyor"
-        case .fullscreen: return leavesFullscreen ? "\(name) tam ekrandan çıktı" : "\(name) tam ekran"
-        case .nextScreen: return "\(name) diğer ekranda"
+        case .left: return L("\(name) solda", "\(name) on the left")
+        case .right: return L("\(name) sağda", "\(name) on the right")
+        case .maximize: return L("\(name) ekranı kaplıyor", "\(name) fills the screen")
+        case .fullscreen: return leavesFullscreen ? L("\(name) tam ekrandan çıktı", "\(name) left full screen") : L("\(name) tam ekran", "\(name) full screen")
+        case .nextScreen: return L("\(name) diğer ekranda", "\(name) on the other display")
         }
     }
 
