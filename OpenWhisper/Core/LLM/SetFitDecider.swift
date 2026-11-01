@@ -107,17 +107,17 @@ final class SetFitDecider {
                 let pid = try server.start()
                 owLog("[Decider] Started SetFit server (pid \(pid))")
             } catch {
-                status = "Başlatılamadı: \(error.localizedDescription)"
+                status = String(format: loc("Başlatılamadı: %@"), error.localizedDescription)
                 owLog("[Decider] Could not start SetFit server: \(error)")
                 return
             }
         }
-        status = "Yükleniyor…"
+        status = loc("Yükleniyor…")
         let outcome = await server.waitUntilReady(timeout: 90, poll: .milliseconds(500)) { json in
             let served = json["variant"] as? String ?? "minilm"
             guard served == Self.variant else {
                 // A server left from another run serves the other base model.
-                status = "Model değiştiriliyor…"
+                status = loc("Model değiştiriliyor…")
                 owLog("[Decider] SetFit server has \(served), reloading as \(Self.variant)")
                 await reload()
                 return false
@@ -128,16 +128,16 @@ final class SetFitDecider {
         case .ready(let json):
             let models = Self.describeModels(json)
             Self.readyFlag.withLock { $0 = true }
-            status = "Hazır — \(models)"
+            status = String(format: loc("Hazır — %@"), models)
             owLog("[Decider] SetFit ready: \(models)")
         case .failed(let error):
-            status = "Yüklenemedi: \(error)"
+            status = String(format: loc("Yüklenemedi: %@"), "\(error)")
             owLog("[Decider] SetFit failed to load: \(error). Log: \(server.logPath)")
         case .exited(let code):
-            status = "Sunucu kapandı (\(code))"
+            status = String(format: loc("Sunucu kapandı (%ld)"), Int(code))
             owLog("[Decider] SetFit server exited (\(code)). Log: \(server.logPath)")
         case .timedOut:
-            status = "90 sn içinde hazır olmadı"
+            status = loc("90 sn içinde hazır olmadı")
             owLog("[Decider] SetFit server did not become ready within 90 s")
         }
     }

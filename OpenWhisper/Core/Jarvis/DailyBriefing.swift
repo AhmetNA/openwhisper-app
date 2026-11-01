@@ -19,13 +19,13 @@ enum DailyBriefing {
         var headline: String {
             var parts: [String] = []
             if missingAccess.contains("Takvim") {
-                parts.append("takvim izni yok")
+                parts.append(L("takvim izni yok", "no calendar access"))
             } else {
-                parts.append(events.isEmpty ? "etkinlik yok" : "\(events.count) etkinlik")
+                parts.append(events.isEmpty ? L("etkinlik yok", "no events") : L("\(events.count) etkinlik", DailyBriefing.count(events.count, "event")))
             }
-            if !reminders.isEmpty { parts.append("\(reminders.count) hatırlatıcı") }
-            if let unreadMailCount, unreadMailCount > 0 { parts.append("\(unreadMailCount) okunmamış mail") }
-            let first = events.first.map { " — ilk: \($0)" } ?? ""
+            if !reminders.isEmpty { parts.append(L("\(reminders.count) hatırlatıcı", DailyBriefing.count(reminders.count, "reminder"))) }
+            if let unreadMailCount, unreadMailCount > 0 { parts.append(L("\(unreadMailCount) okunmamış mail", DailyBriefing.count(unreadMailCount, "unread mail"))) }
+            let first = events.first.map { L(" — ilk: ", " — first: ") + $0 } ?? ""
             return "\(title): " + parts.joined(separator: " · ") + first
         }
 
@@ -34,37 +34,42 @@ enum DailyBriefing {
         func morningLine(now: Date) -> String {
             let formatter = DateFormatter()
             formatter.dateFormat = "HH:mm"
-            var sentences = ["Saat \(formatter.string(from: now))."]
+            var sentences = [L("Saat \(formatter.string(from: now)).", "It's \(formatter.string(from: now)).")]
             if !missingAccess.contains("Takvim") {
                 if let first = events.first {
-                    sentences.append(events.count == 1 ? "Bugün bir etkinlik var: \(first)."
-                                     : "Bugün \(events.count) etkinlik var, ilki \(first).")
+                    sentences.append(events.count == 1 ? L("Bugün bir etkinlik var: \(first).", "There is one event today: \(first).")
+                                     : L("Bugün \(events.count) etkinlik var, ilki \(first).", "There are \(events.count) events today, the first is \(first)."))
                 } else {
-                    sentences.append("Takvim bugün boş.")
+                    sentences.append(L("Takvim bugün boş.", "The calendar is empty today."))
                 }
             }
             var waiting: [String] = []
-            if !reminders.isEmpty { waiting.append("\(reminders.count) hatırlatıcı") }
-            if let unreadMailCount, unreadMailCount > 0 { waiting.append("\(unreadMailCount) okunmamış mail") }
-            if !waiting.isEmpty { sentences.append(waiting.joined(separator: " ve ") + " bekliyor.") }
+            if !reminders.isEmpty { waiting.append(L("\(reminders.count) hatırlatıcı", DailyBriefing.count(reminders.count, "reminder"))) }
+            if let unreadMailCount, unreadMailCount > 0 { waiting.append(L("\(unreadMailCount) okunmamış mail", DailyBriefing.count(unreadMailCount, "unread mail"))) }
+            if !waiting.isEmpty { sentences.append(waiting.joined(separator: L(" ve ", " and ")) + L(" bekliyor.", " waiting.")) }
             return sentences.joined(separator: " ")
         }
 
         /// Notification body, one section per source.
         var body: String {
             var lines: [String] = []
-            lines.append(events.isEmpty ? "📅 Etkinlik yok" : "📅 " + events.joined(separator: "\n📅 "))
+            lines.append(events.isEmpty ? L("📅 Etkinlik yok", "📅 No events") : "📅 " + events.joined(separator: "\n📅 "))
             if !reminders.isEmpty { lines.append("☑️ " + reminders.joined(separator: "\n☑️ ")) }
             if let unreadMailCount {
-                lines.append(unreadMailCount == 0 ? "✉️ Okunmamış mail yok"
-                             : "✉️ \(unreadMailCount) okunmamış: " + mail.joined(separator: " · "))
+                lines.append(unreadMailCount == 0 ? L("✉️ Okunmamış mail yok", "✉️ No unread mail")
+                             : L("✉️ \(unreadMailCount) okunmamış: ", "✉️ \(unreadMailCount) unread: ") + mail.joined(separator: " · "))
             }
             if !missingAccess.isEmpty {
-                lines.append("⚠️ İzin yok: \(missingAccess.joined(separator: ", ")) — Sistem Ayarları › Gizlilik ve Güvenlik")
+                let names = missingAccess.map { $0 == "Takvim" ? L("Takvim", "Calendar") : L($0, "Reminders") }
+                lines.append(L("⚠️ İzin yok: ", "⚠️ No access: ") + names.joined(separator: ", ")
+                             + L(" — Sistem Ayarları › Gizlilik ve Güvenlik", " — System Settings › Privacy & Security"))
             }
             return lines.joined(separator: "\n")
         }
     }
+
+    /// "1 event", "3 events".
+    fileprivate static func count(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
 
     private static let store = EKEventStore()
 
@@ -82,7 +87,7 @@ enum DailyBriefing {
         let unread = dayOffset == 0 ? await MailController.unreadCount() : nil
         let mail = dayOffset == 0 ? await MailController.unreadMessages(limit: 3) ?? [] : []
         return Summary(
-            title: dayOffset == 0 ? "Bugün" : "Yarın",
+            title: dayOffset == 0 ? L("Bugün", "Today") : L("Yarın", "Tomorrow"),
             events: dayEvents ?? [],
             reminders: dueReminders ?? [],
             unreadMailCount: unread,
@@ -114,8 +119,8 @@ enum DailyBriefing {
         return store.events(matching: predicate)
             .sorted { ($0.isAllDay ? 0 : 1, $0.startDate) < ($1.isAllDay ? 0 : 1, $1.startDate) }
             .map { event in
-                let title = event.title ?? "Etkinlik"
-                return event.isAllDay ? "Tüm gün: \(title)" : "\(formatter.string(from: event.startDate)) \(title)"
+                let title = event.title ?? L("Etkinlik", "Event")
+                return event.isAllDay ? L("Tüm gün: ", "All day: ") + title : "\(formatter.string(from: event.startDate)) \(title)"
             }
     }
 
@@ -139,9 +144,9 @@ enum DailyBriefing {
         return reminders
             .sorted { (due($0) ?? .distantPast) < (due($1) ?? .distantPast) }
             .map { reminder in
-                let title = reminder.title ?? "Hatırlatıcı"
+                let title = reminder.title ?? L("Hatırlatıcı", "Reminder")
                 guard let due = due(reminder) else { return title }
-                if due < Calendar.current.startOfDay(for: now) { return "\(title) (gecikmiş)" }
+                if due < Calendar.current.startOfDay(for: now) { return title + L(" (gecikmiş)", " (overdue)") }
                 let hasTime = reminder.dueDateComponents?.hour != nil
                 return hasTime ? "\(formatter.string(from: due)) \(title)" : title
             }

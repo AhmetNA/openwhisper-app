@@ -289,13 +289,21 @@ struct JarvisReply {
         }
     }
 
-    static let helpText = "Müzik çalarım, sesi, Wi-Fi'yi, Bluetooth'u ve ekranı ayarlarım, uygulama açıp geçiş yaparım. "
+    static var helpText: String { CommandLanguage.isEnglish ? englishHelpText : turkishHelpText }
+
+    private static let englishHelpText = "I play music, set the volume, Wi-Fi, Bluetooth and the display, and open and switch apps. "
+        + "I set timers, alarms, reminders and calendar events, give the day's briefing, and read your mail. "
+        + "I search in Safari, summarize pages, control videos and write to Claude Code. "
+        + "You can ask me to remember something, or just chat."
+
+    private static let turkishHelpText = "Müzik çalarım, sesi, Wi-Fi'yi, Bluetooth'u ve ekranı ayarlarım, uygulama açıp geçiş yaparım. "
         + "Zamanlayıcı, alarm, hatırlatıcı ve takvim etkinliği kurarım, günün özetini veririm, mailleri okur, cevap taslağı hazırlarım. "
         + "Safari'de arama yapar, sayfayı özetler, videoyu yönetirim, Claude Code'a mesaj yazarım. "
         + "Bana bir şeyi hatırlamamı söyleyebilir ya da sadece sohbet edebilirsiniz."
 
     /// "Burada ne diyebilirim?": what fits the app in front, or the text field.
     static func whatCanISay(frontBundleID: String?, inTextField: Bool) -> String {
+        if CommandLanguage.isEnglish { return englishWhatCanISay(frontBundleID: frontBundleID, inTextField: inTextField) }
         let anywhere = "Ekrandaki bir şeyi anlatman da yeter, örneğin 'kaydet' ya da 'izin ver'; 'son komutu geri al' da diyebilirsin."
         if inTextField {
             return "Söylediğini buraya yazarım. Sonra 'sil', 'son kelimeyi sil', 'Ahmed'i Ahmet yap' ya da 'enter'a bas' diyebilirsin."
@@ -313,6 +321,25 @@ struct JarvisReply {
             return "Burada 'yeni session aç', 'son session'ı özetle', 'Bitirme projesine geç' ya da 'Claude'a yaz … gönder' diyebilirsin."
         default:
             return "'Safari'ye geç', 'Wi-Fi'yi kapat', '10 dakikalık zamanlayıcı kur' ya da 'bunu özetle' diyebilirsin. " + anywhere
+        }
+    }
+
+    private static func englishWhatCanISay(frontBundleID: String?, inTextField: Bool) -> String {
+        let anywhere = "You can also name something on screen, like 'save' or 'allow', or say 'undo that'."
+        if inTextField {
+            return "I type what you say here. Then you can say 'delete', 'delete the last word' or 'press enter'."
+        }
+        switch frontBundleID {
+        case "com.apple.Safari":
+            return "Here you can say 'summarize this page', 'search YouTube for lofi', 'open a new tab' or 'go back'. " + anywhere
+        case "com.spotify.client":
+            return "Here you can say 'pause the music', 'next song', 'play Tarkan' or 'turn the volume down'."
+        case "net.whatsapp.WhatsApp", "desktop.WhatsApp":
+            return "Here you can say 'send Ali a WhatsApp message saying I'm on my way'."
+        case "com.anthropic.claudefordesktop", "com.openai.codex":
+            return "Here you can say 'open a new session', 'switch to the finished chat' or 'tell Claude … and send it'."
+        default:
+            return "You can say 'switch to Safari', 'turn off Wi-Fi', 'set a 10 minute timer' or 'summarize this'. " + anywhere
         }
     }
 
@@ -396,6 +423,7 @@ struct JarvisReply {
 
     /// A greeting answered by the clock: "günaydın" at 22:00 gets a gentle correction.
     mutating func greet(_ greeting: Greeting, hour: Int) -> String {
+        if CommandLanguage.isEnglish { return englishGreet(greeting, hour: hour) }
         let fitting: String
         switch hour {
         case 5..<12: fitting = "Günaydın"
@@ -414,6 +442,28 @@ struct JarvisReply {
         case .goodMorning, .hello, .goodDay, .goodEvening:
             let tail = choose(["Nasıl yardımcı olabilirim?", "Emrinizdeyim.", "Buradayım."])
             return "\(addressingGreeting(fitting)) \(tail)"
+        }
+    }
+
+    private mutating func englishGreet(_ greeting: Greeting, hour: Int) -> String {
+        let fitting: String
+        switch hour {
+        case 5..<12: fitting = "Good morning"
+        case 12..<18: fitting = "Good afternoon"
+        case 18..<23: fitting = "Good evening"
+        default: fitting = "Good night"
+        }
+        switch greeting {
+        case .howAreYou:
+            return addressing(choose(["Very well, and at your service.", "Alert as always.", "All systems running smoothly, thank you."]))
+        case .goodNight:
+            return hour >= 20 || hour < 5 ? addressing("Good night, rest well.") : addressing("The day isn't over yet, but rest well.")
+        case .goodMorning where !(5..<12).contains(hour):
+            return hour < 5 ? addressing("It's a little early for good morning, but I'm here.")
+                : addressing("We're past noon, but good morning. \(fitting) would be closer.")
+        case .goodMorning, .hello, .goodDay, .goodEvening:
+            addressedLastTime = true
+            return "\(fitting), sir. " + choose(["How can I help?", "At your service.", "I'm here."])
         }
     }
 

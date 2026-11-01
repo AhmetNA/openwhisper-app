@@ -27,6 +27,11 @@ enum EnglishSystemCommands {
             return .disableWakeWord
         }
         if matches(text, #"^(?:what time is it|what is the time|what's the time|tell me the time|what time is it right now)$"#) { return .time }
+        // "brief me", "what's on today", "what does my day look like", "what's on tomorrow".
+        let day = #"(?:today|my day|the day|tomorrow)"#
+        if matches(text, #"^(?:brief me|(?:give me |read me )?(?:my |the )?(?:daily )?briefing|(?:give me |read me )?(?:a |the )?(?:daily |morning )?summary of \#(day)|what(?: is|'s) (?:on |planned |happening |up )?(?:for )?\#(day)|what(?: is|'s) on (?:my |the )?(?:calendar|schedule|agenda)(?: for)? \#(day)|what does \#(day) look like|how does \#(day) look|what do i have \#(day))(?: for me)?$"#) {
+            return .briefing(dayOffset: text.contains("tomorrow") ? 1 : 0)
+        }
         if matches(text, #"^(?:how much battery(?: do i have| is left| left)?|what(?: is|'s) (?:my |the )?battery(?: level| at)?|battery(?: level| status| percentage)?)$"#) {
             return .battery
         }

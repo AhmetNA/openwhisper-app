@@ -276,7 +276,7 @@ extension AppState {
         }
         guard let provider = transcriptionModelRegistry.provider(for: transcriptionModel) else {
             modelLoading = false
-            lastError = "Seçili konuşma modeli bulunamadı: \(transcriptionModel)"
+            lastError = String(format: loc("Seçili konuşma modeli bulunamadı: %@"), transcriptionModel)
             owLog("[OpenWhisper] Model provider not found: \(transcriptionModel)")
             return
         }

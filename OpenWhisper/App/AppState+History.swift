@@ -61,7 +61,7 @@ extension AppState {
                     owLog("[RecordingHistory] Replay preview save failed: \(error)")
                 }
             } catch {
-                replayStatus = "Kayıt açılamadı: \(error.localizedDescription)"
+                replayStatus = String(format: loc("Kayıt açılamadı: %@"), error.localizedDescription)
             }
         }
     }

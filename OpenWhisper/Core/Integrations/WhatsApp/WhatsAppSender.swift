@@ -28,6 +28,7 @@ enum WhatsAppSendParser {
     ]
 
     static func parse(_ text: String) -> WhatsAppOutgoing? {
+        if CommandLanguage.isEnglish { return parseEnglish(text) }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = trimmed.lowercased(with: locale)
         // Offsets found in the lowered text are cut from the original one.
@@ -48,6 +49,54 @@ enum WhatsAppSendParser {
         return nil
     }
 
+    // MARK: - English
+
+    private static let englishCall = #"^\s*(?:hey\s+)?(?:jarvis[\s,.!]+)?(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:please\s+)?"#
+    private static let app = #"whats ?app"#
+    private static let englishBodyLead = #"(?:\s+(?:saying|that says|that|and say|and tell (?:him|her|them)(?: that)?)|\s*[:,])\s+(.+)$"#
+
+    /// "Send Ali a WhatsApp message saying I'm on my way", "WhatsApp Ali: running late",
+    /// "send a WhatsApp to Ali", "tell Ali on WhatsApp that I'll call". WhatsApp must be named,
+    /// so "message Ali" alone is never taken for it.
+    private static func parseEnglish(_ text: String) -> WhatsAppOutgoing? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowered = trimmed.lowercased(with: CommandLanguage.locale)
+        guard lowered.utf16.count == trimmed.utf16.count, lowered.range(of: app, options: .regularExpression) != nil else { return nil }
+        let name = #"([\p{L}'’ ]+?)"#
+        let message = #"(?:a |an )?(?:\#(app) )?(?:message|text|msg)|(?:a )?\#(app)"#
+        let onApp = #"(?:\s+(?:on|via|over|through|with) \#(app))?"#
+        let withBody = [
+            #"\#(englishCall)(?:send|write|text|message) \#(name) (?:\#(message))\#(onApp)\#(englishBodyLead)"#,
+            #"\#(englishCall)(?:send|write) (?:\#(message)) to \#(name)\#(onApp)\#(englishBodyLead)"#,
+            #"\#(englishCall)(?:\#(app)|message|text|tell) \#(name)\#(onApp)\#(englishBodyLead)"#,
+        ]
+        for pattern in withBody {
+            if let groups = match(pattern, lowered), let who = englishRecipient(trimmed, groups[0]) {
+                return outgoing(who, body: cut(trimmed, groups[1]))
+            }
+        }
+        let bodyless = [
+            #"\#(englishCall)(?:send|write) (?:\#(message)) to \#(name)\#(onApp)[\s.!]*$"#,
+            #"\#(englishCall)(?:send|write|text|message) \#(name) (?:\#(message))\#(onApp)[\s.!]*$"#,
+            #"\#(englishCall)(?:\#(app)|message|text) \#(name)\#(onApp)[\s.!]*$"#,
+        ]
+        for pattern in bodyless {
+            if let groups = match(pattern, lowered), let who = englishRecipient(trimmed, groups[0]) {
+                return WhatsAppOutgoing(recipient: who, body: "")
+            }
+        }
+        return nil
+    }
+
+    private static func englishRecipient(_ text: String, _ range: NSRange) -> String? {
+        let name = cut(text, range).trimmingCharacters(in: .whitespaces)
+        let lowered = name.lowercased(with: CommandLanguage.locale)
+        let notPeople: Set<String> = ["me", "myself", "it", "this", "that", "here", "there", "him", "her", "them", "claude", "codex", "jarvis"]
+        guard !name.isEmpty, name.split(separator: " ").count <= 3, !notPeople.contains(lowered),
+              lowered.range(of: app, options: .regularExpression) == nil else { return nil }
+        return name.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+
     private static func outgoing(_ name: String, body: String) -> WhatsAppOutgoing? {
         let body = cleanBody(body)
         guard !body.isEmpty else { return nil }
@@ -57,7 +106,7 @@ enum WhatsAppSendParser {
     /// The message as it is sent: no quotes around it, a capital first letter.
     static func cleanBody(_ text: String) -> String {
         let body = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”'")))
-        return body.prefix(1).uppercased(with: locale) + body.dropFirst()
+        return body.prefix(1).uppercased(with: CommandLanguage.isEnglish ? CommandLanguage.locale : locale) + body.dropFirst()
     }
 
     /// "Whatsapp'tan" misheard ("Datsattan") is left before the name: "Datsattan Dileyim".
@@ -151,19 +200,19 @@ final class WhatsAppSender {
             return .done(await WhatsAppController.status(for: error))
         }
         let best = WhatsAppStore.bestChat(for: outgoing.recipient, in: chats, contacts: contacts)?.chat
-        if best?.isGroup == true { return .done("Gruplara henüz mesaj gönderemiyorum") }
+        if best?.isGroup == true { return .done(L("Gruplara henüz mesaj gönderemiyorum", "I can't send to groups yet")) }
         let name = best.map(WhatsAppController.spokenName) ?? contacts.first?.fullName
         guard let name, let phone = best.flatMap(Self.phone(of:)) ?? contacts.lazy.compactMap(Self.phone(of:)).first else {
             return .done(best == nil && contacts.isEmpty
-                ? "WhatsApp'ta \(outgoing.recipient) adında kimse bulunamadı"
-                : "\(outgoing.recipient) için telefon numarası bulunamadı")
+                ? L("WhatsApp'ta \(outgoing.recipient) adında kimse bulunamadı", "No one named \(outgoing.recipient) found on WhatsApp")
+                : L("\(outgoing.recipient) için telefon numarası bulunamadı", "No phone number found for \(outgoing.recipient)"))
         }
         let draft = Draft(chatName: name, phone: phone, body: outgoing.body, chatID: best?.id,
                           expiresAt: Date().addingTimeInterval(Self.confirmationTimeout))
         guard !outgoing.body.isEmpty else {
             pending = draft
             owLog("[WhatsApp] chat found, asking for the message")
-            return .confirm("\(name) kişisine ne yazayım?")
+            return .confirm(L("\(name) kişisine ne yazayım?", "What should I write to \(name)?"))
         }
         return readBack(draft)
     }
@@ -172,7 +221,7 @@ final class WhatsAppSender {
         pending = draft
         owLog("[WhatsApp] message to one chat awaiting confirmation (\(draft.body.count) chars)")
         let sentence = draft.body.last.map { ".!?".contains($0) } == true ? draft.body : draft.body + "."
-        return .confirm("\(draft.chatName) kişisine: \(sentence) Göndereyim mi?")
+        return .confirm(L("\(draft.chatName) kişisine: \(sentence) Göndereyim mi?", "To \(draft.chatName): \(sentence) Shall I send it?"))
     }
 
     /// The answer to the pending draft, or nil when `text` is no answer (a new message
@@ -183,7 +232,7 @@ final class WhatsAppSender {
             guard offer.expiresAt > Date() else { return nil }
             switch Self.readDecision(text) {
             case .approve: return .done(await WhatsAppController.latest(inChats: offer.chatIDs))
-            case .reject: return .done("Tamam")
+            case .reject: return .done(L("Tamam", "Okay"))
             // Anything else is a new request ("Dilayım'a yaz: …"), routed as usual.
             case .unclear: return nil
             }
@@ -195,13 +244,14 @@ final class WhatsAppSender {
         }
         guard draft.expiresAt > Date() else {
             pending = nil
-            return .done(draft.body.isEmpty ? "Süre doldu, mesaj yazmadım" : "Onay süresi doldu, göndermedim")
+            return .done(draft.body.isEmpty ? L("Süre doldu, mesaj yazmadım", "Time ran out, I didn't write a message")
+                : L("Onay süresi doldu, göndermedim", "The confirmation timed out, I didn't send it"))
         }
         // The answer to "ne yazayım?" is the message, unless it calls the message off.
         if draft.body.isEmpty {
             if Self.decision(text) == .reject {
                 pending = nil
-                return .done("Tamam, göndermedim")
+                return .done(L("Tamam, göndermedim", "Okay, I didn't send it"))
             }
             draft.body = WhatsAppSendParser.cleanBody(text)
             guard !draft.body.isEmpty else {
@@ -217,14 +267,14 @@ final class WhatsAppSender {
             return .done(await send(draft))
         case .reject:
             pending = nil
-            return .done("Tamam, göndermedim")
+            return .done(L("Tamam, göndermedim", "Okay, I didn't send it"))
         case .unclear where !draft.retried:
             draft.retried = true
             pending = draft
-            return .confirm("Anlayamadım. \(draft.chatName) kişisine gönderilsin mi? Evet ya da hayır de")
+            return .confirm(L("Anlayamadım. \(draft.chatName) kişisine gönderilsin mi? Evet ya da hayır de", "I didn't catch that. Send it to \(draft.chatName)? Say yes or no"))
         case .unclear:
             pending = nil
-            return .done("Onay alamadım, göndermedim")
+            return .done(L("Onay alamadım, göndermedim", "No confirmation, I didn't send it"))
         }
     }
 
@@ -241,21 +291,21 @@ final class WhatsAppSender {
 
     private func send(_ draft: Draft) async -> String {
         let startedAt = Date()
-        guard await openChat(phone: draft.phone, text: draft.body) else { return "WhatsApp açılamadı" }
-        guard let app = await waitForFrontWhatsApp() else { return "WhatsApp öne gelmedi, göndermedim" }
+        guard await openChat(phone: draft.phone, text: draft.body) else { return L("WhatsApp açılamadı", "Couldn't open WhatsApp") }
+        guard let app = await waitForFrontWhatsApp() else { return L("WhatsApp öne gelmedi, göndermedim", "WhatsApp didn't come to the front, I didn't send it") }
         // The field must hold exactly the draft: an older draft in it would be sent along.
         switch await waitForField(pid: app.processIdentifier, text: draft.body) {
         case .matches:
             break
         case .differs:
             owLog("[WhatsApp] message field holds other text; Return not pressed")
-            return "WhatsApp'ta yazı alanında başka metin var, göndermedim. Kontrol edip kendin gönder"
+            return L("WhatsApp'ta yazı alanında başka metin var, göndermedim. Kontrol edip kendin gönder", "There is other text in the WhatsApp field, I didn't send it. Check it and send it yourself")
         case .unreadable:
             owLog("[WhatsApp] message field unreadable; Return not pressed")
-            return "Mesajı WhatsApp'ta hazırladım ama alanı okuyamadım, göndermek için Return'e bas"
+            return L("Mesajı WhatsApp'ta hazırladım ama alanı okuyamadım, göndermek için Return'e bas", "The message is ready in WhatsApp but I couldn't read the field, press Return to send it")
         }
-        guard pressReturn(app.processIdentifier) else { return "Mesaj hazır ama Return'e basamadım, kendin gönder" }
-        guard let chatID = draft.chatID else { return "Gönderdim" }
+        guard pressReturn(app.processIdentifier) else { return L("Mesaj hazır ama Return'e basamadım, kendin gönder", "The message is ready but I couldn't press Return, send it yourself") }
+        guard let chatID = draft.chatID else { return L("Gönderdim", "Sent") }
         // WhatsApp writes the sent message to its database within a second or two.
         for _ in 0..<8 {
             try? await Task.sleep(for: .milliseconds(500))
@@ -264,11 +314,11 @@ final class WhatsAppSender {
             }.value)?.contains { $0.fromMe && $0.date >= startedAt.addingTimeInterval(-5) && Self.same($0.text, draft.body) }
             if sent == true {
                 owLog("[WhatsApp] sent message found in the database")
-                return "Gönderdim"
+                return L("Gönderdim", "Sent")
             }
         }
         owLog("[WhatsApp] Return pressed but the message is not in the database yet")
-        return "Return'e bastım ama gönderildiğini göremedim, WhatsApp'a bir bak"
+        return L("Return'e bastım ama gönderildiğini göremedim, WhatsApp'a bir bak", "I pressed Return but couldn't see it sent, take a look at WhatsApp")
     }
 
     private func waitForFrontWhatsApp() async -> NSRunningApplication? {

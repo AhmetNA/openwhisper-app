@@ -183,7 +183,7 @@ struct SettingsView: View {
                 interfaceLanguageSection
             }
             if let error = appState.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
+                Label(loc(error), systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(.orange)
             }
@@ -1038,9 +1038,9 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if appState.decisionEngine.usesSetFit {
-                Text("SetFit: \(appState.setFitStatus)")
+                Text("SetFit: " + appState.setFitStatus)
                     .font(.caption)
-                    .foregroundStyle(appState.setFitStatus.hasPrefix("Hazır") ? Color.secondary : Color.orange)
+                    .foregroundStyle(appState.setFitStatus.hasPrefix(loc("Hazır")) ? Color.secondary : Color.orange)
             }
         }
     }
@@ -1243,7 +1243,7 @@ struct SettingsView: View {
                 || appState.targetSpeakerSampleIsProcessing
                 || !appState.targetSpeakerSampleStatus.isEmpty {
                 Text(appState.targetSpeakerSampleIsRecording
-                     ? "Ses örneği: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerSampleStatus)"
+                     ? String(format: loc("Ses örneği: %ld/30 sn — %@"), Int(appState.recordingDuration), loc(appState.targetSpeakerSampleStatus))
                      : loc(appState.targetSpeakerSampleStatus))
                     .font(.caption)
                     .foregroundStyle(.primary)
@@ -1403,7 +1403,8 @@ struct SettingsView: View {
     @ViewBuilder
     private var micEnrollmentProgress: some View {
         Text(appState.targetSpeakerEnrollmentIsRecording
-             ? "Kayıt \(appState.targetSpeakerEnrollmentStep + 1)/2: \(Int(appState.recordingDuration))/30 sn — \(appState.targetSpeakerEnrollmentPrompt)"
+             ? String(format: loc("Kayıt %ld/2: %ld/30 sn — %@"), appState.targetSpeakerEnrollmentStep + 1,
+                      Int(appState.recordingDuration), loc(appState.targetSpeakerEnrollmentPrompt))
              : loc(appState.targetSpeakerEnrollmentStatus))
             .font(.caption)
             .foregroundStyle(.primary)

@@ -462,7 +462,7 @@ extension AppState {
                     } catch {
                         session.historySaveFailed = true
                         owLog("[RecordingHistory] Save failed: \(error)")
-                        self.lastError = "Ses geçmişi kaydedilemedi: \(error.localizedDescription)"
+                        self.lastError = String(format: loc("Ses geçmişi kaydedilemedi: %@"), error.localizedDescription)
                     }
                 }
                 await self.transcribeStreamingSegment(segment, session: session)

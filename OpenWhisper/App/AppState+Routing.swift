@@ -80,7 +80,7 @@ extension AppState {
                 trigger: session.trigger
             )
         } catch {
-            lastError = "Ses geçmişi tamamlanamadı: \(error.localizedDescription)"
+            lastError = String(format: loc("Ses geçmişi tamamlanamadı: %@"), error.localizedDescription)
             owLog("[RecordingHistory] Finish failed: \(error)")
         }
         // Only kept recordings get a trace: it lives and is pruned next to their audio.
@@ -466,7 +466,7 @@ extension AppState {
                             ? "Kayıt başında sohbet kimliği alınamadı"
                             : "Kaydın başladığı sohbete dönülemedi"
                         agentDeliveryFailure = reason
-                        self.lastError = "\(reason). Metin panoya kopyalandı."
+                        self.lastError = loc(reason) + ". " + loc("Metin panoya kopyalandı.")
                         session.latency.markOutput(reason)
                         owLog("[Agent] Delivery blocked: \(reason)")
                         goBack()
@@ -1128,7 +1128,7 @@ extension AppState {
                 // "… bas" already is the go-ahead; only a bare name ("Gönder") is asked about.
                 if ScreenActions.isRisky(target.label), !saysClick {
                     self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
-                    let prompt = "“\(target.label)” \(target.kindDative) basayım mı?"
+                    let prompt = L("“\(target.label)” \(target.kindDative) basayım mı?", "Shall I press “\(target.label)”?")
                     let heard = await self.speakReply(prompt)
                     askFollowUp(prompt, heard: heard)
                     return true
@@ -1591,6 +1591,9 @@ extension AppState {
                     reply = reply.replacingOccurrences(of: " Nasıl yardımcı olabilirim?", with: "")
                         .replacingOccurrences(of: " Emrinizdeyim.", with: "")
                         .replacingOccurrences(of: " Buradayım.", with: "")
+                        .replacingOccurrences(of: " How can I help?", with: "")
+                        .replacingOccurrences(of: " At your service.", with: "")
+                        .replacingOccurrences(of: " I'm here.", with: "")
                         + " " + summary.morningLine(now: now)
                     owLog("[Briefing] Morning: \(summary.headline)")
                 }

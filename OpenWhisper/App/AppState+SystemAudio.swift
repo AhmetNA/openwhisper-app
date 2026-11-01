@@ -50,7 +50,7 @@ extension AppState {
                 self.systemAudioStatus = "Kaydediliyor · Bitir'e basınca yazıya dökülür"
             } catch {
                 guard let self, self.systemAudioGeneration == generation else { return }
-                let message = "Bilgisayar sesi açılamadı: \(error.localizedDescription)"
+                let message = String(format: loc("Bilgisayar sesi açılamadı: %@"), error.localizedDescription)
                 self.lastError = message
                 self.stopSystemAudioListening(tail: 0)
                 self.systemAudioStatus = message
@@ -126,7 +126,7 @@ extension AppState {
             )
         } catch {
             owLog("[SystemAudio] History finish failed: \(error)")
-            lastError = "Bilgisayar sesi geçmişe kaydedilemedi: \(error.localizedDescription)"
+            lastError = String(format: loc("Bilgisayar sesi geçmişe kaydedilemedi: %@"), error.localizedDescription)
         }
         let traceID = recordingID.flatMap { id in savedRecordings.contains { $0.id == id } ? id : nil }
         if let traceID {

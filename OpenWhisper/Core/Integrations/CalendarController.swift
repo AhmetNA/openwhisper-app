@@ -8,13 +8,13 @@ enum CalendarController {
     static func add(_ event: CalendarEventParser.Event, now: Date = Date()) async -> String {
         guard (try? await store.requestFullAccessToEvents()) == true else {
             owLog("[Calendar] Access not granted (status \(EKEventStore.authorizationStatus(for: .event).rawValue))")
-            return "Takvim izni yok"
+            return L("Takvim izni yok", "No calendar access")
         }
         let calendar = store.defaultCalendarForNewEvents.flatMap { $0.allowsContentModifications ? $0 : nil }
             ?? store.calendars(for: .event).first { $0.allowsContentModifications }
         guard let calendar else {
             owLog("[Calendar] No writable calendar")
-            return "Yazılabilir takvim yok"
+            return L("Yazılabilir takvim yok", "No writable calendar")
         }
         let item = EKEvent(eventStore: store)
         item.calendar = calendar
@@ -26,10 +26,10 @@ enum CalendarController {
         do {
             try store.save(item, span: .thisEvent, commit: true)
             owLog("[Calendar] Added '\(event.title)' at \(event.start) (all day: \(event.allDay), \(event.minutes) min) to \(calendar.title)")
-            return "Takvime eklendi: \(event.title), \(when(event, now: now))"
+            return L("Takvime eklendi: ", "Added to the calendar: ") + "\(event.title), \(when(event, now: now))"
         } catch {
             owLog("[Calendar] Save failed: \(error)")
-            return "Takvime eklenemedi"
+            return L("Takvime eklenemedi", "Couldn't add it to the calendar")
         }
     }
 
@@ -39,15 +39,15 @@ enum CalendarController {
         let days = calendar.dateComponents([.day], from: today, to: calendar.startOfDay(for: event.start)).day ?? 0
         let day: String
         switch days {
-        case 0: day = "bugün"
-        case 1: day = "yarın"
+        case 0: day = L("bugün", "today")
+        case 1: day = L("yarın", "tomorrow")
         default:
             let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "tr_TR")
-            formatter.dateFormat = "d MMMM EEEE"
+            formatter.locale = CommandLanguage.locale
+            formatter.dateFormat = CommandLanguage.isEnglish ? "EEEE, d MMMM" : "d MMMM EEEE"
             day = formatter.string(from: event.start)
         }
-        if event.allDay { return "\(day) tüm gün" }
+        if event.allDay { return L("\(day) tüm gün", "\(day), all day") }
         let time = DateFormatter()
         time.dateFormat = "HH:mm"
         return "\(day) \(time.string(from: event.start))"

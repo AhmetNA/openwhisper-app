@@ -4,9 +4,9 @@ import SQLite3
 /// The selected local or cloud model chooses an action; only enumerated destinations can be opened.
 enum CloudSessionNavigation {
     /// `handle`'s reply when a new chat opened; the mic then stays open for its first message.
-    static let newChatOpened = "Yeni sohbet açıldı."
+    static var newChatOpened: String { L("Yeni sohbet açıldı.", "New chat opened.") }
     /// `handle`'s reply after switching to an existing chat; the mic stays open there too.
-    static let switchedChat = "İstediğin sohbete geçtim."
+    static var switchedChat: String { L("İstediğin sohbete geçtim.", "Switched to the chat you asked for.") }
 
     /// Characters of recap and recent messages sent per chat. At 1800 the 40 chats made a
     /// ~50-65k character prompt and the cloud took 4.9-5.6 s to answer (28 Oct 2026).
@@ -24,6 +24,13 @@ enum CloudSessionNavigation {
     }
 
     static func isRequest(_ text: String) -> Bool {
+        if CommandLanguage.isEnglish {
+            // "Open the chat about taxes in Claude", "switch to the session on the UI", "start a new chat in Codex".
+            let t = text.lowercased(with: CommandLanguage.locale)
+            let subject = t.range(of: #"\b(?:chat|chats|session|sessions|conversation|thread)\b"#, options: .regularExpression) != nil
+            let verb = t.range(of: #"\b(?:open|switch|go|jump|find|start|return|take me)\b"#, options: .regularExpression) != nil
+            return subject && verb && AgentCommandParser.finishedChatRequest(text) == nil && !AgentCommandParser.isSessionSummaryRequest(text)
+        }
         let t = text.lowercased(with: Locale(identifier: "tr_TR"))
         let subject = ["chat", "çat", "çet", "sohbet", "konuşma", "session", "sesion", "oturum", "thread"]
         let verb = ["aç", "geç", "git", "dön", "bul", "başlat"]
@@ -292,7 +299,7 @@ enum CloudSessionNavigation {
         // A named project ("Bitirme projesinde yeni çet aç") goes to that project's folder instead.
         if let dictation = AgentCommandParser.parse(text), !dictation.body.isEmpty || dictation.project != nil { return nil }
         guard let agent = agent(for: text, front: front) else {
-            return "Hangi uygulamadaki sohbeti açayım: Claude mu, Codex mi?"
+            return L("Hangi uygulamadaki sohbeti açayım: Claude mu, Codex mi?", "Which app's chat should I open: Claude or Codex?")
         }
         let current = front.flatMap { RecordedConversation.capture(app: $0) }
         let currentID = current?.agent == agent ? current?.sessionID : nil
@@ -313,34 +320,34 @@ enum CloudSessionNavigation {
                                                       cloud: cloud.map { ($0.0, $0.model) }, localModel: LLM.selectedModel)
                 owLog("[CloudSessionNavigation] \(candidates.count) chats loaded in \(loadMs) ms, \(backend) decision \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 guard let decided else {
-                    return "Hangi sohbeti açacağımı netleştiremedim; konusunu biraz daha açık söyler misin?"
+                    return L("Hangi sohbeti açacağımı netleştiremedim; konusunu biraz daha açık söyler misin?", "I couldn't tell which chat to open; could you name its topic more clearly?")
                 }
                 chosen = decided
             } catch is CancellationError {
                 return nil
             } catch {
                 owLog("[CloudSessionNavigation] \(backend) failed: \(ChatFallback.describe(error))")
-                return "Sohbet modeline ulaşamadım; sohbet geçişi yapılmadı."
+                return L("Sohbet modeline ulaşamadım; sohbet geçişi yapılmadı.", "I couldn't reach the chat model; I didn't switch chats.")
             }
         }
 
         if chosen.action == "none" { return nil }
-        if chosen.action == "ambiguous" { return "Son 40 sohbet içinde kesin bir eşleşme bulamadım; sohbetin konusunu daha açık söyler misin?" }
+        if chosen.action == "ambiguous" { return L("Son 40 sohbet içinde kesin bir eşleşme bulamadım; sohbetin konusunu daha açık söyler misin?", "I found no clear match in the last 40 chats; could you name its topic more clearly?") }
         let openStart = Date()
         defer { owLog("[CloudSessionNavigation] opening took \(Int(Date().timeIntervalSince(openStart) * 1000)) ms") }
         guard !Task.isCancelled, !RemoteControl.screenIsLocked,
-              let app = await AgentAppActivator.activate(agent) else { return "Sohbet uygulamasını açamadım." }
+              let app = await AgentAppActivator.activate(agent) else { return L("Sohbet uygulamasını açamadım.", "I couldn't open the chat app.") }
         let opened: Bool
         if chosen.action == "new" {
             opened = agent == .claudeCode ? await ClaudeSessionNavigator.openNewSession(app)
                 : await CodexSessionNavigator.openNewThread(app, folder: nil)
         } else {
-            guard let item = candidates.first(where: { $0.id == chosen.id }) else { return "Sohbet bulunamadı." }
+            guard let item = candidates.first(where: { $0.id == chosen.id }) else { return L("Sohbet bulunamadı.", "Chat not found.") }
             let navigated = agent == .claudeCode
                 ? await ClaudeSessionNavigator.openSession(app, id: item.id, title: item.title)
                 : await CodexSessionNavigator.openThread(app, id: item.id, title: item.title)
             opened = navigated && RecordedConversation.capture(app: app)?.sessionID == item.id
         }
-        return opened ? (chosen.action == "new" ? newChatOpened : switchedChat) : "Sohbetin açıldığını doğrulayamadım."
+        return opened ? (chosen.action == "new" ? newChatOpened : switchedChat) : L("Sohbetin açıldığını doğrulayamadım.", "I couldn't confirm the chat opened.")
     }
 }

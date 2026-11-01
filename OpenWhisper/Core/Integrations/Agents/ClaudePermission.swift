@@ -38,6 +38,10 @@ enum ClaudePermission {
     /// "Bitirme projesinde Claude bir komut çalıştırmak istiyor: Run the tests. İzin veriyor musun?"
     /// The command itself is not read out (`detail` shows it).
     static func question(for request: Request) -> String {
+        if CommandLanguage.isEnglish {
+            let who = request.project.map { "Claude in \($0)" } ?? "Claude"
+            return "\(who) \(englishAction(of: request)). Do you allow it?"
+        }
         let who = request.project.map { "\($0) projesinde Claude" } ?? "Claude"
         return "\(who) \(action(of: request)). İzin veriyor musun?"
     }
@@ -67,12 +71,37 @@ enum ClaudePermission {
         }
     }
 
+    private static func englishAction(of request: Request) -> String {
+        let input = request.input
+        switch request.tool {
+        case "Bash":
+            let what = (input["description"] as? String).flatMap(nonEmpty)
+                ?? (input["command"] as? String).map { String($0.prefix(60)) }
+            return what.map { "wants to run a command: \($0)" } ?? "wants to run a command"
+        case "Edit", "MultiEdit", "Write", "NotebookEdit":
+            let path = input["file_path"] as? String ?? input["notebook_path"] as? String
+            let name = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "a file"
+            return request.tool == "Write" ? "wants to write \(name)" : "wants to edit \(name)"
+        case "WebFetch":
+            let host = (input["url"] as? String).flatMap { URL(string: $0)?.host }
+            return host.map { "wants to open \($0)" } ?? "wants to open a web page"
+        case "WebSearch":
+            return "wants to search the web"
+        default:
+            let parts = request.tool.components(separatedBy: "__")
+            if parts.count >= 3, parts[0] == "mcp" {
+                return "wants to use the \(parts[1]) tool: \(parts[2...].joined(separator: " "))"
+            }
+            return "wants to use the \(request.tool) tool"
+        }
+    }
+
     /// What is asked, in full, for the Flow bar: the command, the file, or the tool.
     static func detail(for request: Request) -> String {
         let input = request.input
         let what = (input["command"] as? String) ?? (input["file_path"] as? String)
             ?? (input["notebook_path"] as? String) ?? (input["url"] as? String) ?? (input["query"] as? String)
-        return "Claude izin istiyor · \(request.tool)" + (what.map { ": \(String($0.prefix(200)))" } ?? "")
+        return L("Claude izin istiyor · ", "Claude asks for permission · ") + request.tool + (what.map { ": \(String($0.prefix(200)))" } ?? "")
     }
 
     private static let denyWords: Set<String> = [
@@ -143,7 +172,7 @@ enum ClaudePermission {
             decision = ["behavior": "allow"]
             if !request.suggestions.isEmpty { decision["updatedPermissions"] = request.suggestions }
         case .deny(let message):
-            decision = ["behavior": "deny", "message": message ?? "Kullanıcı sesle reddetti."]
+            decision = ["behavior": "deny", "message": message ?? L("Kullanıcı sesle reddetti.", "The user denied it by voice.")]
         }
         let output: [String: Any] = ["hookSpecificOutput": ["hookEventName": "PermissionRequest", "decision": decision]]
         return (try? JSONSerialization.data(withJSONObject: output)) ?? Data()
@@ -152,10 +181,10 @@ enum ClaudePermission {
     /// What Jarvis says once the answer is sent.
     static func reply(to answer: Answer, request: Request) -> String {
         switch answer {
-        case .allow: "Tamam, izin verdim."
-        case .always: request.suggestions.isEmpty ? "Tamam, izin verdim." : "Tamam, bir daha sormayacak."
-        case .deny(nil): "Tamam, reddettim."
-        case .deny: "Reddettim, Claude'a ilettim."
+        case .allow: L("Tamam, izin verdim.", "Okay, allowed.")
+        case .always: request.suggestions.isEmpty ? L("Tamam, izin verdim.", "Okay, allowed.") : L("Tamam, bir daha sormayacak.", "Okay, it won't ask again.")
+        case .deny(nil): L("Tamam, reddettim.", "Okay, denied.")
+        case .deny: L("Reddettim, Claude'a ilettim.", "Denied, and I passed it on to Claude.")
         }
     }
 

@@ -372,3 +372,28 @@
 "Ses profili silindi." = "Voice profile deleted.";
 "Son ekleme geri alındı" = "Last sample undone";
 "Filtre hata verdi — bu kayıt işlenmedi" = "The filter failed — this recording wasn't processed";
+
+/* Settings statuses with values in them. */
+"Kayıt %ld/2: %ld/30 sn — %@" = "Recording %ld/2: %ld/30 s — %@";
+"Ses örneği: %ld/30 sn — %@" = "Voice sample: %ld/30 s — %@";
+"Başlatılamadı: %@" = "Couldn't start: %@";
+"Hazır — %@" = "Ready — %@";
+"Yüklenemedi: %@" = "Couldn't load: %@";
+"Sunucu kapandı (%ld)" = "The server stopped (%ld)";
+"Bilgisayar sesi açılamadı: %@" = "Couldn't start computer audio: %@";
+"Bilgisayar sesi geçmişe kaydedilemedi: %@" = "Couldn't save computer audio to history: %@";
+"Ses ayrıştırma modeli hazırlanamadı: %@" = "Couldn't prepare the voice separation model: %@";
+"%ld örnek eklendi — kulaklık profilinde toplam %ld." = "%ld samples added — %ld in the headset profile in all.";
+"%ld örnek eklendi — harici mikrofon profilinde toplam %ld." = "%ld samples added — %ld in the external mic profile in all.";
+"%ld örnek eklendi — profilde toplam %ld." = "%ld samples added — %ld in the profile in all.";
+"Kayıt açılamadı: %@" = "Couldn't open the recording: %@";
+"Seçili konuşma modeli bulunamadı: %@" = "The selected speech model wasn't found: %@";
+"Ses geçmişi kaydedilemedi: %@" = "Couldn't save the audio history: %@";
+"Ses geçmişi tamamlanamadı: %@" = "Couldn't complete the audio history: %@";
+"Metin panoya kopyalandı." = "The text was copied to the clipboard.";
+"Kayıt başında sohbet kimliği alınamadı" = "Couldn't get the chat ID at the start of the recording";
+"Kaydın başladığı sohbete dönülemedi" = "Couldn't return to the chat the recording started in";
+"Konuşma modeli yüklenemedi. Kaydı yeniden deneyin." = "Couldn't load the speech model. Try the recording again.";
+"Konuşma modeli zamanında hazırlanamadı. Yeniden seslenebilir veya Fn ile kayıt başlatabilirsiniz." = "The speech model wasn't ready in time. Call again or start a recording with Fn.";
+"Oturur pozisyonda doğal biçimde konuş." = "Speak naturally while sitting.";
+"Şimdi pozisyonunu değiştirip, mümkünse yatarak doğal biçimde konuş." = "Now change your position and, if you can, speak naturally lying down.";

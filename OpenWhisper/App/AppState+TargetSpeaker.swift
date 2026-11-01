@@ -214,7 +214,7 @@ extension AppState {
                 owLog("[TargetSpeaker] Diarization preparation ready")
             } catch {
                 self.targetSpeakerDiarizationReady = false
-                self.lastError = "Ses ayrıştırma modeli hazırlanamadı: \(error.localizedDescription)"
+                self.lastError = String(format: loc("Ses ayrıştırma modeli hazırlanamadı: %@"), error.localizedDescription)
                 owLog("[TargetSpeaker] Diarization preparation failed: \(error)")
             }
         }
@@ -512,7 +512,10 @@ extension AppState {
                 self.lastConfirmedAppendReceipt = receipt
                 self.lastConfirmedAppendMic = mic
                 self.targetSpeakerSampleStatus =
-                    "\(added) örnek eklendi — \(mic == .buds ? "kulaklık profilinde" : mic == .external ? "harici mikrofon profilinde" : "profilde") toplam \(receipt.appendedProfile.embeddings.count)."
+                    String(format: loc(mic == .buds ? "%ld örnek eklendi — kulaklık profilinde toplam %ld."
+                                       : mic == .external ? "%ld örnek eklendi — harici mikrofon profilinde toplam %ld."
+                                       : "%ld örnek eklendi — profilde toplam %ld."),
+                           added, receipt.appendedProfile.embeddings.count)
                 owLog("[TargetSpeaker] On-demand sample appended (\(mic)): +\(added), new count=\(receipt.appendedProfile.embeddings.count)")
             } catch {
                 self.targetSpeakerSampleStatus = error.localizedDescription
