@@ -18,11 +18,34 @@ enum ScreenReader {
             atPath: url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
     }
 
-    static func focusedWindow(of app: NSRunningApplication) -> AXUIElement? {
+    /// Chromium Embedded Framework apps (Spotify) answer only `AXEnhancedUserInterface`, the
+    /// flag VoiceOver sets: without it Jarvis saw 1 element in Spotify (16 nodes), with it ~900.
+    static func isChromiumEmbedded(_ app: NSRunningApplication) -> Bool {
+        guard let url = app.bundleURL else { return false }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("Contents/Frameworks/Chromium Embedded Framework.framework").path)
+    }
+
+    /// Whether the app builds its tree only when asked, and then over a second or more.
+    static func buildsTreeOnRequest(_ app: NSRunningApplication) -> Bool {
+        isElectron(app) || isChromiumEmbedded(app)
+    }
+
+    /// Asks an Electron or Chromium app for its accessibility tree. Done as the app comes to
+    /// the front, so the tree is there by the time a command needs it (ChatGPT: 16 elements a
+    /// second after the ask, 317 a few seconds later).
+    static func wakeTree(of app: NSRunningApplication) {
         let root = AXUIElementCreateApplication(app.processIdentifier)
         if isElectron(app) {
             AXUIElementSetAttributeValue(root, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        } else if isChromiumEmbedded(app) {
+            AXUIElementSetAttributeValue(root, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         }
+    }
+
+    static func focusedWindow(of app: NSRunningApplication) -> AXUIElement? {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        if buildsTreeOnRequest(app) { wakeTree(of: app) }
         AXUIElementSetMessagingTimeout(root, 0.5)
         guard let window = element(root, kAXFocusedWindowAttribute) ?? element(root, kAXMainWindowAttribute) else { return nil }
         // A hung app must not stall the walk below its window either.
@@ -151,6 +174,34 @@ enum ScreenReader {
     }
 
     // MARK: - AX helpers
+
+    /// What a walk needs of one node, read in one call: one by one it was 3–4× slower
+    /// (Spotify, 2 388 nodes: 290 → 97 ms; Claude, 722: 106 → 23 ms).
+    struct Node {
+        let role: String
+        let frame: CGRect?
+        let enabled: Bool
+        let children: [AXUIElement]
+    }
+
+    private static let nodeAttributes = [kAXRoleAttribute, kAXPositionAttribute, kAXSizeAttribute,
+                                         kAXEnabledAttribute, kAXChildrenAttribute] as CFArray
+
+    static func node(_ element: AXUIElement) -> Node {
+        var values: CFArray?
+        AXUIElementCopyMultipleAttributeValues(element, nodeAttributes, AXCopyMultipleAttributeOptions(), &values)
+        let list = values as? [AnyObject] ?? []
+        func value(_ index: Int) -> AnyObject? { index < list.count ? list[index] : nil }
+        var frame: CGRect?
+        if let position = value(1), let size = value(2), CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() {
+            var origin = CGPoint.zero, extent = CGSize.zero
+            if AXValueGetValue(position as! AXValue, .cgPoint, &origin), AXValueGetValue(size as! AXValue, .cgSize, &extent) {
+                frame = CGRect(origin: origin, size: extent)
+            }
+        }
+        return Node(role: value(0) as? String ?? "", frame: frame, enabled: value(3) as? Bool ?? true,
+                    children: value(4) as? [AXUIElement] ?? [])
+    }
 
     static func children(_ node: AXUIElement) -> [AXUIElement] {
         var value: CFTypeRef?

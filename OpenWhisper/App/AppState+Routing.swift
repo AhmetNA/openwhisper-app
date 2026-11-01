@@ -1063,7 +1063,9 @@ extension AppState {
                     }
                     return true
                 }
-                let elements = ScreenActions.elements(of: app)
+                // Up to 400 for matching by name: Spotify shows ~900 once its tree is awake. The
+                // language model still reads only the first 150, to keep its prompt short.
+                let elements = ScreenActions.elements(of: app, limit: 400)
                 stepParts.append(("ekran okuma", CACurrentMediaTime() - mark))
                 guard !elements.isEmpty else { return await pressByText() }
                 let labels = elements.map(\.label)
@@ -1086,7 +1088,7 @@ extension AppState {
                     // model in `pressByText` knows icons better.
                     self.showFlowBarMessage("Ekrana bakıyorum…", durationMs: 8000)
                     mark = CACurrentMediaTime()
-                    pick = await ScreenActions.modelPick(trimmed, elements: elements)
+                    pick = await ScreenActions.modelPick(trimmed, elements: Array(elements.prefix(150)))
                     stepParts.append(("model seçimi", CACurrentMediaTime() - mark))
                     byModel = true
                     if let chosen = pick, exact.isEmpty, !soundAlike.contains(chosen),

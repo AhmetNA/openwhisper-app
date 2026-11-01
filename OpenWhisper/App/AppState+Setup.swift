@@ -175,6 +175,17 @@ extension AppState {
         setupClaudePermissions()
         owLog("[OpenWhisper] Ready!")
         IconClassifier.warmUp()
+        // Electron and Chromium apps build their accessibility tree only when asked, over
+        // seconds: ask as they come to the front, not when "…'e bas" needs it.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                          object: nil, queue: .main) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  ScreenReader.buildsTreeOnRequest(app) else { return }
+            ScreenReader.wakeTree(of: app)
+        }
+        if let front = NSWorkspace.shared.frontmostApplication, ScreenReader.buildsTreeOnRequest(front) {
+            ScreenReader.wakeTree(of: front)
+        }
     }
 
     func downloadedTranscriptionModelNames() -> [String] {

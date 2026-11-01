@@ -57,6 +57,8 @@ enum ScreenActions {
         "AXDisclosureTriangle", "AXTab", "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXRow",
     ]
 
+    private static let pressableContainers: Set<String> = ["AXGroup", "AXImage", "AXStaticText", "AXCell", "AXUnknown"]
+
     /// What can be acted on in `app`'s front window, top to bottom; at most `limit`.
     static func elements(of app: NSRunningApplication, limit: Int = 150) -> [ScreenElement] {
         guard let window = ScreenReader.focusedWindow(of: app), let windowFrame = frame(of: window) else { return [] }
@@ -67,26 +69,28 @@ enum ScreenActions {
         func walk(_ node: AXUIElement, depth: Int, inDialog: Bool) {
             guard found.count < limit, visited < 5000, depth < 50, Date() < deadline else { return }
             visited += 1
-            let role = ScreenReader.string(node, kAXRoleAttribute) ?? ""
+            let info = ScreenReader.node(node)
+            let role = info.role
             let inDialog = inDialog || role == "AXSheet"
             let control = actionableRoles.contains(role)
             // Electron puts a whole window's content under one press-able AXGroup (Claude: 16
             // nodes read, "New" never seen, its children's texts pressed as one "button"). Such a
-            // container counts only by its own name, and the walk always goes inside it.
-            let pressOnly = !control && role != "AXWindow" && hasPress(node)
+            // container counts only by its own name, and the walk always goes inside it. Only
+            // the roles that do this are asked for their actions: one more call per node.
+            let pressOnly = !control && pressableContainers.contains(role) && hasPress(node)
             if control || pressOnly,
-               isEnabled(node), let elementFrame = frame(of: node), elementFrame.width > 1, elementFrame.height > 1,
+               info.enabled, let elementFrame = info.frame, elementFrame.width > 1, elementFrame.height > 1,
                windowFrame.intersects(elementFrame), let label = control ? label(of: node, role: role) : ownLabel(of: node) {
                 found.append(ScreenElement(element: node, role: role, label: label,
                                            region: region(of: elementFrame, in: windowFrame), inDialog: inDialog))
                 // A row's label already holds its texts; its buttons still count.
                 if control && role != "AXRow" && role != "AXLink" { return }
             }
-            for child in ScreenReader.children(node) { walk(child, depth: depth + 1, inDialog: inDialog) }
+            for child in info.children { walk(child, depth: depth + 1, inDialog: inDialog) }
         }
         walk(window, depth: 0, inDialog: windowIsDialog)
         // An Electron app asked for its tree a moment ago may still be building it.
-        if visited < 30, ScreenReader.isElectron(app) {
+        if visited < 30, ScreenReader.buildsTreeOnRequest(app) {
             Thread.sleep(forTimeInterval: 0.4)
             found = []
             visited = 0
@@ -416,13 +420,14 @@ enum ScreenActions {
         func walk(_ node: AXUIElement, depth: Int) {
             guard found.count < 150, visited < 5000, depth < 50 else { return }
             visited += 1
-            let role = ScreenReader.string(node, kAXRoleAttribute) ?? ""
-            if ["AXButton", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXRadioButton"].contains(role) || (role == "AXImage" && hasPress(node)),
-               let box = frame(of: node), (8...64).contains(box.width), (8...64).contains(box.height),
-               (0.5...2).contains(box.width / box.height), windowFrame.intersects(box), isEnabled(node) {
+            let info = ScreenReader.node(node)
+            let role = info.role
+            if let box = info.frame, (8...64).contains(box.width), (8...64).contains(box.height),
+               (0.5...2).contains(box.width / box.height), windowFrame.intersects(box), info.enabled,
+               ["AXButton", "AXPopUpButton", "AXMenuButton", "AXCheckBox", "AXRadioButton"].contains(role) || (role == "AXImage" && hasPress(node)) {
                 found.append(ScreenElement(element: node, role: role, label: ownLabel(of: node) ?? "", region: region(of: box, in: windowFrame), inDialog: false))
             }
-            for child in ScreenReader.children(node) { walk(child, depth: depth + 1) }
+            for child in info.children { walk(child, depth: depth + 1) }
         }
         walk(window, depth: 0)
         return found
