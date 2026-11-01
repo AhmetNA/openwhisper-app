@@ -170,7 +170,9 @@ final class SpotifyManager: @unchecked Sendable {
         "açacağız": "aç", "acacagiz": "aç", "açacağım": "aç", "acacagim": "aç",
         "çalalım": "çal", "calalim": "çal", "çalın": "çal", "calin": "çal", "çalıver": "çal", "caliver": "çal",
         "çalacağız": "çal", "calacagiz": "çal", "çalacağım": "çal", "calacagim": "çal",
-        "oynatalım": "oynat", "oynatalim": "oynat", "başlatalım": "başlat", "baslatalim": "başlat"
+        "oynatalım": "oynat", "oynatalim": "oynat", "başlatalım": "başlat", "baslatalim": "başlat",
+        // English: "open Taylor Swift from Spotify".
+        "open": "aç"
     ]
 
     /// "çalar mısın", "açabilir misin": these stems are verbs only when a question particle

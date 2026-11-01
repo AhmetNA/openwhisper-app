@@ -15,6 +15,15 @@ final class SpotifyDecisionTests: XCTestCase {
         XCTAssertNil(decide("Hadise Düm Tek Tek çal", nil))
     }
 
+    func testEnglishOpenFromSpotifySearches() {
+        for text in ["open Taylor Swift from Spotify", "Open Taylor Swift on Spotify.", "play Taylor Swift from Spotify"] {
+            guard case .search(let request)? = decide(text, nil) else { return XCTFail(text) }
+            XCTAssertEqual(request.freeText, "taylor swift", text)
+        }
+        // Without Spotify or a music word, "open" stays dictation.
+        XCTAssertNil(SpotifyManager.explicitIntent(in: "open the settings"))
+    }
+
     func testVetoOnlyAppliesToBroadIntentsWithoutSpotifyAddress() {
         let none = Parse(intent: .none)
         XCTAssertNil(decide("Müziği durdur", none))

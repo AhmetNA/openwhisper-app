@@ -132,10 +132,10 @@ enum SpotifyRequestParser {
         residue
             .lowercased(with: Locale(identifier: "tr_TR"))
             // Whisper sometimes detaches the case suffix ("Spotify da Neighborhood"), and
-            // English puts a preposition before it ("Daft Punk on Spotify"); both leftovers
+            // English puts a preposition before it ("Daft Punk on Spotify", "… from Spotify"); both leftovers
             // would otherwise end up inside the search query.
             .replacingOccurrences(of: "\\bspotify (da|de|dan|den|ya|ye)\\b", with: "spotify", options: .regularExpression)
-            .replacingOccurrences(of: "\\b(on|in) spotify\\b", with: "spotify", options: .regularExpression)
+            .replacingOccurrences(of: "\\b(on|in|from) spotify\\b", with: "spotify", options: .regularExpression)
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "`", with: "'")
             .split(whereSeparator: { $0.isWhitespace })
