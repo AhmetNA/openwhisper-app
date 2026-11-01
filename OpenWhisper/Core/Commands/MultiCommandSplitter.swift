@@ -22,7 +22,11 @@ enum MultiCommandSplitter {
     private static let locale = Locale(identifier: "tr_TR")
 
     /// Words between two commands. Longest first, so "ve sonra da" is one connector.
-    private static let connectors = [
+    private static var connectors: [String] { CommandLanguage.isEnglish ? englishConnectors : turkishConnectors }
+    /// English says the verb in each command ("turn off Wi-Fi and turn off Bluetooth"); the
+    /// shared Turkish verb at the end has no English counterpart here.
+    private static let englishConnectors = ["and then", "and also", "and after that", "after that", "and", "then", "also"]
+    private static let turkishConnectors = [
         "ve sonra da", "ve sonra", "ve ardından", "ve daha sonra", "daha sonra", "sonra da",
         "ardından da", "ardından", "ondan sonra", "bir de", "ayrıca", "ve de", "ve", "sonra",
         "hem de", "hem",

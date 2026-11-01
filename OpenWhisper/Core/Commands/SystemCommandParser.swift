@@ -175,6 +175,9 @@ enum SystemCommandParser {
     /// brightness, …; `CommandRegistry` runs those first.
     static func parseMac(_ text: String, installedApps: [String] = [], shortcuts: [String] = [], scenes: [String] = [],
                          readingPaused: Bool = false, readingJustCut: Bool = false) -> SystemCommand? {
+        if CommandLanguage.isEnglish, let command = EnglishSystemCommands.parse(text, installedApps: installedApps) {
+            return command
+        }
         var cleaned = text.lowercased(with: locale)
             .replacingOccurrences(of: #"[.,!?;:"“”]"#, with: " ", options: .regularExpression)
         // A leading call to the assistant or a filler is not part of the command.
