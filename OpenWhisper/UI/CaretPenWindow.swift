@@ -33,10 +33,15 @@ final class CaretPenController {
         return round(79 + 241 * progress)
     }
 
+    /// Shared by listening and processing, so the handoff keeps its height.
+    static func height(for caret: CGRect) -> CGFloat {
+        min(32, max(28, caret.height + 2))
+    }
+
     /// `caret` uses AX coordinates (top-left origin). Fall back to the flow bar off-screen.
     func show(at caret: CGRect, duration: TimeInterval, field: CGRect?) -> Bool {
         guard let mainHeight = NSScreen.screens.first?.frame.height else { return false }
-        let height = min(30, max(18, caret.height + 2))
+        let height = Self.height(for: caret)
         // The pen's first point lands on the caret's middle.
         var origin = NSPoint(x: caret.minX - Self.leading - ProcessingWaveformView.startX,
                              y: mainHeight - caret.maxY + caret.height / 2 - height / 2)
@@ -47,7 +52,12 @@ final class CaretPenController {
         if let field, field.insetBy(dx: -1, dy: -1).contains(CGPoint(x: caret.minX, y: caret.midY)) {
             let visibleField = CGRect(x: field.minX, y: mainHeight - field.maxY,
                                       width: field.width, height: field.height).intersection(bounds)
-            if visibleField.width >= 40, visibleField.height >= 18 { bounds = visibleField.insetBy(dx: 2, dy: 0) }
+            if visibleField.width >= 40, visibleField.height >= 18 {
+                // A one-line field is shorter than the pen: stay inside it sideways only.
+                bounds = visibleField.height >= height
+                    ? visibleField.insetBy(dx: 2, dy: 0)
+                    : CGRect(x: visibleField.minX + 2, y: bounds.minY, width: visibleField.width - 4, height: bounds.height)
+            }
         }
         let fittedHeight = min(height, bounds.height)
         let width = min(Self.width(for: duration), bounds.width)

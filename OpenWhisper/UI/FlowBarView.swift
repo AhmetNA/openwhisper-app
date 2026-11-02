@@ -5,7 +5,7 @@ struct FlowBarView: View {
 
     private var indicatorHeight: CGFloat {
         guard let caret = appState.caretPenRect else { return 26 }
-        return min(26, max(18, caret.height + 2))
+        return CaretPenController.height(for: caret)
     }
 
     private var recordingWaveformWidth: CGFloat {
