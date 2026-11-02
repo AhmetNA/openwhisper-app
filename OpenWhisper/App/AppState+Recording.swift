@@ -241,6 +241,7 @@ extension AppState {
             let caret = capturedContext.focusStatus != .notEditable
                 ? capturedContext.focusedElement.flatMap(AXTextAccess.caretRect) : nil
             let field = capturedContext.focusedElement.flatMap(AXTextAccess.fieldRect)
+            owLog("[Caret] \(capturedContext.bundleIdentifier ?? "unknown"): focus=\(capturedContext.focusStatus) element=\(capturedContext.focusedElement != nil) caret=\(caret.map { "\($0)" } ?? "nil")")
             await MainActor.run {
                 guard let session else { return }
                 session.pasteContext = capturedContext
