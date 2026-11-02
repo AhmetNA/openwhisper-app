@@ -61,7 +61,9 @@ final class CaretPenController {
         }
         let fittedHeight = min(height, bounds.height)
         let width = min(Self.width(for: duration), bounds.width)
-        origin.x = min(max(origin.x, bounds.minX), bounds.maxX - width)
+        // Only the screen limits the left edge: at a field's start the glass must still cover the caret.
+        let leftLimit = screen.visibleFrame.minX + 8
+        origin.x = max(leftLimit, min(origin.x, bounds.maxX - width))
         origin.y = min(max(origin.y, bounds.minY), bounds.maxY - fittedHeight)
         let frame = NSRect(origin: origin, size: NSSize(width: width, height: fittedHeight))
         if shownAt == caret, shownWidth == width, panel.frame == frame { return true }

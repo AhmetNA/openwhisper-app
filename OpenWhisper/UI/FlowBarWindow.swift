@@ -206,8 +206,9 @@ final class FlowBarController {
                    fieldBounds.height >= panel.frame.height { bounds = fieldBounds }
             }
             // Same left edge and center line as the processing pen, so the handoff stays put.
-            x = min(max(caretPoint.x - CaretPenController.leading - ProcessingWaveformView.startX,
-                        bounds.minX), max(bounds.minX, bounds.maxX - panelWidth))
+            let leftLimit = screenFrame.minX + 8
+            x = max(leftLimit, min(caretPoint.x - CaretPenController.leading - ProcessingWaveformView.startX,
+                                   bounds.maxX - panelWidth))
             y = min(max(caretPoint.y - panel.frame.height / 2, bounds.minY),
                     max(bounds.minY, bounds.maxY - panel.frame.height))
         } else {
