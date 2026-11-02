@@ -356,7 +356,9 @@ enum AXTextAccess {
         let range = readSelectedRange(element).range
         if let range {
             let caret = range.location + range.length
-            if let rect = bounds(of: CFRange(location: caret, length: 0), in: element) { return rect }
+            if let rect = bounds(of: CFRange(location: caret, length: 0), in: element) {
+                return correctingEmptyRangeOffset(rect, caret: caret, in: element)
+            }
             if caret > 0, let rect = bounds(of: CFRange(location: caret - 1, length: 1), in: element) {
                 return CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height)
             }
@@ -371,6 +373,23 @@ enum AXTextAccess {
         guard range != nil, let field = fieldRect(element), field.height <= 60 else { return nil }
         let height = min(field.height, 22)
         return CGRect(x: field.minX + 8, y: field.midY - height / 2, width: 0, height: height)
+    }
+
+    /// AppKit text views (TextEdit, CotEditor, Safari's address bar) answer an empty range one
+    /// line above the real one, while the character at the same spot is right. With no character
+    /// to compare, an answer ending above the field gives it away.
+    private static func correctingEmptyRangeOffset(_ rect: CGRect, caret: Int, in element: AXUIElement) -> CGRect {
+        let probe = max(caret - 1, 0)
+        let isOffset: Bool
+        if let empty = bounds(of: CFRange(location: probe, length: 0), in: element),
+           let character = bounds(of: CFRange(location: probe, length: 1), in: element) {
+            isOffset = abs(character.minY - empty.maxY) < 1
+        } else if let field = fieldRect(element) {
+            isOffset = rect.maxY <= field.minY + 1
+        } else {
+            isOffset = false
+        }
+        return isOffset ? rect.offsetBy(dx: 0, dy: rect.height) : rect
     }
 
     private static func selectedMarkerBounds(in element: AXUIElement) -> CGRect? {
