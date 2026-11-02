@@ -5,14 +5,14 @@ import SwiftUI
 /// place of the flow bar. Click-through, so it never gets in the way.
 @MainActor
 final class CaretPenController {
-    private let panel: NSPanel
+    private var panel = CaretPenController.makePanel()
     private var shownAt: CGRect?
     private var shownWidth: CGFloat?
     /// The glass's edge left of the pen: little, as it overlaps the text before the caret.
     static let leading: CGFloat = 3
 
-    init() {
-        panel = NSPanel(
+    private static func makePanel() -> NSPanel {
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 84, height: 26),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -25,6 +25,7 @@ final class CaretPenController {
         panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary]
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
+        return panel
     }
 
     /// Short recordings stay compact; 14 seconds or more reaches the 320-point cap.
@@ -67,6 +68,10 @@ final class CaretPenController {
         origin.y = min(max(origin.y, bounds.minY), bounds.maxY - fittedHeight)
         let frame = NSRect(origin: origin, size: NSSize(width: width, height: fittedHeight))
         if shownAt == caret, shownWidth == width, panel.frame == frame { return true }
+        // The window server can tie a panel to one Space, leaving it invisible while AppKit calls
+        // it visible (see FlowBarController). A fresh one joins every Space again.
+        let firstShow = shownAt == nil
+        if firstShow { panel = Self.makePanel() }
         let view = CaretPenView(width: width - Self.leading - 8, height: fittedHeight)
         if shownAt == caret, let hosting = panel.contentView as? NSHostingView<CaretPenView> {
             hosting.rootView = view
@@ -77,6 +82,7 @@ final class CaretPenController {
         shownWidth = width
         panel.orderFrontRegardless()
         shownAt = caret
+        if firstShow { owLog("[Caret] Pen shown: frame=\(panel.frame) visible=\(panel.isVisible) activeSpace=\(panel.isOnActiveSpace)") }
         return true
     }
 
