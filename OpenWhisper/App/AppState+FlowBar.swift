@@ -27,6 +27,9 @@ extension AppState {
             flowBarController?.hide()
             return
         }
+        if recordingState == .transcribing {
+            owLog("[Caret] Processing: caret=\(caretPenRect != nil) flowBar=\(flowBarEnabled) systemAudio=\(systemAudioEnabled) message=\(flowBarMessage != nil) notice=\(microphoneFlowNotice != nil) jarvis=\(jarvisActivity) offer=\(targetSpeakerAppendOfferActive)")
+        }
         // A dictation being processed is drawn at its caret instead, when the app said where.
         if recordingState == .transcribing, let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
            jarvisActivity == .none, !targetSpeakerAppendOfferActive,
