@@ -350,13 +350,34 @@ enum AXTextAccess {
 
     /// The insertion point on screen (AX coordinates: top-left origin of the main display), or
     /// nil when the app doesn't say. An empty range often comes back zero-sized, so the
-    /// character before the caret is asked instead and its right edge used.
+    /// character before the caret is asked instead and its right edge used. Chromium fields
+    /// (Claude) answer ranges with a zero-sized junk rect, but do answer text markers.
     static func caretRect(_ element: AXUIElement) -> CGRect? {
-        guard let range = readSelectedRange(element).range else { return nil }
-        let caret = range.location + range.length
-        if let rect = bounds(of: CFRange(location: caret, length: 0), in: element) { return rect }
-        guard caret > 0, let rect = bounds(of: CFRange(location: caret - 1, length: 1), in: element) else { return nil }
-        return CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height)
+        let range = readSelectedRange(element).range
+        if let range {
+            let caret = range.location + range.length
+            if let rect = bounds(of: CFRange(location: caret, length: 0), in: element) { return rect }
+            if caret > 0, let rect = bounds(of: CFRange(location: caret - 1, length: 1), in: element) {
+                return CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height)
+            }
+        }
+        guard let rect = selectedMarkerBounds(in: element) else { return nil }
+        // On an empty line the marker covers the whole line, whose left edge is the caret.
+        let x = (range?.length ?? 0) > 0 ? rect.maxX : rect.minX
+        return CGRect(x: x, y: rect.minY, width: 0, height: rect.height)
+    }
+
+    private static func selectedMarkerBounds(in element: AXUIElement) -> CGRect? {
+        var marker: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, "AXSelectedTextMarkerRange" as CFString, &marker) == .success,
+              let marker else { return nil }
+        var ref: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, "AXBoundsForTextMarkerRange" as CFString, marker, &ref
+        ) == .success, let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(ref as! AXValue, .cgRect, &rect), rect.height > 0, rect.height < 120 else { return nil }
+        return rect
     }
 
     /// Screen bounds of the editable element, in the same AX coordinates as the caret.
