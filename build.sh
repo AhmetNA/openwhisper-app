@@ -39,6 +39,8 @@ cp Vendor/WebRTCAEC/LICENSE.webrtc "$AEC_NOTICE_DIR/WebRTC-LICENSE.txt"
 cp Vendor/WebRTCAEC/PATENTS.webrtc "$AEC_NOTICE_DIR/WebRTC-PATENTS.txt"
 cp Vendor/WebRTCAEC/LICENSE.abseil "$AEC_NOTICE_DIR/Abseil-LICENSE.txt"
 
+cp servers/tts_ahenk_server/NOTICE.md "$AEC_NOTICE_DIR/Ahenk-Cep-NOTICE.md"
+
 # Copy executable
 cp "$EXEC_SRC" "$APP_DIR/MacOS/OpenWhisper"
 # SwiftPM stamps the binary with sdk == deployment target (14.2), which makes macOS
@@ -101,6 +103,12 @@ EMA_DEST="$HOME/Library/Application Support/OpenWhisper/tts-ema"
 if [ -x "$EMA_DEST/.venv/bin/python" ]; then
     cp servers/tts_ema_server/server.py "$EMA_DEST/"
     echo "==> Updated EMA Lightning server in $EMA_DEST"
+fi
+
+# Ahenk Cep's isolated runtime is installed once by its setup.sh.
+AHENK_DEST="$HOME/Library/Application Support/OpenWhisper/tts-ahenk"
+if [ -x "$AHENK_DEST/.venv/bin/python" ]; then
+    cp servers/tts_ahenk_server/server.py servers/tts_ahenk_server/NOTICE.md "$AHENK_DEST/"
 fi
 
 # Default local voice (Settings › Sesli cevap › Pocket TTS): keep the installed server

@@ -62,10 +62,10 @@ final class InputDeviceSelectionTests: XCTestCase {
         XCTAssertNil(WakeWordListener.listeningDevice(priority: ["buds"], devices: [buds]))
     }
 
-    func testNewMicGoesOnTop() {
+    func testNewMicIsAppendedAfterSavedOrder() {
         let list = [entry(mac, seen: start)]
         let updated = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac, usb], now: start + 60)
-        XCTAssertEqual(updated.map(\.uid), ["usb", "mac"])
+        XCTAssertEqual(updated.map(\.uid), ["mac", "usb"])
     }
 
     func testFirstRunKeepsOldPickOnTopAndOrdersTheRest() {
@@ -80,13 +80,17 @@ final class InputDeviceSelectionTests: XCTestCase {
         XCTAssertEqual(updated.map(\.uid), ["mac", "buds"])
     }
 
-    func testMicUnseenForThreeDaysIsForgottenAndReturnsOnTop() {
-        let list = [entry(mac, seen: start), entry(buds, seen: start)]
-        let later = start + 3 * day + 60
-        let pruned = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac], now: later)
-        XCTAssertEqual(pruned.map(\.uid), ["mac"])
-        let back = MicPriority.updated(pruned, wasConnected: ["mac"], connected: [mac, buds], now: later)
-        XCTAssertEqual(back.map(\.uid), ["buds", "mac"])
+    func testLongAbsentMicReturnsBelowWirelessAfterPersistenceRoundTrip() throws {
+        let list = [entry(usb, seen: start), entry(mac, seen: start), entry(buds, seen: start)]
+        let later = start + 365 * day
+        let absent = MicPriority.updated(list, wasConnected: ["usb", "mac"],
+                                         connected: [usb, mac], now: later)
+        XCTAssertEqual(absent.map(\.uid), ["usb", "mac", "buds"])
+        let restored = try JSONDecoder().decode([MicPriorityEntry].self,
+                                               from: JSONEncoder().encode(absent))
+        let back = MicPriority.updated(restored, wasConnected: [], connected: [buds, mac, usb], now: later)
+        XCTAssertEqual(back.map(\.uid), ["usb", "mac", "buds"])
+        XCTAssertEqual(MicPriority.top(back.map(\.uid), devices: [buds, mac, usb])?.uid, "usb")
     }
 
     func testUnpluggingAfterALongConnectionDoesNotForget() {
@@ -103,11 +107,11 @@ final class InputDeviceSelectionTests: XCTestCase {
         XCTAssertTrue(updated.allSatisfy { $0.lastSeen == start + 5 * day })
     }
 
-    func testAbsentMicExpiresAtExactlyThreeDays() {
+    func testAbsentMicRetainsPositionAtThreeDays() {
         let list = [entry(mac, seen: start), entry(buds, seen: start)]
         let updated = MicPriority.updated(list, wasConnected: ["mac"], connected: [mac],
                                           now: start + 3 * day)
-        XCTAssertEqual(updated.map(\.uid), ["mac"])
+        XCTAssertEqual(updated.map(\.uid), ["mac", "buds"])
     }
 
     func testManualOrderSurvivesDisconnectReconnectAndEnumerationChanges() {

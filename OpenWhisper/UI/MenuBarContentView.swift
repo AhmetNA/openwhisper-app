@@ -37,15 +37,15 @@ struct MenuBarContentView: View {
                     .frame(width: 30, height: 30)
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("“Jarvis” ile sesle başlat")
+                    Text("Sesle başlat")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
-                    Text(loc(appState.wakeWordStatus))
-                        .font(.caption)
-                        .foregroundStyle(appState.wakeWordBlocked ? Color.orange : .secondary)
-                        .lineLimit(appState.wakeWordBlocked ? 3 : 1)
-                        .fixedSize(horizontal: false, vertical: appState.wakeWordBlocked)
-                        .help(loc(appState.wakeWordStatus))
+                    if appState.wakeWordBlocked {
+                        Text(loc(appState.wakeWordStatus))
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 4)
                 Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))
@@ -53,6 +53,7 @@ struct MenuBarContentView: View {
                     .controlSize(.small)
                     .labelsHidden()
                     .accessibilityLabel("“Jarvis” sözcüğünü dinle")
+                    .help(loc(appState.wakeWordStatus))
             }
             .padding(10)
             .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
@@ -64,14 +65,17 @@ struct MenuBarContentView: View {
                     .frame(width: 30, height: 30)
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Bilgisayar sesini yazıya dök")
+                    Text("Bilgisayar sesi")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.9)
-                    Text(loc(appState.systemAudioStatus))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if appState.systemAudioStatus != "Kapalı" {
+                        Text(loc(appState.systemAudioIsRecording ? "Kaydediliyor" : appState.systemAudioStatus))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help(loc(appState.systemAudioStatus))
+                    }
                 }
                 Spacer(minLength: 4)
                 Button {
@@ -103,25 +107,27 @@ struct MenuBarContentView: View {
 
             TimersSection()
 
-            Divider()
-
             if let latest = appState.savedRecordings.first {
+                Divider()
+
                 Button {
-                    appState.replayRecording(latest)
+                    appState.copyRecordingTranscript(latest)
                 } label: {
                     HStack(spacing: 11) {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: "doc.text")
                             .font(.system(size: 15, weight: .semibold))
                             .frame(width: 34, height: 34)
                             .liquidGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("Son kaydı yeniden analiz et")
+                            Text("Son kayıt")
                                 .font(.subheadline.weight(.semibold))
-                            Text("\(latest.durationLabel) · \(latest.previewLabel)")
+                            let previewWords = loc(latest.previewLabel).split(whereSeparator: \.isWhitespace)
+                            Text(previewWords.prefix(6).joined(separator: " ") + (previewWords.count > 6 ? "…" : ""))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                                .multilineTextAlignment(.leading)
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "doc.on.clipboard")
@@ -133,7 +139,8 @@ struct MenuBarContentView: View {
                     .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
                 }
                 .buttonStyle(.plain)
-                .disabled(isBusy)
+                .disabled(latest.transcript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                .help(loc("Metni kopyala"))
 
                 if appState.savedRecordings.count > 1 {
                     Menu {
@@ -156,16 +163,6 @@ struct MenuBarContentView: View {
                     }
                     .menuStyle(.borderlessButton)
                 }
-            } else {
-                HStack(spacing: 9) {
-                    Image(systemName: "mic")
-                        .foregroundStyle(.secondary)
-                    Text("Kayıtlarınız burada görünecek")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 13)
             }
 
             if let replayStatus = appState.replayStatus {
@@ -221,7 +218,7 @@ struct MenuBarContentView: View {
             if appState.systemAudioIsRecording { return "Bilgisayar sesi kaydediliyor" }
             if appState.systemAudioIsTranscribing { return "Bilgisayar sesi işleniyor" }
             if appState.systemAudioEnabled { return "Bilgisayar sesi açılıyor" }
-            return appState.whisperSuspendedForIdle ? "Hazır · konuşma modeli gerektiğinde yüklenir" : appState.modelLoaded ? "Hazır" : "Model hazır değil"
+            return (appState.whisperSuspendedForIdle || appState.modelLoaded) ? "Hazır" : "Model hazır değil"
         }
     }
 

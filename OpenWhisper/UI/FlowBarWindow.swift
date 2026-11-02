@@ -16,6 +16,9 @@ private final class ClickableHostingView<Content: View>: NSHostingView<Content> 
 @MainActor
 final class FlowBarController {
     private var panel: NSPanel?
+    /// AX destination captured at recording start; nil uses the bottom-of-screen fallback.
+    var caretRect: CGRect?
+    var fieldRect: CGRect?
     private weak var appState: AppState?
     /// Tracks our own show/hide intent (independent of the panel's animated alpha), so a
     /// stale `hide()` completion can't `orderOut` a bar that's since been re-shown — e.g. a
@@ -81,6 +84,7 @@ final class FlowBarController {
         // orderFrontRegardless keeps the nonactivating overlay visible without stealing
         // keyboard focus from that target app, including while it owns a fullscreen Space.
         // Every time, not only on the first show: a fullscreen app may have covered it since.
+        centerPanelOnScreen()
         panel?.orderFrontRegardless()
         rebuildIfOffActiveSpace()
         recenterAfterContentLayout()
@@ -177,7 +181,11 @@ final class FlowBarController {
 
     /// Center panel horizontally on the main screen based on its exact content width
     private func centerPanelOnScreen() {
-        guard let panel = panel, let screen = targetScreen() else { return }
+        guard let panel = panel else { return }
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        let caretPoint = caretRect.map { NSPoint(x: $0.minX, y: mainHeight - $0.midY) }
+        let caretScreen = caretPoint.flatMap { point in NSScreen.screens.first { $0.frame.contains(point) } }
+        guard let screen = caretScreen ?? targetScreen() else { return }
         if let hostingView = panel.contentView {
             hostingView.layoutSubtreeIfNeeded()
             let fittingSize = hostingView.fittingSize
@@ -187,8 +195,25 @@ final class FlowBarController {
         }
         let screenFrame = screen.visibleFrame
         let panelWidth = panel.frame.width
-        let x = round(screenFrame.midX - (panelWidth / 2.0))
-        let y = screenFrame.minY + 16
+        let x: CGFloat
+        let y: CGFloat
+        if let caretPoint, caretScreen != nil {
+            var bounds = screenFrame.insetBy(dx: 8, dy: 8)
+            if let field = fieldRect {
+                let fieldBounds = CGRect(x: field.minX, y: mainHeight - field.maxY,
+                                         width: field.width, height: field.height).intersection(bounds)
+                if fieldBounds.contains(caretPoint), fieldBounds.width >= panelWidth,
+                   fieldBounds.height >= panel.frame.height { bounds = fieldBounds }
+            }
+            // Same left edge and center line as the processing pen, so the handoff stays put.
+            x = min(max(caretPoint.x - CaretPenController.leading - ProcessingWaveformView.startX,
+                        bounds.minX), max(bounds.minX, bounds.maxX - panelWidth))
+            y = min(max(caretPoint.y - panel.frame.height / 2, bounds.minY),
+                    max(bounds.minY, bounds.maxY - panel.frame.height))
+        } else {
+            x = round(screenFrame.midX - (panelWidth / 2.0))
+            y = screenFrame.minY + 16
+        }
         panel.setFrameOrigin(NSPoint(x: x, y: y))
         owLog("[FlowBar] Centered at (\(x), \(y)) with width \(panelWidth) on screen \(screenFrame)")
     }

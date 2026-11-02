@@ -220,6 +220,7 @@ scripts up to date afterwards.
 
 | Voice | Language | Install |
 | --- | --- | --- |
+| Ahenk Cep | Turkish, fixed synthetic female voice | `bash servers/tts_ahenk_server/setup.sh` (~34 MB weights; runtime extra) |
 | Pocket TTS (default) | Turkish | `bash servers/tts_pocket_server/setup.sh` (~440 MB) |
 | Piper Jarvis | English | `bash servers/tts_piper_server/setup.sh` (~63 MB) |
 | OmniVoice (MLX) | Turkish | `bash servers/tts_server/setup.sh` (~2 GB) |
@@ -353,9 +354,9 @@ Selection happens after English translation. The prosody version is part of the 
 identity so old neutral clips are regenerated. Tone selection and synthesis share a
 lock, and each request resets the speed condition. Other voices are unchanged.
 
-## Cloud chat navigation
+## Local and cloud chat navigation
 
-Cloud-assisted chat navigation is always enabled and has no separate settings toggle. It uses the configured cloud chat model.
+Chat navigation is always enabled and has no separate settings toggle. It uses the selected local or cloud chat model. With a local model, navigation requests and conversation excerpts stay on your Mac; no cloud API key is required.
 
 Examples: “Bir önceki chat’e geç”, “Yeni chat aç”, or “Claude Code’da ses modeliyle ilgili konuştuğumuz sohbeti aç”. An explicitly named app takes priority; otherwise the app focused when recording started is used. “Previous” means the most recently active conversation other than the current one. Searches cover the latest 40 non-archived conversations, using bounded user/assistant excerpts rather than full transcripts. Claude sessions without completed turns are excluded.
 

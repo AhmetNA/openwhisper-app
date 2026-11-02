@@ -336,6 +336,13 @@ final class SpotifyManager: @unchecked Sendable {
             return .likeCurrentTrack
         }
 
+        // Changing the current song means skip, with no title to ask the chat model for.
+        // Match the whole request so changing a song's name/volume stays a different intent.
+        let changeTrack = #"^(?:lütfen\s+)?(?:spotify(?:['’]?(?:da|de))?\s+)?(?:(?:bu|çalan|şu anki)\s+)?(?:şarkıyı|şarkı|sarkiyi|sarki|parçayı|parça|parcayi|parca|müziği|muzigi)\s+(?:değiştir|degistir|değiştirsene|degistirsene|(?:değiştirir|degistirir|değiştirebilir|degistirebilir)\s+misin)(?:\s+(?:lütfen|lutfen|hemen|şimdi))?$"#
+        if normalized.range(of: changeTrack, options: .regularExpression) != nil {
+            return .next
+        }
+
         let nextWords: Set<String> = ["sonraki", "next"]
         let transitionVerbs: Set<String> = ["geç", "gec", "atla", "skip"]
         if !nextWords.isDisjoint(with: wordSet),

@@ -20,7 +20,8 @@ struct IdleWaveformView: View {
 /// the bar, its trail fading out behind the tip. Sines at unrelated rates keep the path from
 /// repeating, so it looks random but stays smooth.
 struct ProcessingWaveformView: View {
-    private let width: CGFloat = 68
+    var width: CGFloat = 68
+    var height: CGFloat = 26
     private let trail = 0.7
     private let samples = 48
     /// Path times where the pen is near its left end, on the middle line, heading right
@@ -51,20 +52,22 @@ struct ProcessingWaveformView: View {
                             with: .color(.white))
             }
         }
-        .frame(width: width, height: 26)
+        .frame(width: width, height: height)
     }
 
     private func point(at t: Double, in size: CGSize) -> CGPoint {
         let x = 0.72 * sin(2.1 * t) + 0.28 * sin(3.7 * t + 1.3)
         let y = 0.55 * sin(6.3 * t) + 0.3 * sin(9.1 * t + 2.1) + 0.15 * sin(13.7 * t + 0.4)
-        return CGPoint(x: size.width / 2 + (size.width / 2 - 4) * x, y: size.height / 2 + 8 * y)
+        return CGPoint(x: size.width / 2 + (size.width / 2 - 4) * x, y: size.height / 2 + min(8, size.height / 2 - 4) * y)
     }
 }
 
 struct AudioWaveformView: View {
     let level: Float
-    private let barWidth: CGFloat = 2.5
-    private let barSpacing: CGFloat = 2.5
+    var height: CGFloat = 26
+    var width: CGFloat = 67.5
+    private var barWidth: CGFloat { width / 27 }
+    private var barSpacing: CGFloat { width / 27 }
     private let barCount = 14 // 14 bars * (1/14s per bar) = exact 1.0s window in original horizontal width
     private let grayColor = Color.white.opacity(0.75)
 
@@ -81,10 +84,10 @@ struct AudioWaveformView: View {
             ForEach(0..<barCount, id: \.self) { index in
                 Capsule()
                     .fill(grayColor)
-                    .frame(width: barWidth, height: currentHeight(for: index))
+                    .frame(width: barWidth, height: currentHeight(for: index) * height / 26)
             }
         }
-        .frame(height: 26, alignment: .center)
+        .frame(height: height, alignment: .center)
         .animation(.linear(duration: 1.0 / 20.0), value: samples)
         .onReceive(timer) { _ in
             pushSample(level)

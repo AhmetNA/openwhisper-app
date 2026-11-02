@@ -12,11 +12,25 @@ extension AppState {
     /// dictation (recording through transcribing/pasting), so the app runs invisibly in the
     /// background otherwise — the menu bar icon remains the only always-visible element.
     func syncFlowBarVisibility() {
-        if recordingState != .transcribing { caretPenRect = nil }
+        if recordingState == .idle {
+            caretPenRect = nil
+            caretFieldRect = nil
+            caretPenSessionID = nil
+            caretPenDuration = 0
+            caretLookupPending = false
+        }
+        flowBarController?.fieldRect = caretFieldRect
+        flowBarController?.caretRect = systemAudioEnabled ? nil : caretPenRect
+        // Wait briefly for the destination before the first display, avoiding a bottom-to-caret jump.
+        if caretLookupPending, flowBarEnabled, !systemAudioEnabled, recordingState != .idle {
+            caretPenController?.hide()
+            flowBarController?.hide()
+            return
+        }
         // A dictation being processed is drawn at its caret instead, when the app said where.
-        if let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
+        if recordingState == .transcribing, let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
            jarvisActivity == .none, !targetSpeakerAppendOfferActive,
-           caretPenController?.show(at: caretPenRect) == true {
+           caretPenController?.show(at: caretPenRect, duration: caretPenDuration, field: caretFieldRect) == true {
             flowBarController?.hide()
             return
         }
@@ -35,25 +49,6 @@ extension AppState {
             flowBarController?.hide()
         } else {
             flowBarController?.show()
-        }
-    }
-
-    /// Looks up the caret of the field a dictation goes into, so the processing pen is drawn
-    /// there; "Hey Jarvis" sessions too, until he starts thinking about a command. Off the main
-    /// thread: AX calls can block on a busy app.
-    func startCaretPen(for session: RecordingTranscriptionSession) {
-        guard caretPenRect == nil, flowBarEnabled, session.trigger != .typed,
-              session.pasteContext.focusStatus != .notEditable else { return }
-        let context = session.pasteContext
-        Task {
-            let rect = await Task.detached {
-                let element = context.focusedElement ?? context.targetPID.flatMap { AXTextAccess.focusedElement(matchingPID: $0) }
-                return element.flatMap(AXTextAccess.caretRect)
-            }.value
-            owLog("[FlowBar] caret: \(rect.map { "\($0)" } ?? "unknown")")
-            guard let rect, recordingState == .transcribing else { return }
-            caretPenRect = rect
-            syncFlowBarVisibility()
         }
     }
 

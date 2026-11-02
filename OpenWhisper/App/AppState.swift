@@ -41,6 +41,9 @@ final class AppState {
     var recordingState: RecordingState = .idle {
         didSet {
             guard oldValue != recordingState else { return }
+            if oldValue == .recording, recordingState == .transcribing {
+                caretPenDuration = recordingDuration
+            }
             if recordingState != .recording { recordingHeardSpeech = false }
             syncFlowBarVisibility()
             updateWakeWordListener()
@@ -289,7 +292,6 @@ final class AppState {
             updateMicrophoneFlowNotice()
         }
     }
-    @ObservationIgnored var inputPriorityExpiryTask: Task<Void, Never>?
 
     var inputPriorityUIDs: [String] { inputPriority.map(\.uid) }
     var audioDuckingEnabled: Bool {
@@ -445,8 +447,12 @@ final class AppState {
     var hotkey: GlobalHotkey?
     var flowBarController: FlowBarController?
     var caretPenController: CaretPenController?
-    /// Where the caret of the field being dictated into is, while that dictation is processed.
-    @ObservationIgnored var caretPenRect: CGRect?
+    /// Destination captured once at recording start and retained through processing.
+    var caretPenRect: CGRect?
+    var caretFieldRect: CGRect?
+    @ObservationIgnored var caretPenDuration: TimeInterval = 0
+    @ObservationIgnored var caretPenSessionID: UInt64?
+    @ObservationIgnored var caretLookupPending = false
     var lockScreenIndicator: LockScreenIndicatorController?
     var reminderManager: ReminderManager?
     var recordingTimer: Timer?
@@ -606,8 +612,6 @@ final class AppState {
     @ObservationIgnored var commandFollowUpOverReply = false
     /// That follow-up is recording while the reply plays: its window starts when the reply ends.
     @ObservationIgnored var commandFollowUpAwaitingReplyEnd = false
-    /// A follow-up recording holds `SpotifyDuck` until it stops.
-    @ObservationIgnored var followUpHoldsSpotifyDuck = false
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

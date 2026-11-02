@@ -5,7 +5,8 @@ import XCTest
 @MainActor
 final class VoiceRouterTests: XCTestCase {
     func testExplicitPlaybackControlsBypassModelRouting() {
-        for text in ["Şarkıyı durdur", "Spotify'da devam et", "Sonraki şarkıya geç"] {
+        for text in ["Şarkıyı durdur", "Spotify'da devam et", "Sonraki şarkıya geç",
+                     "Şarkıyı değiştir", "Şarkıyı değiştirir misin?", "Parçayı değiştir"] {
             guard case .command(.spotify) = VoiceRouter.route(text, facts: facts()) else {
                 XCTFail("Expected local Spotify route: \(text)"); continue
             }

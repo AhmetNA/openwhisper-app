@@ -359,6 +359,24 @@ enum AXTextAccess {
         return CGRect(x: rect.maxX, y: rect.minY, width: 0, height: rect.height)
     }
 
+    /// Screen bounds of the editable element, in the same AX coordinates as the caret.
+    static func fieldRect(_ element: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef,
+              CFGetTypeID(positionRef) == AXValueGetTypeID(),
+              CFGetTypeID(sizeRef) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+              position.x.isFinite, position.y.isFinite,
+              size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return nil }
+        return CGRect(origin: position, size: size)
+    }
+
     private static func bounds(of range: CFRange, in element: AXUIElement) -> CGRect? {
         var range = range
         guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }

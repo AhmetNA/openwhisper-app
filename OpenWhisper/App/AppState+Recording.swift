@@ -54,11 +54,6 @@ extension AppState {
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
         guard recordingState != .recording else { return }
-        // Music stays quiet while the mic listens right after Jarvis spoke.
-        if recordingTrigger == .followUp, !followUpHoldsSpotifyDuck {
-            followUpHoldsSpotifyDuck = true
-            SpotifyDuck.shared.hold()
-        }
         clearFlowBarMessage()
         // The recap stays readable while the user words the message.
         if let claudeRecap { showFlowBarMessage(claudeRecap, durationMs: Self.flowBarDuration(ofRecap: claudeRecap)) }
@@ -211,6 +206,11 @@ extension AppState {
                 self.markRecordingInputReady(sessionID: sessionID)
             }
         }
+        caretPenRect = nil
+        caretFieldRect = nil
+        caretPenSessionID = sessionID
+        caretPenDuration = 0
+        caretLookupPending = flowBarEnabled
         recordingState = .recording
         recordingDuration = 0
         audioLevel = 0
@@ -236,11 +236,29 @@ extension AppState {
         // Start destination capture before the remaining microphone/UI setup.
         // Keep AX IPC off the hotkey callback thread.
         let currentTargetApp = targetApp
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .userInitiated) { [weak self, weak session] in
             let capturedContext = PasteContext.capture(targetApp: currentTargetApp)
-            await MainActor.run { [weak session] in
-                session?.pasteContext = capturedContext
+            let caret = capturedContext.focusStatus != .notEditable
+                ? capturedContext.focusedElement.flatMap(AXTextAccess.caretRect) : nil
+            let field = capturedContext.focusedElement.flatMap(AXTextAccess.fieldRect)
+            await MainActor.run {
+                guard let session else { return }
+                session.pasteContext = capturedContext
+                guard let self, self.caretPenSessionID == session.id,
+                      self.caretLookupPending, !session.isCancelled,
+                      self.recordingState != .idle else { return }
+                self.caretPenRect = caret
+                self.caretFieldRect = field
+                self.caretLookupPending = false
+                self.syncFlowBarVisibility()
             }
+        }
+        // An unresponsive AX app must not hide recording feedback indefinitely. Once the
+        // fallback is visible, keep it there for this session even if the lookup returns late.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.caretPenSessionID == sessionID, self.caretLookupPending else { return }
+            self.caretLookupPending = false
+            self.syncFlowBarVisibility()
         }
         session.bypassAudioProcessing = bypassProcessing
         session.previewEndpointDetector = smartTurnEndpointDetector
@@ -507,7 +525,6 @@ extension AppState {
         wakeProbation = nil
         delayedStopWorkItem?.cancel()
         recordingState = .transcribing
-        if let session = activeTranscriptionSession { startCaretPen(for: session) }
         owLog("[OpenWhisper] Hotkey released; UI transitioned to transcribing, keeping mic open for \(Int(delay * 1000))ms tail buffer...")
         let workItem = DispatchWorkItem { [weak self] in
             self?.stopRecording()
@@ -517,7 +534,6 @@ extension AppState {
     }
 
     func stopRecording() {
-        releaseFollowUpSpotifyDuck()
         delayedStopWorkItem?.cancel()
         delayedStopWorkItem = nil
         voiceEndpointDetector = nil
@@ -573,7 +589,6 @@ extension AppState {
         }
 
         recordingState = .transcribing
-        startCaretPen(for: session)
         owLog("[OpenWhisper] Finishing recording; waiting for background batches...")
     }
 
@@ -1123,15 +1138,8 @@ extension AppState {
         )
     }
 
-    func releaseFollowUpSpotifyDuck() {
-        guard followUpHoldsSpotifyDuck else { return }
-        followUpHoldsSpotifyDuck = false
-        SpotifyDuck.shared.release()
-    }
-
     /// Stops the microphone and throws the audio away: no transcription, no injection.
     func discardActiveRecording(reason: String) {
-        releaseFollowUpSpotifyDuck()
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil

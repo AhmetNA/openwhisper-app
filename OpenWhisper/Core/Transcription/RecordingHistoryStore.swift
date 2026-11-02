@@ -7,6 +7,8 @@ struct SavedRecording: Codable, Identifiable, Sendable {
     let sampleCount: Int
     /// A short transcript excerpt for the menu. Older index entries decode as nil.
     let previewText: String?
+    /// Full recognized text, including commands, for immediate clipboard copying.
+    var transcript: String? = nil
     /// Speech time, pauses, levels, words. Older index entries decode as nil.
     var stats: RecordingStats? = nil
     /// How it was started (Hey Jarvis, Fn, Fn+Space…); nil for system audio and older entries.
@@ -97,7 +99,7 @@ actor RecordingHistoryStore {
         }
         let finalURL = directory.appendingPathComponent("\(id.uuidString).caf")
         try FileManager.default.moveItem(at: partialURL, to: finalURL)
-        let updated = ([SavedRecording(id: id, createdAt: date, sampleCount: count, previewText: Self.normalizedPreview(previewText), stats: stats, trigger: trigger)] + recordings)
+        let updated = ([SavedRecording(id: id, createdAt: date, sampleCount: count, previewText: Self.normalizedPreview(previewText), transcript: previewText, stats: stats, trigger: trigger)] + recordings)
             .sorted { $0.createdAt > $1.createdAt }
         let retained = Array(updated.prefix(Self.limit))
         do {
@@ -124,6 +126,7 @@ actor RecordingHistoryStore {
             createdAt: old.createdAt,
             sampleCount: old.sampleCount,
             previewText: Self.normalizedPreview(text),
+            transcript: text,
             stats: old.stats.map { var stats = $0; stats.wordCount = RecordingStats.wordCount(in: text); return stats },
             trigger: old.trigger
         )

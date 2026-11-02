@@ -8,6 +8,13 @@ import QuartzCore
 import os
 
 extension AppState {
+    func copyRecordingTranscript(_ recording: SavedRecording) {
+        guard let text = recording.transcript, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        replayStatus = "Kopyalandı"
+    }
+
     /// Re-runs the selected saved audio through the current recognition and text settings.
     /// Replays never paste into another application or trigger voice commands.
     func replayRecording(_ recording: SavedRecording) {
@@ -70,11 +77,11 @@ extension AppState {
     /// when the menu is opened, without changing or deleting any recording.
     func prepareRecordingPreviews() {
         guard modelLoaded, recordingPreviewTask == nil,
-              savedRecordings.contains(where: { $0.previewText == nil }) else { return }
+              savedRecordings.contains(where: { $0.transcript == nil }) else { return }
         recordingPreviewTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.recordingPreviewTask = nil }
-            for recording in self.savedRecordings where recording.previewText == nil {
+            for recording in self.savedRecordings where recording.transcript == nil {
                 guard !Task.isCancelled,
                       self.recordingState == .idle,
                       self.pendingTranscriptionCount == 0,

@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 
 ENGINES = {
     "omnivoice": {"port": 8767, "dir": SUPPORT / "tts"},
+    "ahenk": {"port": 8776, "dir": SUPPORT / "tts-ahenk"},
     "ema": {"port": 8770, "dir": SUPPORT / "tts-ema"},
     "antalia": {"port": 8771, "dir": SUPPORT / "tts-antalia"},
     "pocket": {"port": 8772, "dir": SUPPORT / "tts-pocket"},

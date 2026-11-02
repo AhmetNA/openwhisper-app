@@ -110,7 +110,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DamgaNormalizer.shared.stop()
         RecordingMediaController.shared.waitUntilIdle()
         AudioDucker.shared.restoreImmediatelyForTermination()
-        SpotifyDuck.shared.restoreImmediately()
         // Mics connected while the app ran count as seen now, not at the last device change.
         MainActor.assumeIsolated {
             AppState.shared.updateInputPriority(wasConnected: AppState.shared.availableInputDevices)

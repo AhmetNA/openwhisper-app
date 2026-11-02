@@ -3,6 +3,17 @@ import SwiftUI
 struct FlowBarView: View {
     @Environment(AppState.self) var appState
 
+    private var indicatorHeight: CGFloat {
+        guard let caret = appState.caretPenRect else { return 26 }
+        return min(26, max(18, caret.height + 2))
+    }
+
+    private var recordingWaveformWidth: CGFloat {
+        guard appState.caretPenRect != nil, let field = appState.caretFieldRect else { return 67.5 }
+        let controls: CGFloat = (appState.handsFreeActive ? 28 : 0) + (appState.screenModeActive ? 78 : 0)
+        return min(67.5, max(20, field.width - 20 - controls))
+    }
+
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
@@ -61,8 +72,8 @@ struct FlowBarView: View {
                     .padding(.vertical, 4)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .padding(.horizontal, appState.caretPenRect == nil ? 16 : 8)
+        .padding(.vertical, appState.caretPenRect == nil ? 6 : 2)
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 17)
@@ -111,7 +122,7 @@ struct FlowBarView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Kaydı bitir ve metni panoya kopyala")
         }
-        .frame(height: 26)
+        .frame(height: indicatorHeight)
     }
 
     // MARK: - Target-speaker confirmation offer
@@ -145,7 +156,7 @@ struct FlowBarView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 6)
-        .frame(height: 26)
+        .frame(height: indicatorHeight)
     }
 
     // MARK: - Idle
@@ -165,14 +176,14 @@ struct FlowBarView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
             if appState.recordingInputReady {
-                AudioWaveformView(level: appState.audioLevel)
+                AudioWaveformView(level: appState.audioLevel, height: indicatorHeight, width: recordingWaveformWidth)
             } else {
                 // Bluetooth buds are still switching to call mode; speech now would be lost.
                 Text("bağlanıyor")
                     .font(.custom("Bradley Hand", size: 16).weight(.medium))
                     .foregroundStyle(.white.opacity(0.6))
                     .padding(.horizontal, 6)
-                    .frame(height: 26)
+                    .frame(height: indicatorHeight)
             }
 
             // Hands-free sessions have no key to release, so offer a click target. The panel is
@@ -197,7 +208,7 @@ struct FlowBarView: View {
     // MARK: - Transcribing
 
     private var transcribingContent: some View {
-        ProcessingWaveformView()
+        ProcessingWaveformView(height: indicatorHeight)
     }
 
     // MARK: - Speaking
@@ -207,6 +218,6 @@ struct FlowBarView: View {
             .font(.custom("Bradley Hand", size: 16).weight(.medium))
             .foregroundStyle(.white.opacity(0.85))
             .padding(.horizontal, 6)
-            .frame(height: 26)
+            .frame(height: indicatorHeight)
     }
 }

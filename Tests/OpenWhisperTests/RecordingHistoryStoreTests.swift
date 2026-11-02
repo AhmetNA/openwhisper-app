@@ -124,11 +124,31 @@ final class RecordingHistoryStoreTests: XCTestCase {
         XCTAssertEqual(segment?.0.samples.first ?? 0, 0.15, accuracy: 0.0001)
     }
 
+    func testFullCommandTranscriptSurvivesRestartAndUpdate() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RecordingHistoryStore(directory: directory)
+        let text = "Spotify aç\n" + String(repeating: "uzun konuşma metni ", count: 40)
+        try await store.append(
+            CompletedAudioSegment(samples: [Float](repeating: 0.15, count: 16_000), overlapSampleCount: 0),
+            sessionID: 1, startedAt: Date()
+        )
+        let initial = try await store.finish(sessionID: 1, keep: true, previewText: text)
+        XCTAssertEqual(initial[0].previewText?.count, 240)
+        XCTAssertEqual(initial[0].transcript, text)
+        let reopened = RecordingHistoryStore(directory: directory)
+        let saved = await reopened.items()
+        XCTAssertEqual(saved[0].transcript, text)
+        let updated = try await reopened.updatePreview(id: saved[0].id, text: text + "Son cümle.")
+        XCTAssertEqual(updated[0].transcript, text + "Son cümle.")
+    }
+
     func testOlderIndexWithoutPreviewStillDecodes() throws {
         let oldJSON = """
         {"id":"00000000-0000-0000-0000-000000000001","createdAt":0,"sampleCount":16000}
         """
         let decoded = try JSONDecoder().decode(SavedRecording.self, from: Data(oldJSON.utf8))
+        XCTAssertNil(decoded.transcript)
         XCTAssertNil(decoded.previewText)
         XCTAssertEqual(decoded.menuLabel, "0:01 · Önizleme hazırlanıyor…")
     }

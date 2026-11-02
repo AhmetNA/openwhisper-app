@@ -79,6 +79,22 @@ final class SpotifyDecisionTests: XCTestCase {
         XCTAssertFalse(SpotifyRequestParser.namesLikedSongs("Türkçe Pop Hits"))
     }
 
+    func testChangeCurrentSongSkipsWithoutAskingForATitle() {
+        for text in ["Şarkıyı değiştir", "şarkıyı değiştir.", "Bu şarkıyı değiştir",
+                     "Çalan parçayı değiştir lütfen", "Müziği değiştir", "sarkiyi degistir",
+                     "Şarkıyı değiştirir misin?", "Şarkıyı değiştirebilir misin",
+                     "Şarkıyı değiştirsene", "Spotify'da şarkıyı değiştir"] {
+            XCTAssertEqual(SpotifyManager.explicitIntent(in: text), .next, text)
+            XCTAssertEqual(decide(text, nil), .next, text)
+            XCTAssertFalse(SpotifyManager.resumesPausedMedia(afterCommand: text), text)
+        }
+        for text in ["Şarkıyı değiştirme", "Şarkıyı değiştir demedim",
+                     "Şarkıyı değiştir diye yaz", "Şarkının adını değiştir",
+                     "Şarkıyı değiştirmek istiyorum", "Videoyu değiştir"] {
+            XCTAssertNil(SpotifyManager.explicitIntent(in: text), text)
+        }
+    }
+
     func testAgreementKeepsRulesIntent() {
         XCTAssertEqual(decide("Sonraki şarkıya geç", Parse(intent: .next)), .next)
         XCTAssertEqual(decide("Spotify'da sesi 30 yap", Parse(intent: .volume)), .setVolume(30))

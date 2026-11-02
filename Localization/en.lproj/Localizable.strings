@@ -206,7 +206,7 @@
 "Jarvis sohbeti. OpenAI uyumlu herhangi bir servis." = "Jarvis chat. Any OpenAI-compatible service.";
 "API anahtarı" = "API key";
 "Sesli cevap (TTS)." = "Spoken replies (TTS).";
-"Jarvis'in internette araması (bulut sohbetiyle)." = "Jarvis's web search (with cloud chat).";
+"Jarvis'in internette araması (yerel ve bulut sohbetiyle)." = "Jarvis's web search (with local and cloud chat).";
 "Geçerli bir adres değil (örnek: https://api.ornek.com/v1)." = "Not a valid address (example: https://api.example.com/v1).";
 "Adres https:// ile başlamalı." = "The address must start with https://.";
 "Yerel (Ollama)" = "Local (Ollama)";
@@ -373,6 +373,23 @@
 "Son ekleme geri alındı" = "Last sample undone";
 "Filtre hata verdi — bu kayıt işlenmedi" = "The filter failed — this recording wasn't processed";
 
+/* Jarvis settings grouped by everyday tasks. */
+"Ses ve konuşma" = "Voice and speech";
+"Başlatma ve kısayollar" = "Activation and shortcuts";
+"Bildirimler ve müzik" = "Notifications and music";
+"Kilit ekranı ve uzaktan kullanım" = "Lock screen and remote use";
+"Jarvis’in sesi" = "Jarvis voice";
+"İnternet bağlantısı ve API anahtarı kullanır." = "Uses an internet connection and API key.";
+"Bu Mac’te çalışır. Kurulumdan sonra internet gerekmez." = "Runs on this Mac. No internet needed after setup.";
+
+/* Central model settings. */
+"Modeller" = "Models";
+"Seslendirme" = "Speech synthesis";
+"Yerel dil modeli" = "Local language model";
+"Komutları anlama" = "Command understanding";
+"Modeller’de değiştir" = "Change in Models";
+"Modelleri seç ve dene" = "Choose and try models";
+
 /* Settings statuses with values in them. */
 "Kayıt %ld/2: %ld/30 sn — %@" = "Recording %ld/2: %ld/30 s — %@";
 "Ses örneği: %ld/30 sn — %@" = "Voice sample: %ld/30 s — %@";
@@ -397,3 +414,11 @@
 "Konuşma modeli zamanında hazırlanamadı. Yeniden seslenebilir veya Fn ile kayıt başlatabilirsiniz." = "The speech model wasn't ready in time. Call again or start a recording with Fn.";
 "Oturur pozisyonda doğal biçimde konuş." = "Speak naturally while sitting.";
 "Şimdi pozisyonunu değiştirip, mümkünse yatarak doğal biçimde konuş." = "Now change your position and, if you can, speak naturally lying down.";
+
+/* Compact menu bar labels */
+"Sesle başlat" = "Voice activation";
+"Bilgisayar sesi" = "Computer audio";
+"Son kaydı işle" = "Reprocess last recording";
+"Son kayıt" = "Last recording";
+"Metni kopyala" = "Copy text";
+"Kopyalandı" = "Copied";
