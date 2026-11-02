@@ -366,10 +366,9 @@ enum AXTextAccess {
             let x = (range?.length ?? 0) > 0 ? rect.maxX : rect.minX
             return CGRect(x: x, y: rect.minY, width: 0, height: rect.height)
         }
-        // Spotify and Chrome have no text to measure in an empty field. A one-line field's caret
-        // is near its left edge, on its middle line (the exact spot depends on its padding).
-        guard range?.location == 0, readString(element, kAXValueAttribute as CFString).value?.isEmpty == true,
-              let field = fieldRect(element), field.height <= 60 else { return nil }
+        // Spotify's empty fields and all of Chrome's say nothing about the caret. Show at the left
+        // edge of a one-line field instead, on its middle line: in the field, if not at the caret.
+        guard range != nil, let field = fieldRect(element), field.height <= 60 else { return nil }
         let height = min(field.height, 22)
         return CGRect(x: field.minX + 8, y: field.midY - height / 2, width: 0, height: height)
     }
