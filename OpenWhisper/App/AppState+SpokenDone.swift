@@ -136,7 +136,7 @@ extension AppState {
                                         previewSampleCount: Int?) -> Bool {
         // Screen mode: "… bas" is a whole step, and Smart Turn rates many of them below 0.97
         // ("Nova'ya bas" 0.58), waiting 2–3 s more for nothing.
-        // So is a number or any other pointer step ("beş", "sağ tıkla", "biraz sağa").
+        // So is a number or any other pointer step ("beş", "sağ tıkla").
         let screenPress = screenModeActive && session.followsCommand
             && (ScreenMode.isFinishedPress(text) || ScreenPointer.isFinished(text))
         guard session.isVoiceCommand, let endpoint, let previewSampleCount,

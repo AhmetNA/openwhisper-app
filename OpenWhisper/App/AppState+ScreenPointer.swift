@@ -105,17 +105,6 @@ extension AppState {
             }
             await ScreenPointer.drag(from: start, to: end)
             return finish("adıyla sürüklendi", message: "✓")
-
-        case .nudge(let dx, let dy):
-            // Only in the mode: there it is fine tuning, elsewhere it was said to no one.
-            guard inMode else { return .notHandled }
-            var point = ScreenPointer.location
-            if case .grid(let rect) = screenOverlayState {
-                point = CGPoint(x: rect.midX, y: rect.midY)
-                hideScreenOverlay()
-            }
-            ScreenPointer.move(to: CGPoint(x: point.x + dx, y: point.y + dy))
-            return finish("imleç oynadı", message: nil, changesScreen: false)
         }
     }
 

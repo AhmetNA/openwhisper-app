@@ -619,7 +619,7 @@ extension AppState {
         return false
     }
 
-    /// "Numaraları göster", "beş", "Kaydet'e sağ tıkla", "biraz sağa": the screen used as with
+    /// "Numaraları göster", "beş", "Kaydet'e sağ tıkla": the screen used as with
     /// a mouse. Under the same guards as a press on screen.
     private func handlePointerStep(_ run: FinishRun) async -> Bool {
         let session = run.session

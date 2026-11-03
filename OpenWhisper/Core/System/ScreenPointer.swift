@@ -6,7 +6,7 @@ enum PointerAction: Equatable {
 }
 
 /// A step in screen mode said the way one uses a mouse: "numaraları göster", "beş", "beşe çift
-/// tıkla", "Kaydet'e sağ tıkla", "beşi dokuza sürükle", "biraz sağa", "tıkla". Plain "Kaydet'e
+/// tıkla", "Kaydet'e sağ tıkla", "beşi dokuza sürükle", "tıkla". Plain "Kaydet'e
 /// bas" is no such step: it stays with `ScreenActions`.
 enum PointerCommand: Equatable {
     case open
@@ -21,7 +21,6 @@ enum PointerCommand: Equatable {
     case here(PointerAction)
     case dragNumbers(Int, Int)
     case dragNames(String, String)
-    case nudge(dx: CGFloat, dy: CGFloat)
 }
 
 enum ScreenPointer {
@@ -56,9 +55,6 @@ enum ScreenPointer {
             return english ? bareDigits || englishTens[last] == nil : turkishEndsOnVerb(last)
         case .dragNames:
             return !english && turkishEndsOnVerb(last)
-        case .nudge(_, let dy):
-            if english { return true }
-            return dy == 0 || turkishEndsOnVerb(last)
         }
     }
 
@@ -81,7 +77,7 @@ enum ScreenPointer {
         (["üstüne", "git"], .hover), (["üzerine", "git"], .hover), (["üstüne", "götür"], .hover), (["üzerine", "götür"], .hover),
         (["üstünde", "dur"], .hover), (["üzerinde", "dur"], .hover),
     ]
-    private static let turkishOpen: Set<String> = ["ekran modu", "ekran modunu aç", "ekran modu aç", "ekran modunu başlat", "fare modu", "fare modunu aç", "fare modu aç"]
+    private static let turkishOpen: Set<String> = ["ekran modu", "ekran modunu aç", "ekran modu aç", "ekran modunu başlat"]
     private static let turkishGridWords: Set<String> = ["ızgara", "ızgarayı", "ızgarası", "izgara", "izgarayı", "izgarası", "grid", "gridi", "kareleri"]
     private static let turkishNumberWords: Set<String> = ["numaraları", "numaralar", "sayıları", "rakamları"]
 
@@ -135,7 +131,7 @@ enum ScreenPointer {
             guard action != .press, rest.count <= 5 else { return nil }
             return .name(nameWithoutEnding(rest), action)
         }
-        return turkishNudge(words)
+        return nil
     }
 
     private static func turkishOverlay(_ words: [String]) -> PointerCommand? {
@@ -173,34 +169,6 @@ enum ScreenPointer {
         return words.joined(separator: " ")
     }
 
-    /// "Biraz sağa", "fareyi sola götür", "azıcık yukarı". A subject or a size is required:
-    /// a stray "aşağı" on the open mic must not move anything, "aşağı kaydır" scrolls.
-    private static func turkishNudge(_ words: [String]) -> PointerCommand? {
-        var words = words
-        var subject = false
-        if ["fareyi", "fare", "imleci", "imleç", "oku"].contains(words.first ?? "") {
-            subject = true
-            words.removeFirst()
-        }
-        var distance: CGFloat = 60
-        var sized = false
-        while let first = words.first, let size = turkishSizes[first] {
-            if !sized || first != "daha" { distance = size }
-            sized = true
-            words.removeFirst()
-        }
-        guard subject || sized, let direction = words.first, let unit = turkishDirections[direction] else { return nil }
-        let verbs: Set<String> = subject ? ["git", "gel", "götür", "al", "kaydır", "çek", "doğru"] : ["git", "gel", "götür", "al", "doğru"]
-        guard words.dropFirst().allSatisfy(verbs.contains) else { return nil }
-        return .nudge(dx: unit.x * distance, dy: unit.y * distance)
-    }
-
-    private static let turkishSizes: [String: CGFloat] = ["azıcık": 10, "birazcık": 10, "az": 10, "biraz": 30, "daha": 30, "çok": 200, "epey": 200, "bayağı": 200]
-    private static let turkishDirections: [String: CGPoint] = [
-        "sağa": CGPoint(x: 1, y: 0), "sola": CGPoint(x: -1, y: 0), "yukarı": CGPoint(x: 0, y: -1), "yukarıya": CGPoint(x: 0, y: -1),
-        "aşağı": CGPoint(x: 0, y: 1), "aşağıya": CGPoint(x: 0, y: 1), "aşşağı": CGPoint(x: 0, y: 1),
-    ]
-
     private static let englishFillers: Set<String> = ["jarvis", "hey", "please", "number", "the", "on", "at", "can", "could", "you"]
     private static let englishPhrases: [(words: [String], action: PointerAction)] = [
         (["double", "click"], .doubleClick), (["right", "click"], .rightClick), (["hover", "over"], .hover),
@@ -211,7 +179,7 @@ enum ScreenPointer {
         let words = said.filter { !englishFillers.contains($0) }
         guard !words.isEmpty, words.count <= 12 else { return nil }
         switch words.joined(separator: " ") {
-        case "screen mode", "open screen mode", "start screen mode", "mouse mode": return .open
+        case "screen mode", "open screen mode", "start screen mode": return .open
         case "show numbers", "show number": return .showNumbers
         case "show grid", "show window grid", "grid": return .showGrid(fullScreen: false)
         case "show screen grid", "show full screen grid": return .showGrid(fullScreen: true)
@@ -238,28 +206,7 @@ enum ScreenPointer {
         if let numbers = numbers(in: words, table: englishNumbers, tens: englishTens), numbers.count == 1 {
             return .number(numbers[0], nil)
         }
-        return englishNudge(words)
-    }
-
-    /// "Move left", "a bit right", "move the pointer up a lot".
-    private static func englishNudge(_ words: [String]) -> PointerCommand? {
-        var words = words.filter { !["pointer", "cursor", "mouse"].contains($0) }
-        var subject = false
-        if words.first == "move" {
-            subject = true
-            words.removeFirst()
-        }
-        var text = " " + words.joined(separator: " ") + " "
-        var distance: CGFloat = 60
-        var sized = false
-        for (phrase, size) in [(" a bit ", CGFloat(30)), (" a little ", 30), (" a lot ", 200), (" slightly ", 10)] where text.contains(phrase) {
-            sized = true
-            distance = size
-            text = text.replacingOccurrences(of: phrase, with: " ")
-        }
-        let directions: [String: CGPoint] = ["right": CGPoint(x: 1, y: 0), "left": CGPoint(x: -1, y: 0), "up": CGPoint(x: 0, y: -1), "down": CGPoint(x: 0, y: 1)]
-        guard subject || sized, let unit = directions[text.trimmingCharacters(in: .whitespaces)] else { return nil }
-        return .nudge(dx: unit.x * distance, dy: unit.y * distance)
+        return nil
     }
 
     // MARK: - Numbers

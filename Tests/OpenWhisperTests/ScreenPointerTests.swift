@@ -52,14 +52,6 @@ final class ScreenPointerTests: XCTestCase {
         XCTAssertEqual(tr("yeni dosyayı arşiv klasörüne sürükle"), .dragNames("yeni dosyayı", "arşiv klasörüne"))
     }
 
-    func testNudge() {
-        XCTAssertEqual(tr("biraz sağa"), .nudge(dx: 30, dy: 0))
-        XCTAssertEqual(tr("azıcık yukarı"), .nudge(dx: 0, dy: -10))
-        XCTAssertEqual(tr("fareyi sola götür"), .nudge(dx: -60, dy: 0))
-        XCTAssertEqual(tr("imleci çok aşağı"), .nudge(dx: 0, dy: 200))
-        XCTAssertEqual(tr("biraz daha sağa"), .nudge(dx: 30, dy: 0))
-    }
-
     func testOtherStepsAreLeftAlone() {
         XCTAssertNil(tr("Kaydet'e bas"))
         XCTAssertNil(tr("geri butonuna bas"))
@@ -68,6 +60,8 @@ final class ScreenPointerTests: XCTestCase {
         XCTAssertNil(tr("biraz aşağı kaydır"))
         XCTAssertNil(tr("aşağı"))
         XCTAssertNil(tr("sağa"))
+        XCTAssertNil(tr("biraz sağa"))
+        XCTAssertNil(tr("fareyi sola götür"))
         XCTAssertNil(tr("beş yaz"))
         XCTAssertNil(tr("geri git"))
         XCTAssertNil(tr("tamamdır"))
@@ -89,7 +83,7 @@ final class ScreenPointerTests: XCTestCase {
         XCTAssertEqual(en("hover over Save"), .name("save", .hover))
         XCTAssertEqual(en("right click"), .here(.rightClick))
         XCTAssertEqual(en("drag 5 to 9"), .dragNumbers(5, 9))
-        XCTAssertEqual(en("move left a bit"), .nudge(dx: -30, dy: 0))
+        XCTAssertNil(en("move left a bit"))
         XCTAssertNil(en("click Save"))
         XCTAssertNil(en("scroll down"))
         XCTAssertNil(en("left"))
@@ -97,17 +91,17 @@ final class ScreenPointerTests: XCTestCase {
 
     func testFinishedSteps() {
         for text in ["beş", "5", "on iki", "beşe bas", "beşebas", "beşi dokuza sürükle", "çift tıkla", "sağ tıkla", "tıkla",
-                     "Kaydet'e sağ tıkla", "beşin üstüne gel", "biraz sağa", "fareyi aşağı götür", "numaraları göster", "ızgara"] {
+                     "Kaydet'e sağ tıkla", "beşin üstüne gel", "numaraları göster", "ızgara"] {
             XCTAssertTrue(ScreenPointer.isFinished(text, english: false), text)
         }
-        for text in ["five", "12", "click 12", "double click seven", "drag 5 to 9", "move left", "show grid"] {
+        for text in ["five", "12", "click 12", "double click seven", "drag 5 to 9", "show grid"] {
             XCTAssertTrue(ScreenPointer.isFinished(text, english: true), text)
         }
     }
 
     /// The start of a longer step, with a pause in it, must not stop the mic.
     func testStartsOfStepsAreNotFinished() {
-        for text in ["beşi", "beşe", "beşten", "on", "yirmi", "çok aşağı", "biraz aşağı", "Kaydet'e bas", "aşağı kaydır"] {
+        for text in ["beşi", "beşe", "beşten", "on", "yirmi", "Kaydet'e bas", "aşağı kaydır"] {
             XCTAssertFalse(ScreenPointer.isFinished(text, english: false), text)
         }
         for text in ["click", "right click", "right click Save", "twenty", "click twenty", "drag 5 to twenty"] {
