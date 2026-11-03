@@ -254,7 +254,10 @@ extension AppState {
                             overReply: Bool = false, keepAlive: Bool = false) -> Bool {
         guard session.isVoiceCommand, session.trigger != .typed, !session.isCancelled, recordingState != .recording,
               hotkey?.isIdle == true, microphoneGranted else { return false }
-        if screenModeActive, !keepAlive { noteScreenModeAction() }
+        if screenModeActive, !keepAlive {
+            noteScreenModeAction()
+            screenOverlayHoldsNumbers = false
+        }
         // Opening the buds' mic puts them in call mode, which would break the reply playing in
         // them: there the window opens after the reply (the caller's fallback).
         if overReply, Self.inputIsBluetooth(uid: resolvedInputDeviceUID(for: .followUp)) {
@@ -285,7 +288,7 @@ extension AppState {
         hotkey?.screenModeKeys = true
         let stamp = Date()
         screenModeLastAction = stamp
-        refreshScreenNumbers()
+        if !screenOverlayHoldsNumbers { refreshScreenNumbers() }
         // A recording that never finished must not leave the mode on.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(ScreenMode.silence + ScreenMode.maxDuration + 5))

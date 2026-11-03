@@ -95,6 +95,37 @@ final class ScreenPointerTests: XCTestCase {
         XCTAssertNil(en("left"))
     }
 
+    func testFinishedSteps() {
+        for text in ["beş", "5", "on iki", "beşe bas", "beşebas", "beşi dokuza sürükle", "çift tıkla", "sağ tıkla", "tıkla",
+                     "Kaydet'e sağ tıkla", "beşin üstüne gel", "biraz sağa", "fareyi aşağı götür", "numaraları göster", "ızgara"] {
+            XCTAssertTrue(ScreenPointer.isFinished(text, english: false), text)
+        }
+        for text in ["five", "12", "click 12", "double click seven", "drag 5 to 9", "move left", "show grid"] {
+            XCTAssertTrue(ScreenPointer.isFinished(text, english: true), text)
+        }
+    }
+
+    /// The start of a longer step, with a pause in it, must not stop the mic.
+    func testStartsOfStepsAreNotFinished() {
+        for text in ["beşi", "beşe", "beşten", "on", "yirmi", "çok aşağı", "biraz aşağı", "Kaydet'e bas", "aşağı kaydır"] {
+            XCTAssertFalse(ScreenPointer.isFinished(text, english: false), text)
+        }
+        for text in ["click", "right click", "right click Save", "twenty", "click twenty", "drag 5 to twenty"] {
+            XCTAssertFalse(ScreenPointer.isFinished(text, english: true), text)
+        }
+    }
+
+    func testOneAndTenAreNotEverydayWords() {
+        XCTAssertNil(tr("ona bas"))
+        XCTAssertNil(tr("yine ona bas"))
+        XCTAssertEqual(tr("bir tıkla"), .here(.press))
+        XCTAssertEqual(tr("şuna bir tıkla"), .here(.press))
+        XCTAssertEqual(tr("on'a bas"), .number(10, .press))
+        XCTAssertEqual(tr("10'a bas"), .number(10, .press))
+        XCTAssertEqual(tr("bire bas"), .number(1, .press))
+        XCTAssertEqual(tr("bir"), .number(1, nil))
+    }
+
     func testGridCells() {
         let rect = CGRect(x: 100, y: 50, width: 400, height: 300)
         XCTAssertEqual(ScreenPointer.gridCell(1, in: rect), CGRect(x: 100, y: 50, width: 100, height: 100))

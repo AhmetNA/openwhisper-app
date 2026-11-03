@@ -32,6 +32,43 @@ enum ScreenPointer {
         return english ? parseEnglish(words) : parseTurkish(words)
     }
 
+    /// Whether the step is said in full, so the mic can stop at once. A step's start often parses
+    /// too: "beşi … dokuza sürükle", "on … iki", "çok aşağı … kaydır", "click … 12" wait for the
+    /// usual end of speech.
+    static func isFinished(_ text: String, english: Bool = CommandLanguage.isEnglish) -> Bool {
+        guard let command = parse(text, english: english),
+              let last = ScreenActions.normalized(text).split(separator: " ").map(String.init).last(where: {
+                  !["jarvis", "lütfen", "please"].contains($0)
+              }) else { return false }
+        let bareDigits = last.allSatisfy(\.isNumber)
+        switch command {
+        case .open, .showNumbers, .showGrid, .hideOverlay:
+            return true
+        case .number(_, nil):
+            if bareDigits { return true }
+            return english ? englishNumbers[last] != nil && englishTens[last] == nil : turkishUnits.contains(last)
+        case .number:
+            if english { return bareDigits || (englishNumbers[last] != nil && englishTens[last] == nil) }
+            return turkishEndsOnVerb(last)
+        case .name, .here:
+            return !english && turkishEndsOnVerb(last)
+        case .dragNumbers:
+            return english ? bareDigits || englishTens[last] == nil : turkishEndsOnVerb(last)
+        case .dragNames:
+            return !english && turkishEndsOnVerb(last)
+        case .nudge(_, let dy):
+            if english { return true }
+            return dy == 0 || turkishEndsOnVerb(last)
+        }
+    }
+
+    private static let turkishUnits: Set<String> = ["bir", "iki", "üç", "uc", "dört", "dort", "beş", "bes", "altı", "alti", "yedi", "sekiz", "dokuz"]
+
+    private static func turkishEndsOnVerb(_ word: String) -> Bool {
+        turkishPress.contains(word) || turkishDrag.contains(word) || ["mısın", "mısınız", "misin", "misiniz", "tık", "gel", "git", "götür", "dur", "al", "doğru"].contains(word)
+            || ScreenActions.gluedPressName(word, english: false) != nil
+    }
+
     private static let turkishFillers: Set<String> = ["numara", "numaraya", "numarayı", "numaralı", "numarası", "şuna", "buna"]
     private static let turkishHere: Set<String> = ["buraya", "burada", "burayı", "burası", "şuraya", "orada", "oraya"]
     private static let turkishPress: Set<String> = ["bas", "basın", "bassana", "basar", "tıkla", "tıklayın", "tıklasana", "tıklar"]
@@ -73,7 +110,9 @@ enum ScreenPointer {
             rest = Array(words.dropLast())
         }
         rest = rest.filter { !turkishFillers.contains($0) }
-        let plain = rest.map { $0.replacingOccurrences(of: "'", with: "") }
+        // "Ona bas" is "press it", "bir tıkla" is "give it a click": ten is "on'a", one is "bire".
+        if action != nil, rest == ["bir"] { rest = [] }
+        let plain = rest.map { $0.hasPrefix("on'") ? "on" : $0.replacingOccurrences(of: "'", with: "") }
 
         if drag {
             if let numbers = numbers(in: plain, table: turkishNumbers, tens: turkishTens), numbers.count == 2 {
@@ -242,7 +281,7 @@ enum ScreenPointer {
         (7, ["yedi", "yediye", "yediyi", "yedinin", "yediden"]),
         (8, ["sekiz", "sekize", "sekizi", "sekizin", "sekizden"]),
         (9, ["dokuz", "dokuza", "dokuzu", "dokuzun", "dokuzdan"]),
-        (10, ["on", "ona", "onu", "onun", "ondan"]),
+        (10, ["on"]),
         (20, ["yirmi", "yirmiye", "yirmiyi", "yirminin", "yirmiden"]),
         (30, ["otuz", "otuza", "otuzu", "otuzun", "otuzdan"]),
         (40, ["kırk", "kırka", "kırkı", "kırkın", "kırktan"]),

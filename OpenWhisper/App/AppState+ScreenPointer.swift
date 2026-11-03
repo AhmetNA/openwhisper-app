@@ -17,7 +17,8 @@ extension AppState {
     func runPointerCommand(_ command: PointerCommand, session: RecordingTranscriptionSession, app: NSRunningApplication) async -> PointerOutcome {
         let inMode = screenModeActive && session.followsCommand
         let started = CACurrentMediaTime()
-        func finish(_ outcome: String, message: String?) -> PointerOutcome {
+        func finish(_ outcome: String, message: String?, changesScreen: Bool = true) -> PointerOutcome {
+            screenOverlayHoldsNumbers = !changesScreen
             session.latency.finishDecision(route: "ekran modu, fare")
             logScreenStep(session, outcome, startedAt: started, [("fare adımı", CACurrentMediaTime() - started)])
             if let message { showFlowBarMessage(message, durationMs: 1500) }
@@ -36,11 +37,11 @@ extension AppState {
         switch command {
         case .open:
             owLog("[Pointer] Screen mode opened by voice")
-            return finish("açıldı", message: L("Ekran modu açık", "Screen mode on"))
+            return finish("açıldı", message: L("Ekran modu açık", "Screen mode on"), changesScreen: false)
 
         case .showNumbers:
             guard showScreenNumbers(in: app) else { return miss(L("Numaralanacak bir şey yok, ızgarayı deneyin", "Nothing to number, try the grid")) }
-            return finish("numaralar gösterildi", message: nil)
+            return finish("numaralar gösterildi", message: nil, changesScreen: false)
 
         case .showGrid(let fullScreen):
             guard let rect = gridArea(of: app, fullScreen: fullScreen) else { return miss(L("Izgara açılamadı", "Couldn't show the grid")) }
@@ -58,7 +59,7 @@ extension AppState {
                 guard owner.processIdentifier == app.processIdentifier else { return miss(L("Ekran değişti", "The screen changed")) }
                 guard targets.indices.contains(number - 1) else { return miss(L("\(number) numara yok", "There's no number \(number)")) }
                 let pressed = act(action ?? .press, on: targets[number - 1])
-                return pressed ? finish("\(number) numara", message: "\(number) ✓") : miss(L("Basılamadı", "Couldn't press it"))
+                return pressed ? finish("\(number) numara", message: "\(number) ✓", changesScreen: action != .hover) : miss(L("Basılamadı", "Couldn't press it"))
             case .grid(let rect):
                 guard let cell = ScreenPointer.gridCell(number, in: rect) else { return miss(L("\(number) numara yok", "There's no number \(number)")) }
                 if action == nil, !ScreenPointer.isLastGridLevel(cell) {
@@ -81,7 +82,7 @@ extension AppState {
                 return miss(L("Ekranda “\(name)” bulamadım", "I couldn't find “\(name)” on screen"))
             }
             perform(action, at: point)
-            return finish("adıyla", message: "“\(name)” ✓")
+            return finish("adıyla", message: "“\(name)” ✓", changesScreen: action != .hover)
 
         case .here(let action):
             var point = ScreenPointer.location
@@ -90,7 +91,7 @@ extension AppState {
                 hideScreenOverlay()
             }
             perform(action, at: point)
-            return finish("imlecin yerinde", message: "✓")
+            return finish("imlecin yerinde", message: "✓", changesScreen: action != .hover)
 
         case .dragNumbers(let from, let to):
             guard let start = overlayPoint(from), let end = overlayPoint(to) else { return miss(L("Bu numaralar yok", "Those numbers don't exist")) }
@@ -114,7 +115,7 @@ extension AppState {
                 hideScreenOverlay()
             }
             ScreenPointer.move(to: CGPoint(x: point.x + dx, y: point.y + dy))
-            return finish("imleç oynadı", message: nil)
+            return finish("imleç oynadı", message: nil, changesScreen: false)
         }
     }
 
@@ -224,12 +225,14 @@ extension AppState {
 
     func hideScreenOverlay() {
         screenOverlayRefresh?.cancel()
+        screenOverlayHoldsNumbers = false
         screenOverlayState = nil
         screenOverlay.hide()
     }
 
     /// After a step the screen has changed (a new page, a scroll): numbers are read again once
-    /// it settled. Never on a timer, so a number never changes while it is being said.
+    /// it settled. Never on a timer or after a step that left the screen alone, so a number
+    /// doesn't change while it is being said.
     func refreshScreenNumbers(after delay: Duration = .milliseconds(600)) {
         guard case .numbers = screenOverlayState else { return }
         screenOverlayRefresh?.cancel()

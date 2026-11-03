@@ -688,6 +688,8 @@ final class AppState {
     @ObservationIgnored let screenOverlay = ScreenOverlayController()
     @ObservationIgnored var screenOverlayState: ScreenOverlayState?
     @ObservationIgnored var screenOverlayRefresh: Task<Void, Never>?
+    /// The last step left the screen alone (a hover, the numbers themselves): they stay as read.
+    @ObservationIgnored var screenOverlayHoldsNumbers = false
     @ObservationIgnored var screenOverlayFrontObserver: NSObjectProtocol?
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
