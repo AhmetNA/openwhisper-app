@@ -58,11 +58,15 @@ extension AppState {
 
     /// "WhatsApp · 3 mesaj · 2 kişi" and the names under the screen. Silent on purpose: no voice,
     /// no listening, so music keeps playing and the mic is left alone. Not while WhatsApp is in
-    /// front (the user sees it); kept for after the unlock while the screen is locked.
+    /// front (the user sees it) or a Focus is on; kept for after the unlock while the screen is locked.
     func announceWhatsApp(_ announcement: WhatsAppWatcher.Announcement) async {
         guard whatsAppAnnouncementsEnabled else { return }
         if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == WhatsAppSender.bundleIdentifier {
             owLog("[WhatsApp] announcement skipped: WhatsApp is in front")
+            return
+        }
+        if FocusStatus.isOn {
+            owLog("[WhatsApp] announcement skipped: Focus is on")
             return
         }
         if RemoteControl.screenIsLocked {
