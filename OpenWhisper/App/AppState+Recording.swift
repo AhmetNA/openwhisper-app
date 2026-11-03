@@ -7,30 +7,23 @@ import UserNotifications
 import QuartzCore
 import os
 
+/// What the target-speaker gate's result means for one transcription batch.
+private struct BatchGate {
+    let isFailClosedPassthrough: Bool
+    let isAmbiguousTargetMatch: Bool
+    let isSingleSpeakerUncertain: Bool
+    let isBelowThresholdRejection: Bool
+    let shouldUseDiarization: Bool
+    let skipsScreenStepDiarization: Bool
+}
+
 extension AppState {
     func startRecording() {
         recordingPreviewTask?.cancel()
         let tStart = CACurrentMediaTime()
         let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
         owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
-        // A new command cuts Jarvis off, and his voice must not end up in the recording. Not a
-        // command follow-up opened over his reply: it listens while he finishes.
-        if !(hotkey?.trigger == .followUp && commandFollowUpOverReply) { JarvisVoice.shared.stop() }
-
-        if targetSpeakerEnrollmentActive {
-            if targetSpeakerEnrollmentIsRecording {
-                stopTargetSpeakerEnrollmentRecording()
-            } else {
-                startTargetSpeakerEnrollmentRecording()
-            }
-            return
-        }
-        // Cancel any pending tail-stop work item and finish previous recording if a new recording starts immediately
-        if delayedStopWorkItem != nil {
-            delayedStopWorkItem?.cancel()
-            delayedStopWorkItem = nil
-            stopRecording()
-        }
+        guard prepareForNewRecording() else { return }
 
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
         armVoiceAutoStopForNextRecording = false
@@ -105,21 +98,15 @@ extension AppState {
         // work (flow bar appearance, NSWorkspace query) gets a chance to occupy the main thread
         // and delay this dispatch. Read everything the background block needs up front so the
         // dispatch itself has zero main-thread work between it and the guards above.
-        let processingMode: AudioProcessingMode
         let bypassProcessing = bypassAudioProcessing
         // Also on the raw mic: it only takes out what the Mac plays; DeepFilter and gain stay off.
         let echoCancellation = recordingEchoCancellationWanted(mic: recordingMic)
-        // Decided once here for the whole recording, never switched while it runs.
-        if bypassProcessing {
-            processingMode = .off
-            activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "unprocessed")
-        } else {
-            processingMode = decideDeepFilter(
-                inputDeviceUID: recordingInputDeviceUID,
-                inputIsBluetooth: recordingInputIsBluetooth,
-                echoCancellation: echoCancellation
-            ) ? .deepFilterNet : .off
-        }
+        let processingMode = decideProcessingMode(
+            bypassProcessing: bypassProcessing,
+            inputDeviceUID: recordingInputDeviceUID,
+            inputIsBluetooth: recordingInputIsBluetooth,
+            echoCancellation: echoCancellation
+        )
         let sessionID = nextTranscriptionID &+ 1
         let playbackHeard = OSAllocatedUnfairLock(initialState: false)
         let audioEngineRef = audioEngine
@@ -135,6 +122,106 @@ extension AppState {
         // instead of restarting the hardware; after "Hey Jarvis" the audio since the wake comes
         // along, so a command said without a pause keeps its first words. Taken here, before
         // `recordingState` below stops the listener.
+        let (captureHandoff, canRecord) = claimWakeCapture(
+            wakeLikeSession: wakeLikeSession, trigger: recordingTrigger, deviceUID: recordingInputDeviceUID,
+            echoCancellation: echoCancellation, deferredWake: deferredWake, audioEngine: audioEngineRef
+        )
+        guard canRecord else { return }
+
+        launchMicCapture(
+            audioEngine: audioEngineRef, deviceUID: recordingInputDeviceUID, processingMode: processingMode,
+            bypassProcessing: bypassProcessing, sampleCallback: endpointSampleCallback,
+            echoCancellation: echoCancellation, playbackHeard: playbackHeard, handoff: captureHandoff,
+            waitsForLinkAudio: waitsForLinkAudio, sessionID: sessionID
+        )
+
+        // 2. Update recordingState so flow bar UI appears
+        showRecordingStarted(sessionID: sessionID, waitsForLinkAudio: waitsForLinkAudio)
+
+        // Save the currently focused app (instant NSWorkspace query)
+        targetApp = NSWorkspace.shared.frontmostApplication
+        owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
+        AppFocus.current = AppFocus(app: targetApp, entries: SoundAlikeCorrector.loadEntries())
+
+        // 3. Create session immediately with non-blocking initial context (AX details captured in background)
+        nextTranscriptionID &+= 1
+        let initialContext = PasteContext.initial(targetApp: targetApp)
+        let session = RecordingTranscriptionSession(
+            id: nextTranscriptionID,
+            targetApp: targetApp,
+            // Runs on the raw mic too: on 30 raw external-mic recordings (29 Oct 2026) the profile
+            // scored the same as on their DeepFilter copies (median 0.58 vs 0.58).
+            targetSpeakerEnabled: targetSpeakerFiltersTranscription && sessionProfile != nil,
+            targetSpeakerProfile: sessionProfile,
+            pasteContext: initialContext
+        )
+        captureDestination(for: session, sessionID: sessionID)
+        configure(
+            session, bypassProcessing: bypassProcessing, armVoiceAutoStop: armVoiceAutoStop, trigger: recordingTrigger,
+            mic: recordingMic, pausesMedia: pausesMedia, claudeMessage: claudeMessage, commandFollowUp: commandFollowUp,
+            overReply: overReply, echoCancellation: echoCancellation, playbackHeard: playbackHeard
+        )
+        activeTranscriptionSession = session
+        pendingTranscriptionCount += 1
+
+        startTranscriptionQueue(for: session)
+
+        // 4. Start duration timer
+        startRecordingTimer()
+
+        // Dictation snapshot reset (instant if no active snapshot)
+        DictationSnapshot.shared.handleNewDictationStarting()
+    }
+
+    /// False when the key press was used up by voice-profile enrollment.
+    private func prepareForNewRecording() -> Bool {
+        // A new command cuts Jarvis off, and his voice must not end up in the recording. Not a
+        // command follow-up opened over his reply: it listens while he finishes.
+        if !(hotkey?.trigger == .followUp && commandFollowUpOverReply) { JarvisVoice.shared.stop() }
+
+        if targetSpeakerEnrollmentActive {
+            if targetSpeakerEnrollmentIsRecording {
+                stopTargetSpeakerEnrollmentRecording()
+            } else {
+                startTargetSpeakerEnrollmentRecording()
+            }
+            return false
+        }
+        // Cancel any pending tail-stop work item and finish previous recording if a new recording starts immediately
+        if delayedStopWorkItem != nil {
+            delayedStopWorkItem?.cancel()
+            delayedStopWorkItem = nil
+            stopRecording()
+        }
+        return true
+    }
+
+    private func decideProcessingMode(
+        bypassProcessing: Bool,
+        inputDeviceUID recordingInputDeviceUID: String?,
+        inputIsBluetooth recordingInputIsBluetooth: Bool,
+        echoCancellation: Bool
+    ) -> AudioProcessingMode {
+        // Decided once here for the whole recording, never switched while it runs.
+        if bypassProcessing {
+            activeDeepFilterDecision = DeepFilterDecision(enabled: false, reason: "unprocessed")
+            return .off
+        }
+        return decideDeepFilter(
+            inputDeviceUID: recordingInputDeviceUID,
+            inputIsBluetooth: recordingInputIsBluetooth,
+            echoCancellation: echoCancellation
+        ) ? .deepFilterNet : .off
+    }
+
+    private func claimWakeCapture(
+        wakeLikeSession: Bool,
+        trigger recordingTrigger: RecordingTrigger,
+        deviceUID recordingInputDeviceUID: String?,
+        echoCancellation: Bool,
+        deferredWake: PendingWhisperWake?,
+        audioEngine audioEngineRef: AudioEngine?
+    ) -> (handoff: WakeCaptureHandoff?, canRecord: Bool) {
         let captureHandoff: WakeCaptureHandoff? = wakeLikeSession
             ? wakeWordListener?.handOffCapture(
                 toDeviceID: recordingInputDeviceUID.flatMap(AudioEngine.audioDeviceID(forUID:)) ?? AudioEngine.defaultInputDeviceID(),
@@ -147,7 +234,7 @@ extension AppState {
                 captureHandoff?.echo?.release()
                 cancelPendingWhisperWake(reason: "buffered microphone unavailable", falseWake: true)
                 hotkey?.externalCancelHandsFree()
-                return
+                return (nil, false)
             }
             consumePendingWhisperWake(deferredWake)
         }
@@ -155,7 +242,21 @@ extension AppState {
             captureHandoff?.capture.stop()
             captureHandoff?.echo?.release()
         }
+        return (captureHandoff, true)
+    }
 
+    private func launchMicCapture(
+        audioEngine audioEngineRef: AudioEngine?,
+        deviceUID recordingInputDeviceUID: String?,
+        processingMode: AudioProcessingMode,
+        bypassProcessing: Bool,
+        sampleCallback endpointSampleCallback: (([Float]) -> Void)?,
+        echoCancellation: Bool,
+        playbackHeard: OSAllocatedUnfairLock<Bool>,
+        handoff captureHandoff: WakeCaptureHandoff?,
+        waitsForLinkAudio: Bool,
+        sessionID: UInt64
+    ) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let didFallBackFromDeepFilter = audioEngineRef?.startRecording(
                 deviceUID: recordingInputDeviceUID,
@@ -195,8 +296,9 @@ extension AppState {
                 }
             }
         }
+    }
 
-        // 2. Update recordingState so flow bar UI appears
+    private func showRecordingStarted(sessionID: UInt64, waitsForLinkAudio: Bool) {
         recordingInputReady = !waitsForLinkAudio
         if waitsForLinkAudio {
             // A link that never delivers audio must not leave the bar on "connecting".
@@ -215,24 +317,9 @@ extension AppState {
         recordingDuration = 0
         audioLevel = 0
         lastError = nil
+    }
 
-        // Save the currently focused app (instant NSWorkspace query)
-        targetApp = NSWorkspace.shared.frontmostApplication
-        owLog("[OpenWhisper] Target app: \(targetApp?.localizedName ?? "unknown")")
-        AppFocus.current = AppFocus(app: targetApp, entries: SoundAlikeCorrector.loadEntries())
-
-        // 3. Create session immediately with non-blocking initial context (AX details captured in background)
-        nextTranscriptionID &+= 1
-        let initialContext = PasteContext.initial(targetApp: targetApp)
-        let session = RecordingTranscriptionSession(
-            id: nextTranscriptionID,
-            targetApp: targetApp,
-            // Runs on the raw mic too: on 30 raw external-mic recordings (29 Oct 2026) the profile
-            // scored the same as on their DeepFilter copies (median 0.58 vs 0.58).
-            targetSpeakerEnabled: targetSpeakerFiltersTranscription && sessionProfile != nil,
-            targetSpeakerProfile: sessionProfile,
-            pasteContext: initialContext
-        )
+    private func captureDestination(for session: RecordingTranscriptionSession, sessionID: UInt64) {
         // Start destination capture before the remaining microphone/UI setup.
         // Keep AX IPC off the hotkey callback thread.
         let currentTargetApp = targetApp
@@ -261,6 +348,21 @@ extension AppState {
             self.caretLookupPending = false
             self.syncFlowBarVisibility()
         }
+    }
+
+    private func configure(
+        _ session: RecordingTranscriptionSession,
+        bypassProcessing: Bool,
+        armVoiceAutoStop: Bool,
+        trigger recordingTrigger: RecordingTrigger,
+        mic recordingMic: TargetSpeakerMic,
+        pausesMedia: Bool,
+        claudeMessage: Bool,
+        commandFollowUp: CommandFollowUp.Domain??,
+        overReply: Bool,
+        echoCancellation: Bool,
+        playbackHeard: OSAllocatedUnfairLock<Bool>
+    ) {
         session.bypassAudioProcessing = bypassProcessing
         session.previewEndpointDetector = smartTurnEndpointDetector
         owLog("[AudioProcessing] session=\(session.id) unprocessed=\(bypassProcessing)")
@@ -288,18 +390,6 @@ extension AppState {
             session.wakeClipID = pendingWakeClipID
             pendingWakeClipID = nil
         }
-        activeTranscriptionSession = session
-        pendingTranscriptionCount += 1
-
-        startTranscriptionQueue(for: session)
-
-        // 4. Start duration timer
-        startRecordingTimer()
-
-        // Dictation snapshot reset (instant if no active snapshot)
-        DictationSnapshot.shared.handleNewDictationStarting()
-
-
     }
 
     /// Sets up the voice auto-stop for a new recording: the level detector, and Smart Turn
@@ -649,18 +739,65 @@ extension AppState {
             }
         }
 
-        // Three distinct outcomes once the target-speaker gate is in play -- kept as separate
-        // booleans (rather than folded into one branch) so the fail-closed path and the
-        // below-threshold path can never accidentally share behavior:
-        //   1. wasFailClosed: the gate itself errored (nil/incompatible profile, model
-        //      preparation/embedding failure). It made no decision at all, so a transient
-        //      failure must not cost the user their dictation -- treat exactly like the
-        //      feature-disabled path below.
-        //   2. below-threshold rejection: the gate ran fine and decided this isn't the target
-        //      speaker. Still transcribe (unless there was no voice at all) so the text can be
-        //      salvaged onto the clipboard, but keep it out of `segmentTexts` -- it must never
-        //      reach the normal paste/post-processing path.
-        //   3. accepted (or feature disabled): existing normal path.
+        let gate = gateDecision(for: filtered, session: session)
+        let isFailClosedPassthrough = gate.isFailClosedPassthrough
+        let isBelowThresholdRejection = gate.isBelowThresholdRejection
+        let shouldUseDiarization = gate.shouldUseDiarization
+
+        guard await admitBatch(
+            segment, filtered: filtered, gate: gate, segmentNumber: segmentNumber, session: session,
+            transcriber: transcriber, speakerLogIndex: speakerLogIndex
+        ) else { return }
+
+        do {
+            let segmentText: String
+            if shouldUseDiarization {
+                guard let diarizedText = try await transcribeDiarized(
+                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                    transcriber: transcriber, isAmbiguousTargetMatch: gate.isAmbiguousTargetMatch,
+                    speakerLogIndex: speakerLogIndex
+                ) else { return }
+                segmentText = diarizedText
+            } else {
+                segmentText = try await transcribeMasked(
+                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
+                    transcriber: transcriber, useOriginalAudio: isFailClosedPassthrough || isBelowThresholdRejection
+                )
+            }
+            guard !session.isCancelled else { return }
+            owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
+            guard !segmentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            session.allSegmentTexts.append(segmentText)
+            noteBatchText(segmentText, gate: gate, session: session, speakerLogIndex: speakerLogIndex)
+            if isBelowThresholdRejection {
+                session.unmatchedSegmentTexts.append(segmentText)
+            } else {
+                session.segmentTexts.append(segmentText)
+            }
+        } catch {
+            guard !session.isCancelled else { return }
+            owLog("[OpenWhisper] Background batch \(segmentNumber) failed: \(error)")
+            noteSpeakers { $0.notes.append("Whisper failed: \(error)") }
+            lastError = error.localizedDescription
+        }
+    }
+
+    // Three distinct outcomes once the target-speaker gate is in play -- kept as separate
+    // booleans (rather than folded into one branch) so the fail-closed path and the
+    // below-threshold path can never accidentally share behavior:
+    //   1. wasFailClosed: the gate itself errored (nil/incompatible profile, model
+    //      preparation/embedding failure). It made no decision at all, so a transient
+    //      failure must not cost the user their dictation -- treat exactly like the
+    //      feature-disabled path below.
+    //   2. below-threshold rejection: the gate ran fine and decided this isn't the target
+    //      speaker. Still transcribe (unless there was no voice at all) so the text can be
+    //      salvaged onto the clipboard, but keep it out of `segmentTexts` -- it must never
+    //      reach the normal paste/post-processing path.
+    //   3. accepted (or feature disabled): existing normal path.
+    private func gateDecision(
+        for filtered: TargetSpeakerFilterResult,
+        session: RecordingTranscriptionSession
+    ) -> BatchGate {
         let isFailClosedPassthrough = session.targetSpeakerEnabled && filtered.wasFailClosed
         let isAmbiguousTargetMatch = session.targetSpeakerEnabled
             && !filtered.wasFailClosed
@@ -699,18 +836,37 @@ extension AppState {
         let isBelowThresholdRejection = session.targetSpeakerEnabled
             && !filtered.wasFailClosed
             && (filtered.decision == .rejected || filtered.decision == .noVoice)
+        return BatchGate(
+            isFailClosedPassthrough: isFailClosedPassthrough, isAmbiguousTargetMatch: isAmbiguousTargetMatch,
+            isSingleSpeakerUncertain: isSingleSpeakerUncertain, isBelowThresholdRejection: isBelowThresholdRejection,
+            shouldUseDiarization: shouldUseDiarization, skipsScreenStepDiarization: skipsScreenStepDiarization
+        )
+    }
 
+    /// False when the batch ends here and is not transcribed by the normal path.
+    private func admitBatch(
+        _ segment: CompletedAudioSegment,
+        filtered: TargetSpeakerFilterResult,
+        gate: BatchGate,
+        segmentNumber: Int,
+        session: RecordingTranscriptionSession,
+        transcriber: WhisperTranscriptionService,
+        speakerLogIndex: Int?
+    ) async -> Bool {
+        let (isAmbiguousTargetMatch, shouldUseDiarization) = (gate.isAmbiguousTargetMatch, gate.shouldUseDiarization)
+        let (isSingleSpeakerUncertain, isBelowThresholdRejection) = (gate.isSingleSpeakerUncertain, gate.isBelowThresholdRejection)
+        let isFailClosedPassthrough = gate.isFailClosedPassthrough
         if isAmbiguousTargetMatch {
             session.hadAmbiguousTargetSpeech = true
             guard filtered.hadVoiceActivity else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) has no voice activity; Whisper skipped")
-                noteSpeakers { $0.notes.append("no voice activity, Whisper skipped") }
-                return
+                noteSpeakerBatch(session, at: speakerLogIndex) { $0.notes.append("no voice activity, Whisper skipped") }
+                return false
             }
             guard shouldUseDiarization else {
                 owLog("[OpenWhisper] Batch \(segmentNumber) ambiguous speech withheld because diarization is not ready")
-                noteSpeakers { $0.notes.append("ambiguous speech withheld, not transcribed (diarization not ready)") }
-                return
+                noteSpeakerBatch(session, at: speakerLogIndex) { $0.notes.append("ambiguous speech withheld, not transcribed (diarization not ready)") }
+                return false
             }
             owLog("[OpenWhisper] Batch \(segmentNumber) has unresolved target-speaker ambiguity; trying timed overlap filtering")
         } else if isSingleSpeakerUncertain {
@@ -719,60 +875,40 @@ extension AppState {
                 segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
                 transcriber: transcriber, speakerLogIndex: speakerLogIndex
             )
-            return
+            return false
         } else if isBelowThresholdRejection {
             guard await keepRejectedBatchForSalvage(
                 segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
                 transcriber: transcriber, speakerLogIndex: speakerLogIndex
-            ) else { return }
+            ) else { return false }
         } else if isFailClosedPassthrough {
             owLog("[OpenWhisper] Batch \(segmentNumber) target-speaker gate failed closed; transcribing as normal dictation")
         }
+        return true
+    }
 
-        do {
-            let segmentText: String
-            if shouldUseDiarization {
-                guard let diarizedText = try await transcribeDiarized(
-                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
-                    transcriber: transcriber, isAmbiguousTargetMatch: isAmbiguousTargetMatch,
-                    speakerLogIndex: speakerLogIndex
-                ) else { return }
-                segmentText = diarizedText
+    private func noteBatchText(
+        _ segmentText: String,
+        gate: BatchGate,
+        session: RecordingTranscriptionSession,
+        speakerLogIndex: Int?
+    ) {
+        let (isBelowThresholdRejection, isFailClosedPassthrough) = (gate.isBelowThresholdRejection, gate.isFailClosedPassthrough)
+        let (skipsScreenStepDiarization, shouldUseDiarization) = (gate.skipsScreenStepDiarization, gate.shouldUseDiarization)
+        let trimmedSegmentText = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        noteSpeakerBatch(session, at: speakerLogIndex) { entry in
+            if isBelowThresholdRejection {
+                entry.othersText = trimmedSegmentText
             } else {
-                segmentText = try await transcribeMasked(
-                    segment, filtered: filtered, segmentNumber: segmentNumber, session: session,
-                    transcriber: transcriber, useOriginalAudio: isFailClosedPassthrough || isBelowThresholdRejection
-                )
-            }
-            guard !session.isCancelled else { return }
-            owLog("[OpenWhisper] Batch \(segmentNumber) overlap=\(segment.overlapSampleCount) samples text=\(segmentText)")
-            guard !segmentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            session.allSegmentTexts.append(segmentText)
-            let trimmedSegmentText = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
-            noteSpeakers { entry in
-                if isBelowThresholdRejection {
-                    entry.othersText = trimmedSegmentText
-                } else {
-                    entry.ownText = trimmedSegmentText
-                    if isFailClosedPassthrough {
-                        entry.notes.append("filter error — whole text kept as normal dictation, not split")
-                    } else if skipsScreenStepDiarization && entry.levels.others.seconds >= 0.3 {
-                        entry.notes.append("other voices masked out, their words not transcribed (screen step, diarization skipped)")
-                    } else if !shouldUseDiarization && entry.levels.others.seconds >= 0.3 {
-                        entry.notes.append("other voices masked out, their words not transcribed (diarization not ready)")
-                    }
+                entry.ownText = trimmedSegmentText
+                if isFailClosedPassthrough {
+                    entry.notes.append("filter error — whole text kept as normal dictation, not split")
+                } else if skipsScreenStepDiarization && entry.levels.others.seconds >= 0.3 {
+                    entry.notes.append("other voices masked out, their words not transcribed (screen step, diarization skipped)")
+                } else if !shouldUseDiarization && entry.levels.others.seconds >= 0.3 {
+                    entry.notes.append("other voices masked out, their words not transcribed (diarization not ready)")
                 }
             }
-            if isBelowThresholdRejection {
-                session.unmatchedSegmentTexts.append(segmentText)
-            } else {
-                session.segmentTexts.append(segmentText)
-            }
-        } catch {
-            guard !session.isCancelled else { return }
-            owLog("[OpenWhisper] Background batch \(segmentNumber) failed: \(error)")
-            noteSpeakers { $0.notes.append("Whisper failed: \(error)") }
-            lastError = error.localizedDescription
         }
     }
 

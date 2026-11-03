@@ -940,32 +940,11 @@ final class TargetSpeakerFilter: @unchecked Sendable {
             var confirmationCandidate: TargetSpeakerConfirmationCandidate?
 
             if hasAbsoluteStrongWindow {
-                // Preserve the established absolute path exactly: strong windows pass, nearby
-                // uncertain windows can bridge a tone change, and an unresolved/rejected window
-                // keeps the overall result partial or ambiguous rather than being promoted by a
-                // relative anchor.
-                for run in scoredRuns {
-                    let strongWindows = run.windows.filter { $0.classification == .strong }
-                    for window in run.windows {
-                        switch window.classification {
-                        case .strong:
-                            acceptedUtterances.append(window.range)
-                        case .uncertain:
-                            hadUncertainWindow = true
-                            if Self.canPromoteUncertainWindow(
-                                window,
-                                strongWindows: strongWindows,
-                                tuning: tuning
-                            ) {
-                                acceptedUtterances.append(window.range)
-                            } else {
-                                hadUnresolvedUncertainWindow = true
-                            }
-                        case .reject:
-                            hadStrongRejectWindow = true
-                        }
-                    }
-                }
+                let absolute = Self.absoluteClassification(scoredRuns, tuning: tuning)
+                acceptedUtterances = absolute.accepted
+                hadUncertainWindow = absolute.hadUncertain
+                hadUnresolvedUncertainWindow = absolute.hadUnresolved
+                hadStrongRejectWindow = absolute.hadStrongReject
             } else if !allScoredWindows.isEmpty {
                 let relative = Self.relativeClassification(
                     samples: samples,
@@ -977,29 +956,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
             }
 
             if confirmationCandidate == nil && !allScoredWindows.isEmpty {
-                let candidateWindows = allScoredWindows.map {
-                    TargetSpeakerConfirmationWindow(
-                        startSample: $0.range.start,
-                        endSample: $0.range.end,
-                        profileScore: $0.score,
-                        anchorSimilarity: $0.score,
-                        classification: $0.classification == .reject ? .other : .target
-                    )
-                }
-                let anchorScore = allScoredWindows.map(\.score).max() ?? 0
-                let candidateSamples = Self.mask(
-                    samples: samples,
-                    accepted: allScoredWindows.map { (start: $0.range.start, end: $0.range.end) }
-                )
-                let candidateAudio = candidateSamples.isEmpty ? samples : candidateSamples
-                confirmationCandidate = TargetSpeakerConfirmationCandidate(
-                    samples: candidateAudio,
-                    windows: candidateWindows,
-                    internalCoherence: Self.recordingCoherence(allScoredWindows.map(\.embedding)),
-                    anchorProfileScore: anchorScore,
-                    separation: nil,
-                    separationReason: "single-utterance candidate fallback"
-                )
+                confirmationCandidate = Self.fallbackConfirmationCandidate(samples: samples, windows: allScoredWindows)
             }
 
             for run in scoredRuns {
@@ -1028,64 +985,21 @@ final class TargetSpeakerFilter: @unchecked Sendable {
             } else {
                 // Do not merge short runs before identity decisions. A short run can be retained
                 // only after a neighboring long target utterance has already been accepted.
-                for (index, run) in voiceRuns.enumerated()
-                where run.end - run.start < TargetSpeakerFilterConfiguration.speakerWindowSamples {
-                    let adjacent = acceptedUtterances.contains { accepted in
-                        let gapBefore = accepted.start - run.end
-                        let gapAfter = run.start - accepted.end
-                        return (gapBefore >= 0 && gapBefore <= TargetSpeakerFilterConfiguration.shortAdjacencySamples)
-                            || (gapAfter >= 0 && gapAfter <= TargetSpeakerFilterConfiguration.shortAdjacencySamples)
-                    }
-                    if adjacent {
-                        acceptedUtterances.append(run)
-                        Self.logRescuedShortRun(index: index, run: run)
-                    } else {
-                        Self.logDroppedShortRun(index: index, run: run)
-                    }
-                }
+                Self.rescueShortRuns(voiceRuns, into: &acceptedUtterances)
             }
 
-            let decision: TargetSpeakerFilterDecision
-            if shortBypassApplies {
-                decision = .accepted
-            } else if let relativeDecision {
-                decision = relativeDecision
-            } else if acceptedUtterances.isEmpty {
-                decision = hadUncertainWindow ? .ambiguous : .rejected
-            } else if hadUnresolvedUncertainWindow {
-                decision = .ambiguous
-            } else if hadStrongRejectWindow {
-                decision = .partial
-            } else {
-                decision = .accepted
-            }
-
-            let mergedAccepted = Self.merge(acceptedUtterances, adjacency: TargetSpeakerFilterConfiguration.shortAdjacencySamples)
-            let paddedAccepted = Self.merge(
-                mergedAccepted.map {
-                    SampleRange(
-                        start: max(0, $0.start - TargetSpeakerFilterConfiguration.acceptedPaddingSamples),
-                        end: min(samples.count, $0.end + TargetSpeakerFilterConfiguration.acceptedPaddingSamples)
-                    )
-                },
-                adjacency: 0
+            let decision = Self.finalDecision(
+                shortBypass: shortBypassApplies, relative: relativeDecision, hasAccepted: !acceptedUtterances.isEmpty,
+                hadUncertain: hadUncertainWindow, hadUnresolved: hadUnresolvedUncertainWindow, hadStrongReject: hadStrongRejectWindow
             )
+
+            let paddedAccepted = Self.paddedRanges(acceptedUtterances, sampleCount: samples.count)
             let masked = Self.mask(
                 samples: samples,
                 accepted: paddedAccepted.map { (start: $0.start, end: $0.end) }
             )
             let acceptedSampleCount = paddedAccepted.reduce(0) { $0 + ($1.end - $1.start) }
-            let decisionText: String
-            switch decision {
-            case .disabled: decisionText = "DISABLED"
-            case .accepted: decisionText = shortBypassApplies ? "SHORT_BYPASS" : "ACCEPT"
-            case .partial: decisionText = "PARTIAL"
-            case .ambiguous: decisionText = "AMBIGUOUS"
-            case .singleSpeakerUncertain: decisionText = "SINGLE_SPEAKER_UNCERTAIN"
-            case .rejected: decisionText = "REJECT"
-            case .noVoice: decisionText = "NO_VOICE"
-            case .failClosed: decisionText = "FAIL_CLOSED"
-            }
+            let decisionText = Self.decisionText(decision, shortBypass: shortBypassApplies)
             Self.logSummary(
                 samples: samples, voiceRunCount: voiceRuns.count, scoredRunCount: scoredRunCount,
                 acceptedSampleCount: acceptedSampleCount,
@@ -1114,6 +1028,138 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                 tuning: tuning, startTime: startTime
             )
             return Self.failClosed(samples: samples, error: error.localizedDescription)
+        }
+    }
+    private static func finalDecision(
+        shortBypass: Bool,
+        relative: TargetSpeakerFilterDecision?,
+        hasAccepted: Bool,
+        hadUncertain: Bool,
+        hadUnresolved: Bool,
+        hadStrongReject: Bool
+    ) -> TargetSpeakerFilterDecision {
+        if shortBypass {
+            return .accepted
+        } else if let relative {
+            return relative
+        } else if !hasAccepted {
+            return hadUncertain ? .ambiguous : .rejected
+        } else if hadUnresolved {
+            return .ambiguous
+        } else if hadStrongReject {
+            return .partial
+        } else {
+            return .accepted
+        }
+    }
+
+    private static func paddedRanges(_ acceptedUtterances: [SampleRange], sampleCount: Int) -> [SampleRange] {
+        let mergedAccepted = merge(acceptedUtterances, adjacency: TargetSpeakerFilterConfiguration.shortAdjacencySamples)
+        return merge(
+            mergedAccepted.map {
+                SampleRange(
+                    start: max(0, $0.start - TargetSpeakerFilterConfiguration.acceptedPaddingSamples),
+                    end: min(sampleCount, $0.end + TargetSpeakerFilterConfiguration.acceptedPaddingSamples)
+                )
+            },
+            adjacency: 0
+        )
+    }
+
+    private static func absoluteClassification(
+        _ scoredRuns: [(index: Int, windows: [ScoredWindow])],
+        tuning: TargetSpeakerTuning
+    ) -> (accepted: [SampleRange], hadUncertain: Bool, hadUnresolved: Bool, hadStrongReject: Bool) {
+        var accepted: [SampleRange] = []
+        var hadUncertain = false
+        var hadUnresolved = false
+        var hadStrongReject = false
+        // Preserve the established absolute path exactly: strong windows pass, nearby
+        // uncertain windows can bridge a tone change, and an unresolved/rejected window
+        // keeps the overall result partial or ambiguous rather than being promoted by a
+        // relative anchor.
+        for run in scoredRuns {
+            let strongWindows = run.windows.filter { $0.classification == .strong }
+            for window in run.windows {
+                switch window.classification {
+                case .strong:
+                    accepted.append(window.range)
+                case .uncertain:
+                    hadUncertain = true
+                    if Self.canPromoteUncertainWindow(
+                        window,
+                        strongWindows: strongWindows,
+                        tuning: tuning
+                    ) {
+                        accepted.append(window.range)
+                    } else {
+                        hadUnresolved = true
+                    }
+                case .reject:
+                    hadStrongReject = true
+                }
+            }
+        }
+        return (accepted, hadUncertain, hadUnresolved, hadStrongReject)
+    }
+
+    private static func fallbackConfirmationCandidate(
+        samples: [Float],
+        windows allScoredWindows: [ScoredWindow]
+    ) -> TargetSpeakerConfirmationCandidate {
+        let candidateWindows = allScoredWindows.map {
+            TargetSpeakerConfirmationWindow(
+                startSample: $0.range.start,
+                endSample: $0.range.end,
+                profileScore: $0.score,
+                anchorSimilarity: $0.score,
+                classification: $0.classification == .reject ? .other : .target
+            )
+        }
+        let anchorScore = allScoredWindows.map(\.score).max() ?? 0
+        let candidateSamples = Self.mask(
+            samples: samples,
+            accepted: allScoredWindows.map { (start: $0.range.start, end: $0.range.end) }
+        )
+        let candidateAudio = candidateSamples.isEmpty ? samples : candidateSamples
+        return TargetSpeakerConfirmationCandidate(
+            samples: candidateAudio,
+            windows: candidateWindows,
+            internalCoherence: Self.recordingCoherence(allScoredWindows.map(\.embedding)),
+            anchorProfileScore: anchorScore,
+            separation: nil,
+            separationReason: "single-utterance candidate fallback"
+        )
+    }
+
+    private static func rescueShortRuns(_ voiceRuns: [SampleRange], into acceptedUtterances: inout [SampleRange]) {
+        for (index, run) in voiceRuns.enumerated()
+        where run.end - run.start < TargetSpeakerFilterConfiguration.speakerWindowSamples {
+            let adjacent = acceptedUtterances.contains { accepted in
+                let gapBefore = accepted.start - run.end
+                let gapAfter = run.start - accepted.end
+                return (gapBefore >= 0 && gapBefore <= TargetSpeakerFilterConfiguration.shortAdjacencySamples)
+                    || (gapAfter >= 0 && gapAfter <= TargetSpeakerFilterConfiguration.shortAdjacencySamples)
+            }
+            if adjacent {
+                acceptedUtterances.append(run)
+                Self.logRescuedShortRun(index: index, run: run)
+            } else {
+                Self.logDroppedShortRun(index: index, run: run)
+            }
+        }
+    }
+
+    private static func decisionText(_ decision: TargetSpeakerFilterDecision, shortBypass shortBypassApplies: Bool) -> String {
+        switch decision {
+        case .disabled: return "DISABLED"
+        case .accepted: return shortBypassApplies ? "SHORT_BYPASS" : "ACCEPT"
+        case .partial: return "PARTIAL"
+        case .ambiguous: return "AMBIGUOUS"
+        case .singleSpeakerUncertain: return "SINGLE_SPEAKER_UNCERTAIN"
+        case .rejected: return "REJECT"
+        case .noVoice: return "NO_VOICE"
+        case .failClosed: return "FAIL_CLOSED"
         }
     }
 

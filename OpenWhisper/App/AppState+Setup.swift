@@ -32,22 +32,7 @@ extension AppState {
         if launchAtLogin && SMAppService.mainApp.status != .enabled {
             try? SMAppService.mainApp.register()
         }
-        audioEngine = AudioEngine()
-        // Off the Fn-press path: DeepFilterNet's ~170ms model load happens once here instead of
-        // on first use of that mode.
-        let audioEngineForPrewarm = audioEngine
-        DispatchQueue.global(qos: .utility).async {
-            audioEngineForPrewarm?.prewarmDeepFilter()
-        }
-        llmCleanup = LLMCleanup(model: ollamaModel)
-        if damgaEnabled && language == "tr" { Task { await DamgaNormalizer.shared.prepare() } }
-        textInjector = TextInjector()
-        ClipboardHistory.shared.start()
-        flowBarController = FlowBarController(appState: self)
-        caretPenController = CaretPenController()
-        typedRequestPanel = TypedRequestPanelController(appState: self)
-        lockScreenIndicator = LockScreenIndicatorController(appState: self)
-        syncFlowBarVisibility()
+        createServices()
 
         loadTargetSpeakerProfile()
         startTargetSpeakerDiarizationPreparation()
@@ -74,6 +59,60 @@ extension AppState {
         accessibilityGranted = GlobalHotkey.checkAccessibility(prompt: true)
         owLog("[OpenWhisper] Accessibility: \(accessibilityGranted)")
 
+        installManualReviewFeedback()
+
+        registerHotkey()
+
+        // Load Whisper model
+        owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
+        if transcriptionModelRegistry.provider(for: transcriptionModel) is WhisperKitTranscriptionProvider {
+            whisperSuspendedForIdle = true
+        } else {
+            await loadModel()
+        }
+        startWhisperIdleMonitoring()
+        owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
+
+        setupWakeWordListener()
+        setupRemoteControl()
+
+        // Check Ollama availability
+        await refreshOllamaStatus()
+        owLog("[OpenWhisper] Ollama available: \(ollamaAvailable)")
+        owLog("[OpenWhisper] Selected cleanup available: \(cleanupAvailable)")
+
+        // Setup reminders
+        reminderManager = ReminderManager.shared
+        let notifGranted = await reminderManager?.requestPermission() ?? false
+        owLog("[OpenWhisper] Notification permission: \(notifGranted)")
+        setupTimers()
+        setupWhatsAppAnnouncements()
+        setupClaudePermissions()
+        owLog("[OpenWhisper] Ready!")
+        IconClassifier.warmUp()
+        wakeAccessibilityTrees()
+    }
+
+    private func createServices() {
+        audioEngine = AudioEngine()
+        // Off the Fn-press path: DeepFilterNet's ~170ms model load happens once here instead of
+        // on first use of that mode.
+        let audioEngineForPrewarm = audioEngine
+        DispatchQueue.global(qos: .utility).async {
+            audioEngineForPrewarm?.prewarmDeepFilter()
+        }
+        llmCleanup = LLMCleanup(model: ollamaModel)
+        if damgaEnabled && language == "tr" { Task { await DamgaNormalizer.shared.prepare() } }
+        textInjector = TextInjector()
+        ClipboardHistory.shared.start()
+        flowBarController = FlowBarController(appState: self)
+        caretPenController = CaretPenController()
+        typedRequestPanel = TypedRequestPanelController(appState: self)
+        lockScreenIndicator = LockScreenIndicatorController(appState: self)
+        syncFlowBarVisibility()
+    }
+
+    private func installManualReviewFeedback() {
         // Manual correction review (Option+Shift+C) feedback: DictationSnapshot deliberately
         // has no AppState/AppKit dependency, so it reports outcomes through a plain closure
         // instead. Duration varies by message — the "nothing happened" messages are shorter
@@ -85,7 +124,9 @@ extension AppState {
             let durationMs = shortMessages.contains(message) ? 2000 : 2500
             self?.showFlowBarMessage(message, durationMs: durationMs)
         }
+    }
 
+    private func registerHotkey() {
         // Register global hotkey
         hotkey = GlobalHotkey(
             onPress: { [weak self] in
@@ -148,34 +189,9 @@ extension AppState {
         }
         hotkey?.register()
         owLog("[OpenWhisper] Hotkey registered (Fn/Globe)")
+    }
 
-        // Load Whisper model
-        owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
-        if transcriptionModelRegistry.provider(for: transcriptionModel) is WhisperKitTranscriptionProvider {
-            whisperSuspendedForIdle = true
-        } else {
-            await loadModel()
-        }
-        startWhisperIdleMonitoring()
-        owLog("[OpenWhisper] Model loaded: \(modelLoaded)")
-
-        setupWakeWordListener()
-        setupRemoteControl()
-
-        // Check Ollama availability
-        await refreshOllamaStatus()
-        owLog("[OpenWhisper] Ollama available: \(ollamaAvailable)")
-        owLog("[OpenWhisper] Selected cleanup available: \(cleanupAvailable)")
-
-        // Setup reminders
-        reminderManager = ReminderManager.shared
-        let notifGranted = await reminderManager?.requestPermission() ?? false
-        owLog("[OpenWhisper] Notification permission: \(notifGranted)")
-        setupTimers()
-        setupWhatsAppAnnouncements()
-        setupClaudePermissions()
-        owLog("[OpenWhisper] Ready!")
-        IconClassifier.warmUp()
+    private func wakeAccessibilityTrees() {
         // Electron and Chromium apps build their accessibility tree only when asked, over
         // seconds: ask as they come to the front, not when "…'e bas" needs it.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,

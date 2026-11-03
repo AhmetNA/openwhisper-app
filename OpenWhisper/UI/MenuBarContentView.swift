@@ -6,164 +6,17 @@ struct MenuBarContentView: View {
     var body: some View {
         LiquidGlassContainer(spacing: 14) {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 11) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
-                    .liquidGlass(in: RoundedRectangle(cornerRadius: 11, style: .continuous), tint: Color.accentColor.opacity(0.7), clear: true, interactive: true)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Jarvis")
-                        .font(.headline)
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(statusColor)
-                            .frame(width: 6, height: 6)
-                        Text(loc(statusText))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-            }
+            header
 
             Divider()
 
-            HStack(spacing: 10) {
-                Image(systemName: appState.wakeWordBlocked ? "ear.trianglebadge.exclamationmark" : appState.wakeWordListening ? "ear.fill" : "ear")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(appState.wakeWordBlocked ? Color.orange : appState.wakeWordListening ? Color.accentColor : .secondary)
-                    .frame(width: 30, height: 30)
-                    .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Sesle başlat")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    if appState.wakeWordBlocked {
-                        Text(loc(appState.wakeWordStatus))
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 4)
-                Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .labelsHidden()
-                    .accessibilityLabel("“Jarvis” sözcüğünü dinle")
-                    .help(loc(appState.wakeWordStatus))
-            }
-            .padding(10)
-            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+            wakeWordRow
 
-            HStack(spacing: 10) {
-                Image(systemName: appState.systemAudioEnabled ? "speaker.wave.2.fill" : "speaker.wave.2")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(appState.systemAudioEnabled ? Color.accentColor : .secondary)
-                    .frame(width: 30, height: 30)
-                    .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Bilgisayar sesi")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.9)
-                    if appState.systemAudioStatus != "Kapalı" {
-                        Text(loc(appState.systemAudioIsRecording ? "Kaydediliyor" : appState.systemAudioStatus))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .help(loc(appState.systemAudioStatus))
-                    }
-                }
-                Spacer(minLength: 4)
-                Button {
-                    if appState.systemAudioEnabled {
-                        appState.stopSystemAudioListening()
-                    } else {
-                        appState.startSystemAudioListening()
-                        // Close the MenuBarExtra panel so it doesn't sit over what's being listened to.
-                        NSApp.keyWindow?.close()
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: appState.systemAudioEnabled ? "stop.fill" : "play.fill")
-                            .font(.system(size: 10, weight: .bold))
-                        Text(appState.systemAudioEnabled ? "Bitir" : "Başlat")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .liquidGlass(in: Capsule(), tint: systemAudioButtonColor, clear: true, interactive: true)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(appState.systemAudioEnabled ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini kaydetmeye başla")
-                .disabled(!appState.modelLoaded && !appState.whisperSuspendedForIdle && !appState.systemAudioEnabled)
-            }
-            .padding(10)
-            .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+            systemAudioRow
 
             TimersSection()
 
-            if let latest = appState.savedRecordings.first {
-                Divider()
-
-                Button {
-                    appState.copyRecordingTranscript(latest)
-                } label: {
-                    HStack(spacing: 11) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                            .liquidGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Son kayıt")
-                                .font(.subheadline.weight(.semibold))
-                            let previewWords = loc(latest.previewLabel).split(whereSeparator: \.isWhitespace)
-                            Text(previewWords.prefix(6).joined(separator: " ") + (previewWords.count > 6 ? "…" : ""))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .multilineTextAlignment(.leading)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "doc.on.clipboard")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
-                }
-                .buttonStyle(.plain)
-                .disabled(latest.transcript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                .help(loc("Metni kopyala"))
-
-                if appState.savedRecordings.count > 1 {
-                    Menu {
-                        ForEach(appState.savedRecordings.dropFirst()) { recording in
-                            Button(recording.menuLabel) {
-                                appState.replayRecording(recording)
-                            }
-                            .disabled(isBusy)
-                        }
-                    } label: {
-                        HStack {
-                            Label("Önceki kayıtlar", systemImage: "clock.arrow.circlepath")
-                            Spacer()
-                            Text("\(appState.savedRecordings.count - 1)")
-                                .foregroundStyle(.secondary)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                }
-            }
+            recordingsSection
 
             if let replayStatus = appState.replayStatus {
                 Text(loc(replayStatus))
@@ -174,22 +27,7 @@ struct MenuBarContentView: View {
 
             Divider()
 
-            HStack {
-                Button {
-                    NSApplication.shared.terminate(nil)
-                } label: {
-                    Label("Çıkış", systemImage: "power")
-                }
-                .glassButtonStyle()
-                Spacer()
-                Button {
-                    SettingsWindowController.shared.show()
-                } label: {
-                    Label("Ayarlar…", systemImage: "gearshape")
-                }
-                .glassProminentButtonStyle()
-                .keyboardShortcut(",", modifiers: .command)
-            }
+            footer
         }
         }
         .padding(16)
@@ -198,6 +36,189 @@ struct MenuBarContentView: View {
             if appState.modelLoaded {
                 appState.prepareRecordingPreviews()
             }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "waveform")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 11, style: .continuous), tint: Color.accentColor.opacity(0.7), clear: true, interactive: true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Jarvis")
+                    .font(.headline)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 6, height: 6)
+                    Text(loc(statusText))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var wakeWordRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: appState.wakeWordBlocked ? "ear.trianglebadge.exclamationmark" : appState.wakeWordListening ? "ear.fill" : "ear")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(appState.wakeWordBlocked ? Color.orange : appState.wakeWordListening ? Color.accentColor : .secondary)
+                .frame(width: 30, height: 30)
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sesle başlat")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                if appState.wakeWordBlocked {
+                    Text(loc(appState.wakeWordStatus))
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 4)
+            Toggle("", isOn: Binding(get: { appState.wakeWordEnabled }, set: { appState.wakeWordEnabled = $0 }))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .accessibilityLabel("“Jarvis” sözcüğünü dinle")
+                .help(loc(appState.wakeWordStatus))
+        }
+        .padding(10)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+    }
+
+    private var systemAudioRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: appState.systemAudioEnabled ? "speaker.wave.2.fill" : "speaker.wave.2")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(appState.systemAudioEnabled ? Color.accentColor : .secondary)
+                .frame(width: 30, height: 30)
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 8, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Bilgisayar sesi")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                if appState.systemAudioStatus != "Kapalı" {
+                    Text(loc(appState.systemAudioIsRecording ? "Kaydediliyor" : appState.systemAudioStatus))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help(loc(appState.systemAudioStatus))
+                }
+            }
+            Spacer(minLength: 4)
+            Button {
+                if appState.systemAudioEnabled {
+                    appState.stopSystemAudioListening()
+                } else {
+                    appState.startSystemAudioListening()
+                    // Close the MenuBarExtra panel so it doesn't sit over what's being listened to.
+                    NSApp.keyWindow?.close()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: appState.systemAudioEnabled ? "stop.fill" : "play.fill")
+                        .font(.system(size: 10, weight: .bold))
+                    Text(appState.systemAudioEnabled ? "Bitir" : "Başlat")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .liquidGlass(in: Capsule(), tint: systemAudioButtonColor, clear: true, interactive: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(appState.systemAudioEnabled ? "Kaydı bitir ve metni panoya kopyala" : "Bilgisayar sesini kaydetmeye başla")
+            .disabled(!appState.modelLoaded && !appState.whisperSuspendedForIdle && !appState.systemAudioEnabled)
+        }
+        .padding(10)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+    }
+
+    @ViewBuilder
+    private var recordingsSection: some View {
+        if let latest = appState.savedRecordings.first {
+            Divider()
+
+            Button {
+                appState.copyRecordingTranscript(latest)
+            } label: {
+                HStack(spacing: 11) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .liquidGlass(in: RoundedRectangle(cornerRadius: 9, style: .continuous), tint: Color.accentColor.opacity(0.2), clear: true)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Son kayıt")
+                            .font(.subheadline.weight(.semibold))
+                        let previewWords = loc(latest.previewLabel).split(whereSeparator: \.isWhitespace)
+                        Text(previewWords.prefix(6).joined(separator: " ") + (previewWords.count > 6 ? "…" : ""))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "doc.on.clipboard")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .liquidGlass(in: RoundedRectangle(cornerRadius: 14, style: .continuous), interactive: true)
+            }
+            .buttonStyle(.plain)
+            .disabled(latest.transcript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            .help(loc("Metni kopyala"))
+
+            if appState.savedRecordings.count > 1 {
+                Menu {
+                    ForEach(appState.savedRecordings.dropFirst()) { recording in
+                        Button(recording.menuLabel) {
+                            appState.replayRecording(recording)
+                        }
+                        .disabled(isBusy)
+                    }
+                } label: {
+                    HStack {
+                        Label("Önceki kayıtlar", systemImage: "clock.arrow.circlepath")
+                        Spacer()
+                        Text("\(appState.savedRecordings.count - 1)")
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .menuStyle(.borderlessButton)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                Label("Çıkış", systemImage: "power")
+            }
+            .glassButtonStyle()
+            Spacer()
+            Button {
+                SettingsWindowController.shared.show()
+            } label: {
+                Label("Ayarlar…", systemImage: "gearshape")
+            }
+            .glassProminentButtonStyle()
+            .keyboardShortcut(",", modifiers: .command)
         }
     }
 

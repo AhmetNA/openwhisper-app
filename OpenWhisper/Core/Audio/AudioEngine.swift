@@ -264,35 +264,15 @@ final class AudioEngine: @unchecked Sendable {
         // Raw mic still cancels echo; only the denoiser and gain are bypassed.
         let echoCancellation = requestedEchoCancellation
         appliesSignalProcessing = !bypassAudioProcessing
-        hasLoggedFirstBuffer = false
-        hasLoggedFirstAudibleBuffer = false
-        hasLoggedInputTruncation = false
-        hasLoggedDeepFilterFirstFrame = false
-        inputLevelSumOfSquares = 0
-        inputLevelSampleCount = 0
-        inputLevelPeak = 0
-        noiseFloorMeter = RawNoiseFloorMeter()
+        resetInputMeters()
         let tStartCall = CACurrentMediaTime()
         let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
         owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
 
-        // A previous stop waits for this queue, but keep start safe if a caller reuses the
-        // engine after an interrupted setup.
-        segmentPreparationQueue.sync {}
-        self.levelCallback = levelCallback
-        self.sampleCallback = sampleCallback
-        lastLevelUpdate = .distantPast
-        lock.lock()
-        sampleChunks = []
-        capturedSampleCount = 0
-        completedSegments.removeAll(keepingCapacity: false)
-        leadingOverlapSampleCount = 0
-        didLogInputChannelSelection = false
-        pinnedInputChannelIndex = nil
-        linkAudioWaitStart = waitsForLinkAudio ? CACurrentMediaTime() : nil
-        self.onInputReady = onInputReady
-        droppedLinkFrames = 0
-        lock.unlock()
+        resetCaptureState(
+            levelCallback: levelCallback, sampleCallback: sampleCallback,
+            waitsForLinkAudio: waitsForLinkAudio, onInputReady: onInputReady
+        )
 
         // Record through a bare AUHAL unit bound to the chosen device (or the system default)
         // whenever it can. It runs at the device's own rate (48 kHz on the
@@ -300,21 +280,7 @@ final class AudioEngine: @unchecked Sendable {
         // resampled back to 48 kHz), delivers the device's small I/O buffers instead of the
         // tap's 16384 frames, and never falls back to Bluetooth buds that are the system default
         // (see `HALInputCapture`).
-        var capture: HALInputCapture?
-        var adoptedHandoff: WakeCaptureHandoff?
-        let deviceID = deviceUID.flatMap(Self.audioDeviceID(forUID:)) ?? Self.defaultInputDeviceID()
-        if let deviceID {
-            if let handoff, handoff.capture.deviceID == deviceID {
-                capture = handoff.capture
-                adoptedHandoff = handoff
-            } else {
-                do {
-                    capture = try HALInputCapture(deviceID: deviceID, maxFrames: Self.maxInputFrameCount)
-                } catch {
-                    owLog("[AudioEngine] AUHAL capture unavailable (\(error)); using the engine")
-                }
-            }
-        }
+        let (capture, adoptedHandoff) = makeCapture(deviceUID: deviceUID, handoff: handoff)
         // Every early return below must not leave the handed-over stream running on the
         // listener's old handler (mic on, never stopped, its ring raced by the next start).
         var handoffAttached = false
@@ -359,6 +325,122 @@ final class AudioEngine: @unchecked Sendable {
 
         let capacities = Self.bufferCapacities(nativeSampleRate: format.sampleRate, deepFilterActive: useDeepFilter)
 
+        guard let chain = makeConversionChain(format: format, capacities: capacities, useDeepFilter: useDeepFilter) else {
+            return false
+        }
+
+        lock.lock()
+        self.converter = chain.converter
+        self.monoInputBuffer = chain.monoInput
+        self.convertedBuffer = chain.converted
+        self.activeDeepFilter = useDeepFilter ? loadedDeepFilter : nil
+        self.df3NativeTo48kConverter = chain.df3Converter
+        self.df3ResampledBuffer = chain.df3Resampled
+        self.df3OutputBuffer = chain.df3Output
+        // Sized to this recording's actual worst-case denoised-frame count so the real-time
+        // callback never needs to grow this array; harmless no-op if already large enough.
+        deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
+        let echo = echoCancellation ? RecordingEchoCanceller(handoff: echoHandoff, denoiser: postEchoDenoiser, playbackHeard: playbackHeard) : nil
+        recordingEcho = echo
+        lock.unlock()
+        if let echo {
+            echo.start()
+            owLog("[AEC] Recording echo cancellation on")
+        }
+
+        if capture == nil { engine.inputNode.removeTap(onBus: 0) }
+        let tapBlock: AVAudioNodeTapBlock = { [weak self] buffer, time in
+            self?.handleInputBuffer(buffer, time: time)
+        }
+
+        do {
+            if let adoptedHandoff {
+                continueWakeStream(adoptedHandoff, format: format, tapBlock: tapBlock)
+                handoffAttached = true
+            } else if let capture {
+                try capture.start(handler: tapBlock)
+                halCapture = capture
+            } else {
+                engine.inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format, block: tapBlock)
+                try engine.start()
+            }
+            let tEngineStarted = CACurrentMediaTime()
+            let elapsedEngineStarted = (tEngineStarted - GlobalHotkey.lastFnPressUptime) * 1000
+            owLog(String(format: "[Perf] [AudioEngineEngineStarted] engine.start() completed (%.2f ms / %.3f s from Fn press)", elapsedEngineStarted, elapsedEngineStarted / 1000.0))
+        } catch {
+            owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
+            isEnginePrepared = false
+            lock.lock()
+            let echo = recordingEcho
+            recordingEcho = nil
+            lock.unlock()
+            if let echo { echo.queue.async { _ = echo.finish() } }
+            return false
+        }
+        return didFallBackFromDeepFilter
+    }
+
+    private func resetInputMeters() {
+        hasLoggedFirstBuffer = false
+        hasLoggedFirstAudibleBuffer = false
+        hasLoggedInputTruncation = false
+        hasLoggedDeepFilterFirstFrame = false
+        inputLevelSumOfSquares = 0
+        inputLevelSampleCount = 0
+        inputLevelPeak = 0
+        noiseFloorMeter = RawNoiseFloorMeter()
+    }
+
+    private func resetCaptureState(
+        levelCallback: @escaping (Float) -> Void,
+        sampleCallback: (([Float]) -> Void)?,
+        waitsForLinkAudio: Bool,
+        onInputReady: (() -> Void)?
+    ) {
+        // A previous stop waits for this queue, but keep start safe if a caller reuses the
+        // engine after an interrupted setup.
+        segmentPreparationQueue.sync {}
+        self.levelCallback = levelCallback
+        self.sampleCallback = sampleCallback
+        lastLevelUpdate = .distantPast
+        lock.lock()
+        sampleChunks = []
+        capturedSampleCount = 0
+        completedSegments.removeAll(keepingCapacity: false)
+        leadingOverlapSampleCount = 0
+        didLogInputChannelSelection = false
+        pinnedInputChannelIndex = nil
+        linkAudioWaitStart = waitsForLinkAudio ? CACurrentMediaTime() : nil
+        self.onInputReady = onInputReady
+        droppedLinkFrames = 0
+        lock.unlock()
+    }
+
+    private func makeCapture(deviceUID: String?, handoff: WakeCaptureHandoff?) -> (HALInputCapture?, WakeCaptureHandoff?) {
+        var capture: HALInputCapture?
+        var adoptedHandoff: WakeCaptureHandoff?
+        let deviceID = deviceUID.flatMap(Self.audioDeviceID(forUID:)) ?? Self.defaultInputDeviceID()
+        if let deviceID {
+            if let handoff, handoff.capture.deviceID == deviceID {
+                capture = handoff.capture
+                adoptedHandoff = handoff
+            } else {
+                do {
+                    capture = try HALInputCapture(deviceID: deviceID, maxFrames: Self.maxInputFrameCount)
+                } catch {
+                    owLog("[AudioEngine] AUHAL capture unavailable (\(error)); using the engine")
+                }
+            }
+        }
+        return (capture, adoptedHandoff)
+    }
+
+    private func makeConversionChain(
+        format: AVAudioFormat,
+        capacities: BufferCapacities,
+        useDeepFilter: Bool
+    ) -> (converter: AVAudioConverter, monoInput: AVAudioPCMBuffer, converted: AVAudioPCMBuffer,
+          df3Converter: AVAudioConverter?, df3Resampled: AVAudioPCMBuffer?, df3Output: AVAudioPCMBuffer?)? {
         guard let downmixFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: format.sampleRate,
@@ -374,7 +456,7 @@ final class AudioEngine: @unchecked Sendable {
             frameCapacity: capacities.monoInput
         ) else {
             owLog("[AudioEngine] Failed to create recording buffers")
-            return false
+            return nil
         }
 
         // When DeepFilterNet is active, the 16kHz converter reads from DF3's fixed-48kHz output
@@ -402,7 +484,7 @@ final class AudioEngine: @unchecked Sendable {
 
         guard let converter = AVAudioConverter(from: converterSourceFormat, to: targetFormat) else {
             owLog("[AudioEngine] Failed to create 16kHz recording converter")
-            return false
+            return nil
         }
 
         guard let convertedBuffer = AVAudioPCMBuffer(
@@ -410,165 +492,128 @@ final class AudioEngine: @unchecked Sendable {
             frameCapacity: max(capacities.converted, 1)
         ) else {
             owLog("[AudioEngine] Failed to allocate 16kHz recording buffer")
-            return false
+            return nil
+        }
+        return (converter, monoInputBuffer, convertedBuffer, newDf3NativeTo48kConverter, newDf3ResampledBuffer, newDf3OutputBuffer)
+    }
+
+    /// Runs on the audio thread for every input buffer.
+    private func handleInputBuffer(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
+        let frameLength = Int(buffer.frameLength)
+        guard frameLength > 0 else { return }
+
+        self.lock.lock()
+        if let waitStart = self.linkAudioWaitStart {
+            let waited = CACurrentMediaTime() - waitStart
+            if waited < Self.linkAudioWaitLimit, Self.isDigitalSilence(buffer) {
+                self.droppedLinkFrames += frameLength
+                self.lock.unlock()
+                return
+            }
+            self.linkAudioWaitStart = nil
+            let ready = self.onInputReady
+            self.onInputReady = nil
+            owLog(String(format: "[AudioEngine] Bluetooth mic live after %.0f ms (dropped %d zero frames)%@",
+                         waited * 1000, self.droppedLinkFrames,
+                         waited >= Self.linkAudioWaitLimit ? " — wait limit reached" : ""))
+            ready?()
+        }
+        let channelIndex: Int
+        let rms: Float
+        if let pinned = self.pinnedInputChannelIndex {
+            channelIndex = pinned
+            rms = self.channelRMS(in: buffer, channelIndex: pinned)
+        } else {
+            let selection = self.loudestInputChannel(in: buffer)
+            let index = selection?.index ?? 0
+            self.pinnedInputChannelIndex = index
+            channelIndex = index
+            rms = selection?.rms ?? 0.0
+            if !self.didLogInputChannelSelection {
+                self.didLogInputChannelSelection = true
+                owLog(
+                    "[AudioEngine] Input downmix (pinned): "
+                        + "selectedChannel=\(index + 1)/\(buffer.format.channelCount) "
+                        + String(format: "rms=%.5f", rms)
+                )
+            }
+        }
+        // rms is this buffer's root-mean-square, so rms^2 * frames is its sum of squares.
+        // Accumulating that (rather than averaging per-buffer RMS values) keeps the final
+        // mean correct even when CoreAudio delivers uneven buffer sizes.
+        self.inputLevelSumOfSquares += Double(rms) * Double(rms) * Double(frameLength)
+        self.inputLevelSampleCount += frameLength
+        let bufferPeak = self.channelPeak(in: buffer, channelIndex: channelIndex)
+        if bufferPeak > self.inputLevelPeak {
+            self.inputLevelPeak = bufferPeak
+        }
+        self.noiseFloorMeter.add(rms: rms, frames: frameLength, sampleRate: buffer.format.sampleRate)
+        let echoCancelling = self.recordingEcho != nil
+        self.lock.unlock()
+
+        let tNow = CACurrentMediaTime()
+        let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
+        if !self.hasLoggedFirstBuffer {
+            self.hasLoggedFirstBuffer = true
+            owLog(String(format: "[Perf] [AudioEngineFirstBufferArrived] CoreAudio delivered 1st audio buffer (%.2f ms / %.3f s from Fn press, frames=%d, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, frameLength, rms))
+        }
+        if !self.hasLoggedFirstAudibleBuffer && rms > 0.001 {
+            self.hasLoggedFirstAudibleBuffer = true
+            owLog(String(format: "[Perf] [AudioEngineFirstAudibleSpeechArrived] First non-silent voice buffer detected (%.2f ms / %.3f s from Fn press, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, rms))
         }
 
-        lock.lock()
-        self.converter = converter
-        self.monoInputBuffer = monoInputBuffer
-        self.convertedBuffer = convertedBuffer
-        self.activeDeepFilter = useDeepFilter ? loadedDeepFilter : nil
-        self.df3NativeTo48kConverter = newDf3NativeTo48kConverter
-        self.df3ResampledBuffer = newDf3ResampledBuffer
-        self.df3OutputBuffer = newDf3OutputBuffer
-        // Sized to this recording's actual worst-case denoised-frame count so the real-time
-        // callback never needs to grow this array; harmless no-op if already large enough.
-        deepFilterDenoiseScratch.reserveCapacity(Int(capacities.df3Output ?? capacities.monoInput))
-        let echo = echoCancellation ? RecordingEchoCanceller(handoff: echoHandoff, denoiser: postEchoDenoiser, playbackHeard: playbackHeard) : nil
-        recordingEcho = echo
-        lock.unlock()
-        if let echo {
-            echo.start()
-            owLog("[AEC] Recording echo cancellation on")
+        // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
+        // microphone sample for transcription. While echo-cancelling, the level comes from the
+        // cleaned samples instead (`storeEchoCancelled`), so the speakers don't move it.
+        if !echoCancelling {
+            self.reportLevel(rms)
         }
 
-        if capture == nil { engine.inputNode.removeTap(onBus: 0) }
-        let tapBlock: AVAudioNodeTapBlock = { [weak self] buffer, time in
-            guard let self else { return }
-            let frameLength = Int(buffer.frameLength)
-            guard frameLength > 0 else { return }
+        // 16 kHz sample index on the host clock, for pairing with the echo reference.
+        let hostIndex = time.isHostTimeValid
+            ? Int((AVAudioTime.seconds(forHostTime: time.hostTime) * Self.targetSampleRate).rounded())
+            : nil
+        self.lock.lock()
+        self.convert(buffer, channelIndex: channelIndex, hostIndex: hostIndex)
+        self.lock.unlock()
+    }
 
-            self.lock.lock()
-            if let waitStart = self.linkAudioWaitStart {
-                let waited = CACurrentMediaTime() - waitStart
-                if waited < Self.linkAudioWaitLimit, Self.isDigitalSilence(buffer) {
-                    self.droppedLinkFrames += frameLength
-                    self.lock.unlock()
-                    return
-                }
-                self.linkAudioWaitStart = nil
-                let ready = self.onInputReady
-                self.onInputReady = nil
-                owLog(String(format: "[AudioEngine] Bluetooth mic live after %.0f ms (dropped %d zero frames)%@",
-                             waited * 1000, self.droppedLinkFrames,
-                             waited >= Self.linkAudioWaitLimit ? " — wait limit reached" : ""))
-                ready?()
+    private func continueWakeStream(
+        _ adoptedHandoff: WakeCaptureHandoff,
+        format: AVAudioFormat,
+        tapBlock: @escaping AVAudioNodeTapBlock
+    ) {
+        // Already running: the audio held since the wake goes through the same chain
+        // first, then live buffers follow with no gap and no overlap.
+        var prerollFrames = 0
+        var prerollEnd: UInt64?
+        var blockedMs = 0.0
+        let continuity = OSAllocatedUnfairLock<Bool>(initialState: false)
+        let sampleRate = format.sampleRate
+        // Logs once how the first live buffer lines up with the end of the preroll
+        // (≈0 ms: seamless; positive: a hole; negative: overlap).
+        let liveBlock: AVAudioNodeTapBlock = { buffer, time in
+            if let prerollEnd, time.isHostTimeValid, !continuity.withLock({ done in defer { done = true }; return done }) {
+                let gap = time.hostTime >= prerollEnd
+                    ? AVAudioTime.seconds(forHostTime: time.hostTime - prerollEnd)
+                    : -AVAudioTime.seconds(forHostTime: prerollEnd - time.hostTime)
+                owLog(String(format: "[AudioEngine] First live buffer after the wake preroll: gap %.1f ms (%d frames)",
+                             gap * 1000, Int(buffer.frameLength)))
             }
-            let channelIndex: Int
-            let rms: Float
-            if let pinned = self.pinnedInputChannelIndex {
-                channelIndex = pinned
-                rms = self.channelRMS(in: buffer, channelIndex: pinned)
-            } else {
-                let selection = self.loudestInputChannel(in: buffer)
-                let index = selection?.index ?? 0
-                self.pinnedInputChannelIndex = index
-                channelIndex = index
-                rms = selection?.rms ?? 0.0
-                if !self.didLogInputChannelSelection {
-                    self.didLogInputChannelSelection = true
-                    owLog(
-                        "[AudioEngine] Input downmix (pinned): "
-                            + "selectedChannel=\(index + 1)/\(buffer.format.channelCount) "
-                            + String(format: "rms=%.5f", rms)
-                    )
-                }
-            }
-            // rms is this buffer's root-mean-square, so rms^2 * frames is its sum of squares.
-            // Accumulating that (rather than averaging per-buffer RMS values) keeps the final
-            // mean correct even when CoreAudio delivers uneven buffer sizes.
-            self.inputLevelSumOfSquares += Double(rms) * Double(rms) * Double(frameLength)
-            self.inputLevelSampleCount += frameLength
-            let bufferPeak = self.channelPeak(in: buffer, channelIndex: channelIndex)
-            if bufferPeak > self.inputLevelPeak {
-                self.inputLevelPeak = bufferPeak
-            }
-            self.noiseFloorMeter.add(rms: rms, frames: frameLength, sampleRate: buffer.format.sampleRate)
-            let echoCancelling = self.recordingEcho != nil
-            self.lock.unlock()
-
-            let tNow = CACurrentMediaTime()
-            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
-            if !self.hasLoggedFirstBuffer {
-                self.hasLoggedFirstBuffer = true
-                owLog(String(format: "[Perf] [AudioEngineFirstBufferArrived] CoreAudio delivered 1st audio buffer (%.2f ms / %.3f s from Fn press, frames=%d, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, frameLength, rms))
-            }
-            if !self.hasLoggedFirstAudibleBuffer && rms > 0.001 {
-                self.hasLoggedFirstAudibleBuffer = true
-                owLog(String(format: "[Perf] [AudioEngineFirstAudibleSpeechArrived] First non-silent voice buffer detected (%.2f ms / %.3f s from Fn press, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, rms))
-            }
-
-            // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
-            // microphone sample for transcription. While echo-cancelling, the level comes from the
-            // cleaned samples instead (`storeEchoCancelled`), so the speakers don't move it.
-            if !echoCancelling {
-                self.reportLevel(rms)
-            }
-
-            // 16 kHz sample index on the host clock, for pairing with the echo reference.
-            let hostIndex = time.isHostTimeValid
-                ? Int((AVAudioTime.seconds(forHostTime: time.hostTime) * Self.targetSampleRate).rounded())
-                : nil
-            self.lock.lock()
-            self.convert(buffer, channelIndex: channelIndex, hostIndex: hostIndex)
-            self.lock.unlock()
+            tapBlock(buffer, time)
         }
-
-        do {
-            if let adoptedHandoff {
-                // Already running: the audio held since the wake goes through the same chain
-                // first, then live buffers follow with no gap and no overlap.
-                var prerollFrames = 0
-                var prerollEnd: UInt64?
-                var blockedMs = 0.0
-                let continuity = OSAllocatedUnfairLock<Bool>(initialState: false)
-                let sampleRate = format.sampleRate
-                // Logs once how the first live buffer lines up with the end of the preroll
-                // (≈0 ms: seamless; positive: a hole; negative: overlap).
-                let liveBlock: AVAudioNodeTapBlock = { buffer, time in
-                    if let prerollEnd, time.isHostTimeValid, !continuity.withLock({ done in defer { done = true }; return done }) {
-                        let gap = time.hostTime >= prerollEnd
-                            ? AVAudioTime.seconds(forHostTime: time.hostTime - prerollEnd)
-                            : -AVAudioTime.seconds(forHostTime: prerollEnd - time.hostTime)
-                        owLog(String(format: "[AudioEngine] First live buffer after the wake preroll: gap %.1f ms (%d frames)",
-                                     gap * 1000, Int(buffer.frameLength)))
-                    }
-                    tapBlock(buffer, time)
-                }
-                adoptedHandoff.capture.replaceHandler(liveBlock) {
-                    let t0 = CACurrentMediaTime()
-                    for (buffer, time) in adoptedHandoff.preroll() {
-                        prerollFrames += Int(buffer.frameLength)
-                        tapBlock(buffer, time)
-                        prerollEnd = time.hostTime + AVAudioTime.hostTime(forSeconds: Double(buffer.frameLength) / sampleRate)
-                    }
-                    blockedMs = (CACurrentMediaTime() - t0) * 1000
-                }
-                handoffAttached = true
-                halCapture = adoptedHandoff.capture
-                owLog(String(format: "[AudioEngine] Continued the wake listener stream with %.0f ms of audio since the wake (processed in %.1f ms with input held)",
-                             Double(prerollFrames) / sampleRate * 1000, blockedMs))
-            } else if let capture {
-                try capture.start(handler: tapBlock)
-                halCapture = capture
-            } else {
-                engine.inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format, block: tapBlock)
-                try engine.start()
+        adoptedHandoff.capture.replaceHandler(liveBlock) {
+            let t0 = CACurrentMediaTime()
+            for (buffer, time) in adoptedHandoff.preroll() {
+                prerollFrames += Int(buffer.frameLength)
+                tapBlock(buffer, time)
+                prerollEnd = time.hostTime + AVAudioTime.hostTime(forSeconds: Double(buffer.frameLength) / sampleRate)
             }
-            let tEngineStarted = CACurrentMediaTime()
-            let elapsedEngineStarted = (tEngineStarted - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog(String(format: "[Perf] [AudioEngineEngineStarted] engine.start() completed (%.2f ms / %.3f s from Fn press)", elapsedEngineStarted, elapsedEngineStarted / 1000.0))
-        } catch {
-            owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
-            isEnginePrepared = false
-            lock.lock()
-            let echo = recordingEcho
-            recordingEcho = nil
-            lock.unlock()
-            if let echo { echo.queue.async { _ = echo.finish() } }
-            return false
+            blockedMs = (CACurrentMediaTime() - t0) * 1000
         }
-        return didFallBackFromDeepFilter
+        halCapture = adoptedHandoff.capture
+        owLog(String(format: "[AudioEngine] Continued the wake listener stream with %.0f ms of audio since the wake (processed in %.1f ms with input held)",
+                     Double(prerollFrames) / sampleRate * 1000, blockedMs))
     }
 
     /// True when every sample of every channel is exactly zero (a link that is not up yet).

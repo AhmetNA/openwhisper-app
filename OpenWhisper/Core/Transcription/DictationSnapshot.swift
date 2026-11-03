@@ -624,61 +624,7 @@ final class DictationSnapshot {
         let newWords = CorrectionEngine.words(newSlice)
         let raws = CorrectionEngine.substitutionCandidates(oldWords: oldWords, newWords: newWords)
 
-        // Reversal detection: for each raw candidate, check whether it exactly undoes one of
-        // THIS dictation's applied learned pairs — i.e. the diff's (wrong, right) is the applied
-        // pair's (right, wrong) reversed. A reversal candidate must NEVER reach
-        // `CorrectionStore.recordObservation`/`recordManualObservation`: learning it would create
-        // the opposite-direction record (e.g. "commit" -> "komit") that cycles forever against
-        // the very pair that just fired ("komit" -> "commit") — exactly how the "commit'"/
-        // "komit" poisoned pair was born. Instead the offending record is normally penalized via
-        // `recordRejection` — but WHO penalizes and how often is deliberately different per path:
-        //
-        // - Automatic (manual == false): completely unchanged from before this feature —
-        //   `recordRejection` fires once per raw match, deduped only within this single call via
-        //   a call-local set (`penalizedThisCall`), exactly as it always did.
-        // - Manual, active snapshot (`manual && dedupe`): task 1 made repeated Option+Shift+C
-        //   presses on the SAME still-reverted text (the snapshot deliberately stays open now)
-        //   the expected workflow. Without a generation-scoped dedupe here, two presses on an
-        //   unchanged reversal would call `recordRejection` twice and disable an otherwise-good
-        //   record purely because the user checked twice — not because they reverted twice. Uses
-        //   `penalizedInCurrentGen`, reset in the same places as `learnedInCurrentGen`.
-        // - Manual, no active snapshot (`manual && !dedupe`, the retained-text fallback): there
-        //   is no generation to scope a dedupe to, and this path can be invoked repeatedly with
-        //   no bound at all — so it excludes the candidate from learning (still correct) but
-        //   never calls `recordRejection`. A real, repeated user reversal will still eventually
-        //   get penalized the next time an actual dictation snapshot is active.
-        var nonReversalRaws: [CorrectionEngine.RawSubstitution] = []
-        var penalizedThisCall: Set<String> = []
-        for raw in raws {
-            owLog("[Corrections] \(logLabel) — raw candidate: '\(raw.wrong)' -> '\(raw.right)'")
-            let rawWrongLower = CorrectionEngine.trLower(raw.wrong)
-            let rawRightLower = CorrectionEngine.trLower(raw.right)
-            if let matchedPair = appliedPairs.first(where: {
-                rawWrongLower == CorrectionEngine.trLower($0.right) &&
-                rawRightLower == CorrectionEngine.trLower($0.wrong)
-            }) {
-                let penaltyKey = CorrectionEngine.trLower(matchedPair.wrong)
-                owLog("[Corrections] \(logLabel) — REVERSAL detected: user reverted applied correction '\(matchedPair.wrong)' -> '\(matchedPair.right)' back to '\(raw.right)'. Excluding from learning.")
-                if manual {
-                    if dedupe {
-                        if !penalizedInCurrentGen.contains(penaltyKey) {
-                            penalizedInCurrentGen.insert(penaltyKey)
-                            owLog("[Corrections] \(logLabel) — penalizing record (first time this generation)")
-                            CorrectionStore.shared.recordRejection(wrong: matchedPair.wrong)
-                        } else {
-                            owLog("[Corrections] \(logLabel) — reversal of '\(penaltyKey)' already penalized this generation, not penalizing again")
-                        }
-                    } else {
-                        owLog("[Corrections] \(logLabel) — no active snapshot to scope a penalty dedupe to, excluding without penalizing")
-                    }
-                } else if !penalizedThisCall.contains(penaltyKey) {
-                    penalizedThisCall.insert(penaltyKey)
-                    CorrectionStore.shared.recordRejection(wrong: matchedPair.wrong)
-                }
-                continue
-            }
-            nonReversalRaws.append(raw)
-        }
+        let nonReversalRaws = excludingReversals(raws, appliedPairs: appliedPairs, manual: manual, dedupe: dedupe, logLabel: logLabel)
 
         var accepted: [CorrectionEngine.Candidate] = []
         for raw in nonReversalRaws {
@@ -757,6 +703,85 @@ final class DictationSnapshot {
 
         guard manual else { return nil }
 
+        return manualReviewMessage(
+            newlyLearnedCount: newlyLearnedCount, learnedPairs: learnedPairs, alreadyActivePairs: alreadyActivePairs,
+            sawProtected: sawProtected, sawCycle: sawCycle, sawDisabled: sawDisabled
+        )
+    }
+
+    // Reversal detection: for each raw candidate, check whether it exactly undoes one of
+    // THIS dictation's applied learned pairs — i.e. the diff's (wrong, right) is the applied
+    // pair's (right, wrong) reversed. A reversal candidate must NEVER reach
+    // `CorrectionStore.recordObservation`/`recordManualObservation`: learning it would create
+    // the opposite-direction record (e.g. "commit" -> "komit") that cycles forever against
+    // the very pair that just fired ("komit" -> "commit") — exactly how the "commit'"/
+    // "komit" poisoned pair was born. Instead the offending record is normally penalized via
+    // `recordRejection` — but WHO penalizes and how often is deliberately different per path:
+    //
+    // - Automatic (manual == false): completely unchanged from before this feature —
+    //   `recordRejection` fires once per raw match, deduped only within this single call via
+    //   a call-local set (`penalizedThisCall`), exactly as it always did.
+    // - Manual, active snapshot (`manual && dedupe`): task 1 made repeated Option+Shift+C
+    //   presses on the SAME still-reverted text (the snapshot deliberately stays open now)
+    //   the expected workflow. Without a generation-scoped dedupe here, two presses on an
+    //   unchanged reversal would call `recordRejection` twice and disable an otherwise-good
+    //   record purely because the user checked twice — not because they reverted twice. Uses
+    //   `penalizedInCurrentGen`, reset in the same places as `learnedInCurrentGen`.
+    // - Manual, no active snapshot (`manual && !dedupe`, the retained-text fallback): there
+    //   is no generation to scope a dedupe to, and this path can be invoked repeatedly with
+    //   no bound at all — so it excludes the candidate from learning (still correct) but
+    //   never calls `recordRejection`. A real, repeated user reversal will still eventually
+    //   get penalized the next time an actual dictation snapshot is active.
+    private func excludingReversals(
+        _ raws: [CorrectionEngine.RawSubstitution],
+        appliedPairs: [(wrong: String, right: String)],
+        manual: Bool,
+        dedupe: Bool,
+        logLabel: String
+    ) -> [CorrectionEngine.RawSubstitution] {
+        var nonReversalRaws: [CorrectionEngine.RawSubstitution] = []
+        var penalizedThisCall: Set<String> = []
+        for raw in raws {
+            owLog("[Corrections] \(logLabel) — raw candidate: '\(raw.wrong)' -> '\(raw.right)'")
+            let rawWrongLower = CorrectionEngine.trLower(raw.wrong)
+            let rawRightLower = CorrectionEngine.trLower(raw.right)
+            if let matchedPair = appliedPairs.first(where: {
+                rawWrongLower == CorrectionEngine.trLower($0.right) &&
+                rawRightLower == CorrectionEngine.trLower($0.wrong)
+            }) {
+                let penaltyKey = CorrectionEngine.trLower(matchedPair.wrong)
+                owLog("[Corrections] \(logLabel) — REVERSAL detected: user reverted applied correction '\(matchedPair.wrong)' -> '\(matchedPair.right)' back to '\(raw.right)'. Excluding from learning.")
+                if manual {
+                    if dedupe {
+                        if !penalizedInCurrentGen.contains(penaltyKey) {
+                            penalizedInCurrentGen.insert(penaltyKey)
+                            owLog("[Corrections] \(logLabel) — penalizing record (first time this generation)")
+                            CorrectionStore.shared.recordRejection(wrong: matchedPair.wrong)
+                        } else {
+                            owLog("[Corrections] \(logLabel) — reversal of '\(penaltyKey)' already penalized this generation, not penalizing again")
+                        }
+                    } else {
+                        owLog("[Corrections] \(logLabel) — no active snapshot to scope a penalty dedupe to, excluding without penalizing")
+                    }
+                } else if !penalizedThisCall.contains(penaltyKey) {
+                    penalizedThisCall.insert(penaltyKey)
+                    CorrectionStore.shared.recordRejection(wrong: matchedPair.wrong)
+                }
+                continue
+            }
+            nonReversalRaws.append(raw)
+        }
+        return nonReversalRaws
+    }
+
+    private func manualReviewMessage(
+        newlyLearnedCount: Int,
+        learnedPairs: [(wrong: String, right: String)],
+        alreadyActivePairs: [(wrong: String, right: String)],
+        sawProtected: Bool,
+        sawCycle: Bool,
+        sawDisabled: Bool
+    ) -> String? {
         if newlyLearnedCount == 1, let pair = learnedPairs.first {
             return L("öğrenildi: ", "learned: ") + "\(pair.wrong) → \(pair.right)"
         } else if newlyLearnedCount > 1 {
