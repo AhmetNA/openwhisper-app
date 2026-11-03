@@ -354,6 +354,9 @@ enum ScreenActions {
         "durdur": ["stop", "pause"], "oynat": ["play"], "başlat": ["start", "play"], "atla": ["skip"],
         "evet": ["yes"], "hayır": ["no"], "güncelle": ["update"], "ekle": ["add"], "tekrar": ["retry"],
         "bildirim": ["notification"], "artı": ["new", "add", "plus"],
+        "dışa": ["export"], "içe": ["import"], "yazdır": ["print"], "bul": ["find", "search"], "pencere": ["window"],
+        "sekme": ["tab"], "görünüm": ["view"], "adlandır": ["rename"], "küçült": ["minimize", "zoom out"], "büyüt": ["zoom in"],
+        "kes": ["cut"], "yinele": ["redo"], "tümü": ["all"], "hepsi": ["all"], "belge": ["document"], "dosya": ["file"], "klasör": ["folder"],
     ]
 
     /// Whether the model's pick is tied to what was said: a shared word or stem, a sound-alike,
@@ -677,7 +680,7 @@ enum ScreenActions {
             " pay ", "ödeme", "payment", "sipariş", " order", "çıkış", "oturumu kapat", "sign out", "log out", "logout",
             "boşalt", " empty", "kaydetme", "don't save", "dont save", "değişiklikleri at", "discard", "yayınla", "publish",
             " post ", "paylaş", " share", "abonelik", "unsubscribe", "transfer", "onayla", "confirm", " erase", "sıfırla",
-            " reset", "biçimlendir", " format", "yükle", " install",
+            " reset", "biçimlendir", " format", "yükle", " install", " quit", "çöp", " trash",
         ]
         return risky.contains { text.contains($0) }
     }
@@ -713,7 +716,8 @@ enum ScreenActions {
             owLog("[Screen] Selected row '\(target.label)'")
             return true
         }
-        guard let frame = frame(of: node) else { return false }
+        // A closed menu's item has no place on screen to click.
+        guard let frame = frame(of: node), frame.width > 1, frame.height > 1 else { return false }
         owLog("[Screen] Press refused; clicking '\(target.label)'")
         return click(at: CGPoint(x: frame.midX, y: frame.midY))
     }

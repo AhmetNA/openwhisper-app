@@ -460,15 +460,17 @@ enum SystemCommandParser {
         // target below, so a conversational "yukarı kaydı" can never become an action.
         let clippedScrollVerb = #"(?:kaydı|kaydi)"#
         let largeScroll = #"(?:bayağı|baya|çok|epey|iyice|oldukça)(?:\s+bir)?"#
+        // "Biraz aşağı kaydır", "biraz daha yukarı kaydır".
+        let scrollAmount = #"(?:biraz\s+)?(?:daha\s+)?"#
         let isLargeScroll = matches(text, largeScroll)
         let scrollText = text
             .replacingOccurrences(of: largeScroll, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
-        if matches(scrollText, #"^(?:\#(scrollTarget)\s+)?(?:aşağı|aşşağı|asagi|down)(?:ya)?\s+\#(scrollVerb)(?:\s+lütfen)?$"#) {
+        if matches(scrollText, #"^(?:\#(scrollTarget)\s+)?\#(scrollAmount)(?:aşağı|aşşağı|asagi|down)(?:ya)?\s+\#(scrollVerb)(?:\s+lütfen)?$"#) {
             return .scroll(up: false, large: isLargeScroll)
         }
-        if matches(scrollText, #"^(?:\#(scrollTarget)\s+)?(?:yukarı|yukari|up)(?:ya)?\s+\#(scrollVerb)(?:\s+lütfen)?$"#) {
+        if matches(scrollText, #"^(?:\#(scrollTarget)\s+)?\#(scrollAmount)(?:yukarı|yukari|up)(?:ya)?\s+\#(scrollVerb)(?:\s+lütfen)?$"#) {
             return .scroll(up: true, large: isLargeScroll)
         }
         if matches(scrollText, #"^\#(scrollTarget)\s+\#(scrollVerb)\s+(?:aşağı|aşşağı|asagi|down)(?:ya)?(?:\s+lütfen)?$"#) {

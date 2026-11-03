@@ -388,6 +388,8 @@ extension AppState {
 
         if await handlePointerStep(run) { return }
 
+        if await handleEditKey(run, route: route) { return }
+
         if await handleCommandOnlySession(run, route: &route) { return }
 
         // Locked: nothing can be typed into an app or done on screen. Say so instead of
@@ -640,6 +642,31 @@ extension AppState {
         return true
     }
 
+    /// "Kopyala", "tümünü seç", "vazgeç": what the keyboard does in any app. A command of its own
+    /// or an edit of the last dictation ("geri al" right after one) goes first.
+    private func handleEditKey(_ run: FinishRun, route: VoiceRouter.Route) async -> Bool {
+        let session = run.session
+        switch route {
+        case .command, .commands, .dictationEdit, .meta, .voiceTest: return false
+        default: break
+        }
+        guard session.isVoiceCommand, session.acceptsCommands, !session.heardOnlyOverPlayback, !RemoteControl.screenIsLocked,
+              let key = EditKeys.parse(run.trimmed), let app = session.targetApp, !app.isTerminated,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
+        let started = CACurrentMediaTime()
+        session.latency.finishDecision(route: "düzenleme tuşu")
+        owLog("[Route] edit key: '\(run.trimmed)' → \(key)")
+        self.lastTranscription = run.text
+        self.lastCommandUndo = []
+        EditKeys.press(key)
+        self.logScreenStep(session, "tuş", startedAt: started, [("tuş", CACurrentMediaTime() - started)])
+        self.showFlowBarMessage(EditKeys.done(key), durationMs: 1200)
+        self.noteScreenModeAction()
+        run.commandFollowUp = .some(nil)
+        return true
+    }
+
     private func typeIntoNamedField(_ run: FinishRun) async -> Bool {
         let session = run.session
         let text = run.text
@@ -718,6 +745,9 @@ extension AppState {
                         }
                         return true
                     }
+                    if await screenAction(run) { return true }
+                } else if session.followsCommand, !session.heardOnlyOverPlayback, ScreenActions.saysClick(trimmed) {
+                    // "Kapatma butonuna bas" right after a command: said outright, so it counts.
                     if await screenAction(run) { return true }
                 }
                 owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
@@ -1629,7 +1659,8 @@ extension AppState {
         let trimmed = run.trimmed
         // Screen mode's open mic is for exactly this.
         let screenModeStep = screenModeActive && session.followsCommand
-        guard session.acceptsCommands, !session.takesOnlyCommands || screenModeStep, !session.heardOnlyOverPlayback,
+        let saysClickAfterCommand = session.followsCommand && ScreenActions.saysClick(trimmed)
+        guard session.acceptsCommands, !session.takesOnlyCommands || screenModeStep || saysClickAfterCommand, !session.heardOnlyOverPlayback,
               !RemoteControl.screenIsLocked, let app = session.targetApp, !app.isTerminated,
               app.bundleIdentifier != Bundle.main.bundleIdentifier,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
@@ -1654,10 +1685,26 @@ extension AppState {
         // language model still reads only the first 150, to keep its prompt short.
         let elements = ScreenActions.elements(of: app, limit: 400)
         stepParts.append(("ekran okuma", CACurrentMediaTime() - mark))
-        guard !elements.isEmpty else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
-        let (pick, byModel) = await pickElement(trimmed, elements: elements, saysClick: saysClick, stepParts: &stepParts)
-        guard let pick else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
-        let target = elements[pick]
+        // On screen first, by its name. Then the app's menus by theirs, ahead of a model's guess
+        // among what is on screen: "dışa aktar" means the menu item, whatever else looks close.
+        mark = CACurrentMediaTime()
+        let onScreenByName = !ScreenActions.exactMatches(trimmed, labels: elements.map(\.label)).isEmpty
+        let menuItems = onScreenByName ? [] : MenuCommands.items(of: app)
+        var found = MenuCommands.exactMatch(trimmed, in: menuItems)
+        stepParts.append(("menü okuma", CACurrentMediaTime() - mark))
+        var byModel = false
+        if found == nil, !elements.isEmpty {
+            let (pick, picked) = await pickElement(trimmed, elements: elements, saysClick: saysClick, stepParts: &stepParts)
+            found = pick.map { elements[$0] }
+            byModel = picked
+        }
+        if found == nil, saysClick || screenModeStep || MenuCommands.isShort(trimmed) {
+            mark = CACurrentMediaTime()
+            found = await MenuCommands.modelMatch(trimmed, in: menuItems)
+            byModel = found != nil
+            stepParts.append(("menü modeli", CACurrentMediaTime() - mark))
+        }
+        guard let target = found else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
         session.latency.finishDecision(route: "ekran eylemi")
         owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(byModel ? " by the model" : "")")
         self.lastTranscription = text

@@ -120,6 +120,26 @@ final class ScreenPointerTests: XCTestCase {
         XCTAssertEqual(tr("bir"), .number(1, nil))
     }
 
+    func testEditKeys() {
+        XCTAssertEqual(EditKeys.parse("Kopyala.", english: false), EditKeys.copy)
+        XCTAssertEqual(EditKeys.parse("Jarvis tümünü seç lütfen", english: false), EditKeys.selectAll)
+        XCTAssertEqual(EditKeys.parse("vazgeç", english: false), EditKeys.escape)
+        XCTAssertEqual(EditKeys.parse("enter'a bas", english: false), EditKeys.enter)
+        XCTAssertEqual(EditKeys.parse("sonraki alan", english: false), EditKeys.nextField)
+        XCTAssertEqual(EditKeys.parse("select all", english: true), EditKeys.selectAll)
+        XCTAssertNil(EditKeys.parse("metni kopyala ve Ali'ye gönder", english: false))
+        XCTAssertNil(EditKeys.parse("sesi kes", english: false))
+        XCTAssertNil(EditKeys.parse("Kaydet'e bas", english: false))
+    }
+
+    func testScrollWithAnAmount() {
+        for text in ["biraz aşağı kaydır", "biraz daha aşağı kaydır", "sayfayı biraz aşağı kaydır", "aşağı kaydır"] {
+            guard case .scroll(up: false, _)? = SystemCommandParser.parse(text) else { return XCTFail(text) }
+        }
+        guard case .scroll(up: true, _)? = SystemCommandParser.parse("biraz yukarı kaydır") else { return XCTFail() }
+        XCTAssertNotNil(SystemCommandParser.parse("biraz daha kaydır"))
+    }
+
     func testGridCells() {
         let rect = CGRect(x: 100, y: 50, width: 400, height: 300)
         XCTAssertEqual(ScreenPointer.gridCell(1, in: rect), CGRect(x: 100, y: 50, width: 100, height: 100))
