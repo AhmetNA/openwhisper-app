@@ -386,6 +386,8 @@ extension AppState {
             return
         }
 
+        if await handlePointerStep(run) { return }
+
         if await handleCommandOnlySession(run, route: &route) { return }
 
         // Locked: nothing can be typed into an app or done on screen. Say so instead of
@@ -615,6 +617,27 @@ extension AppState {
             route = VoiceRouter.route(text, facts: facts)
         }
         return false
+    }
+
+    /// "Numaraları göster", "beş", "Kaydet'e sağ tıkla", "biraz sağa": the screen used as with
+    /// a mouse. Under the same guards as a press on screen.
+    private func handlePointerStep(_ run: FinishRun) async -> Bool {
+        let session = run.session
+        guard session.isVoiceCommand, session.acceptsCommands, !session.heardOnlyOverPlayback, !RemoteControl.screenIsLocked,
+              let command = ScreenPointer.parse(run.trimmed), let app = session.targetApp, !app.isTerminated,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return false }
+        owLog("[Pointer] '\(run.trimmed)' → \(command)")
+        switch await runPointerCommand(command, session: session, app: app) {
+        case .notHandled:
+            return false
+        case .step:
+            self.lastTranscription = run.text
+            run.commandFollowUp = .some(nil)
+        case .noStep:
+            self.lastTranscription = run.text
+        }
+        return true
     }
 
     private func typeIntoNamedField(_ run: FinishRun) async -> Bool {

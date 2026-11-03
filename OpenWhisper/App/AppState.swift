@@ -684,6 +684,11 @@ final class AppState {
     /// The button screen mode last pressed, and the icon it was asked for: "mikrofona bas" again
     /// presses it again, though pressing changed its look (Claude's mic turns into a stop).
     @ObservationIgnored var screenModeLastPress: (element: ScreenElement, iconClass: String?)?
+    /// The numbers or the grid screen mode shows (`AppState+ScreenPointer`).
+    @ObservationIgnored let screenOverlay = ScreenOverlayController()
+    @ObservationIgnored var screenOverlayState: ScreenOverlayState?
+    @ObservationIgnored var screenOverlayRefresh: Task<Void, Never>?
+    @ObservationIgnored var screenOverlayFrontObserver: NSObjectProtocol?
     /// The target belonging to the latest raw/cleaned pair, not necessarily the app from the
     /// most recently started recording.
     var swapTargetApp: NSRunningApplication?

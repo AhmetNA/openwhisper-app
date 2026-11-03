@@ -61,6 +61,9 @@ enum ScreenActions {
 
     /// What can be acted on in `app`'s front window, top to bottom; at most `limit`.
     static func elements(of app: NSRunningApplication, limit: Int = 150) -> [ScreenElement] {
+        // An open menu is all that can be acted on until it closes.
+        let menuItems = openMenuItems(of: app)
+        if !menuItems.isEmpty { return menuItems }
         guard let window = ScreenReader.focusedWindow(of: app), let windowFrame = frame(of: window) else { return [] }
         let windowIsDialog = ["AXDialog", "AXSystemDialog"].contains(ScreenReader.string(window, kAXSubroleAttribute) ?? "")
         let deadline = Date().addingTimeInterval(1.5)
@@ -98,6 +101,32 @@ enum ScreenActions {
         }
         owLog("[Screen] \(found.count) elements in \(app.localizedName ?? "?") (\(visited) nodes)")
         return found
+    }
+
+    /// The items of an open menu (a right click's): it hangs off the app or the focused
+    /// element, not the front window.
+    static func openMenuItems(of app: NSRunningApplication) -> [ScreenElement] {
+        let root = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(root, 0.3)
+        var parents = [root]
+        if let window = ScreenReader.focusedWindow(of: app) { parents.append(window) }
+        var focused: CFTypeRef?
+        if AXUIElementCopyAttributeValue(root, kAXFocusedUIElementAttribute as CFString, &focused) == .success, let focused,
+           CFGetTypeID(focused) == AXUIElementGetTypeID() {
+            parents.append(focused as! AXUIElement)
+        }
+        for parent in parents {
+            for child in ScreenReader.children(parent) where ScreenReader.node(child).role == "AXMenu" {
+                let items = ScreenReader.children(child).compactMap { item -> ScreenElement? in
+                    let info = ScreenReader.node(item)
+                    guard info.role == "AXMenuItem", info.enabled, let frame = info.frame, frame.height > 1,
+                          let label = ownLabel(of: item) else { return nil }
+                    return ScreenElement(element: item, role: info.role, label: label, region: "orta", inDialog: true)
+                }
+                if !items.isEmpty { return items }
+            }
+        }
+        return []
     }
 
     private static func label(of node: AXUIElement, role: String) -> String? {
@@ -215,9 +244,9 @@ enum ScreenActions {
 
     /// Whisper glues a short "Nova'ya bas" into one word ("Novayabas", "Novanabas"): the name
     /// before the "bas". Nil for any other word.
-    static func gluedPressName(_ word: String) -> String? {
+    static func gluedPressName(_ word: String, english: Bool = CommandLanguage.isEnglish) -> String? {
         let word = word.replacingOccurrences(of: "'", with: "")
-        guard !CommandLanguage.isEnglish, word.count > 5, word.hasSuffix("bas"), !fillers.contains(word) else { return nil }
+        guard !english, word.count > 5, word.hasSuffix("bas"), !fillers.contains(word) else { return nil }
         return String(word.dropLast(3))
     }
 

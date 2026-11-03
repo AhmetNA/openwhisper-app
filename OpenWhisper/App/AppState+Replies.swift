@@ -285,6 +285,7 @@ extension AppState {
         hotkey?.screenModeKeys = true
         let stamp = Date()
         screenModeLastAction = stamp
+        refreshScreenNumbers()
         // A recording that never finished must not leave the mode on.
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(ScreenMode.silence + ScreenMode.maxDuration + 5))
@@ -310,6 +311,7 @@ extension AppState {
         owLog("[ScreenMode] Off: \(reason)")
         screenModeActive = false
         screenModeLastPress = nil
+        hideScreenOverlay()
         hotkey?.screenModeKeys = false
     }
 
