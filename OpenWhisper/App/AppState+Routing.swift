@@ -20,8 +20,7 @@ private final class FinishRun {
     var agentDeliveryFailure: String?
     /// Jarvis opened the app or chat it sends to: the Flow bar keeps saying so.
     var jarvisChangedScreen = false
-    // Set when a command ran: listen a moment longer for a fix ("sonrakine geç"). Declared
-    // first so it runs last, once the media and recording state below are settled.
+    // Set when a command ran: listen a moment longer for a fix ("sonrakine geç").
     var commandFollowUp: CommandFollowUp.Domain?? = nil
     // An agent app or a new chat was opened: listen for commands or dictation there.
     var conversationContinuationApp: NSRunningApplication?
@@ -61,6 +60,7 @@ extension AppState {
         guard !session.hasFinished else { return }
         session.hasFinished = true
         let run = FinishRun(session: session)
+        // Declared first so it runs last, once the media and recording state below are settled.
         defer { continueListening(run) }
         defer { settleMedia(run) }
         let traceID = await closeRecordingHistory(session)
@@ -1180,8 +1180,6 @@ extension AppState {
         send: Bool
     ) async -> Bool {
         let session = run.session
-        let generation = run.generation
-        let focus = run.focus
         var pasteContext = pasteContext
         run.agentDeliveryFailure = nil
         // Never type into the lock screen.
@@ -1193,44 +1191,10 @@ extension AppState {
         }
         session.latency.finishDecision(route: send ? "agent yazma" : "dikte")
         let preprocessingStartedAt = session.latency.timestamp()
-        var initialText = rawText
-
-        // Tracks which learned pairs actually fired for THIS dictation, so the paste
-        // callback below can hand them to DictationSnapshot.capture for reversal detection.
-        // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
-        // below) — that corrector has no corresponding CorrectionStore record to penalize.
-        var appliedCorrectionPairs: [(wrong: String, right: String)] = []
-
-        let activePairs = CorrectionStore.shared.activePairs
-        if !activePairs.isEmpty {
-            let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
-            if !applied.isEmpty {
-                initialText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
-                for (wrong, right) in applied {
-                    owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
-                }
-                CorrectionStore.shared.recordApplied(pairs: applied)
-                appliedCorrectionPairs = applied
-            }
-        }
-
-        let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
-        if !phoneticApplied.isEmpty {
-            initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
-            for (wrong, right) in phoneticApplied {
-                owLog("[PhoneticGlossary] Corrected: \(wrong) -> \(right)")
-            }
-        }
-
-        var laughterWasRandomized = false
-        if self.laughterToRandomEnabled {
-            let result = LaughterRandomizer.transform(initialText)
-            if result.didTransform {
-                initialText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                laughterWasRandomized = true
-                owLog("[LaughterRandomizer] Laughter converted to keyboard random")
-            }
-        }
+        let prepared = applyLocalCorrections(rawText)
+        var initialText = prepared.text
+        let appliedCorrectionPairs = prepared.appliedPairs
+        let laughterWasRandomized = prepared.laughterWasRandomized
 
         initialText = await self.formatTurkishDictation(initialText)
         initialText = TranscriptSanitizer.removeForbiddenArtifacts(from: initialText)
@@ -1248,17 +1212,7 @@ extension AppState {
         // Until Return is pressed the screen must stay put: say so on the Flow bar, and
         // the moment the user moves to another app, tell them the message may not go.
         var watchesScreen = self.autoPasteEnabled && send
-        let screenWatch = watchesScreen ? NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            Task { @MainActor in
-                guard watchesScreen, let app, app.processIdentifier != targetApp?.processIdentifier,
-                      app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-                owLog("[Agent] Screen changed to \(app.localizedName ?? "?") before the send")
-                self?.showFlowBarMessage(L("Ekran değişti, mesaj gitmeyebilir", "The screen changed, the message may not go through"), durationMs: 8000)
-            }
-        } : nil
+        let screenWatch = watchesScreen ? watchForScreenChange(targetApp: targetApp, isWatching: { watchesScreen }) : nil
         defer {
             watchesScreen = false
             if let screenWatch { NSWorkspace.shared.notificationCenter.removeObserver(screenWatch) }
@@ -1277,36 +1231,14 @@ extension AppState {
            let sent = await ClaudeSessionNavigator.sendInBackground(target, window: conversation.window, text: initialText) {
             // Once Send was pressed there is no retry: it could post the message twice.
             watchesScreen = false
-            self.lastInjectedText = ""
-            self.swapPair = nil
-            self.swapPasteContext = nil
-            self.hotkey?.setSwapAvailable(false)
-            let result = sent ? "Agent message sent in background" : "Agent message written in background, send unconfirmed"
-            session.latency.markOutput(result)
-            owLog("[Result] \(result)")
-            if let traceID = run.traceID {
-                VoiceEventLog.shared.append(traceID, "[Result] \(result)")
-            }
-            self.showFlowBarMessage(sent ? L("gönderildi", "sent") : L("yazıldı, gönderilmedi", "written, not sent"), durationMs: 1200)
+            noteBackgroundSend(run, sent: sent)
             return sent
         }
 
         // Return can only be pressed in the frontmost app. If the user moved to another
         // app (or full-screen Space) after "gönder", hop to the target, send there, and
         // go straight back to where they were.
-        var hopFrom: NSRunningApplication?
-        if self.autoPasteEnabled, send,
-           let target = targetApp, !target.isTerminated,
-           let front = NSWorkspace.shared.frontmostApplication,
-           front.processIdentifier != target.processIdentifier {
-            owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
-            run.jarvisChangedScreen = true
-            self.showFlowBarMessage(L("Jarvis ekranı değiştirdi, bekleyin", "Jarvis changed the screen, please wait"), durationMs: 8000)
-            // A bound conversation focuses its own composer right after this.
-            if await AgentAppActivator.bringToFront(target, settle: !RecordedConversation.requiresBinding(target.bundleIdentifier)) {
-                hopFrom = front
-            }
-        }
+        let hopFrom = await hopToSendTarget(run, targetApp: targetApp, send: send)
         // Remember the conversation visible immediately before the delivery hop,
         // independently of the conversation captured when recording started.
         let deliveryConversation = pasteContext.conversation
@@ -1341,14 +1273,7 @@ extension AppState {
             }
             guard let app = targetApp, let conversation = pasteContext.conversation,
                   await conversation.restore(in: app) else {
-                _ = ClipboardHistory.write(initialText)
-                let reason = pasteContext.conversation == nil
-                    ? "Kayıt başında sohbet kimliği alınamadı"
-                    : "Kaydın başladığı sohbete dönülemedi"
-                run.agentDeliveryFailure = reason
-                self.lastError = loc(reason) + ". " + loc("Metin panoya kopyalandı.")
-                session.latency.markOutput(reason)
-                owLog("[Agent] Delivery blocked: \(reason)")
+                noteDeliveryBlocked(run, text: initialText, hadConversation: pasteContext.conversation != nil)
                 goBack()
                 return false
             }
@@ -1361,210 +1286,128 @@ extension AppState {
         var chatWatch: Task<Void, Never>?
         if watchesScreen, let app = targetApp, let conversation = pasteContext.conversation,
            let shown = conversation.shownTitle(in: app) {
-            chatWatch = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    guard watchesScreen, !Task.isCancelled else { return }
-                    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-                          let now = conversation.shownTitle(in: app), now != shown else { continue }
-                    owLog("[Agent] Chat changed to \"\(now)\" before the send")
-                    self?.showFlowBarMessage(L("Sohbet değişti, mesaj gitmeyebilir", "The chat changed, the message may not go through"), durationMs: 8000)
-                    return
-                }
-            }
+            chatWatch = watchForChatChange(in: app, conversation: conversation, shown: shown, isWatching: { watchesScreen })
         }
         defer { chatWatch?.cancel() }
 
         if self.autoPasteEnabled {
-            let pasteStartedAt = session.latency.timestamp()
-            session.latency.expectAsyncOutput()
-            guard let textInjector = self.textInjector else {
-                session.latency.markOutput("metin enjektörü kullanılamıyor")
-                return false
-            }
-            // Resumed once the paste (and, with `send`, the Return) is done, so a
-            // spoken "Gönderdim" never runs ahead of the real send.
-            return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            var finished = false
-            @MainActor func finish(_ delivered: Bool) {
-                guard !finished else { return }
-                finished = true
-                continuation.resume(returning: delivered)
-            }
-            // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
-            textInjector.pasteTextResult(
-                initialText,
-                targetApp: targetApp,
-                context: pasteContext
-            ) { [weak self] outcome in
-                // The paste callback runs outside the task: re-bind the trace so the
-                // cleanup below (and everything it logs) still lands in it.
-                Task { @MainActor in VoiceTrace.$current.withValue(run.traceID) {
-                    guard let self else { return }
-                    session.latency.record(.paste, since: pasteStartedAt, detail: "\(outcome)")
-                    session.latency.markOutput("\(outcome)")
-                    owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
-                    switch outcome {
-                    case .pastedVerified where send, .pastedUnverified where send:
-                        self.lastInjectedText = ""
-                        self.swapPair = nil
-                        self.swapPasteContext = nil
-                        self.hotkey?.setSwapAvailable(false)
-                        // Electron composers and CLI bracketed paste need a moment to
-                        // take the paste before Return, or only part of it is sent.
-                        // Claude's composer is watched for the pasted text below instead.
-                        let isClaude = targetApp?.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false
-                        DispatchQueue.main.asyncAfter(deadline: .now() + (isClaude ? 0.05 : 0.25)) { [weak self] in
-                            Task { @MainActor in
-                                guard let self else { return }
-                                // A background paste (the hop above failed or the user moved
-                                // on) still gets sent: hop there for the Return and back.
-                                var sent = false
-                                if let app = targetApp, !app.isTerminated,
-                                   app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
-                                   NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
-                                    _ = await ClaudeSessionNavigator.waitForComposerText(app, text: initialText)
-                                }
-                                if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
-                                    // From here Jarvis itself may hop to the target and back.
-                                    watchesScreen = false
-                                    sent = await injector.pressReturnBringingToFront(pid: pid, context: pasteContext)
-                                }
-                                // A posted Return proves nothing if Claude was not ready:
-                                // a sent message leaves the composer.
-                                if sent, let app = targetApp, !app.isTerminated,
-                                   app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
-                                   NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-                                   await ClaudeSessionNavigator.composerStillHolds(app, text: initialText) {
-                                    owLog("[Result] Return pressed but the text is still in Claude's composer")
-                                    sent = false
-                                }
-                                owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
-                                if let traceID = run.traceID {
-                                    VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
-                                }
-                                self.showFlowBarMessage(sent ? L("gönderildi", "sent") : L("yazıldı, gönderilmedi", "written, not sent"), durationMs: 1200)
-                                finish(sent)
-                                // Wait a beat so the app takes the Return before losing focus.
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { goBack() }
-                            }
-                        }
-                    case .pastedVerified, .pastedUnverified:
-                        self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
-                        self.swapTargetApp = targetApp
-                        self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
-                        self.lastInjectedIsCleaned = initialText != rawText
-                        self.lastInjectedText = initialText
-                        self.hotkey?.setSwapAvailable(true)
-                        DictationSnapshot.shared.capture(
-                            pastedText: initialText,
-                            targetApp: targetApp,
-                            appliedPairs: appliedCorrectionPairs
-                        )
-
-                        self.dismissFlowBarMessage()
-                        finish(true)
-
-                        // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
-                        // Once Ollama finishes, replace the initially pasted text in-place.
-                        // Keep the generated keyboard random exact. LLM cleanup can rewrite
-                        // or remove a random-looking token, which would defeat this setting.
-                        if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
-                            Task { @MainActor [weak self] in
-                                guard let self else { return }
-                                let cleanupStartedAt = session.latency.timestamp()
-                                let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard, focus: focus) ?? initialText
-                                session.latency.record(.cleanup, since: cleanupStartedAt)
-                                let formatted = await self.formatTurkishDictation(cleaned)
-                                let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                                guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
-                                // A voice edit, an Option+Z swap or a newer dictation changed
-                                // the field since: backspacing `initialText` would cut the wrong text.
-                                guard self.lastInjectedText == initialText else {
-                                    owLog("[OpenWhisper] Pasted text changed before the LLM cleanup finished; not replacing")
-                                    return
-                                }
-                                if LLMCleanup.isNoOpCleanup(original: initialText, cleaned: trimmedCleaned) {
-                                    owLog("[OpenWhisper] LLM cleanup only changed spacing/punctuation style; not swapping")
-                                    return
-                                }
-                                // A corrected word can reveal a voice command ("Sesifullah"
-                                // → "Sesi fulle"): take the dictation back out and run it.
-                                if !misheard.isEmpty,
-                                   !LLMCleanup.sameWords(trimmedCleaned, initialText),
-                                   await self.runCorrectedDictationAsCommand(
-                                    pasted: initialText, corrected: trimmedCleaned,
-                                    generation: generation, session: session, targetApp: targetApp
-                                   ) {
-                                    return
-                                }
-                                owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
-
-                                self.textInjector?.replaceInjectedText(
-                                    oldText: initialText,
-                                    newText: trimmedCleaned,
-                                    targetApp: targetApp,
-                                    context: self.swapPasteContext
-                                ) { [weak self] in
-                                    Task { @MainActor in
-                                        guard let self else { return }
-                                        self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
-                                        self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: trimmedCleaned)
-                                        self.lastTranscription = trimmedCleaned
-                                        self.lastInjectedIsCleaned = true
-                                        self.lastInjectedText = trimmedCleaned
-                                        self.textInjector?.copyToClipboard(rawText)
-                                        self.showFlowBarMessage("fixed", durationMs: 1000)
-                                        // The field now holds the LLM-cleaned text, not what
-                                        // was captured at the raw paste above — without this,
-                                        // every later diff compares raw-vs-cleaned and can
-                                        // learn the LLM's own edits as if the user made them.
-                                        // `capture` re-runs the same suppressNextCapture check
-                                        // as the original call (see `install`), so an
-                                        // intervening Option+Z swap still correctly discards
-                                        // this recapture instead of resurrecting a snapshot
-                                        // for text the user already threw away.
-                                        DictationSnapshot.shared.capture(
-                                            pastedText: trimmedCleaned,
-                                            targetApp: targetApp,
-                                            appliedPairs: appliedCorrectionPairs
-                                        )
-                                        owLog("[OpenWhisper] Async LLM replacement finished.")
-                                        if let traceID = run.traceID {
-                                            VoiceEventLog.shared.append(traceID, "[Result] Replaced pasted text with cleanup: '\(trimmedCleaned)'")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    case .clipboardOnly(let reason):
-                        self.lastInjectedText = ""
-                        self.swapPair = nil
-                        self.swapPasteContext = nil
-                        self.hotkey?.setSwapAvailable(false)
-                        self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
-                        goBack()
-                        finish(false)
-                    }
-                } }
-            }
-            // Destination resolution and AX verification are bounded well below this.
-            // Keep a trace even if an unexpected integration path loses its callback.
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(2))
-                session.latency.markOutput("yapıştırma sonucu zaman aşımı")
-                // The send path hops apps and waits, but never this long.
-                try? await Task.sleep(for: .seconds(6))
-                if !finished { owLog("[Result] Paste result never came back; reporting not delivered") }
-                finish(false)
-            }
-            }
+            return await pasteAndWait(
+                run, rawText: rawText, text: initialText, targetApp: targetApp, pasteContext: pasteContext, send: send,
+                misheard: misheard, appliedPairs: appliedCorrectionPairs, laughterWasRandomized: laughterWasRandomized,
+                stopWatching: { watchesScreen = false }, goBack: goBack
+            )
         } else {
             self.textInjector?.copyToClipboard(initialText)
             owLog("[Result] Auto-paste off, copied to clipboard: '\(initialText)'")
             session.latency.markOutput("panoya kopyalandı")
             return false
+        }
+    }
+
+    /// Pastes the text and returns once it is in the target, and, with `send`, Return went to it.
+    private func pasteAndWait(
+        _ run: FinishRun,
+        rawText: String,
+        text initialText: String,
+        targetApp: NSRunningApplication?,
+        pasteContext: PasteContext,
+        send: Bool,
+        misheard: [MisheardWordDetector.Word],
+        appliedPairs appliedCorrectionPairs: [(wrong: String, right: String)],
+        laughterWasRandomized: Bool,
+        stopWatching: @escaping @MainActor () -> Void,
+        goBack: @escaping @MainActor () -> Void
+    ) async -> Bool {
+        let session = run.session
+        let pasteStartedAt = session.latency.timestamp()
+        session.latency.expectAsyncOutput()
+        guard let textInjector = self.textInjector else {
+            session.latency.markOutput("metin enjektörü kullanılamıyor")
+            return false
+        }
+        // Resumed once the paste (and, with `send`, the Return) is done, so a
+        // spoken "Gönderdim" never runs ahead of the real send.
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        var finished = false
+        @MainActor func finish(_ delivered: Bool) {
+            guard !finished else { return }
+            finished = true
+            continuation.resume(returning: delivered)
+        }
+        // Step 1: Paste raw/corrected text INSTANTLY (3-second path)
+        textInjector.pasteTextResult(
+            initialText,
+            targetApp: targetApp,
+            context: pasteContext
+        ) { [weak self] outcome in
+            // The paste callback runs outside the task: re-bind the trace so the
+            // cleanup below (and everything it logs) still lands in it.
+            Task { @MainActor in VoiceTrace.$current.withValue(run.traceID) {
+                guard let self else { return }
+                session.latency.record(.paste, since: pasteStartedAt, detail: "\(outcome)")
+                session.latency.markOutput("\(outcome)")
+                owLog("[Result] Paste into \(targetApp?.bundleIdentifier ?? "unknown"): \(outcome) — '\(initialText)'")
+                switch outcome {
+                case .pastedVerified where send, .pastedUnverified where send:
+                    self.lastInjectedText = ""
+                    self.swapPair = nil
+                    self.swapPasteContext = nil
+                    self.hotkey?.setSwapAvailable(false)
+                    // Electron composers and CLI bracketed paste need a moment to
+                    // take the paste before Return, or only part of it is sent.
+                    // Claude's composer is watched for the pasted text below instead.
+                    let isClaude = targetApp?.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false
+                    self.pressReturnAfterPaste(
+                        run, text: initialText, targetApp: targetApp, pasteContext: pasteContext, delay: isClaude ? 0.05 : 0.25,
+                        stopWatching: stopWatching, finish: finish, goBack: goBack
+                    )
+                case .pastedVerified, .pastedUnverified:
+                    self.swapPair = DictationPair(raw: rawText, cleaned: initialText)
+                    self.swapTargetApp = targetApp
+                    self.swapPasteContext = pasteContext.contextForInjectedText(initialText)
+                    self.lastInjectedIsCleaned = initialText != rawText
+                    self.lastInjectedText = initialText
+                    self.hotkey?.setSwapAvailable(true)
+                    DictationSnapshot.shared.capture(
+                        pastedText: initialText,
+                        targetApp: targetApp,
+                        appliedPairs: appliedCorrectionPairs
+                    )
+
+                    self.dismissFlowBarMessage()
+                    finish(true)
+
+                    // Step 2: Run LLM Cleanup asynchronously in background (7-second path).
+                    // Once Ollama finishes, replace the initially pasted text in-place.
+                    // Keep the generated keyboard random exact. LLM cleanup can rewrite
+                    // or remove a random-looking token, which would defeat this setting.
+                    if self.llmCleanupEnabled && self.cleanupAvailable && !laughterWasRandomized {
+                        self.cleanUpPastedText(
+                            run, initialText, rawText: rawText, targetApp: targetApp,
+                            misheard: misheard, appliedPairs: appliedCorrectionPairs
+                        )
+                    }
+                case .clipboardOnly(let reason):
+                    self.lastInjectedText = ""
+                    self.swapPair = nil
+                    self.swapPasteContext = nil
+                    self.hotkey?.setSwapAvailable(false)
+                    self.showFlowBarMessage(self.clipboardOnlyMessage(for: reason))
+                    goBack()
+                    finish(false)
+                }
+            } }
+        }
+        // Destination resolution and AX verification are bounded well below this.
+        // Keep a trace even if an unexpected integration path loses its callback.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            session.latency.markOutput("yapıştırma sonucu zaman aşımı")
+            // The send path hops apps and waits, but never this long.
+            try? await Task.sleep(for: .seconds(6))
+            if !finished { owLog("[Result] Paste result never came back; reporting not delivered") }
+            finish(false)
+        }
         }
     }
 
@@ -1613,7 +1456,6 @@ extension AppState {
     @MainActor private func runCommands(_ run: FinishRun, _ steps: [MultiCommandSplitter.Step<VoiceCommand>], output: String) async {
         let session = run.session
         let text = run.text
-        let timers = TimerManager.shared
         self.lastTranscription = text
         let actionStartedAt = session.latency.timestamp()
         var steps = steps
@@ -1634,120 +1476,20 @@ extension AppState {
         for step in steps {
             switch step.command {
             case .timer(let timerCommand):
-                let status: String
-                // A wall-clock alarm goes to the Clock app, which rings it even without Jarvis;
-                // Jarvis keeps it only when that can't be done (no shortcut, more than a day away).
-                if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
-                   await ClockAlarm.set(date, label: label) {
-                    status = L("Saat uygulamasına alarm kurdum: ", "I set an alarm in the Clock app: ") + TimerManager.clock(date, sayDay: true)
-                } else {
-                    status = timers.perform(timerCommand)
-                }
-                owLog("[Result] Timer: \(status)")
-                ran.append(step.command)
-                statuses.append(status)
-                replies.append(self.jarvisReply.timer(timerCommand, status: status))
+                await runTimerStep(step, timerCommand, ran: &ran, statuses: &statuses, replies: &replies)
             case .system(let parsed):
-                var command = parsed
-                // "Tam ekran yap": the YouTube video in front, else the window ("Claude'u tam
-                // ekran yap" names its app).
-                if parsed == .video(.fullscreen) {
-                    let named = DailyCommandParser.fullscreenTarget(step.text, installedApps: SystemController.installedApps())
-                    if (named != nil && named != "Safari") || !VideoController.youTubeVideoInFront() {
-                        command = .window(WindowAction(app: named, position: .fullscreen))
-                    }
-                }
-                if step.command.endsSession && command != .disableWakeWord {
-                    // Say everything before the Mac stops listening.
-                    if session.isVoiceCommand {
-                        await self.speakReply(self.jarvisReply.combined(replies + [L("Görüşürüz.", "See you.")]))
-                    }
-                    replies = []
-                }
-                // The local model takes several seconds on a long page.
-                if command == .browser(.summarize) { self.showFlowBarMessage(L("Sayfa özetleniyor…", "Summarizing the page…"), durationMs: 30000) }
-                var youTubeStatus: String?
-                if case .video = command, SystemCommandParser.mentionsYouTube(step.text) {
-                    youTubeStatus = await BrowserController.prepareYouTubeVideo()
-                }
-                let status: String
-                if let youTubeStatus {
-                    status = youTubeStatus
-                } else if case .video(let action) = command, SystemCommandParser.mentionsYouTube(step.text) {
-                    status = await VideoController.perform(action, onlyYouTube: true)
-                } else {
-                    status = await SystemController.perform(command, disableWakeWord: {
-                        self.wakeWordEnabled = false
-                    })
-                }
-                if command == .disableWakeWord {
-                    run.commandFollowUp = nil
-                    run.conversationContinuationApp = nil
-                }
-                if case .reading(let action) = command, action != .stop, !JarvisReply.isFailure(status) {
-                    // Jarvis reads over nothing: the paused media stays paused.
-                    startsReading = true
-                    run.resumeMediaAfterCommand = false
-                }
-                // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
-                // lets the video the recording paused continue, and so does a failed command.
-                if case .video(let action) = command, action.changesPlayback,
-                   !VideoController.failures.contains(status) { run.resumeMediaAfterCommand = false }
-                if command == .video(.play) { ArticleReader.shared.forget() }
-                switch command {
-                case .switchToAgent(let agent):
-                    stepTargetApp = NSWorkspace.shared.frontmostApplication
-                    // Opening an agent invites a message, not just a short command fix.
-                    // Continue only after a successful final step into the expected app.
-                    if session.isVoiceCommand, steps.last?.command == step.command,
-                       status == SystemController.frontStatus(agent.displayName),
-                       let app = stepTargetApp,
-                       agent.bundleIdentifiers.contains(app.bundleIdentifier ?? "") {
-                        run.conversationContinuationApp = app
-                    }
-                case .switchToApp: stepTargetApp = NSWorkspace.shared.frontmostApplication
-                default: break
-                }
-                owLog("[Result] System command: \(status)")
-                ran.append(step.command)
-                statuses.append(status)
-                if !step.command.endsSession || command == .disableWakeWord { replies.append(self.jarvisReply.system(command, status: status)) }
+                await runSystemStep(
+                    run, step, parsed, allSteps: steps, stepTargetApp: &stepTargetApp, startsReading: &startsReading,
+                    ran: &ran, statuses: &statuses, replies: &replies
+                )
             case .spotify(let request):
-                let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
-                let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: request)
-                let speaksResult = SpotifyManager.speaksResult(afterCommand: request)
-                let speaksFailure = SpotifyManager.speaksFailure(afterCommand: request)
-                let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
-                let message = SpotifyManager.shared.takeResultMessage(for: request)
-                owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
-                if handled, !resumes { run.resumeMediaAfterCommand = false }
-                if handled { ArticleReader.shared.forget() }
-                if handled { ran.append(step.command) }
-                statuses.append(handled ? "Spotify: \(step.text)" : L("Spotify komutu uygulanamadı", "Couldn't apply the Spotify command"))
-                if handled {
-                    replies.append(speaksResult ? message.map { self.jarvisReply.spotifyResult($0) }
-                        : self.jarvisReply.spotify(handled: true, likedSongs: likedSongs))
-                } else {
-                    replies.append(self.jarvisReply.failure(speaksFailure ? message ?? L("Spotify komutunu uygulayamadım", "I couldn't apply the Spotify command") : L("Spotify komutunu uygulayamadım", "I couldn't apply the Spotify command")))
-                }
+                await runSpotifyStep(
+                    run, step, request, targetApp: stepTargetApp, ran: &ran, statuses: &statuses, replies: &replies
+                )
             case .agent(let dictation) where dictation.body.isEmpty && dictation.session == .new && dictation.project == nil:
-                // A scene's "Claude Code'da yeni session aç". An app still launching behind
-                // can take the front while this one is activated; try again once it settled.
-                let agent = dictation.target ?? .claudeCode
-                var app: NSRunningApplication?
-                for _ in 0..<3 where app == nil { app = await AgentAppActivator.activate(agent) }
-                var opened = false
-                if let app {
-                    opened = agent == .claudeCode ? await ClaudeSessionNavigator.openNewSession(app)
-                        : await CodexSessionNavigator.openNewThread(app, folder: nil)
-                }
-                if opened, let app, steps.last?.text == step.text { run.conversationContinuationApp = app }
-                let status = opened ? L("\(agent.displayName)’da yeni sohbet hazır", "New chat ready in \(agent.displayName)")
-                    : L("\(agent.displayName)’da yeni sohbet açılamadı", "Couldn't open a new chat in \(agent.displayName)")
-                owLog("[Result] Agent new session: \(status)")
-                ran.append(step.command)
-                statuses.append(status)
-                replies.append(opened ? nil : self.jarvisReply.failure(status))
+                await runNewAgentChatStep(
+                    run, step, dictation, isLast: steps.last?.text == step.text, ran: &ran, statuses: &statuses, replies: &replies
+                )
             case .agent:
                 // Never a step: `CommandRegistry` keeps agent dictation on its own route.
                 owLog("[Route] agent dictation reached the command runner; skipped")
@@ -1879,138 +1621,19 @@ extension AppState {
         // may have changed its look (Claude's mic turned into a stop and was not found).
         if screenModeStep, ScreenActions.saysClick(trimmed), let last = screenModeLastPress, ScreenReader.node(last.element.element).frame != nil,
            ScreenMode.isRepeat(trimmed) || (last.iconClass != nil && IconClassifier.iconClass(for: trimmed) == last.iconClass) {
-            session.latency.finishDecision(route: "ekran eylemi, aynı düğme")
-            owLog("[Route] screen action: '\(last.element.label)' again")
-            self.lastTranscription = text
-            let pressed = ScreenActions.perform(last.element)
-            self.logScreenStep(session, pressed ? "aynı düğmeye basıldı" : "basılamadı", startedAt: stepStarted,
-                               [("basma", CACurrentMediaTime() - stepStarted)])
-            self.showFlowBarMessage(pressed ? "✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
-            if pressed {
-                self.noteScreenModeAction()
-                run.commandFollowUp = .some(nil)
-            } else {
-                await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
-            }
+            await pressLastAgain(run, last.element, stepStarted: stepStarted)
             return true
         }
         // "… tuşuna bas" asked for a press: if nothing fits, say so instead of chatting.
         let saysClick = ScreenActions.saysClick(trimmed)
-        // Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
-        @MainActor func notFound() async -> Bool {
-            guard saysClick, session.isVoiceCommand else { return false }
-            let name = ScreenActions.spokenName(trimmed)
-            owLog("[Screen] Nothing on screen matches '\(name)'")
-            session.latency.finishDecision(route: "ekran eylemi, bulunamadı")
-            self.logScreenStep(session, "bulunamadı", startedAt: stepStarted, stepParts)
-            self.lastTranscription = text
-            self.showFlowBarMessage(L("Ekranda “\(name)” bulamadım", "I couldn't find “\(name)” on screen"), durationMs: 4000)
-            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(L("Bulamadım", "I couldn't find it"))) }
-            return true
-        }
         var mark = CACurrentMediaTime()
-        /// Not in the accessibility tree (a canvas, a game, an Electron view): find the
-        /// words on a screenshot and click them; an icon without words goes to a vision
-        /// model. Only when pressing was asked for.
-        @MainActor func pressByText() async -> Bool {
-            // "bu butonuna bas" names nothing: no screenshot can find it.
-            guard session.isVoiceCommand, saysClick || screenModeStep,
-                  !ScreenActions.spokenName(trimmed).isEmpty else { return await notFound() }
-            // OCR and the icon model look at the screen at the same time, not one after the
-            // other; a named icon ("mikrofona bas") is no text, so there the icon's pick wins.
-            let namesIcon = saysClick && IconClassifier.iconClass(for: trimmed) != nil
-            mark = CACurrentMediaTime()
-            async let textFound = ScreenActions.findText(trimmed, in: app)
-            async let iconFound = saysClick ? await ScreenActions.iconPick(trimmed, in: app) : nil
-            var hit = await textFound
-            let icon = await iconFound
-            stepParts.append((saysClick ? "OCR + simge modeli (aynı anda)" : "ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
-            if let found = hit, ScreenActions.isRisky(found.label), !saysClick { hit = nil }
-            if let icon, namesIcon || hit == nil,
-               NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
-                session.latency.finishDecision(route: "ekran eylemi, simge modeli")
-                owLog("[Route] screen action: icon '\(icon.label)' by the icon model")
-                self.lastTranscription = text
-                self.lastCommandUndo = []
-                mark = CACurrentMediaTime()
-                let pressed = ScreenActions.perform(icon)
-                if pressed { self.screenModeLastPress = (icon, IconClassifier.iconClass(for: trimmed)) }
-                stepParts.append(("basma", CACurrentMediaTime() - mark))
-                self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
-                self.showFlowBarMessage(pressed ? "✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
-                if pressed {
-                    self.noteScreenModeAction()
-                    run.commandFollowUp = .some(nil)
-                } else {
-                    await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
-                }
-                return true
-            }
-            if hit == nil, saysClick {
-                self.showFlowBarMessage(L("Ekrana bakıyorum…", "Looking at the screen…"), durationMs: 12000)
-                mark = CACurrentMediaTime()
-                let point = await ScreenActions.visionPick(trimmed, in: app)
-                stepParts.append(("görüntü modeli", CACurrentMediaTime() - mark))
-                if let point { hit = (ScreenActions.spokenName(trimmed), point) } else { self.dismissFlowBarMessage() }
-            }
-            guard let hit, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
-                return await notFound()
-            }
-            session.latency.finishDecision(route: "ekran eylemi, ekran görüntüsünden")
-            owLog("[Route] screen action: '\(hit.label)' on the screenshot at \(Int(hit.point.x)),\(Int(hit.point.y))")
-            self.lastTranscription = text
-            self.lastCommandUndo = []
-            mark = CACurrentMediaTime()
-            let pressed = ScreenActions.click(at: hit.point)
-            stepParts.append(("tıklama", CACurrentMediaTime() - mark))
-            if session.isVoiceCommand {
-                self.logScreenStep(session, pressed ? "ekran görüntüsünden tıklandı" : "tıklanamadı", startedAt: stepStarted, stepParts)
-            }
-            self.showFlowBarMessage(pressed ? "“\(hit.label)” ✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
-            if session.isVoiceCommand, pressed {
-                self.noteScreenModeAction()
-                run.commandFollowUp = .some(nil)
-            } else if session.isVoiceCommand {
-                await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
-            }
-            return true
-        }
         // Up to 400 for matching by name: Spotify shows ~900 once its tree is awake. The
         // language model still reads only the first 150, to keep its prompt short.
         let elements = ScreenActions.elements(of: app, limit: 400)
         stepParts.append(("ekran okuma", CACurrentMediaTime() - mark))
-        guard !elements.isEmpty else { return await pressByText() }
-        let labels = elements.map(\.label)
-        var pick: Int?
-        var byModel = false
-        let exact = ScreenActions.exactMatches(trimmed, labels: labels)
-        // Only when pressing was said: "bak" alone must not press "Back".
-        let soundAlike = exact.isEmpty && saysClick ? ScreenActions.soundAlikeMatches(trimmed, labels: labels) : []
-        if exact.count == 1 {
-            pick = exact[0]
-        } else if exact.count > 1, exact.filter({ elements[$0].inDialog }).count == 1 {
-            pick = exact.first { elements[$0].inDialog }
-        } else if soundAlike.count == 1 {
-            pick = soundAlike[0]
-            owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
-        } else if !(exact.isEmpty && saysClick && IconClassifier.iconClass(for: trimmed) != nil
-                    && !labels.contains { ScreenActions.isGrounded(trimmed, label: $0) }),
-                  !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
-            // A named icon no label speaks of skips the language model (0.5–2 s): the icon
-            // model in `pressByText` knows icons better.
-            self.showFlowBarMessage(L("Ekrana bakıyorum…", "Looking at the screen…"), durationMs: 8000)
-            mark = CACurrentMediaTime()
-            pick = await ScreenActions.modelPick(trimmed, elements: Array(elements.prefix(150)))
-            stepParts.append(("model seçimi", CACurrentMediaTime() - mark))
-            byModel = true
-            if let chosen = pick, exact.isEmpty, !soundAlike.contains(chosen),
-               !ScreenActions.isGrounded(trimmed, label: labels[chosen]) {
-                owLog("[Screen] Model's pick '\(labels[chosen])' has nothing to do with '\(trimmed)'; not pressed")
-                pick = nil
-            }
-            if pick == nil { self.dismissFlowBarMessage() }
-        }
-        guard let pick else { return await pressByText() }
+        guard !elements.isEmpty else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
+        let (pick, byModel) = await pickElement(trimmed, elements: elements, saysClick: saysClick, stepParts: &stepParts)
+        guard let pick else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
         let target = elements[pick]
         session.latency.finishDecision(route: "ekran eylemi")
         owLog("[Route] screen action: \(target.kind) '\(target.label)' (\(target.region))\(byModel ? " by the model" : "")")
@@ -2041,6 +1664,558 @@ extension AppState {
             await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
         }
         return true
+    }
+
+    private func applyLocalCorrections(_ rawText: String) -> (text: String, appliedPairs: [(wrong: String, right: String)], laughterWasRandomized: Bool) {
+        var initialText = rawText
+
+        // Tracks which learned pairs actually fired for THIS dictation, so the paste
+        // callback below can hand them to DictationSnapshot.capture for reversal detection.
+        // Deliberately excludes PhoneticGlossaryCorrector's substitutions (see `phoneticApplied`
+        // below) — that corrector has no corresponding CorrectionStore record to penalize.
+        var appliedCorrectionPairs: [(wrong: String, right: String)] = []
+
+        let activePairs = CorrectionStore.shared.activePairs
+        if !activePairs.isEmpty {
+            let (corrected, applied) = CorrectionEngine.applyCorrections(to: initialText, pairs: activePairs)
+            if !applied.isEmpty {
+                initialText = corrected.trimmingCharacters(in: .whitespacesAndNewlines)
+                for (wrong, right) in applied {
+                    owLog("[Corrections] Applied learned correction: \(wrong) -> \(right)")
+                }
+                CorrectionStore.shared.recordApplied(pairs: applied)
+                appliedCorrectionPairs = applied
+            }
+        }
+
+        let (phoneticCorrected, phoneticApplied) = PhoneticGlossaryCorrector.correct(initialText)
+        if !phoneticApplied.isEmpty {
+            initialText = phoneticCorrected.trimmingCharacters(in: .whitespacesAndNewlines)
+            for (wrong, right) in phoneticApplied {
+                owLog("[PhoneticGlossary] Corrected: \(wrong) -> \(right)")
+            }
+        }
+
+        var laughterWasRandomized = false
+        if self.laughterToRandomEnabled {
+            let result = LaughterRandomizer.transform(initialText)
+            if result.didTransform {
+                initialText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                laughterWasRandomized = true
+                owLog("[LaughterRandomizer] Laughter converted to keyboard random")
+            }
+        }
+        return (initialText, appliedCorrectionPairs, laughterWasRandomized)
+    }
+
+    private func watchForScreenChange(targetApp: NSRunningApplication?, isWatching: @escaping @MainActor () -> Bool) -> NSObjectProtocol {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            Task { @MainActor in
+                guard isWatching(), let app, app.processIdentifier != targetApp?.processIdentifier,
+                      app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                owLog("[Agent] Screen changed to \(app.localizedName ?? "?") before the send")
+                self?.showFlowBarMessage(L("Ekran değişti, mesaj gitmeyebilir", "The screen changed, the message may not go through"), durationMs: 8000)
+            }
+        }
+    }
+
+    private func noteBackgroundSend(_ run: FinishRun, sent: Bool) {
+        let session = run.session
+        self.lastInjectedText = ""
+        self.swapPair = nil
+        self.swapPasteContext = nil
+        self.hotkey?.setSwapAvailable(false)
+        let result = sent ? "Agent message sent in background" : "Agent message written in background, send unconfirmed"
+        session.latency.markOutput(result)
+        owLog("[Result] \(result)")
+        if let traceID = run.traceID {
+            VoiceEventLog.shared.append(traceID, "[Result] \(result)")
+        }
+        self.showFlowBarMessage(sent ? L("gönderildi", "sent") : L("yazıldı, gönderilmedi", "written, not sent"), durationMs: 1200)
+    }
+
+    /// The app the user was in, when the send target had to be brought to the front.
+    private func hopToSendTarget(_ run: FinishRun, targetApp: NSRunningApplication?, send: Bool) async -> NSRunningApplication? {
+        var hopFrom: NSRunningApplication?
+        if self.autoPasteEnabled, send,
+           let target = targetApp, !target.isTerminated,
+           let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != target.processIdentifier {
+            owLog("[Result] Send target is in the background; switching to \(target.localizedName ?? "?") to send, then back to \(front.localizedName ?? "?")")
+            run.jarvisChangedScreen = true
+            self.showFlowBarMessage(L("Jarvis ekranı değiştirdi, bekleyin", "Jarvis changed the screen, please wait"), durationMs: 8000)
+            // A bound conversation focuses its own composer right after this.
+            if await AgentAppActivator.bringToFront(target, settle: !RecordedConversation.requiresBinding(target.bundleIdentifier)) {
+                hopFrom = front
+            }
+        }
+        return hopFrom
+    }
+
+    private func noteDeliveryBlocked(_ run: FinishRun, text initialText: String, hadConversation: Bool) {
+        let session = run.session
+        _ = ClipboardHistory.write(initialText)
+        let reason = !hadConversation
+            ? "Kayıt başında sohbet kimliği alınamadı"
+            : "Kaydın başladığı sohbete dönülemedi"
+        run.agentDeliveryFailure = reason
+        self.lastError = loc(reason) + ". " + loc("Metin panoya kopyalandı.")
+        session.latency.markOutput(reason)
+        owLog("[Agent] Delivery blocked: \(reason)")
+    }
+
+    private func watchForChatChange(in app: NSRunningApplication, conversation: RecordedConversation, shown: String, isWatching: @escaping @MainActor () -> Bool) -> Task<Void, Never> {
+        Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard isWatching(), !Task.isCancelled else { return }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                      let now = conversation.shownTitle(in: app), now != shown else { continue }
+                owLog("[Agent] Chat changed to \"\(now)\" before the send")
+                self?.showFlowBarMessage(L("Sohbet değişti, mesaj gitmeyebilir", "The chat changed, the message may not go through"), durationMs: 8000)
+                return
+            }
+        }
+    }
+
+    private func pressReturnAfterPaste(
+        _ run: FinishRun,
+        text initialText: String,
+        targetApp: NSRunningApplication?,
+        pasteContext: PasteContext,
+        delay: TimeInterval,
+        stopWatching: @escaping @MainActor () -> Void,
+        finish: @escaping @MainActor (Bool) -> Void,
+        goBack: @escaping @MainActor () -> Void
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                // A background paste (the hop above failed or the user moved
+                // on) still gets sent: hop there for the Return and back.
+                var sent = false
+                if let app = targetApp, !app.isTerminated,
+                   app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
+                   NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                    _ = await ClaudeSessionNavigator.waitForComposerText(app, text: initialText)
+                }
+                if let pid = pasteContext.targetPID, let injector = self.textInjector as? TextInjector {
+                    // From here Jarvis itself may hop to the target and back.
+                    stopWatching()
+                    sent = await injector.pressReturnBringingToFront(pid: pid, context: pasteContext)
+                }
+                // A posted Return proves nothing if Claude was not ready:
+                // a sent message leaves the composer.
+                if sent, let app = targetApp, !app.isTerminated,
+                   app.bundleIdentifier.map(AgentApp.claudeCode.bundleIdentifiers.contains) ?? false,
+                   NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                   await ClaudeSessionNavigator.composerStillHolds(app, text: initialText) {
+                    owLog("[Result] Return pressed but the text is still in Claude's composer")
+                    sent = false
+                }
+                owLog("[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
+                if let traceID = run.traceID {
+                    VoiceEventLog.shared.append(traceID, "[Result] Agent message \(sent ? "sent" : "pasted, Return skipped")")
+                }
+                self.showFlowBarMessage(sent ? L("gönderildi", "sent") : L("yazıldı, gönderilmedi", "written, not sent"), durationMs: 1200)
+                finish(sent)
+                // Wait a beat so the app takes the Return before losing focus.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { goBack() }
+            }
+        }
+    }
+
+    /// Runs the LLM cleanup in the background and, once it is done, replaces the pasted text in place.
+    private func cleanUpPastedText(
+        _ run: FinishRun,
+        _ initialText: String,
+        rawText: String,
+        targetApp: NSRunningApplication?,
+        misheard: [MisheardWordDetector.Word],
+        appliedPairs appliedCorrectionPairs: [(wrong: String, right: String)]
+    ) {
+        let session = run.session
+        let generation = run.generation
+        let focus = run.focus
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let cleanupStartedAt = session.latency.timestamp()
+            let cleaned = await self.llmCleanup?.cleanup(text: initialText, misheard: misheard, focus: focus) ?? initialText
+            session.latency.record(.cleanup, since: cleanupStartedAt)
+            let formatted = await self.formatTurkishDictation(cleaned)
+            let trimmedCleaned = formatted.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !trimmedCleaned.isEmpty, trimmedCleaned != initialText else { return }
+            // A voice edit, an Option+Z swap or a newer dictation changed
+            // the field since: backspacing `initialText` would cut the wrong text.
+            guard self.lastInjectedText == initialText else {
+                owLog("[OpenWhisper] Pasted text changed before the LLM cleanup finished; not replacing")
+                return
+            }
+            if LLMCleanup.isNoOpCleanup(original: initialText, cleaned: trimmedCleaned) {
+                owLog("[OpenWhisper] LLM cleanup only changed spacing/punctuation style; not swapping")
+                return
+            }
+            // A corrected word can reveal a voice command ("Sesifullah"
+            // → "Sesi fulle"): take the dictation back out and run it.
+            if !misheard.isEmpty,
+               !LLMCleanup.sameWords(trimmedCleaned, initialText),
+               await self.runCorrectedDictationAsCommand(
+                pasted: initialText, corrected: trimmedCleaned,
+                generation: generation, session: session, targetApp: targetApp
+               ) {
+                return
+            }
+            owLog("[OpenWhisper] Async LLM cleanup complete: '\(trimmedCleaned)'. Replacing initial text...")
+
+            self.textInjector?.replaceInjectedText(
+                oldText: initialText,
+                newText: trimmedCleaned,
+                targetApp: targetApp,
+                context: self.swapPasteContext
+            ) { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.swapPair = DictationPair(raw: rawText, cleaned: trimmedCleaned)
+                    self.swapPasteContext = self.swapPasteContext?.contextAfterReplacingInjectedText(with: trimmedCleaned)
+                    self.lastTranscription = trimmedCleaned
+                    self.lastInjectedIsCleaned = true
+                    self.lastInjectedText = trimmedCleaned
+                    self.textInjector?.copyToClipboard(rawText)
+                    self.showFlowBarMessage("fixed", durationMs: 1000)
+                    // The field now holds the LLM-cleaned text, not what
+                    // was captured at the raw paste above — without this,
+                    // every later diff compares raw-vs-cleaned and can
+                    // learn the LLM's own edits as if the user made them.
+                    // `capture` re-runs the same suppressNextCapture check
+                    // as the original call (see `install`), so an
+                    // intervening Option+Z swap still correctly discards
+                    // this recapture instead of resurrecting a snapshot
+                    // for text the user already threw away.
+                    DictationSnapshot.shared.capture(
+                        pastedText: trimmedCleaned,
+                        targetApp: targetApp,
+                        appliedPairs: appliedCorrectionPairs
+                    )
+                    owLog("[OpenWhisper] Async LLM replacement finished.")
+                    if let traceID = run.traceID {
+                        VoiceEventLog.shared.append(traceID, "[Result] Replaced pasted text with cleanup: '\(trimmedCleaned)'")
+                    }
+                }
+            }
+        }
+    }
+
+    private func runTimerStep(
+        _ step: MultiCommandSplitter.Step<VoiceCommand>,
+        _ timerCommand: TimerCommandParser.Command,
+        ran: inout [VoiceCommand],
+        statuses: inout [String],
+        replies: inout [String?]
+    ) async {
+        let timers = TimerManager.shared
+        let status: String
+        // A wall-clock alarm goes to the Clock app, which rings it even without Jarvis;
+        // Jarvis keeps it only when that can't be done (no shortcut, more than a day away).
+        if case .alarm(let date, let label) = timerCommand, ClockAlarm.canSet(date),
+           await ClockAlarm.set(date, label: label) {
+            status = L("Saat uygulamasına alarm kurdum: ", "I set an alarm in the Clock app: ") + TimerManager.clock(date, sayDay: true)
+        } else {
+            status = timers.perform(timerCommand)
+        }
+        owLog("[Result] Timer: \(status)")
+        ran.append(step.command)
+        statuses.append(status)
+        replies.append(self.jarvisReply.timer(timerCommand, status: status))
+    }
+
+    private func runSystemStep(
+        _ run: FinishRun,
+        _ step: MultiCommandSplitter.Step<VoiceCommand>,
+        _ parsed: SystemCommand,
+        allSteps steps: [MultiCommandSplitter.Step<VoiceCommand>],
+        stepTargetApp: inout NSRunningApplication?,
+        startsReading: inout Bool,
+        ran: inout [VoiceCommand],
+        statuses: inout [String],
+        replies: inout [String?]
+    ) async {
+        let session = run.session
+        var command = parsed
+        // "Tam ekran yap": the YouTube video in front, else the window ("Claude'u tam
+        // ekran yap" names its app).
+        if parsed == .video(.fullscreen) {
+            let named = DailyCommandParser.fullscreenTarget(step.text, installedApps: SystemController.installedApps())
+            if (named != nil && named != "Safari") || !VideoController.youTubeVideoInFront() {
+                command = .window(WindowAction(app: named, position: .fullscreen))
+            }
+        }
+        if step.command.endsSession && command != .disableWakeWord {
+            // Say everything before the Mac stops listening.
+            if session.isVoiceCommand {
+                await self.speakReply(self.jarvisReply.combined(replies + [L("Görüşürüz.", "See you.")]))
+            }
+            replies = []
+        }
+        // The local model takes several seconds on a long page.
+        if command == .browser(.summarize) { self.showFlowBarMessage(L("Sayfa özetleniyor…", "Summarizing the page…"), durationMs: 30000) }
+        var youTubeStatus: String?
+        if case .video = command, SystemCommandParser.mentionsYouTube(step.text) {
+            youTubeStatus = await BrowserController.prepareYouTubeVideo()
+        }
+        let status: String
+        if let youTubeStatus {
+            status = youTubeStatus
+        } else if case .video(let action) = command, SystemCommandParser.mentionsYouTube(step.text) {
+            status = await VideoController.perform(action, onlyYouTube: true)
+        } else {
+            status = await SystemController.perform(command, disableWakeWord: {
+                self.wakeWordEnabled = false
+            })
+        }
+        if command == .disableWakeWord {
+            run.commandFollowUp = nil
+            run.conversationContinuationApp = nil
+        }
+        if case .reading(let action) = command, action != .stop, !JarvisReply.isFailure(status) {
+            // Jarvis reads over nothing: the paused media stays paused.
+            startsReading = true
+            run.resumeMediaAfterCommand = false
+        }
+        // "Videoyu durdur / devam ettir" decided the state; a seek or speed change
+        // lets the video the recording paused continue, and so does a failed command.
+        if case .video(let action) = command, action.changesPlayback,
+           !VideoController.failures.contains(status) { run.resumeMediaAfterCommand = false }
+        if command == .video(.play) { ArticleReader.shared.forget() }
+        switch command {
+        case .switchToAgent(let agent):
+            stepTargetApp = NSWorkspace.shared.frontmostApplication
+            // Opening an agent invites a message, not just a short command fix.
+            // Continue only after a successful final step into the expected app.
+            if session.isVoiceCommand, steps.last?.command == step.command,
+               status == SystemController.frontStatus(agent.displayName),
+               let app = stepTargetApp,
+               agent.bundleIdentifiers.contains(app.bundleIdentifier ?? "") {
+                run.conversationContinuationApp = app
+            }
+        case .switchToApp: stepTargetApp = NSWorkspace.shared.frontmostApplication
+        default: break
+        }
+        owLog("[Result] System command: \(status)")
+        ran.append(step.command)
+        statuses.append(status)
+        if !step.command.endsSession || command == .disableWakeWord { replies.append(self.jarvisReply.system(command, status: status)) }
+    }
+
+    private func runSpotifyStep(
+        _ run: FinishRun,
+        _ step: MultiCommandSplitter.Step<VoiceCommand>,
+        _ request: String,
+        targetApp stepTargetApp: NSRunningApplication?,
+        ran: inout [VoiceCommand],
+        statuses: inout [String],
+        replies: inout [String?]
+    ) async {
+        let resumes = SpotifyManager.resumesPausedMedia(afterCommand: request)
+        let likedSongs = SpotifyManager.playsLikedSongs(afterCommand: request)
+        let speaksResult = SpotifyManager.speaksResult(afterCommand: request)
+        let speaksFailure = SpotifyManager.speaksFailure(afterCommand: request)
+        let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
+        let message = SpotifyManager.shared.takeResultMessage(for: request)
+        owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
+        if handled, !resumes { run.resumeMediaAfterCommand = false }
+        if handled { ArticleReader.shared.forget() }
+        if handled { ran.append(step.command) }
+        statuses.append(handled ? "Spotify: \(step.text)" : L("Spotify komutu uygulanamadı", "Couldn't apply the Spotify command"))
+        if handled {
+            replies.append(speaksResult ? message.map { self.jarvisReply.spotifyResult($0) }
+                : self.jarvisReply.spotify(handled: true, likedSongs: likedSongs))
+        } else {
+            replies.append(self.jarvisReply.failure(speaksFailure ? message ?? L("Spotify komutunu uygulayamadım", "I couldn't apply the Spotify command") : L("Spotify komutunu uygulayamadım", "I couldn't apply the Spotify command")))
+        }
+    }
+
+    private func runNewAgentChatStep(
+        _ run: FinishRun,
+        _ step: MultiCommandSplitter.Step<VoiceCommand>,
+        _ dictation: AgentDictation,
+        isLast: Bool,
+        ran: inout [VoiceCommand],
+        statuses: inout [String],
+        replies: inout [String?]
+    ) async {
+        // A scene's "Claude Code'da yeni session aç". An app still launching behind
+        // can take the front while this one is activated; try again once it settled.
+        let agent = dictation.target ?? .claudeCode
+        var app: NSRunningApplication?
+        for _ in 0..<3 where app == nil { app = await AgentAppActivator.activate(agent) }
+        var opened = false
+        if let app {
+            opened = agent == .claudeCode ? await ClaudeSessionNavigator.openNewSession(app)
+                : await CodexSessionNavigator.openNewThread(app, folder: nil)
+        }
+        if opened, let app, isLast { run.conversationContinuationApp = app }
+        let status = opened ? L("\(agent.displayName)’da yeni sohbet hazır", "New chat ready in \(agent.displayName)")
+            : L("\(agent.displayName)’da yeni sohbet açılamadı", "Couldn't open a new chat in \(agent.displayName)")
+        owLog("[Result] Agent new session: \(status)")
+        ran.append(step.command)
+        statuses.append(status)
+        replies.append(opened ? nil : self.jarvisReply.failure(status))
+    }
+
+    private func pressLastAgain(_ run: FinishRun, _ element: ScreenElement, stepStarted: TimeInterval) async {
+        let session = run.session
+        let text = run.text
+        session.latency.finishDecision(route: "ekran eylemi, aynı düğme")
+        owLog("[Route] screen action: '\(element.label)' again")
+        self.lastTranscription = text
+        let pressed = ScreenActions.perform(element)
+        self.logScreenStep(session, pressed ? "aynı düğmeye basıldı" : "basılamadı", startedAt: stepStarted,
+                           [("basma", CACurrentMediaTime() - stepStarted)])
+        self.showFlowBarMessage(pressed ? "✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
+        if pressed {
+            self.noteScreenModeAction()
+            run.commandFollowUp = .some(nil)
+        } else {
+            await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
+        }
+    }
+
+    /// Fn dictation keeps typing such a sentence; only Jarvis was asked to press.
+    private func notFound(_ run: FinishRun, saysClick: Bool, stepStarted: TimeInterval, stepParts: [(String, TimeInterval)]) async -> Bool {
+        let session = run.session
+        let text = run.text
+        let trimmed = run.trimmed
+        guard saysClick, session.isVoiceCommand else { return false }
+        let name = ScreenActions.spokenName(trimmed)
+        owLog("[Screen] Nothing on screen matches '\(name)'")
+        session.latency.finishDecision(route: "ekran eylemi, bulunamadı")
+        self.logScreenStep(session, "bulunamadı", startedAt: stepStarted, stepParts)
+        self.lastTranscription = text
+        self.showFlowBarMessage(L("Ekranda “\(name)” bulamadım", "I couldn't find “\(name)” on screen"), durationMs: 4000)
+        if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(L("Bulamadım", "I couldn't find it"))) }
+        return true
+    }
+
+    /// Not in the accessibility tree (a canvas, a game, an Electron view): find the
+    /// words on a screenshot and click them; an icon without words goes to a vision
+    /// model. Only when pressing was asked for.
+    private func pressByText(
+        _ run: FinishRun,
+        app: NSRunningApplication,
+        saysClick: Bool,
+        screenModeStep: Bool,
+        stepStarted: TimeInterval,
+        stepParts: [(String, TimeInterval)]
+    ) async -> Bool {
+        let session = run.session
+        let text = run.text
+        let trimmed = run.trimmed
+        var stepParts = stepParts
+        // "bu butonuna bas" names nothing: no screenshot can find it.
+        guard session.isVoiceCommand, saysClick || screenModeStep,
+              !ScreenActions.spokenName(trimmed).isEmpty else { return await notFound(run, saysClick: saysClick, stepStarted: stepStarted, stepParts: stepParts) }
+        // OCR and the icon model look at the screen at the same time, not one after the
+        // other; a named icon ("mikrofona bas") is no text, so there the icon's pick wins.
+        let namesIcon = saysClick && IconClassifier.iconClass(for: trimmed) != nil
+        var mark = CACurrentMediaTime()
+        async let textFound = ScreenActions.findText(trimmed, in: app)
+        async let iconFound = saysClick ? await ScreenActions.iconPick(trimmed, in: app) : nil
+        var hit = await textFound
+        let icon = await iconFound
+        stepParts.append((saysClick ? "OCR + simge modeli (aynı anda)" : "ekran görüntüsü + OCR", CACurrentMediaTime() - mark))
+        if let found = hit, ScreenActions.isRisky(found.label), !saysClick { hit = nil }
+        if let icon, namesIcon || hit == nil,
+           NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+            session.latency.finishDecision(route: "ekran eylemi, simge modeli")
+            owLog("[Route] screen action: icon '\(icon.label)' by the icon model")
+            self.lastTranscription = text
+            self.lastCommandUndo = []
+            mark = CACurrentMediaTime()
+            let pressed = ScreenActions.perform(icon)
+            if pressed { self.screenModeLastPress = (icon, IconClassifier.iconClass(for: trimmed)) }
+            stepParts.append(("basma", CACurrentMediaTime() - mark))
+            self.logScreenStep(session, pressed ? "simge modeliyle basıldı" : "basılamadı", startedAt: stepStarted, stepParts)
+            self.showFlowBarMessage(pressed ? "✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
+            if pressed {
+                self.noteScreenModeAction()
+                run.commandFollowUp = .some(nil)
+            } else {
+                await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
+            }
+            return true
+        }
+        if hit == nil, saysClick {
+            self.showFlowBarMessage(L("Ekrana bakıyorum…", "Looking at the screen…"), durationMs: 12000)
+            mark = CACurrentMediaTime()
+            let point = await ScreenActions.visionPick(trimmed, in: app)
+            stepParts.append(("görüntü modeli", CACurrentMediaTime() - mark))
+            if let point { hit = (ScreenActions.spokenName(trimmed), point) } else { self.dismissFlowBarMessage() }
+        }
+        guard let hit, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+            return await notFound(run, saysClick: saysClick, stepStarted: stepStarted, stepParts: stepParts)
+        }
+        session.latency.finishDecision(route: "ekran eylemi, ekran görüntüsünden")
+        owLog("[Route] screen action: '\(hit.label)' on the screenshot at \(Int(hit.point.x)),\(Int(hit.point.y))")
+        self.lastTranscription = text
+        self.lastCommandUndo = []
+        mark = CACurrentMediaTime()
+        let pressed = ScreenActions.click(at: hit.point)
+        stepParts.append(("tıklama", CACurrentMediaTime() - mark))
+        if session.isVoiceCommand {
+            self.logScreenStep(session, pressed ? "ekran görüntüsünden tıklandı" : "tıklanamadı", startedAt: stepStarted, stepParts)
+        }
+        self.showFlowBarMessage(pressed ? "“\(hit.label)” ✓" : L("Basılamadı", "Couldn't press it"), durationMs: pressed ? 1500 : 3000)
+        if session.isVoiceCommand, pressed {
+            self.noteScreenModeAction()
+            run.commandFollowUp = .some(nil)
+        } else if session.isVoiceCommand {
+            await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it")))
+        }
+        return true
+    }
+
+    /// The element the words name: by its label if that is clear, otherwise the language model's pick.
+    private func pickElement(
+        _ trimmed: String,
+        elements: [ScreenElement],
+        saysClick: Bool,
+        stepParts: inout [(String, TimeInterval)]
+    ) async -> (pick: Int?, byModel: Bool) {
+        let labels = elements.map(\.label)
+        var pick: Int?
+        var byModel = false
+        let exact = ScreenActions.exactMatches(trimmed, labels: labels)
+        // Only when pressing was said: "bak" alone must not press "Back".
+        let soundAlike = exact.isEmpty && saysClick ? ScreenActions.soundAlikeMatches(trimmed, labels: labels) : []
+        if exact.count == 1 {
+            pick = exact[0]
+        } else if exact.count > 1, exact.filter({ elements[$0].inDialog }).count == 1 {
+            pick = exact.first { elements[$0].inDialog }
+        } else if soundAlike.count == 1 {
+            pick = soundAlike[0]
+            owLog("[Screen] '\(trimmed)' sounds like '\(labels[soundAlike[0]])'")
+        } else if !(exact.isEmpty && saysClick && IconClassifier.iconClass(for: trimmed) != nil
+                    && !labels.contains { ScreenActions.isGrounded(trimmed, label: $0) }),
+                  !exact.isEmpty || saysClick || ScreenActions.mayBeAboutScreen(trimmed, labels: labels) {
+            // A named icon no label speaks of skips the language model (0.5–2 s): the icon
+            // model in `pressByText` knows icons better.
+            self.showFlowBarMessage(L("Ekrana bakıyorum…", "Looking at the screen…"), durationMs: 8000)
+            let mark = CACurrentMediaTime()
+            pick = await ScreenActions.modelPick(trimmed, elements: Array(elements.prefix(150)))
+            stepParts.append(("model seçimi", CACurrentMediaTime() - mark))
+            byModel = true
+            if let chosen = pick, exact.isEmpty, !soundAlike.contains(chosen),
+               !ScreenActions.isGrounded(trimmed, label: labels[chosen]) {
+                owLog("[Screen] Model's pick '\(labels[chosen])' has nothing to do with '\(trimmed)'; not pressed")
+                pick = nil
+            }
+            if pick == nil { self.dismissFlowBarMessage() }
+        }
+        return (pick, byModel)
     }
 
     // For a Jarvis session that is not a command, keyboard focus is the primary signal:
