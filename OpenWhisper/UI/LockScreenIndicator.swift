@@ -284,6 +284,35 @@ struct JarvisCore: View {
     }
 }
 
+extension NSImage {
+    /// JarvisCore redrawn for the menu bar: one color, still, with heavier lines so it reads at 18 pt.
+    /// A template image, so macOS tints it white on a dark menu bar.
+    static let jarvisMenuBarLogo: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { rect in
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            NSColor.black.set()
+
+            let outer = NSBezierPath()
+            outer.appendArc(withCenter: center, radius: 8, startAngle: 0, endAngle: 0.82 * 360)
+            outer.lineWidth = 1.2
+            outer.lineCapStyle = .round
+            outer.setLineDash([2.4, 2.8], count: 2, phase: 0)
+            outer.stroke()
+
+            let inner = NSBezierPath()
+            inner.appendArc(withCenter: center, radius: 5.2, startAngle: 0, endAngle: 0.6 * 360)
+            inner.lineWidth = 1
+            inner.lineCapStyle = .round
+            inner.stroke()
+
+            NSBezierPath(ovalIn: rect.insetBy(dx: 7, dy: 7)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+}
+
 /// Two short lights that leave the top middle of the screen, run down either side and meet at the bottom.
 private struct EdgeSweep: Shape {
     var progress: Double

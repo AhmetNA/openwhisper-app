@@ -63,9 +63,13 @@ struct OpenWhisperApp: App {
                 .environment(AppState.shared)
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: AppState.shared.menuBarIcon)
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(AppState.shared.menuBarIconColor)
+                if let symbol = AppState.shared.menuBarIcon {
+                    Image(systemName: symbol)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(AppState.shared.menuBarIconColor)
+                } else {
+                    Image(nsImage: .jarvisMenuBarLogo)
+                }
             }
         }
         .menuBarExtraStyle(.window)

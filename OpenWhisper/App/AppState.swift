@@ -700,9 +700,10 @@ final class AppState {
 
     // MARK: - Computed
 
-    var menuBarIcon: String {
+    /// SF Symbol for the menu bar; nil shows the Jarvis logo.
+    var menuBarIcon: String? {
         switch recordingState {
-        case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : wakeWordBlocked ? "mic.badge.xmark" : "mic.fill"
+        case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : wakeWordBlocked ? "mic.badge.xmark" : nil
         case .recording: "waveform"
         case .transcribing: "waveform.path.ecg"
         }
