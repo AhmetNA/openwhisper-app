@@ -530,6 +530,8 @@ final class EchoCanceller {
     }
 
     private func collectForEstimate(mic: [Float], reference: [Float]) {
+        // AEC3 owns delay tracking; only the in-house filter needs the estimate.
+        guard !filter.handlesDelayInternally else { return }
         let keep = Self.estimatorWindow + Self.maxDelay
         estimatorMic += mic
         estimatorRef += reference
@@ -542,12 +544,8 @@ final class EchoCanceller {
         guard let estimate = EchoDelayEstimator.estimate(mic: micWindow, reference: estimatorRef,
                                                          maxDelay: Self.maxDelay) else { return }
         let latencyMs = Double(estimate.delay - Self.lookahead) / 16
-        if !filter.handlesDelayInternally {
-            log(String(format: "[AEC] Delay estimate %.1f ms (confidence %.1f)", latencyMs, estimate.confidence))
-        }
+        log(String(format: "[AEC] Delay estimate %.1f ms (confidence %.1f)", latencyMs, estimate.confidence))
         guard estimate.confidence >= 8 else { return }
-        // AEC3 owns delay tracking; retain the shared estimator for diagnostics only.
-        guard !filter.handlesDelayInternally else { return }
         // Two agreeing estimates in a row before moving the filter.
         defer { delayCandidate = estimate.delay }
         guard let previous = delayCandidate, abs(previous - estimate.delay) <= 48 else { return }
