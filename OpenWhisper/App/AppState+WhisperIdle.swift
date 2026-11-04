@@ -52,4 +52,21 @@ extension AppState {
         guard whisperSuspendedForIdle else { return }
         await loadModel()
     }
+
+    /// A macOS update makes the Neural Engine compile Whisper again, which takes over a minute.
+    /// Do it in the background at launch so the first command doesn't wait; the idle monitor
+    /// then releases the model as usual.
+    func compileWhisperIfSystemChanged() {
+        let key = "whisperCompiledForSystem"
+        let system = ProcessInfo.processInfo.operatingSystemVersionString
+        guard UserDefaults.standard.string(forKey: key) != system,
+              transcriptionModelRegistry.provider(for: transcriptionModel)?.isDownloaded == true else { return }
+        owLog("[WhisperIdle] System is now \(system); preparing Whisper in the background")
+        Task { [weak self] in
+            await self?.loadModel()
+            if self?.modelLoaded == true {
+                UserDefaults.standard.set(system, forKey: key)
+            }
+        }
+    }
 }

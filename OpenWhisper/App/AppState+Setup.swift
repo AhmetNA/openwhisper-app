@@ -67,6 +67,7 @@ extension AppState {
         owLog("[OpenWhisper] Loading model: \(transcriptionModel)...")
         if transcriptionModelRegistry.provider(for: transcriptionModel) is WhisperKitTranscriptionProvider {
             whisperSuspendedForIdle = true
+            compileWhisperIfSystemChanged()
         } else {
             await loadModel()
         }
