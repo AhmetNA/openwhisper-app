@@ -62,6 +62,23 @@ final class WakeWordVerifierTests: XCTestCase {
         XCTAssertFalse(WakeWordVerifier.isBareCall("I am Jarvis tonight"))
     }
 
+    func testRepeatedMishearingsCountOnlyAsTheWholeClip() {
+        for clip in ["H. R. S.", "HRS", "He's yours.", "Hey Charles", "Ecaviz.", "Necaviz", "Tecaviz."] {
+            XCTAssertTrue(WakeWordVerifier.containsWakeWord(clip), clip)
+        }
+        for talk in ["He's yours now", "Tecaviz davası başladı", "Hey, galiba.", "Evet.", "Bu.", ""] {
+            XCTAssertFalse(WakeWordVerifier.containsWakeWord(talk), talk)
+        }
+    }
+
+    @MainActor func testUnheardWakeWordTakesOnlyCommands() {
+        let session = RecordingTranscriptionSession(id: 1, targetApp: nil, targetSpeakerEnabled: true, targetSpeakerProfile: nil)
+        XCTAssertFalse(session.takesOnlyCommands)
+        session.wakeWordUnheard = true
+        session.wakeUnconfirmed = false  // the voice following it doesn't lift this
+        XCTAssertTrue(session.takesOnlyCommands)
+    }
+
     func testNormalizationLiftsQuietAudioWithCap() {
         let quiet = [Float](repeating: 0.01, count: 10)
         XCTAssertEqual(WakeWordListener.normalizedForWhisper(quiet).first!, 0.3, accuracy: 1e-6)

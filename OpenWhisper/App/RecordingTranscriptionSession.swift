@@ -49,9 +49,11 @@ final class RecordingTranscriptionSession {
     /// A `.followUp` opened after a command: only a command is taken from it, and a bare
     /// "sonrakine geç" is read against this domain (`CommandFollowUp`).
     var followsCommand = false
-    /// A weak wake Whisper didn't confirm: kept open anyway; with media playing at the start
-    /// only a command is taken from it (the call may have come from the video).
+    /// A weak wake Whisper didn't confirm, and the user's voice hasn't followed yet.
     var wakeUnconfirmed = false
+    /// A weak wake Whisper didn't confirm, whoever's voice it was: only a command is taken from
+    /// it. The user's talk to someone else matches the profile and was pasted (5 Nov 2026).
+    var wakeWordUnheard = false
     /// Text of batches the profile rejected while the speakers played, in a called-Jarvis
     /// session. Over a song or video the user's own windows score 0.05–0.28, no higher than the
     /// residual (17 Oct 2026: "Saat kaç?", "Video durdur" after a 0.99 wake, all dropped
@@ -62,7 +64,7 @@ final class RecordingTranscriptionSession {
     var heardOnlyOverPlayback = false
     /// Only a command is taken from this session, never dictation or chat.
     var takesOnlyCommands: Bool {
-        followsCommand || wakeUnconfirmed && mediaWasPlaying || heardOnlyOverPlayback
+        followsCommand || wakeWordUnheard || heardOnlyOverPlayback
     }
     var commandFollowUpDomain: CommandFollowUp.Domain?
     /// A `.followUp` opened after a Claude / Codex recap: the transcript is sent to that chat.

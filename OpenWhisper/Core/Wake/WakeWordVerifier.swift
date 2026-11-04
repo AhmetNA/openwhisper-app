@@ -41,6 +41,7 @@ enum WakeWordVerifier {
     /// Turkish suffix ("Jarvis'e", "Cervisim"), or a near miss right after "hey" (`isHeyNearMiss`).
     static func containsWakeWord(_ text: String) -> Bool {
         let folded = words(text).map(fold)
+        if wholeClipMishearings.contains(folded.joined()) { return true }
         var candidates = folded
         for i in folded.indices.dropLast() { candidates.append(folded[i] + folded[i + 1]) }
         if candidates.contains(where: isWakeWord) { return true }
@@ -50,6 +51,11 @@ enum WakeWordVerifier {
         }
         return false
     }
+
+    /// What Whisper repeatedly wrote for the user's real calls, each followed by a command in the
+    /// wake clips (Oct–Nov 2026): "H. R. S.", "He's yours", "Hey Charles", "Ecaviz", "Necaviz",
+    /// "Tecaviz". Only as the whole clip: as words in a sentence they mean something else.
+    private static let wholeClipMishearings: Set<String> = ["hrs", "haiours", "haijharlas", "ajavis", "najavis", "tajavis"]
 
     private static func isWakeWord(_ word: String) -> Bool {
         // "Servis", "Harvey"… sit one edit away; a real call always starts with a j-like sound.

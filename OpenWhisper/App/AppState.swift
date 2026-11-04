@@ -642,6 +642,10 @@ final class AppState {
     /// A wake over media that pauses nothing until the user's voice confirms it. See `WakeProbation`.
     @ObservationIgnored var wakeProbation: WakeProbation?
     @ObservationIgnored var wakeProbationCheckInFlight = false
+    /// A weak wake whose Whisper check hasn't answered: media isn't paused on the voice alone.
+    @ObservationIgnored var weakWakeWordPending = false
+    /// The voice was confirmed while `weakWakeWordPending`: the word decides the held pause.
+    @ObservationIgnored var heldPauseAwaitsWord = false
     @ObservationIgnored var lastWakeProbationCheck: TimeInterval = 0
     /// A wake-word session whose "Jarvis" didn't match the voice: the profile its later speech is
     /// scored against (`checkLateWakeVoice`). Nil once matched or when there's nothing to check.

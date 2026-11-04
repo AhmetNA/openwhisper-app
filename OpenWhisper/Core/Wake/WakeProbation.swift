@@ -6,7 +6,8 @@ import Foundation
 /// (`RecordingMediaController.begin(holdingPause:)`) until the user's voice confirms it: the
 /// wake clip's speaker check, or what follows scoring at the wake threshold (this window's own
 /// checks or `checkLateWakeVoice`). Whisper hearing "Jarvis" doesn't count: a song says it too.
-/// Without the voice by `window` the session is dropped.
+/// Without the voice by `window` the session is dropped. A weak wake Whisper didn't confirm is put
+/// on the same probation with nothing playing too, so someone else talking can't hold it open.
 ///
 /// A plain hard reject would have lost about 1 in 15 of the user's own calls over media that day
 /// (voice 0.32–0.38 on the "Jarvis" clip); the command after it gets a second chance here.

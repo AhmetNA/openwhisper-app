@@ -1475,7 +1475,7 @@ extension AppState {
             wakeProbation = nil
             owLog(String(format: "[WakeProbation] No voice of yours within %.0f s — dropping the session, nothing was paused", WakeProbation.window))
             hotkey?.externalCancelHandsFree()
-            discardActiveRecording(reason: "wake over media, never your voice")
+            discardActiveRecording(reason: "unconfirmed wake, never your voice")
             return
         }
         guard now - lastWakeProbationCheck >= WakeProbation.checkInterval, let audioEngine else { return }
@@ -1543,7 +1543,7 @@ extension AppState {
             session.wakeSpeakerVerified = true
             if session.wakeUnconfirmed {
                 session.wakeUnconfirmed = false
-                owLog("[LateWakeVoice] Your voice after the wake word — the session is no longer commands-only")
+                owLog("[LateWakeVoice] Your voice after the wake word — the session stays open, for commands only")
             }
             self.confirmWakeProbation(String(format: "speech after the wake scored %.2f", score))
         }
@@ -1558,6 +1558,16 @@ extension AppState {
     func confirmWakeProbation(_ why: String) {
         guard wakeProbation != nil else { return }
         wakeProbation = nil
+        // A weak wake also needs the word: the user talking to someone isn't a call.
+        if weakWakeWordPending {
+            heldPauseAwaitsWord = true
+            owLog("[WakeProbation] Your voice (\(why)) — the pause waits for Whisper to hear the word")
+            return
+        }
+        if activeTranscriptionSession?.wakeWordUnheard == true {
+            owLog("[WakeProbation] Your voice (\(why)), but no wake word — the media keeps playing")
+            return
+        }
         owLog("[WakeProbation] Your voice (\(why)) — pausing the media")
         recordingMedia.confirmPause()
     }

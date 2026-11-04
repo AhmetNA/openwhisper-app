@@ -36,8 +36,9 @@ extension AppState {
     /// "Jarvis" aren't lost. With "Yalnızca Benim Sesim" the speaker check runs meanwhile: a
     /// match lets the recording through as the user's; no match doesn't end the session (the
     /// wake-time check scored the real user 0.11–0.38 about half the time, 26 Sep 2026), the
-    /// recording's own speaker filter decides, and a weak "Jarvis" must still be confirmed by
-    /// Whisper.
+    /// recording's own speaker filter decides. A weak "Jarvis" must be confirmed by Whisper either
+    /// way: the voice says who spoke, not that they called (the user's own talk woke Jarvis at
+    /// 0.32 with voice 0.43, paused Spotify and was pasted, 5 Nov 2026).
     func handleDirectWake(audio: [Float], score: Float) {
         guard wakeWordEnabled else { return }
         // A cold Whisper doesn't hold the call back: the recording starts now and loads the
@@ -48,6 +49,8 @@ extension AppState {
         }
         owLog("[OpenWhisper] Voice session requested (wake word)")
         pendingWakeSpeakerVerified = false
+        weakWakeWordPending = score < WakeWordListener.confirmedScore
+        heldPauseAwaitsWord = false
         let clipID = beginWakeClip(audio: audio, score: score, kind: "direct")
         startVoiceSession(trigger: .wakeWord)
         guard targetSpeakerGuardsWakeWord else {
@@ -62,7 +65,7 @@ extension AppState {
             let margin: Float = self.mediaPlaying ? Self.mediaWakeSpeakerMargin : 0
             if await self.wakeSpeakerMatches(audio: audio, clipID: clipID, margin: margin) {
                 self.markWakeSpeakerVerified()
-                if score < WakeWordListener.confirmedScore { self.shadowWakeWordCheck(audio: audio, clipID: clipID) }
+                if score < WakeWordListener.confirmedScore { self.confirmDirectWake(audio: audio, score: score, clipID: clipID) }
             } else if score < WakeWordListener.confirmedScore {
                 self.confirmDirectWake(audio: audio, score: score, clipID: clipID)
             } else {
@@ -101,7 +104,9 @@ extension AppState {
     }
 
     /// A weak direct detection: the session is already recording (no added latency) while
-    /// Whisper checks the clip for "Jarvis"; without it the recording is dropped untranscribed.
+    /// Whisper checks the clip for "Jarvis". Without it only a command is taken from the session
+    /// (Whisper mishears real calls: "Ecaviz", "Hey Charles"), and without the user's voice either
+    /// the session is dropped.
     func confirmDirectWake(audio: [Float], score: Float, clipID: UUID?) {
         wakeConfirmationID &+= 1
         let id = wakeConfirmationID
@@ -110,7 +115,10 @@ extension AppState {
             guard let self else { return }
             // After a cold wake the check waits for the model the recording is loading.
             await self.resumeIdleWhisperIfNeeded()
-            guard self.modelLoaded, let transcriber = self.activeTranscriptionService else { return }
+            guard self.modelLoaded, let transcriber = self.activeTranscriptionService else {
+                if id == self.wakeConfirmationID { self.settleWeakWakeWord(heard: true) }
+                return
+            }
             self.activeWhisperWakeChecks += 1
             defer { self.activeWhisperWakeChecks -= 1 }
             let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
@@ -119,8 +127,11 @@ extension AppState {
             switch verdict {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Weak detection %.2f confirmed in %d ms — %@", score, ms, why))
+                if id == self.wakeConfirmationID { self.settleWeakWakeWord(heard: true) }
             case .rejected(let why):
-                guard id == self.wakeConfirmationID, self.recordingState == .recording else {
+                guard id == self.wakeConfirmationID else { return }
+                guard self.recordingState == .recording else {
+                    self.settleWeakWakeWord(heard: false)
                     owLog(String(format: "[WakeWord] Weak detection %.2f rejected in %d ms, session already over — %@", score, ms, why))
                     return
                 }
@@ -130,8 +141,9 @@ extension AppState {
                     let wait = Self.minimumRejectedWakeOpen - Date().timeIntervalSince(session.startedAt)
                     if wait > 0 {
                         try? await Task.sleep(for: .seconds(wait))
-                        guard id == self.wakeConfirmationID, self.recordingState == .recording,
-                              self.activeTranscriptionSession === session else {
+                        guard id == self.wakeConfirmationID else { return }
+                        guard self.recordingState == .recording, self.activeTranscriptionSession === session else {
+                            self.settleWeakWakeWord(heard: false)
                             owLog(String(format: "[WakeWord] Weak detection %.2f rejected, session over while held open — %@", score, why))
                             return
                         }
@@ -141,45 +153,62 @@ extension AppState {
                     let since = self.audioEngine?.recentSamples(count: Int.max) ?? []
                     if !since.isEmpty {
                         let again = await WakeWordVerifier.heardWakeWord(audio: audio + since, transcriber: transcriber)
-                        guard id == self.wakeConfirmationID, self.recordingState == .recording,
-                              self.activeTranscriptionSession === session else { return }
+                        guard id == self.wakeConfirmationID else { return }
+                        guard self.recordingState == .recording, self.activeTranscriptionSession === session else {
+                            self.settleWeakWakeWord(heard: false)
+                            return
+                        }
                         if case .accepted(let why) = again {
                             owLog(String(format: "[WakeWord] Weak detection %.2f confirmed on the second check with %.1f s more — %@",
                                          score, Double(since.count) / 16_000, why))
                             WakeClipLog.shared.update(clipID) { $0.wordCheck = Self.wakeClipWordCheck(again) }
+                            self.settleWeakWakeWord(heard: true)
                             return
                         }
                     }
                 }
-                // Never cut the user off: Whisper mishears real calls ("Hey Jones", 16 Oct 2026,
-                // 22:58, while the user was talking). The session keeps listening and ends on
-                // silence like any other; with media playing only a command is taken from it.
-                // The voice after the wake already matched (`checkLateWakeVoice`): it's the user.
-                if self.activeTranscriptionSession?.wakeSpeakerVerified == true {
-                    owLog(String(format: "[WakeWord] Weak detection %.2f not confirmed by Whisper, but your voice followed it — keeping the session", score))
+                // Never cut the user off: Whisper mishears real calls ("Hey Jones", 16 Oct 2026),
+                // so a command still runs. Dictation and chat don't: their own voice proves nothing.
+                self.settleWeakWakeWord(heard: false)
+                let session = self.activeTranscriptionSession
+                session?.wakeWordUnheard = true
+                if session?.wakeSpeakerVerified == true {
+                    owLog(String(format: "[WakeWord] Weak detection %.2f not confirmed by Whisper; your voice, but only a command is taken — %@", score, why))
                     return
                 }
-                self.activeTranscriptionSession?.wakeUnconfirmed = true
-                owLog(String(format: "[WakeWord] Weak detection %.2f not confirmed in %d ms — keeping the session open (%@): %@",
-                             score, Int(Date().timeIntervalSince(started) * 1000),
-                             self.mediaPlaying ? "media playing, commands only" : "nothing playing", why))
+                session?.wakeUnconfirmed = true
+                owLog(String(format: "[WakeWord] Weak detection %.2f not confirmed in %d ms — commands only, dropped without your voice: %@",
+                             score, Int(Date().timeIntervalSince(started) * 1000), why))
+                self.armWakeProbationAfterRejectedWord()
             }
         }
     }
 
-    /// A weak "Jarvis" whose voice matched skips `confirmDirectWake`. Whether Whisper would have
-    /// heard the word is only recorded (`shadow:` in the wake clip log), never acted on, until the
-    /// clips show that enforcing it doesn't drop the user's own calls (WAKE-SPEAKER-PLANI.md).
-    func shadowWakeWordCheck(audio: [Float], clipID: UUID?) {
-        guard clipID != nil else { return }
-        Task {
-            await resumeIdleWhisperIfNeeded()
-            guard modelLoaded, let transcriber = activeTranscriptionService else { return }
-            activeWhisperWakeChecks += 1
-            defer { activeWhisperWakeChecks -= 1 }
-            let verdict = await WakeWordVerifier.heardWakeWord(audio: audio, transcriber: transcriber)
-            WakeClipLog.shared.update(clipID) { $0.wordCheck = "shadow " + Self.wakeClipWordCheck(verdict) }
+    /// Whisper answered on a weak wake. A pause waiting for this runs only if it heard the word.
+    private func settleWeakWakeWord(heard: Bool) {
+        weakWakeWordPending = false
+        guard heldPauseAwaitsWord else { return }
+        heldPauseAwaitsWord = false
+        guard heard else {
+            owLog("[WakeProbation] Your voice, but no \"Jarvis\" in it — the media keeps playing")
+            return
         }
+        owLog("[WakeProbation] Your voice and the word — pausing the media")
+        recordingMedia.confirmPause()
+    }
+
+    /// Nothing but a weak score woke this session, with or without media: the user's voice has to
+    /// follow or it closes. Someone else talking would otherwise hold it open. Across 8 days of
+    /// clips, 161 such sessions went on to transcribe only noise and other people, bar about 3 real
+    /// commands. At least 2 s remain however long Whisper took.
+    private func armWakeProbationAfterRejectedWord() {
+        guard wakeProbation == nil, targetSpeakerGuardsWakeWord, !VoiceTestInjector.shared.bypassesSpeakerChecks,
+              let profile = ownVoiceProfile, let session = activeTranscriptionSession else { return }
+        let now = CACurrentMediaTime()
+        let sessionStart = now - Date().timeIntervalSince(session.startedAt)
+        let start = max(sessionStart, now - WakeProbation.window + 2)
+        wakeProbation = WakeProbation(startTime: start, profile: profile)
+        lastWakeProbationCheck = now - WakeProbation.checkInterval
     }
 
     /// How far under `TargetSpeakerFilter.wakeThreshold` a direct wake's voice may score while
