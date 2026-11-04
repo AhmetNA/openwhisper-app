@@ -65,17 +65,12 @@ final class FlowBarController {
     /// Show the flow bar. Calling it again while already shown (e.g. the recording →
     /// transcribing transition) only re-fronts it, so it doesn't refade in and flicker.
     func show() {
-        let tShowStart = CACurrentMediaTime()
-        let elapsedFromFn = (tShowStart - GlobalHotkey.lastFnPressUptime) * 1000
-        owLog("[Perf] [FlowBarShowStart] FlowBar show() called (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press), panel exists: \(panel != nil)")
-
         if panel == nil {
             createPanel()
             centerPanelOnScreen()
         }
         if !isShown {
             isShown = true
-            owLog("[FlowBar] panel frame: \(panel?.frame ?? .zero)")
         }
         visibilityGeneration &+= 1
         forceOpaque()
@@ -88,11 +83,6 @@ final class FlowBarController {
         panel?.orderFrontRegardless()
         rebuildIfOffActiveSpace()
         recenterAfterContentLayout()
-
-        let tShowEnd = CACurrentMediaTime()
-        let totalElapsed = (tShowEnd - GlobalHotkey.lastFnPressUptime) * 1000
-        let showFnDuration = (tShowEnd - tShowStart) * 1000
-        owLog("[Perf] [FlowBarShowEnd] FlowBar show() completed: execution duration = \(String(format: "%.2f", showFnDuration))ms (+\(String(format: "%.2f", totalElapsed))ms after Fn press)")
     }
 
     /// Hide the flow bar. Idempotent, and safe to race with a subsequent `show()` — the
@@ -216,7 +206,6 @@ final class FlowBarController {
             y = screenFrame.minY + 16
         }
         panel.setFrameOrigin(NSPoint(x: x, y: y))
-        owLog("[FlowBar] Centered at (\(x), \(y)) with width \(panelWidth) on screen \(screenFrame)")
     }
 
     /// Re-measure after Observation/SwiftUI has rendered the new state (such as the
@@ -229,9 +218,6 @@ final class FlowBarController {
             self.recenterScheduled = false
             guard self.isShown else { return }
             self.centerPanelOnScreen()
-            let tLayout = CACurrentMediaTime()
-            let layoutElapsed = (tLayout - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog("[Perf] [FlowBarLayoutDone] FlowBar recenter/layout completed (+\(String(format: "%.2f", layoutElapsed))ms after Fn press)")
         }
     }
 

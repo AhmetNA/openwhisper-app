@@ -159,16 +159,13 @@ final class VoiceLatencyTracker: @unchecked Sendable {
             .filter { $0.key != .capture }
             .max { $0.value.seconds < $1.value.seconds }
         let bottleneck = processing.map {
-            "[Latency] Darboğaz: \($0.key.title) \(format($0.value.seconds))"
-        } ?? "[Latency] Darboğaz: ölçülebilen işlem aşaması yok"
+            "\($0.key.title) \(format($0.value.seconds))"
+        } ?? "ölçülebilen işlem aşaması yok"
         let stopToOutput = stoppedAt.map { max(0, endedAt - $0) }
         let wall = "Kayıt başlangıcı → sonuç: \(format(max(0, endedAt - startedAt)))"
         let afterStop = stopToOutput.map { "Mikrofon durdu → sonuç: \(format($0))" } ?? "Mikrofon duruşu ölçülmedi"
-        return [
-            "[Latency] Aşamalar: " + (ordered.isEmpty ? "ölçüm yok" : ordered.joined(separator: " | ")),
-            "[Latency] Kritik süre: \(afterStop) | \(wall) | Sonuç: \(outcome)",
-            bottleneck,
-        ]
+        let stages = ordered.isEmpty ? "ölçüm yok" : ordered.joined(separator: ", ")
+        return ["[Latency] Kritik süre: \(afterStop) | \(wall) | Sonuç: \(outcome) | Darboğaz: \(bottleneck) | Aşamalar: \(stages)"]
     }
 
     private static func format(_ seconds: TimeInterval) -> String {

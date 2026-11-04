@@ -103,11 +103,11 @@ final class RemoteControl {
         if displayAsleep {
             asleepSince = now
             lastSample = now
-            cpuLogTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            cpuLogTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let last = self.lastSample else { return }
                     let sample = (cpu: Self.processCPUSeconds(), uptime: ProcessInfo.processInfo.systemUptime)
-                    owLog(String(format: "[Power] Display asleep: Jarvis used %.1f%% of one core in the last minute",
+                    owLog(String(format: "[Power] Display asleep: Jarvis used %.1f%% of one core in the last 10 min",
                                  Self.percent(from: last, to: sample)))
                     self.lastSample = sample
                 }

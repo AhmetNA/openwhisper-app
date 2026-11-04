@@ -131,15 +131,7 @@ extension AppState {
         // Register global hotkey
         hotkey = GlobalHotkey(
             onPress: { [weak self] in
-                let now = CACurrentMediaTime()
-                let delayMs = (now - GlobalHotkey.lastFnPressUptime) * 1000
-                owLog("[Perf] [HotkeyCallback] onPress callback triggered (+\(String(format: "%.2f", delayMs))ms from Fn press)")
-                DispatchQueue.main.async {
-                    let mainNow = CACurrentMediaTime()
-                    let mainDelayMs = (mainNow - GlobalHotkey.lastFnPressUptime) * 1000
-                    owLog("[Perf] [StartRecordingDispatch] startRecording scheduled on Main thread (+\(String(format: "%.2f", mainDelayMs))ms from Fn press)")
-                    self?.startRecording()
-                }
+                DispatchQueue.main.async { self?.startRecording() }
             },
             onRelease: { [weak self] in
                 DispatchQueue.main.async { self?.stopRecordingWithTail() }

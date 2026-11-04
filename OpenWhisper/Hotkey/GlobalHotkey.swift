@@ -148,9 +148,7 @@ final class GlobalHotkey {
             if isPressed, screenModeKeys {
                 DispatchQueue.main.async { self.onScreenModeExit?() }
             } else if isPressed {
-                let now = CACurrentMediaTime()
-                GlobalHotkey.lastFnPressUptime = now
-                owLog("[Perf] [FnKeyDown] Fn key pressed down at t=\(String(format: "%.3f", now))")
+                GlobalHotkey.lastFnPressUptime = CACurrentMediaTime()
                 trigger = .fnHold
                 mode = .holding
                 onPress()

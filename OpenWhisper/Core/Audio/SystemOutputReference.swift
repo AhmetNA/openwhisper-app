@@ -26,7 +26,6 @@ final class SystemOutputReference: @unchecked Sendable {
     private let handler: OSAllocatedUnfairLock<HandlerBox>
     /// Everything below is touched only on `queue`.
     private var tap: TapDevice?
-    private var loggedTiming = false
     /// Set by `start`, cleared by `stop`: while set, the tap follows default output changes.
     private var wantsRunning = false
     private var outputListener: AudioObjectPropertyListenerBlock?
@@ -87,7 +86,6 @@ final class SystemOutputReference: @unchecked Sendable {
             self?.queue.async { self?.ingest(samples, channels: channels, rate: rate, hostTime: hostTime, sampleTime: sampleTime) }
         }
         self.tap = tap
-        loggedTiming = false
         owLog("[AEC] Reference capture started (process tap, \(Int(tap.sampleRate)) Hz)")
     }
 
@@ -185,11 +183,6 @@ final class SystemOutputReference: @unchecked Sendable {
         let pts = anchorSeconds + Double(producedSamples) / outputFormat.sampleRate
         producedSamples += count
 
-        if !loggedTiming {
-            loggedTiming = true
-            let now = AVAudioTime.seconds(forHostTime: mach_absolute_time())
-            owLog(String(format: "[AEC] First reference buffer: pts − host now = %.1f ms", (pts - now) * 1000))
-        }
         let samples = Array(UnsafeBufferPointer(start: output.floatChannelData![0], count: count))
         handler.withLock { $0 }.call(samples, pts)
     }

@@ -416,7 +416,7 @@ final class EchoCanceller {
         if requestedEngine == .aec3, let aec3 = AEC3LinearEchoFilter() {
             filter = aec3
             activeEngine = .aec3
-            startupNotice = "[AEC] Engine: WebRTC AEC3 linear output"
+            startupNotice = nil
         } else {
             filter = PartitionedEchoFilter()
             activeEngine = .linear
@@ -542,7 +542,9 @@ final class EchoCanceller {
         guard let estimate = EchoDelayEstimator.estimate(mic: micWindow, reference: estimatorRef,
                                                          maxDelay: Self.maxDelay) else { return }
         let latencyMs = Double(estimate.delay - Self.lookahead) / 16
-        log(String(format: "[AEC] Delay estimate %.1f ms (confidence %.1f)", latencyMs, estimate.confidence))
+        if !filter.handlesDelayInternally {
+            log(String(format: "[AEC] Delay estimate %.1f ms (confidence %.1f)", latencyMs, estimate.confidence))
+        }
         guard estimate.confidence >= 8 else { return }
         // AEC3 owns delay tracking; retain the shared estimator for diagnostics only.
         guard !filter.handlesDelayInternally else { return }

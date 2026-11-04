@@ -156,6 +156,8 @@ final class AudioEngine: @unchecked Sendable {
     private var isEnginePrepared = false
     private var hasLoggedFirstBuffer = false
     private var hasLoggedFirstAudibleBuffer = false
+    private var recordingStartUptime: CFTimeInterval = 0
+    private var firstBufferMs: Double = 0
     /// Bluetooth buds send exact digital zeros for ~0.25–0.75 s while their call-mode link comes
     /// up (measured 16 Oct 2026, Redmi Buds 5 Pro). Those buffers are dropped until the first
     /// non-zero sample, which is when the mic is really live. Guarded by `lock`.
@@ -164,11 +166,10 @@ final class AudioEngine: @unchecked Sendable {
     private var droppedLinkFrames = 0
     static let linkAudioWaitLimit: CFTimeInterval = 1.5
     private var hasLoggedInputTruncation = false
-    private var hasLoggedDeepFilterFirstFrame = false
 
     /// Whole-recording input level accumulators. These describe the RAW microphone downmix,
     /// before `AudioSignalProcessor`'s gain stage, because that is the level that actually
-    /// needs diagnosing. The existing `[Perf] ... rms=` lines only report the first buffer to
+    /// needs diagnosing. The `[Perf] Mic start` line only reports the first buffer to
     /// cross a silence threshold, which is an onset measurement and not representative of the
     /// recording. Written on the audio callback under `lock`, summarised once in stopRecording().
     private var inputLevelSumOfSquares: Double = 0
@@ -203,22 +204,11 @@ final class AudioEngine: @unchecked Sendable {
     }
 
     private func configureEngine(deviceUID: String?, audioProcessingMode: AudioProcessingMode) {
-        var tStep = CACurrentMediaTime()
-        func logStep(_ label: String) {
-            let tNow = CACurrentMediaTime()
-            let stepMs = (tNow - tStep) * 1000
-            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog(String(format: "[Perf] [\(label)] step=%.2f ms, total=%.2f ms / %.3f s from Fn press", stepMs, elapsedMs, elapsedMs / 1000.0))
-            tStep = tNow
-        }
-
         engine.stop()
         engine.reset()
         engine = AVAudioEngine()
-        logStep("CfgEngineAlloc")
 
         let inputNode = engine.inputNode
-        logStep("CfgInputNodeAccess")
 
         if let uid = deviceUID, let deviceID = Self.audioDeviceID(forUID: uid) {
             do {
@@ -232,13 +222,11 @@ final class AudioEngine: @unchecked Sendable {
         } else {
             owLog("[AudioEngine] Using system default input")
         }
-        logStep("CfgSetDeviceID")
 
         configuredDeviceUID = deviceUID
         configuredAudioProcessingMode = audioProcessingMode
         isEnginePrepared = true
         engine.prepare()
-        logStep("CfgPrepare")
     }
 
     /// Start recording. If `deviceUID` is non-nil, route AUHAL to that input device;
@@ -265,9 +253,7 @@ final class AudioEngine: @unchecked Sendable {
         let echoCancellation = requestedEchoCancellation
         appliesSignalProcessing = !bypassAudioProcessing
         resetInputMeters()
-        let tStartCall = CACurrentMediaTime()
-        let elapsedStart = (tStartCall - GlobalHotkey.lastFnPressUptime) * 1000
-        owLog(String(format: "[Perf] [AudioEngineStartCall] startRecording() entered (%.2f ms / %.3f s from Fn press)", elapsedStart, elapsedStart / 1000.0))
+        recordingStartUptime = CACurrentMediaTime()
 
         resetCaptureState(
             levelCallback: levelCallback, sampleCallback: sampleCallback,
@@ -364,9 +350,6 @@ final class AudioEngine: @unchecked Sendable {
                 engine.inputNode.installTap(onBus: 0, bufferSize: Self.maxInputFrameCount, format: format, block: tapBlock)
                 try engine.start()
             }
-            let tEngineStarted = CACurrentMediaTime()
-            let elapsedEngineStarted = (tEngineStarted - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog(String(format: "[Perf] [AudioEngineEngineStarted] engine.start() completed (%.2f ms / %.3f s from Fn press)", elapsedEngineStarted, elapsedEngineStarted / 1000.0))
         } catch {
             owLog("[AudioEngine] Failed to start: \(error). Resetting engine configuration.")
             isEnginePrepared = false
@@ -384,7 +367,6 @@ final class AudioEngine: @unchecked Sendable {
         hasLoggedFirstBuffer = false
         hasLoggedFirstAudibleBuffer = false
         hasLoggedInputTruncation = false
-        hasLoggedDeepFilterFirstFrame = false
         inputLevelSumOfSquares = 0
         inputLevelSampleCount = 0
         inputLevelPeak = 0
@@ -551,15 +533,17 @@ final class AudioEngine: @unchecked Sendable {
         let echoCancelling = self.recordingEcho != nil
         self.lock.unlock()
 
-        let tNow = CACurrentMediaTime()
-        let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
+        let elapsedMs = (CACurrentMediaTime() - self.recordingStartUptime) * 1000
         if !self.hasLoggedFirstBuffer {
             self.hasLoggedFirstBuffer = true
-            owLog(String(format: "[Perf] [AudioEngineFirstBufferArrived] CoreAudio delivered 1st audio buffer (%.2f ms / %.3f s from Fn press, frames=%d, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, frameLength, rms))
+            self.firstBufferMs = elapsedMs
         }
         if !self.hasLoggedFirstAudibleBuffer && rms > 0.001 {
             self.hasLoggedFirstAudibleBuffer = true
-            owLog(String(format: "[Perf] [AudioEngineFirstAudibleSpeechArrived] First non-silent voice buffer detected (%.2f ms / %.3f s from Fn press, rms=%.5f)", elapsedMs, elapsedMs / 1000.0, rms))
+            // A wake or follow-up session has no Fn press behind it: the last one is long past.
+            let sinceFn = self.recordingStartUptime - GlobalHotkey.lastFnPressUptime
+            let fnPart = sinceFn < 2 ? String(format: "Fn → start %.0f ms, ", sinceFn * 1000) : ""
+            owLog(String(format: "[Perf] Mic start: %@first buffer %.0f ms, first sound %.0f ms (rms=%.5f)", fnPart, self.firstBufferMs, elapsedMs, rms))
         }
 
         // The waveform is presentation-only. Limit UI work to 8 Hz while preserving every
@@ -690,13 +674,13 @@ final class AudioEngine: @unchecked Sendable {
             let peakDBFS = peak > 0 ? 20 * log10(peak) : -Double.infinity
             owLog(String(
                 format: "[AudioEngine] Input level summary (raw, pre-gain): "
-                    + "meanRMS=%.5f (%.1f dBFS) peak=%.5f (%.1f dBFS) samples=%d",
-                meanRMS, rmsDBFS, peak, peakDBFS, inputLevelSampleCount
+                    + "meanRMS=%.5f (%.1f dBFS) peak=%.5f (%.1f dBFS) samples=%d, noise floor %@ over %.1f s",
+                meanRMS, rmsDBFS, peak, peakDBFS, inputLevelSampleCount,
+                noiseFloorMeter.floorDBFS.map { String(format: "%.1f dBFS", $0) } ?? "none",
+                noiseFloorMeter.measuredSeconds
             ))
         }
         lastRawNoiseFloor = (noiseFloorMeter.floorDBFS, noiseFloorMeter.measuredSeconds)
-        owLog("[AudioEngine] Raw noise floor: " + (lastRawNoiseFloor.dbfs.map { String(format: "%.1f dBFS", $0) } ?? "none")
-            + String(format: " over %.1f s", lastRawNoiseFloor.seconds))
 
         if let stoppedDeepFilter, stoppedDeepFilter.processedFrameCount > 0 {
             owLog(String(
@@ -834,13 +818,6 @@ final class AudioEngine: @unchecked Sendable {
         deepFilterDenoiseScratch.removeAll(keepingCapacity: true)
         processor.process(sourceChannel, count: Int(source.frameLength), into: &deepFilterDenoiseScratch)
         guard !deepFilterDenoiseScratch.isEmpty else { return nil }
-
-        if !hasLoggedDeepFilterFirstFrame {
-            hasLoggedDeepFilterFirstFrame = true
-            let tNow = CACurrentMediaTime()
-            let elapsedMs = (tNow - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog(String(format: "[Perf] [DeepFilterFirstFrame] First denoised frame produced (%.2f ms / %.3f s from Fn press)", elapsedMs, elapsedMs / 1000.0))
-        }
 
         let capacity = Int(outputBuffer.frameCapacity)
         let count = min(deepFilterDenoiseScratch.count, capacity)

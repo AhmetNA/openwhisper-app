@@ -20,9 +20,6 @@ private struct BatchGate {
 extension AppState {
     func startRecording() {
         recordingPreviewTask?.cancel()
-        let tStart = CACurrentMediaTime()
-        let elapsedFromFn = (tStart - GlobalHotkey.lastFnPressUptime) * 1000
-        owLog("[Perf] [StartRecordingEnter] startRecording() entered (+\(String(format: "%.2f", elapsedFromFn))ms from Fn press)")
         guard prepareForNewRecording() else { return }
 
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
@@ -280,10 +277,6 @@ extension AppState {
                     }
                 }
             ) ?? false
-
-            let tAudioDone = CACurrentMediaTime()
-            let audioElapsed = (tAudioDone - GlobalHotkey.lastFnPressUptime) * 1000
-            owLog("[Perf] [AudioEngineStarted] Mic recording started (+\(String(format: "%.2f", audioElapsed))ms from Fn press)")
 
             // Non-blocking: this recording is already under way by the time this lands, so it
             // can never delay the Fn->audio path -- it only informs the user after the fact.
@@ -1360,12 +1353,6 @@ extension AppState {
             at: time,
             levelSpeechDetected: detector.speechDetected
         ) ?? .useLevelFallback(reason: "not armed")
-        // Tuning aid: once a second, the level against the floor and end threshold.
-        if time - lastVoiceEndpointTrace >= 1 {
-            lastVoiceEndpointTrace = time
-            let smartSummary = smartTurnEndpointDetector?.summary ?? "disabled"
-            owLog(String(format: "[VoiceAutoStop] level %.1f dBFS — ", VoiceEndpointDetector.dBFS(fromRMS: rawRMS)) + detector.summary + " smart={\(smartSummary)}")
-        }
 
         let decision: VoiceEndpointDetector.Decision
         switch smartDecision {
@@ -1398,7 +1385,8 @@ extension AppState {
             decision = levelDecision
         }
 
-        owLog("[VoiceAutoStop] \(decision) — \(detector.summary)")
+        owLog(String(format: "[VoiceAutoStop] \(decision) — level %.1f dBFS, ", VoiceEndpointDetector.dBFS(fromRMS: rawRMS))
+            + detector.summary + " smart={\(smartTurnEndpointDetector?.summary ?? "disabled")}")
         voiceEndpointDetector = nil
         smartTurnEndpointDetector = nil
         ownVoiceStopGate = nil
@@ -1449,6 +1437,7 @@ extension AppState {
             let verdict = gate.record(score: score, at: now)
             self.ownVoiceStopGate = gate
             WakeClipLog.shared.update(self.activeTranscriptionSession?.wakeClipID) { $0.ownVoiceScores.append(score) }
+            guard verdict != .keep else { return }
             let outcome = switch verdict {
             case .keep: ""
             case .otherVoice: " — someone else is talking, stopping"
@@ -1456,7 +1445,6 @@ extension AppState {
             }
             owLog(String(format: "[OwnVoiceStop] score %.3f speech %.1fs (user ≥%.2f, other <%.2f)%@",
                          score, gate.speechDuration(endingAt: now), gate.userThreshold, gate.otherThreshold, outcome))
-            guard verdict != .keep else { return }
             if self.ownVoiceGateLogsOnly {
                 owLog("[OwnVoiceStop] Would stop here — log only, the session goes on")
                 gate = OwnVoiceStopGate(startTime: now, watchesPlayback: gate.watchesPlayback)
@@ -1547,8 +1535,8 @@ extension AppState {
             guard let score, self.recordingState == .recording, self.activeTranscriptionSession === session,
                   !session.wakeSpeakerVerified else { return }
             let threshold = TargetSpeakerFilter.wakeThreshold
-            owLog(String(format: "[LateWakeVoice] score %.3f (yours ≥%.2f)", score, threshold))
             guard score >= threshold else { return }
+            owLog(String(format: "[LateWakeVoice] score %.3f (yours ≥%.2f)", score, threshold))
             self.lateWakeVoiceMatches += 1
             guard self.lateWakeVoiceMatches >= Self.lateWakeVoiceMatchesNeeded else { return }
             self.lateWakeVoiceProfile = nil

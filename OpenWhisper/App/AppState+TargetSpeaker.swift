@@ -195,7 +195,6 @@ extension AppState {
                 guard let self, !self.targetSpeakerEnrollmentActive else { return }
                 self.targetSpeakerPreparationProgress = progress.fractionCompleted
                 self.targetSpeakerPreparationMessage = progress.message
-                owLog("[TargetSpeaker] Diarization prep progress: phase=\(progress.phase), msg='\(progress.message)'")
             }
         }
         targetSpeakerDiarizationPreparationTask = Task { @MainActor [weak self] in
@@ -250,7 +249,6 @@ extension AppState {
     /// Internal (not `private`) so tests can simulate the 8s offer timeout firing without an
     /// actual 8-second sleep -- see `AppStateTargetSpeakerIntegrationTests`.
     func dismissTargetSpeakerAppendOffer() {
-        owLog("[TargetSpeaker] dismissTargetSpeakerAppendOffer")
         targetSpeakerAppendOfferTask?.cancel()
         targetSpeakerAppendOfferTask = nil
         targetSpeakerAppendOfferActive = false

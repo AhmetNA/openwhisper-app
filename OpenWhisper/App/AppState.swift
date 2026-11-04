@@ -629,7 +629,6 @@ final class AppState {
     /// Model-based endpointing for Jarvis sessions. The level detector above remains only as a
     /// fail-open fallback when either local model is unavailable.
     @ObservationIgnored var smartTurnEndpointDetector: SmartTurnEndpointDetector?
-    @ObservationIgnored var lastVoiceEndpointTrace: TimeInterval = 0
     /// Wake-word sessions with an enrolled voice: ends them when the user stops, even while
     /// someone else keeps talking. See `OwnVoiceStopGate`.
     @ObservationIgnored var ownVoiceStopGate: OwnVoiceStopGate?

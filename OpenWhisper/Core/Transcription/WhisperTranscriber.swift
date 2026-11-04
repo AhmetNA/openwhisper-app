@@ -105,7 +105,6 @@ final class WhisperTranscriber: @unchecked Sendable {
         let modelFolder: URL
 
         if FileManager.default.fileExists(atPath: localModel.path) {
-            owLog("[Whisper] Model found locally: openai_whisper-\(name)")
             modelFolder = localModel
             progress(0.8)
         } else {
@@ -168,7 +167,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             throw TranscriberError.modelNotLoaded
         }
 
-        owLog("[Whisper] Transcribing with language='\(language)' task=transcribe samples=\(audioData.count)")
+        owLog("[Whisper] Transcribing samples=\(audioData.count) language=\(language)")
 
         // Glossary conditioning via `DecodingOptions.promptTokens` stays DISABLED — a deliberate
         // decision. WhisperKit's `TextDecoder.decodeText` has no `isPrefill` guard on
@@ -266,7 +265,6 @@ final class WhisperTranscriber: @unchecked Sendable {
         language: String,
         overlapSampleCount: Int
     ) async throws -> String {
-        owLog("[Whisper] Transcribing batch samples=\(audioData.count) overlap=\(overlapSampleCount)")
         return try await transcribe(audioData: audioData, language: language)
     }
 
@@ -452,7 +450,7 @@ final class WhisperTranscriber: @unchecked Sendable {
                 : result.segments.map(\.avgLogprob).reduce(0, +) / Float(result.segments.count)
             let maxNoSpeech = result.segments.map(\.noSpeechProb).max() ?? 0
             let maxCompression = result.segments.map(\.compressionRatio).max() ?? 0
-            owLog("[Whisper] Result[\(i)] language=\(result.language) avgLogprob=\(String(describing: avgLogprob)) noSpeech=\(maxNoSpeech) compression=\(maxCompression) text=\(result.text)")
+            owLog("[Whisper] Result[\(i)] language=\(result.language) avgLogprob=\(avgLogprob.map { String($0) } ?? "nil") noSpeech=\(maxNoSpeech) compression=\(maxCompression) text=\(result.text)")
         }
 
         let text = results

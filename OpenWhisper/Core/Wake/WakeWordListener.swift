@@ -98,7 +98,6 @@ final class WakeWordListener {
     private var aecAligner = EchoReferenceAligner()
     private var echoCanceller = EchoCanceller()
     private var aecDump: EchoDebugWriter?
-    private var lastAECLog = Date()
     private var loggedMicTiming = false
     /// Queue: host sample index (16 kHz) just past the last mic samples scored unprocessed; nil
     /// on the echo-cancelled path, whose aligner delays and re-chunks them.
@@ -239,12 +238,10 @@ final class WakeWordListener {
             aecAligner = EchoReferenceAligner()
             echoCanceller = EchoCanceller()
             echoCanceller.log = { owLog($0) }
-            lastAECLog = Date()
             if EchoCancellationSettings.dumpsAudio {
                 aecDump = EchoDebugWriter(names: ["mic", "reference"])
                 if let dir = aecDump?.directory { owLog("[AEC] Dumping audio to \(dir.path)") }
             }
-            owLog("[AEC] Echo cancellation active")
         }
         let now = ProcessInfo.processInfo.systemUptime
         referenceAudibility.add(samples, at: now)
@@ -576,9 +573,7 @@ final class WakeWordListener {
     private func ingestMic(_ raw: [Float], hostIndex: Int?) {
         if aecActive, !loggedMicTiming {
             loggedMicTiming = true
-            let now = AVAudioTime.seconds(forHostTime: mach_absolute_time()) * Double(EchoCanceller.sampleRate)
-            owLog(hostIndex.map { String(format: "[AEC] Mic timestamps valid: mic time − host now = %.1f ms", (Double($0) - now) / 16) }
-                  ?? "[AEC] Mic buffers have no valid host time — echo cancellation bypassed")
+            if hostIndex == nil { owLog("[AEC] Mic buffers have no valid host time — echo cancellation bypassed") }
         }
         guard aecActive, aecReferenceAudible == true, let hostIndex else {
             scoredEndHostIndex = hostIndex.map { $0 + raw.count }
@@ -595,18 +590,20 @@ final class WakeWordListener {
         let cleaned = echoCanceller.process(mic: pair.mic, reference: pair.reference)
         // The paired inputs; offline tuning re-runs the canceller on them.
         aecDump?.write([pair.mic, pair.reference])
-        if Date().timeIntervalSince(lastAECLog) >= 10 {
-            lastAECLog = Date()
-            let levels = EchoBlockStats.summary(echoCanceller.takeBlockStats())
-            let paired = aecAligner.takePairedPercent() ?? .nan
-            let delay = echoCanceller.activeEngine == .aec3
-                ? "AEC3 internal"
-                : String(format: "%.1f ms", Double(echoCanceller.filterDelay - EchoCanceller.lookahead) / 16)
-            owLog(String(format: "[AEC] engine %@, %@, paired with reference %.0f%%, delay %@, mic resyncs %d",
-                         echoCanceller.activeEngine.rawValue, levels, paired,
-                         delay, aecAligner.resyncs))
-        }
         if !cleaned.isEmpty { score(cleaned) }
+    }
+
+    /// Queue: the echo canceller's part of the 30 s line; empty when it processed nothing.
+    private func aecHeartbeat() -> String {
+        guard aecActive else { return "" }
+        let echoBlocks = echoCanceller.takeBlockStats()
+        guard !echoBlocks.isEmpty else { return "" }
+        let delay = echoCanceller.activeEngine == .aec3
+            ? "AEC3 internal"
+            : String(format: "%.1f ms", Double(echoCanceller.filterDelay - EchoCanceller.lookahead) / 16)
+        return String(format: " | AEC %@, %@, paired with reference %.0f%%, delay %@, mic resyncs %d",
+                      echoCanceller.activeEngine.rawValue, EchoBlockStats.summary(echoBlocks),
+                      aecAligner.takePairedPercent() ?? .nan, delay, aecAligner.resyncs)
     }
 
     /// Queue: on the echo-cancelled path, scores the last 2 s of what the Mac played with a
@@ -740,16 +737,17 @@ final class WakeWordListener {
             let audio = Self.normalizedForWhisper(pending.audio)
             DispatchQueue.main.async { [weak self] in self?.onCandidate?(audio, pending.peak) }
         }
-        // Tuning aid: the highest score in each 10 s stretch, and how many blocks actually ran
-        // the embedding model (the power cost; backfill included).
-        if Date().timeIntervalSince(lastPeakLog) >= 10 {
+        // Tuning aid: the highest score in each 30 s stretch, how many blocks actually ran the
+        // embedding model (the power cost; backfill included) and how the echo canceller did.
+        if Date().timeIntervalSince(lastPeakLog) >= 30 {
             let blocks = detector.blockCount - blocksAtLog
             let embeddings = detector.embeddingCount - embeddingsAtLog
             let median = levelsSinceLog.isEmpty ? Float.nan : levelsSinceLog.sorted()[levelsSinceLog.count / 2]
             let media = !mediaPlaying ? "none" : (detector.gate?.mediaPlaying == true ? "audible" : "silent")
             let vad = voiceActivity?.takeSummary(at: ProcessInfo.processInfo.systemUptime) ?? "off"
-            owLog(String(format: "[WakeWord] peak score last 10s: %.2f, embeddings %d/%d blocks, level median %.0f dB, floor %.0f dB, media %@, vad %@",
-                         peakSinceLog, embeddings, blocks, median, detector.gate?.floor ?? .nan, media, vad))
+            owLog(String(format: "[WakeWord] peak score last 30s: %.2f, embeddings %d/%d blocks, level median %.0f dB, floor %.0f dB, media %@, vad %@",
+                         peakSinceLog, embeddings, blocks, median, detector.gate?.floor ?? .nan, media, vad)
+                  + aecHeartbeat())
             levelsSinceLog.removeAll(keepingCapacity: true)
             blocksAtLog = detector.blockCount
             embeddingsAtLog = detector.embeddingCount
