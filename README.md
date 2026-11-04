@@ -91,7 +91,7 @@ cd openwhisper-app
 bash build.sh
 ```
 
-`build.sh` builds with SwiftPM, creates `build/Jarvis.app`, signs it with an available Apple Development identity (or ad-hoc signs it), copies it to `/Applications`, and launches it. To build without copying to `/Applications`:
+`build.sh` builds with SwiftPM, creates `build/Jarvis.app`, signs it with an available Apple Development identity (or ad-hoc signs it), copies it to `/Applications`, removes the build copy, and launches the installed app. To build without copying to `/Applications`:
 
 ```bash
 SKIP_INSTALL=1 bash build.sh

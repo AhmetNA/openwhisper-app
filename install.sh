@@ -43,7 +43,7 @@ echo "==> Launching Jarvis..."
 open /Applications/Jarvis.app 2>/dev/null || open build/Jarvis.app
 
 echo ""
-echo "  Jarvis is ready! Look for the microphone icon in your menu bar."
+echo "  Jarvis is ready! Look for the Jarvis icon in your menu bar."
 echo "  Hold Right Option key, speak, release to transcribe."
 echo ""
 echo "  To update later, run this same command again."

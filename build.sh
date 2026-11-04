@@ -176,11 +176,16 @@ install_app() {
         cp -R "$APP_BUNDLE" /Applications/
         echo "  Installed at /Applications/Jarvis.app"
 
+        # A second bundle with the same identifier would show up as a second Jarvis in macOS.
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$PWD/$APP_BUNDLE" 2>/dev/null || true
+        rm -rf "$APP_BUNDLE"
+
         echo "==> Launching newly installed Jarvis..."
         open /Applications/Jarvis.app
+    else
+        echo "Done! App bundle at: $APP_BUNDLE"
     fi
 }
 
-echo "Done! App bundle at: build/Jarvis.app"
 install_app
 echo ""
