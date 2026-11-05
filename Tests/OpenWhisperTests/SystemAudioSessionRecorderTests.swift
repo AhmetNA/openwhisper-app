@@ -103,12 +103,4 @@ final class SystemAudioSessionRecorderTests: XCTestCase {
         let samples = [Float](repeating: 0.005, count: rate * 3)
         XCTAssertEqual(AudioSegmentation.systemAudioChunks(from: samples), [0..<(rate * 3)])
     }
-
-    func testSparseTextIsReportedAsPossiblyIncomplete() {
-        XCTAssertEqual(
-            SystemAudioReport.finished(elapsed: 15, audioSeconds: 14.4, spokenSeconds: 14.4, wordCount: 17, copied: true),
-            L("Ses 14 sn · Çevrilen 14 sn · 17 kelime · Eksik olabilir · Panoya kopyalandı",
-              "Audio 14 s · Transcribed 14 s · 17 words · May be incomplete · Copied")
-        )
-    }
 }

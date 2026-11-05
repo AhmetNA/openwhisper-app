@@ -257,7 +257,6 @@ struct SystemAudioResult: Equatable {
 enum SystemAudioReport {
     /// Below this share of the audio having text, part of a spoken recording may be missing.
     private static let completeShare = 0.7
-    private static let completeWordsPerMinute = 100.0
 
     static func clock(_ seconds: TimeInterval) -> String {
         let total = max(Int(seconds.rounded(.down)), 0)
@@ -302,9 +301,7 @@ enum SystemAudioReport {
             L("Çevrilen \(duration(spokenSeconds))", "Transcribed \(duration(spokenSeconds))"),
             L("\(wordCount) kelime", "\(wordCount) words"),
         ]
-        // Timestamps alone can look complete while speech is missing: 17 words over 14 s.
-        let wordsPerMinute = spokenSeconds > 0 ? Double(wordCount) / spokenSeconds * 60 : 0
-        if audioSeconds > 0, spokenSeconds / audioSeconds < completeShare || wordsPerMinute < completeWordsPerMinute {
+        if audioSeconds > 0, spokenSeconds / audioSeconds < completeShare {
             parts.append(L("Eksik olabilir", "May be incomplete"))
         }
         parts.append(copied ? L("Panoya kopyalandı", "Copied") : L("Panoya kopyalanamadı", "Couldn't copy"))

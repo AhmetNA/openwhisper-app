@@ -90,7 +90,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         let words: [WhisperTimedWord]
         let averageLogprob: Float?
         let needsRecovery: Bool
-        let spokenSeconds: Double
+        let segments: [(start: Float, end: Float, text: String)]
 
         var confidenceScore: Float {
             averageLogprob ?? -Float.greatestFiniteMagnitude
@@ -259,7 +259,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             )
             let text = Self.cleanedTranscript(pass.text)
             if !text.isEmpty { texts.append(text) }
-            spokenSeconds += pass.spokenSeconds
+            spokenSeconds += Self.spokenSeconds(in: pass.segments)
         }
         return SystemAudioDecode(text: texts.joined(separator: " "), spokenSeconds: spokenSeconds)
     }
@@ -268,9 +268,9 @@ final class WhisperTranscriber: @unchecked Sendable {
     /// and a loop that swallowed the rest of a window shows up as a gap.
     static func spokenSeconds(in segments: [(start: Float, end: Float, text: String)]) -> Double {
         segments.reduce(0) { total, segment in
-            let text = segment.text
-                .replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression)
-            guard !cleanedTranscript(text).isEmpty else { return total }
+            let text = TranscriptSanitizer.removeForbiddenArtifacts(from: segment.text
+                .replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression))
+            guard text.count >= 3, !AudioSegmentation.isKnownHallucination(text) else { return total }
             return total + Double(max(segment.end - segment.start, 0))
         }
     }
@@ -545,7 +545,7 @@ final class WhisperTranscriber: @unchecked Sendable {
             words: words,
             averageLogprob: averageLogprob,
             needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression,
-            spokenSeconds: Self.spokenSeconds(in: segments.map { (start: $0.start, end: $0.end, text: $0.text) })
+            segments: segments.map { (start: $0.start, end: $0.end, text: $0.text) }
         )
     }
 
