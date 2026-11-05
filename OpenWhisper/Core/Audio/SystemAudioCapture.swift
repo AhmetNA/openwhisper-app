@@ -35,7 +35,9 @@ final class SystemAudioSessionRecorder {
             let frame = input[offset..<end]
             let rms = sqrt(frame.reduce(Float.zero) { $0 + $1 * $1 } / Float(frame.count))
             if rms < pauseRMS {
-                pause.append(contentsOf: frame)
+                // Silence before the first sound is never kept: with ~1 s of it in front, Whisper
+                // answered a 16 s voice message with only "Altyazı M.K." (5 Nov 2026).
+                if !samples.isEmpty { pause.append(contentsOf: frame) }
                 // Bound memory during a long pause: keep its first and last half second.
                 if pause.count > keptPauseSamples * 2 {
                     let half = keptPauseSamples / 2
@@ -58,7 +60,8 @@ final class SystemAudioSessionRecorder {
     /// Returns the whole session, or nil when nothing audible was heard (Whisper would only
     /// hallucinate on it). The recorder is empty afterwards.
     func finish() -> [Float]? {
-        flushPause()
+        // Silence after the last sound is dropped, like the silence before the first.
+        pause.removeAll(keepingCapacity: true)
         let completed = samples
         let audible = audibleSamples
         samples = []

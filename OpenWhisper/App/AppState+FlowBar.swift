@@ -35,9 +35,9 @@ extension AppState {
             return
         }
         caretPenController?.hide()
-        // Keep a reachable finish control onscreen while the system output is being heard,
+        // Keep a reachable finish control and the outcome onscreen for the system output,
         // even if the normal microphone flow bar is disabled in Settings.
-        if systemAudioEnabled {
+        if systemAudioEnabled || showsSystemAudioBar {
             flowBarController?.show()
             return
         }

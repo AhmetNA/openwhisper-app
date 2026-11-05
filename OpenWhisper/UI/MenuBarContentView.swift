@@ -109,7 +109,8 @@ struct MenuBarContentView: View {
                     Text(loc(appState.systemAudioIsRecording ? "Kaydediliyor" : appState.systemAudioStatus))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                         .help(loc(appState.systemAudioStatus))
                 }
             }

@@ -31,6 +31,17 @@ final class AppState {
     }
     var systemAudioIsTranscribing = false
     var systemAudioStatus = "Kapalı"
+    var systemAudioStartedAt: Date?
+    /// Recordings past Bitir that have not reached a result yet.
+    var systemAudioPendingCount = 0 {
+        didSet { syncFlowBarVisibility() }
+    }
+    var systemAudioResult: SystemAudioResult? {
+        didSet { syncFlowBarVisibility() }
+    }
+    var showsSystemAudioBar: Bool {
+        recordingState == .idle && (systemAudioEnabled || systemAudioPendingCount > 0 || systemAudioResult != nil)
+    }
 
     // MARK: - Recording State
 
@@ -656,6 +667,7 @@ final class AppState {
     var systemAudioCapture: SystemAudioCapture?
     var systemAudioGeneration: UInt64 = 0
     var systemAudioTranscriptionTail: Task<Void, Never>?
+    var systemAudioResultTask: Task<Void, Never>?
     var recordingPreviewTask: Task<Void, Never>?
 
     /// Whether any background transcription task (other than the currently recording session) is running.

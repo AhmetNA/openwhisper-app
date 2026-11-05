@@ -86,6 +86,63 @@ struct AudioSegmentation {
         return best?.cut
     }
 
+    /// Splits a system audio recording for separate decodes, under Whisper's 30 s window. Each
+    /// chunk ends in the longest pause it can find and the next one starts where the sound comes
+    /// back: a chunk that started in silence came back as only "İzlediğiniz için teşekkür ederim."
+    /// and lost its ~25 s of speech (5 Nov 2026). WhisperKit's own VAD cuts mid-silence.
+    static func systemAudioChunks(from samples: [Float]) -> [Range<Int>] {
+        let rate = Int(sampleRate)
+        let frame = rate / 50
+        guard !samples.isEmpty else { return [] }
+        var overallRMS: Float = 0
+        vDSP_rmsqv(samples, 1, &overallRMS, vDSP_Length(samples.count))
+        // -40 dBFS clears the line noise of a voice message; a very soft recording must not all
+        // count as quiet.
+        let quietRMS = min(0.01, overallRMS * 0.25)
+        let longest = 28 * rate
+        let earliestCut = 15 * rate
+
+        func isQuiet(_ start: Int) -> Bool {
+            let end = min(start + frame, samples.count)
+            var rms: Float = 0
+            samples.withUnsafeBufferPointer { buffer in
+                vDSP_rmsqv(buffer.baseAddress!.advanced(by: start), 1, &rms, vDSP_Length(end - start))
+            }
+            return rms < quietRMS
+        }
+        func firstSound(from start: Int) -> Int {
+            var index = start
+            while index < samples.count, isQuiet(index) { index += frame }
+            return min(index, samples.count)
+        }
+
+        var chunks: [Range<Int>] = []
+        var start = firstSound(from: 0)
+        while start < samples.count {
+            guard samples.count - start > longest else {
+                chunks.append(start..<samples.count)
+                break
+            }
+            // Longest quiet run in the second part of the window; with none, the full window.
+            var cut = start + longest
+            var resume = cut
+            var bestLength = 0
+            var index = start + earliestCut
+            while index < start + longest {
+                guard isQuiet(index) else { index += frame; continue }
+                let runEnd = firstSound(from: index)
+                if runEnd - index > bestLength {
+                    bestLength = runEnd - index
+                    (cut, resume) = (min(index, start + longest), runEnd)
+                }
+                index = max(runEnd, index + frame)
+            }
+            chunks.append(start..<cut)
+            start = resume
+        }
+        return chunks
+    }
+
     /// Whisper's classic failure on music or noise: one word over and over ("Bu Bu Bu Bu Bu Bu"),
     /// or a whole transcript that is only a YouTube outro (`isKnownHallucination`).
     /// Nobody dictates a single word four or more times with nothing else around it.

@@ -1,6 +1,12 @@
 import Foundation
 import WhisperKit
 
+/// One system audio decode: the text, and how many seconds of the audio that text covers.
+struct SystemAudioDecode: Sendable, Equatable {
+    let text: String
+    let spokenSeconds: Double
+}
+
 /// A source-compatible timed representation of one Whisper word. Keeping this type separate
 /// from WhisperKit's `WordTiming` means the rest of OpenWhisper does not depend on WhisperKit's
 /// result model and can pass words to the speaker gate without importing WhisperKit.
@@ -45,9 +51,18 @@ protocol WhisperTranscriptionService: Sendable {
         language: String,
         overlapSampleCount: Int
     ) async throws -> TimedTranscriptionResult
+    func transcribeSystemAudio(audioData: [Float], language: String) async throws -> SystemAudioDecode
 }
 
 extension WhisperTranscriptionService {
+    /// A producer without segment times cannot say how much it covered, so it reports nothing.
+    func transcribeSystemAudio(audioData: [Float], language: String) async throws -> SystemAudioDecode {
+        SystemAudioDecode(
+            text: try await transcribe(audioData: audioData, language: language, overlapSampleCount: 0),
+            spokenSeconds: 0
+        )
+    }
+
     // Preserve spoken-done support for other providers; only Whisper can skip recovery.
     func previewTranscription(audioData: [Float], language: String) async throws -> String? {
         let text = try await transcribe(audioData: audioData, language: language, overlapSampleCount: 0)
@@ -75,6 +90,7 @@ final class WhisperTranscriber: @unchecked Sendable {
         let words: [WhisperTimedWord]
         let averageLogprob: Float?
         let needsRecovery: Bool
+        let spokenSeconds: Double
 
         var confidenceScore: Float {
             averageLogprob ?? -Float.greatestFiniteMagnitude
@@ -213,7 +229,54 @@ final class WhisperTranscriber: @unchecked Sendable {
             }
         }
 
-        var text = selectedPass.text
+        return Self.cleanedTranscript(selectedPass.text)
+    }
+
+    /// System audio only: decoded in `systemAudioChunks`, because one long decode lost everything
+    /// from the end of a window's last segment to the next 30 s mark (5 Nov 2026). The mic path
+    /// keeps its single decode.
+    func transcribeSystemAudio(audioData: [Float], language: String) async throws -> SystemAudioDecode {
+        try await workGate.run {
+            try Task.checkCancellation()
+            return try await self.transcribeSystemAudioExclusively(audioData: audioData, language: language)
+        }
+    }
+
+    private func transcribeSystemAudioExclusively(audioData: [Float], language: String) async throws -> SystemAudioDecode {
+        guard let whisperKit else {
+            throw TranscriberError.modelNotLoaded
+        }
+        owLog("[Whisper] Transcribing system audio samples=\(audioData.count) language=\(language)")
+        var texts: [String] = []
+        var spokenSeconds = 0.0
+        for chunk in AudioSegmentation.systemAudioChunks(from: audioData) {
+            try Task.checkCancellation()
+            let pass = try await runDecode(
+                whisperKit: whisperKit,
+                audioData: Array(audioData[chunk]),
+                language: language,
+                promptTokens: nil
+            )
+            let text = Self.cleanedTranscript(pass.text)
+            if !text.isEmpty { texts.append(text) }
+            spokenSeconds += pass.spokenSeconds
+        }
+        return SystemAudioDecode(text: texts.joined(separator: " "), spokenSeconds: spokenSeconds)
+    }
+
+    /// Seconds of audio Whisper actually wrote text for. A hallucinated segment does not count,
+    /// and a loop that swallowed the rest of a window shows up as a gap.
+    static func spokenSeconds(in segments: [(start: Float, end: Float, text: String)]) -> Double {
+        segments.reduce(0) { total, segment in
+            let text = segment.text
+                .replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression)
+            guard !cleanedTranscript(text).isEmpty else { return total }
+            return total + Double(max(segment.end - segment.start, 0))
+        }
+    }
+
+    private static func cleanedTranscript(_ rawText: String) -> String {
+        var text = rawText
 
         // This subtitle-credit hallucination is a hard-denied output artifact. Strip it
         // regardless of position, capitalization, punctuation, or decoder/provider path.
@@ -481,7 +544,8 @@ final class WhisperTranscriber: @unchecked Sendable {
             text: text,
             words: words,
             averageLogprob: averageLogprob,
-            needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression
+            needsRecovery: text.isEmpty || weakLogprob || suspiciousCompression,
+            spokenSeconds: Self.spokenSeconds(in: segments.map { (start: $0.start, end: $0.end, text: $0.text) })
         )
     }
 

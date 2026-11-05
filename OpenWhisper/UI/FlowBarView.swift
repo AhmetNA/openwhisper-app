@@ -17,7 +17,7 @@ struct FlowBarView: View {
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 8) {
-                if appState.systemAudioEnabled && appState.recordingState == .idle {
+                if appState.showsSystemAudioBar {
                     systemAudioContent
                 } else if let message = appState.flowBarMessage,
                           appState.jarvisActivity != .speaking || appState.targetSpeakerAppendOfferActive {
@@ -95,11 +95,38 @@ struct FlowBarView: View {
         .animation(.easeInOut(duration: 0.15), value: appState.recordingInputReady)
         .animation(.easeInOut(duration: 0.25), value: appState.jarvisActivity)
         .animation(.easeInOut(duration: 0.25), value: appState.systemAudioIsRecording)
+        .animation(.easeInOut(duration: 0.25), value: appState.systemAudioPendingCount)
+        .animation(.easeInOut(duration: 0.25), value: appState.systemAudioResult)
     }
 
     // MARK: - System output recording
 
+    @ViewBuilder
     private var systemAudioContent: some View {
+        if appState.systemAudioEnabled {
+            systemAudioRecordingContent
+        } else if appState.systemAudioPendingCount > 0 {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(verbatim: loc(appState.systemAudioStatus))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .frame(height: indicatorHeight)
+        } else if let result = appState.systemAudioResult {
+            HStack(spacing: 8) {
+                Image(systemName: result.succeeded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(result.succeeded ? Color.green : Color.orange)
+                Text(verbatim: result.message)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .frame(height: indicatorHeight)
+        }
+    }
+
+    private var systemAudioRecordingContent: some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(appState.systemAudioIsRecording ? Color.red : Color.orange)
@@ -108,6 +135,16 @@ struct FlowBarView: View {
             Text(appState.systemAudioIsRecording ? "Bilgisayar sesi kaydediliyor" : "Bilgisayar sesi açılıyor")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white)
+
+            if let startedAt = appState.systemAudioStartedAt {
+                TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                    Text(verbatim: SystemAudioReport.clock(context.date.timeIntervalSince(startedAt)))
+                        .font(.system(size: 13, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                // Up to 90:00, so the panel never has to grow while it records.
+                .frame(width: 42, alignment: .leading)
+            }
 
             Button {
                 appState.stopSystemAudioListening()
