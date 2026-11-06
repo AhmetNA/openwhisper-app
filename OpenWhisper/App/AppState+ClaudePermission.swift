@@ -24,7 +24,9 @@ extension AppState {
     /// Nil (Claude's own prompt decides) when off, busy, unanswered or answered in Claude.
     func askClaudePermission(_ body: Data, id: UUID) async -> Data? {
         defer { abandonedClaudePermissions.remove(id) }
-        guard claudeVoicePermissionsEnabled, let request = ClaudePermission.Request(json: body) else { return nil }
+        // Only while Jarvis is listening; otherwise the question stays in Claude's window, unspoken.
+        guard claudeVoicePermissionsEnabled, wakeWordEnabled,
+              let request = ClaudePermission.Request(json: body) else { return nil }
         owLog("[ClaudePermission] \(request.tool) asked in \(request.project ?? "?")")
         // A voice profile being recorded would take the answer's recording for its next sample.
         guard !targetSpeakerEnrollmentActive else {

@@ -81,7 +81,7 @@
 "Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %%%lld'nin altında Mac yine uyuyabilir." = "Listens for “Jarvis” even with the display off and keeps the Mac from sleeping. Say “Ekranı aç” to turn the display on. On battery below %%%lld the Mac may still sleep.";
 "Pil %%%lld'nin altında: şarja takınca Mac'i uyanık tutar." = "Battery below %%%lld: keeps the Mac awake once plugged in.";
 "Uzaktan kontrol" = "Remote control";
-"Claude Code bir işlem için izin isteyince soruyu sesli okur. “Evet”, “her zaman” ya da “hayır, …” diyebilirsiniz; cevap vermezseniz karar Claude'un penceresinde kalır." = "When Claude Code asks permission for an action, reads the question aloud. Say “Evet”, “her zaman” or “hayır, …”; if you don't answer, the decision stays in Claude's window.";
+"“Jarvis” dinlemesi açıkken Claude Code bir işlem için izin isteyince soruyu sesli okur. “Evet”, “her zaman” ya da “hayır, …” diyebilirsiniz; cevap vermezseniz karar Claude'un penceresinde kalır." = "While “Jarvis” listening is on and Claude Code asks permission for an action, reads the question aloud. Say “Evet”, “her zaman” or “hayır, …”; if you don't answer, the decision stays in Claude's window.";
 "Claude izinlerini sesle sor" = "Ask Claude permissions by voice";
 "WhatsApp'tan mesaj gelince altta kimden kaç mesaj geldiğini gösterir." = "When WhatsApp messages arrive, shows at the bottom who sent how many.";
 "WhatsApp mesajlarını haber ver" = "Announce WhatsApp messages";

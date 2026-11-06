@@ -888,7 +888,7 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
-                Text("Claude Code bir işlem için izin isteyince soruyu sesli okur. “Evet”, “her zaman” ya da “hayır, …” diyebilirsiniz; cevap vermezseniz karar Claude'un penceresinde kalır.")
+                Text("“Jarvis” dinlemesi açıkken Claude Code bir işlem için izin isteyince soruyu sesli okur. “Evet”, “her zaman” ya da “hayır, …” diyebilirsiniz; cevap vermezseniz karar Claude'un penceresinde kalır.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
