@@ -170,7 +170,7 @@ final class SystemCommandParserTests: XCTestCase {
     func testMailAttachment() {
         for text in ["Mustafa'ya gönderdiğim eki bul", "Jarvis, Ayşe Yılmaz'a ekte gönderdiğim dosyayı bul.",
                      "Ali'ye mailde yolladığım PDF'i aç", "hocaya gönderdiğimiz ekleri bulur musun",
-                     "Ekte gönderdiğim dosyayı aç", "Ayşe Yılmaz'a gönderdiğim eki bu.", "Ayşe'ye gönderdiğim PDF bu.", "Ayşe'ye gönderdiğin PDF'i bul."] {
+                     "Ekte gönderdiğim dosyayı aç", "Ayşe Yılmaz'a gönderdiğim eki bu.", "Ayşe'ye gönderdiğim PDF bu.", "Ayşe'ye gönderdiğin PDF'i bul.", "Ali'ye gönderdiğim eki bulur musun?", "Ayşe'ye ekte yolladığım dosyayı açar mısın lütfen"] {
             XCTAssertEqual(SystemCommandParser.parse(text, installedApps: apps), .mailAttachment(text), text)
         }
         // Not something the user sent as an attachment.
@@ -179,6 +179,12 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("ali'ye gönderdiğim mesajı oku"))
         XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("mustafa'nın gönderdiği eki bul"))
         XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("whatsapp'tan ali'ye attığım fotoğrafı bul"))
+        // Dictated mail text, not a request.
+        for text in ["Merhaba hocam, ekte gönderdiğim dosyada açıklamaları bulabilirsiniz.",
+                     "Ekte gönderdiğim raporu açıp inceleyebilir misiniz?",
+                     "Dün gönderdiğim ekte bazı hatalar bulunuyor, düzeltilmiş halini yarın getireceğim."] {
+            XCTAssertNotEqual(SystemCommandParser.parse(text, installedApps: apps), .mailAttachment(text), text)
+        }
     }
 
     func testSentAttachmentsMatchRecipientAndDedupe() {

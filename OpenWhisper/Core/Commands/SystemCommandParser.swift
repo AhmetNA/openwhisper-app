@@ -295,8 +295,11 @@ enum SystemCommandParser {
     static func isMailAttachmentRequest(_ text: String) -> Bool {
         // Whisper often hears "gönderdiğim" as "gönderdiğin".
         guard matches(text, #"(?:gönderdiğim|gönderdik|yolladığım|yolladık|attığım|attık|gönderdiğin|yolladığın)\S*"#),
-              // Whisper ends "… eki bul" as "… eki bu".
-              matches(text, #"\b(?:bul|aç|göster|getir)|\bbu$"#) else { return false }
+              // The request ends the sentence, so dictated mail ("ekte gönderdiğim dosyada
+              // açıklamaları bulabilirsiniz") stays text. Whisper ends "… eki bul" as "… eki bu".
+              text.split(separator: " ").count <= 12,
+              matches(text, #"\b(?:bul|aç|göster|getir)(?:ur|ar|ır|ir|abilir|ebilir)?(?: m[ıiuü]s[ıiuü]n)?(?: lütfen)?$|\bbu$"#)
+        else { return false }
         return matches(text, #"\b(?:ek|eki|ekte|ekteki|ekleri|ekli|eklenti\S*)\b"#)
             || (matches(text, #"\b(?:dosya|belge|pdf|zip|resim|fotoğraf|sunum)\S*"#) && !matches(text, whatsApp) && !matches(text, message))
     }
