@@ -205,6 +205,126 @@ enum MailController {
         .sorted { $0.date > $1.date }
     }
 
+    struct ConversationMail: Equatable {
+        let incoming: Bool
+        /// The Message-ID header, for opening it with a `message:` URL.
+        let messageID: String
+        let date: Date
+        /// The sender of an incoming mail, the recipients of a sent one.
+        let counterpart: String
+        let subject: String
+        let body: String
+    }
+
+    /// The newest mail exchanged with `person`, both ways, at most `limit`. The inbox is searched
+    /// by sender only: a header search there took almost two minutes on 18,000 mails. A word
+    /// counts when the name contains it or the address starts with it, so "İrem" doesn't catch
+    /// "…ryanairemail.com". Mail doesn't list the hits newest first, so the script picks.
+    static func conversation(with person: String, limit: Int = 3) async -> [ConversationMail]? {
+        let words = person.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard !words.isEmpty else { return [] }
+        let list = { (items: [String]) in "{" + items.map { "\"\(escaped($0))\"" }.joined(separator: ", ") + "}" }
+        let senderFilter = words.map { "sender contains \"\(escaped($0))\"" }.joined(separator: " or ")
+        let headerFilter = words.map { "all headers contains \"\(escaped($0))\"" }.joined(separator: " or ")
+        let script = """
+            on matchesPerson(theName, theAddress, ws, fws)
+                if theName is missing value then set theName to ""
+                repeat with i from 1 to count of ws
+                    if theName contains (item i of ws) then return true
+                    if theAddress starts with (item i of fws) then return true
+                end repeat
+                return false
+            end matchesPerson
+
+            on newest(cands, k)
+                set picked to {}
+                repeat k times
+                    set best to 0
+                    set bestOffset to -1.0E+12
+                    repeat with i from 1 to count of cands
+                        set c to item i of cands
+                        if (item 1 of c) > bestOffset and (item 3 of c) is false then
+                            set best to i
+                            set bestOffset to item 1 of c
+                        end if
+                    end repeat
+                    if best is 0 then exit repeat
+                    set item 3 of item best of cands to true
+                    set end of picked to item best of cands
+                end repeat
+                return picked
+            end newest
+
+            on run
+                set ws to \(list(words))
+                set fws to \(list(words.map(fold)))
+                tell application "Mail"
+                    set rs to character id 30
+                    set fs to character id 31
+                    set now to current date
+                    set out to ""
+                    set cands to {}
+                    set n to 0
+                    -- Into a variable first: in the repeat line itself the search runs again every turn.
+                    set found to (messages of inbox whose \(senderFilter))
+                    repeat with m in found
+                        set n to n + 1
+                        if n > 80 then exit repeat
+                        set s to sender of m
+                        if my matchesPerson(extract name from s, extract address from s, ws, fws) then
+                            set end of cands to {(date received of m) - now, contents of m, false, "in", s}
+                        end if
+                    end repeat
+                    set n to 0
+                    set found to (messages of sent mailbox whose \(headerFilter))
+                    repeat with m in found
+                        set n to n + 1
+                        if n > 80 then exit repeat
+                        set r to ""
+                        set hit to false
+                        repeat with x in to recipients of m
+                            set xn to name of x
+                            if xn is missing value then set xn to ""
+                            if my matchesPerson(xn, address of x, ws, fws) then set hit to true
+                            set r to r & xn & " <" & (address of x) & ">; "
+                        end repeat
+                        if hit then set end of cands to {(date sent of m) - now, contents of m, false, "out", r}
+                    end repeat
+                    repeat with c in my newest(cands, \(limit + 2))
+                        set m to item 2 of c
+                        set t to content of m
+                        if length of t > 1500 then set t to text 1 thru 1500 of t
+                        set out to out & (item 4 of c) & fs & (message id of m) & fs & (item 1 of c) & fs & (item 5 of c) & fs & (subject of m) & fs & t & rs
+                    end repeat
+                end tell
+                return out
+            end run
+            """
+        guard let reply = await run(script) else { return nil }
+        return Array(parseConversation(reply, now: Date()).prefix(limit))
+    }
+
+    /// Newest first, each message once: a sent mail can be in two accounts' sent boxes.
+    static func parseConversation(_ reply: String, now: Date) -> [ConversationMail] {
+        var seen = Set<String>()
+        return reply.split(separator: "\u{1E}").compactMap { record -> ConversationMail? in
+            let fields = record.split(separator: "\u{1F}", maxSplits: 5, omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 6, let offset = Double(fields[2]), seen.insert(fields[1]).inserted else { return nil }
+            return ConversationMail(incoming: fields[0] == "in", messageID: fields[1], date: now.addingTimeInterval(offset),
+                                    counterpart: fields[3].trimmingCharacters(in: CharacterSet(charactersIn: "; ")),
+                                    subject: fields[4], body: readableBody(fields[5]))
+        }
+        .sorted { $0.date > $1.date }
+    }
+
+    /// Opens the message in Mail by its Message-ID; a lookup by id in a big inbox took 4 s.
+    @MainActor
+    static func open(messageID: String) -> Bool {
+        let encoded = "<\(messageID)>".addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._@"))) ?? ""
+        guard let url = URL(string: "message:\(encoded)") else { return false }
+        return NSWorkspace.shared.open(url)
+    }
+
     /// Saves the attachment of a sent message to Downloads (under a new name if taken) and
     /// returns where; nil when Mail couldn't. Picked by `whose name is` in one Apple event:
     /// walking `mail attachments` item by item, Mail hands out a shuffled list with repeats

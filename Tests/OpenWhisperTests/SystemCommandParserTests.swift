@@ -187,6 +187,32 @@ final class SystemCommandParserTests: XCTestCase {
         }
     }
 
+    func testMailConversation() {
+        for text in ["Hafize İrem'le mail ile ne konuşmuştuk?", "Ayşe Yılmaz'la mailde ne yazışmıştık",
+                     "Ali'yle mailleşmemizi özetle", "Jarvis, hocanın son maillerini özetler misin?",
+                     "Mehmet hoca mailde ne demiş?", "Hafize İrem ile Maide ne yazışmıştık?"] {
+            XCTAssertEqual(SystemCommandParser.parse(text, installedApps: apps), .mailConversation(text), text)
+        }
+        XCTAssertEqual(SystemCommandParser.parse("Son mail ne diyor?", installedApps: apps), .mailReadLatest)
+        XCTAssertEqual(SystemCommandParser.parse("Ahmet'ten mail var mı?", installedApps: apps), .mailFrom("Ahmet"))
+        XCTAssertFalse(SystemCommandParser.isMailConversationRequest("dilay'la en son ne konuştuk"))
+        XCTAssertFalse(SystemCommandParser.isMailConversationRequest("bu maili özetle"))
+        XCTAssertFalse(SystemCommandParser.isMailConversationRequest("son maili özetler misin"))
+        XCTAssertFalse(SystemCommandParser.isMailConversationRequest("hocam mailde konuştuğumuz konuyla ilgili ek bir sorum olacaktı"))
+    }
+
+    func testConversationNewestFirstOnce() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let reply = "in\u{1F}a@x\u{1F}-300\u{1F}Ayşe <ayse@example.com>\u{1F}Konu\u{1F}Merhaba.\n> eski\u{1E}"
+            + "out\u{1F}b@x\u{1F}-100\u{1F}Ayşe <ayse@example.com>; \u{1F}Re: Konu\u{1F}Tamam.\u{1E}"
+            + "out\u{1F}b@x\u{1F}-100\u{1F}Ayşe <ayse@example.com>; \u{1F}Re: Konu\u{1F}Tamam.\u{1E}"
+        let mails = MailController.parseConversation(reply, now: now)
+        XCTAssertEqual(mails.map(\.messageID), ["b@x", "a@x"])
+        XCTAssertFalse(mails[0].incoming)
+        XCTAssertEqual(mails[1].body, "Merhaba.")
+        XCTAssertEqual(mails[0].counterpart, "Ayşe <ayse@example.com>")
+    }
+
     func testSentAttachmentsMatchRecipientAndDedupe() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let reply = """
@@ -198,8 +224,8 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(found.map(\.id), [12, 11])
         XCTAssertEqual(found[1].attachments, ["logo.png", "rapor.pdf"])
         XCTAssertEqual(found[0].date, now.addingTimeInterval(-50))
-        XCTAssertTrue(MailAttachmentAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasPrefix("rapor açıldı;"))
-        XCTAssertTrue(MailAttachmentAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasSuffix("alıcı Ayşe Yılmaz"))
+        XCTAssertTrue(MailAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasPrefix("rapor açıldı;"))
+        XCTAssertTrue(MailAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasSuffix("alıcı Ayşe Yılmaz"))
     }
 
     func testMailReplyDraft() {

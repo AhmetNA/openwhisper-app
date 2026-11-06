@@ -59,7 +59,7 @@ struct JarvisReply {
         case .mute(true), .sleep, .displaySleep, .lockScreen, .screenSaver:
             return nil
         case .time, .battery, .mailCount, .mailCheck, .mailLatest, .mailReadUnread, .mailOpen, .briefing,
-             .mailReadLatest, .mailFrom, .mailReplyDraft, .mailAttachment, .whatsAppUnread, .whatsAppFrom,
+             .mailReadLatest, .mailFrom, .mailReplyDraft, .mailAttachment, .mailConversation, .whatsAppUnread, .whatsAppFrom,
              .whatsAppConversation, .whatsAppSearch:
             return answer(Self.speakable(Self.shortened(status, for: command)))
         case .disableWakeWord:

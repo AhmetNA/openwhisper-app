@@ -49,8 +49,10 @@ enum SystemCommand: Equatable, Sendable {
     /// "Son maile cevap yaz: yarın uygunum": a reply to the newest mail, opened in Mail but
     /// never sent; the user sends it there. An empty text opens an empty reply.
     case mailReplyDraft(String)
-    /// "Mustafa'ya gönderdiğim eki bul": the whole request, for `MailAttachmentAgent`.
+    /// "Mustafa'ya gönderdiğim eki bul": the whole request, for `MailAgent`.
     case mailAttachment(String)
+    /// "Hafize İrem'le mailde ne konuşmuştuk": the whole request, for `MailAgent`.
+    case mailConversation(String)
     /// WhatsApp Desktop's chats, read-only (`WhatsAppController`). "WhatsApp'ta okunmamış var
     /// mı", "okunmamış mesajları oku": the chats with unread messages and what they say.
     case whatsAppUnread
@@ -197,6 +199,8 @@ enum SystemCommandParser {
         // First, and with a longer limit: shortcut names are free text ("Wi-Fi ile Sabah Özeti")
         // that would otherwise read as a Wi-Fi or app command.
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
+        // Before WhatsApp's "Dilay'la ne konuştuk": the mail is named.
+        if isMailConversationRequest(cleaned) { return .mailConversation(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
         if cleaned.split(separator: " ").count <= 12, let search = parseWhatsAppSearch(cleaned) { return search }
         // Before files: "ekte gönderdiğim dosyayı aç" is a mail attachment, not a file named so.
@@ -288,6 +292,16 @@ enum SystemCommandParser {
         if matches(text, #"son (?:gelen )?\#(mail)|kimden|konusu"#) { return .mailLatest }
         if matches(text, #"kaç|var mı|geldi mi|yeni \#(mail)|okunmamış"#) { return .mailCount }
         return nil
+    }
+
+    /// "Hafize İrem'le mailde ne konuşmuştuk", "Ali'yle mailleşmemizi özetle", "hocanın son
+    /// maillerinde ne demiş": a question about mail with someone, asked at the end.
+    static func isMailConversationRequest(_ text: String) -> Bool {
+        // Whisper hears "mailde" as "maide".
+        guard text.split(separator: " ").count <= 12, matches(text, mail) || matches(text, #"\bmaide\b"#) else { return false }
+        return matches(text, #"(?:konuş|yazış|mailleş)\S*(?: mu| mıydı| muyduk)?$|\bne (?:demiş|yazmış|dedi|yazdı|istemiş|istedi|diyor)$|\bözetle\S*(?: m[ıiuü]s[ıiuü]n)?$"#)
+            // "Bu maili özetle" is the mail on screen, "son mail ne diyor" the newest: no person.
+            && !matches(text, #"^(?:bu|şu|son)(?: gelen)? (?:\#(mail)|maide)"#)
     }
 
     /// "Ali'ye gönderdiğim eki bul", "ekte yolladığım dosyayı aç", "Ayşe'ye attığım PDF'i

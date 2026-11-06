@@ -218,3 +218,4 @@ keys	10 dakika sonra çıkıyorum	none
 keys	Alarm sesi çok yüksek	none
 voice	Mustafa'ya gönderdiğim eki bul.	system:mailAttachment("Mustafa\'ya gönderdiğim eki bul.")
 voice	Ayşe'ye ekte yolladığım dosyayı açar mısın?	system:mailAttachment("Ayşe\'ye ekte yolladığım dosyayı açar mısın?")
+voice	Hafize İrem'le mail ile ne konuşmuştuk?	system:mailConversation("Hafize İrem\'le mail ile ne konuşmuştuk?")
