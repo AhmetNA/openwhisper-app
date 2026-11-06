@@ -139,6 +139,99 @@ enum MailController {
         return parse(reply).first
     }
 
+    struct SentWithAttachments: Equatable {
+        let id: Int
+        let date: Date
+        let recipients: String
+        let subject: String
+        /// Each name once: a reply carries the thread's images again.
+        let attachments: [String]
+    }
+
+    /// How many sent messages whose headers name the person are looked at.
+    static let sentSearchDepth = 40
+
+    /// Sent messages with attachments to someone whose name or address matches `person`,
+    /// newest first. Mail's headers have each word as written ("Işık", or "IŞIK") and the
+    /// address folded ("isik@"), so every word in both forms is searched; the recipients are
+    /// checked again here, since the headers also hold the sender.
+    static func sentWithAttachments(to person: String) async -> [SentWithAttachments]? {
+        let words = person.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let forms = Array(Set(words + words.map(fold))).map { "all headers contains \"\(escaped($0))\"" }
+        guard !forms.isEmpty else { return [] }
+        let script = """
+            tell application "Mail"
+                set found to (messages of sent mailbox whose \(forms.joined(separator: " or ")))
+                set out to ""
+                set n to 0
+                set now to current date
+                repeat with m in found
+                    set n to n + 1
+                    if n > \(sentSearchDepth) then exit repeat
+                    -- One Apple event: walking the attachments one by one, Mail repeats some and skips others.
+                    set atts to name of mail attachments of m
+                    if (count of atts) > 0 then
+                        set rs to ""
+                        repeat with r in to recipients of m
+                            set rn to name of r
+                            if rn is missing value then set rn to ""
+                            set rs to rs & rn & " <" & (address of r) & ">; "
+                        end repeat
+                        set an to ""
+                        repeat with a in atts
+                            set an to an & a & "|"
+                        end repeat
+                        set out to out & (id of m) & tab & ((date sent of m) - now) & tab & rs & tab & (subject of m) & tab & an & linefeed
+                    end if
+                end repeat
+                return out
+            end tell
+            """
+        guard let reply = await run(script) else { return nil }
+        return parseSent(reply, person: person, now: Date())
+    }
+
+    static func parseSent(_ reply: String, person: String, now: Date) -> [SentWithAttachments] {
+        reply.split(whereSeparator: \.isNewline).compactMap { line -> SentWithAttachments? in
+            let fields = line.split(separator: "\t", maxSplits: 4, omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 5, let id = Int(fields[0]), let offset = Double(fields[1]),
+                  senderMatches(fields[2], name: person) else { return nil }
+            var names: [String] = []
+            for name in fields[4].split(separator: "|").map(String.init) where !names.contains(name) { names.append(name) }
+            let recipients = fields[2].trimmingCharacters(in: CharacterSet(charactersIn: "; "))
+            return SentWithAttachments(id: id, date: now.addingTimeInterval(offset), recipients: recipients,
+                                       subject: fields[3], attachments: names)
+        }
+        .sorted { $0.date > $1.date }
+    }
+
+    /// Saves the attachment of a sent message to Downloads (under a new name if taken) and
+    /// returns where; nil when Mail couldn't. Picked by `whose name is` in one Apple event:
+    /// walking `mail attachments` item by item, Mail hands out a shuffled list with repeats
+    /// and the one asked for can be missing.
+    static func saveSentAttachment(messageID: Int, name: String) async -> URL? {
+        let fileName = name.precomposedStringWithCanonicalMapping
+        guard !fileName.isEmpty, !fileName.contains("/") else { return nil }
+        let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        let base = (fileName as NSString).deletingPathExtension
+        let ext = (fileName as NSString).pathExtension
+        var url = downloads.appendingPathComponent(fileName)
+        var copy = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = downloads.appendingPathComponent(ext.isEmpty ? "\(base) \(copy)" : "\(base) \(copy).\(ext)")
+            copy += 1
+        }
+        let script = """
+            tell application "Mail"
+                set m to first message of sent mailbox whose id is \(messageID)
+                save (first mail attachment of m whose name is "\(escaped(fileName))") in (POSIX file "\(escaped(url.path))")
+                return "saved"
+            end tell
+            """
+        guard await run(script) == "saved", FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
     /// True when every word of `name` begins a word of the sender ("Ahmet" ~ "Ahmet Yılmaz
     /// <ahmet@x.com>"), ignoring case and Turkish letters ("Ayse" ~ "Ayşe").
     static func senderMatches(_ sender: String, name: String) -> Bool {

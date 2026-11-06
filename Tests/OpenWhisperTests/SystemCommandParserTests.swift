@@ -167,6 +167,35 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertEqual(SystemCommandParser.parse("Yeni mail var mı", installedApps: apps), .mailCount)
     }
 
+    func testMailAttachment() {
+        for text in ["Mustafa'ya gönderdiğim eki bul", "Jarvis, Ayşe Yılmaz'a ekte gönderdiğim dosyayı bul.",
+                     "Ali'ye mailde yolladığım PDF'i aç", "hocaya gönderdiğimiz ekleri bulur musun",
+                     "Ekte gönderdiğim dosyayı aç", "Ayşe Yılmaz'a gönderdiğim eki bu.", "Ayşe'ye gönderdiğim PDF bu.", "Ayşe'ye gönderdiğin PDF'i bul."] {
+            XCTAssertEqual(SystemCommandParser.parse(text, installedApps: apps), .mailAttachment(text), text)
+        }
+        // Not something the user sent as an attachment.
+        XCTAssertNotEqual(SystemCommandParser.parse("Ahmet'ten mail var mı", installedApps: apps), .mailAttachment("Ahmet'ten mail var mı"))
+        XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("indirilenlerdeki son pdf'i aç"))
+        XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("ali'ye gönderdiğim mesajı oku"))
+        XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("mustafa'nın gönderdiği eki bul"))
+        XCTAssertFalse(SystemCommandParser.isMailAttachmentRequest("whatsapp'tan ali'ye attığım fotoğrafı bul"))
+    }
+
+    func testSentAttachmentsMatchRecipientAndDedupe() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let reply = """
+            11\t-100\tAyşe Yılmaz <ayse@example.com>; \tRapor\tlogo.png|rapor.pdf|logo.png|
+            12\t-50\t <ayse.yilmaz@example.com>; \tSon hali\trapor2.pdf|
+            13\t-10\tAli Veli <ali@example.com>; \tBaşka\tx.zip|
+            """
+        let found = MailController.parseSent(reply, person: "Ayse", now: now)
+        XCTAssertEqual(found.map(\.id), [12, 11])
+        XCTAssertEqual(found[1].attachments, ["logo.png", "rapor.pdf"])
+        XCTAssertEqual(found[0].date, now.addingTimeInterval(-50))
+        XCTAssertTrue(MailAttachmentAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasPrefix("rapor açıldı;"))
+        XCTAssertTrue(MailAttachmentAgent.openedAnswer(file: "rapor.pdf", mail: found[1]).hasSuffix("alıcı Ayşe Yılmaz"))
+    }
+
     func testMailReplyDraft() {
         XCTAssertEqual(SystemCommandParser.parse("Son maile cevap yaz: Yarın saat 3 uygun, teşekkürler.", installedApps: apps),
                        .mailReplyDraft("Yarın saat 3 uygun, teşekkürler"))

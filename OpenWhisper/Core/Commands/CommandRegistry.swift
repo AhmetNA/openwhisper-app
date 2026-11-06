@@ -118,7 +118,7 @@ enum CommandRegistry {
         if let command = match(trimmed, in: [.timer, .video, .system], context: context) {
             switch command {
             case .system(.whatsAppSearch), .system(.calendarEvent), .system(.browser),
-                 .system(.mailReplyDraft), .system(.openFile), .system(.clipboard(.sendWhatsApp)): return false
+                 .system(.mailReplyDraft), .system(.mailAttachment), .system(.openFile), .system(.clipboard(.sendWhatsApp)): return false
             default: return true
             }
         }

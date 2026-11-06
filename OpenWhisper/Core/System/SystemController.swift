@@ -45,6 +45,7 @@ enum SystemController {
         case .mailReadLatest: return await mailReadLatest()
         case .mailFrom(let name): return await mailFrom(name)
         case .mailReplyDraft(let text): return await mailReplyDraft(text)
+        case .mailAttachment(let request): return await MailAttachmentAgent.run(request)
         case .whatsAppUnread: return await WhatsAppController.unreadSummary()
         case .whatsAppFrom(let name): return await WhatsAppController.latest(from: name)
         case .whatsAppConversation(let name): return await WhatsAppController.conversation(with: name)

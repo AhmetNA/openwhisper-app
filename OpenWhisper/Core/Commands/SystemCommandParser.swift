@@ -49,6 +49,8 @@ enum SystemCommand: Equatable, Sendable {
     /// "Son maile cevap yaz: yarın uygunum": a reply to the newest mail, opened in Mail but
     /// never sent; the user sends it there. An empty text opens an empty reply.
     case mailReplyDraft(String)
+    /// "Mustafa'ya gönderdiğim eki bul": the whole request, for `MailAttachmentAgent`.
+    case mailAttachment(String)
     /// WhatsApp Desktop's chats, read-only (`WhatsAppController`). "WhatsApp'ta okunmamış var
     /// mı", "okunmamış mesajları oku": the chats with unread messages and what they say.
     case whatsAppUnread
@@ -197,6 +199,8 @@ enum SystemCommandParser {
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
         // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
         if cleaned.split(separator: " ").count <= 12, let search = parseWhatsAppSearch(cleaned) { return search }
+        // Before files: "ekte gönderdiğim dosyayı aç" is a mail attachment, not a file named so.
+        if isMailAttachmentRequest(cleaned) { return .mailAttachment(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         // Before mail and WhatsApp: "kopyaladığımı WhatsApp'tan Ali'ye at" is the clipboard's.
         if let daily = DailyCommandParser.parse(cleaned, installedApps: installedApps, scenes: scenes,
                                                 readingPaused: readingPaused, readingJustCut: readingJustCut) {
@@ -284,6 +288,17 @@ enum SystemCommandParser {
         if matches(text, #"son (?:gelen )?\#(mail)|kimden|konusu"#) { return .mailLatest }
         if matches(text, #"kaç|var mı|geldi mi|yeni \#(mail)|okunmamış"#) { return .mailCount }
         return nil
+    }
+
+    /// "Ali'ye gönderdiğim eki bul", "ekte yolladığım dosyayı aç", "Ayşe'ye attığım PDF'i
+    /// bul": something the user sent (not "gönderdiği") as an attachment, not on WhatsApp.
+    static func isMailAttachmentRequest(_ text: String) -> Bool {
+        // Whisper often hears "gönderdiğim" as "gönderdiğin".
+        guard matches(text, #"(?:gönderdiğim|gönderdik|yolladığım|yolladık|attığım|attık|gönderdiğin|yolladığın)\S*"#),
+              // Whisper ends "… eki bul" as "… eki bu".
+              matches(text, #"\b(?:bul|aç|göster|getir)|\bbu$"#) else { return false }
+        return matches(text, #"\b(?:ek|eki|ekte|ekteki|ekleri|ekli|eklenti\S*)\b"#)
+            || (matches(text, #"\b(?:dosya|belge|pdf|zip|resim|fotoğraf|sunum)\S*"#) && !matches(text, whatsApp) && !matches(text, message))
     }
 
     /// "Ahmet'ten mail var mı", "Ayşe Yılmaz'dan gelen e-posta var mı", "Mehmetten mail geldi mi"
