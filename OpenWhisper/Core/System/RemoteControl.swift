@@ -2,7 +2,7 @@ import AppKit
 import IOKit.ps
 import IOKit.pwr_mgt
 
-/// "Uzaktan kontrol": with a microphone across the room, "Jarvis" must still be heard once the
+/// "Ekran kapalıyken dinle": with a microphone across the room, "Jarvis" must still be heard once the
 /// display has gone dark. True system sleep stops the CPU and the mic, so nothing can wake it
 /// by voice; this keeps the system awake while the display sleeps, and the wake-word listener
 /// keeps running (`AppState.updateWakeWordListener`).
@@ -58,7 +58,7 @@ final class RemoteControl {
             var id: IOPMAssertionID = 0
             let result = IOPMAssertionCreateWithName(
                 kIOPMAssertPreventUserIdleSystemSleep as CFString, IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                "Jarvis uzaktan kontrol: ekran kapalıyken dinliyor" as CFString, &id)
+                "Jarvis: ekran kapalıyken dinliyor" as CFString, &id)
             guard result == kIOReturnSuccess else {
                 owLog("[RemoteControl] Could not hold the Mac awake (IOReturn \(result))")
                 return

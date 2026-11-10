@@ -851,7 +851,7 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Label("Uzaktan kontrol", systemImage: "dot.radiowaves.left.and.right")
+                    Label("Ekran kapalıyken dinle", systemImage: "dot.radiowaves.left.and.right")
                     Spacer()
                     // Remote control needs the "Jarvis" listener: switching it on switches that on too.
                     Toggle("", isOn: Binding(get: { appState.remoteControlEnabled && appState.wakeWordEnabled },
@@ -869,17 +869,24 @@ struct SettingsView: View {
                         .font(.caption)
                 }
                 if appState.remoteControl.waitingForPower {
-                    Label(appState.remoteControlOnBattery
-                          ? "Pil %\(RemoteControl.minimumBatteryPercent)'nin altında: şarja takınca Mac'i uyanık tutar."
-                          : "Pilde çalışıyor: şarja takınca Mac'i uyanık tutar.",
-                          systemImage: "battery.25percent")
+                    Group {
+                        if appState.remoteControlOnBattery {
+                            Label("Pil %\(RemoteControl.minimumBatteryPercent)'nin altında: şarja takınca Mac'i uyanık tutar.", systemImage: "battery.25percent")
+                        } else {
+                            Label("Pilde çalışıyor: şarja takınca Mac'i uyanık tutar.", systemImage: "battery.25percent")
+                        }
+                    }
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(appState.remoteControlOnBattery
-                     ? "Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir."
-                     : "Şarjdayken ekran kapalı olsa da “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır.")
+                Group {
+                    if appState.remoteControlOnBattery {
+                        Text("Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir.")
+                    } else {
+                        Text("Şarjdayken ekran kapalı olsa da “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır.")
+                    }
+                }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
