@@ -9,9 +9,9 @@ pkill -9 -x OpenWhisper 2>/dev/null || true
 rm -rf build
 
 echo "==> Building OpenWhisper via SwiftPM..."
-swift build -c debug
+swift build -c release
 
-BIN_DIR="$(swift build -c debug --show-bin-path)"
+BIN_DIR="$(swift build -c release --show-bin-path)"
 APP_BUNDLE="build/Jarvis.app"
 APP_DIR="$APP_BUNDLE/Contents"
 EXEC_SRC="$BIN_DIR/OpenWhisper"
@@ -65,9 +65,9 @@ cp "OpenWhisper/Resources/AppIcon.icns" "$APP_DIR/Resources/AppIcon.icns" 2>/dev
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP_DIR/Info.plist"
 
 # Copy any framework dependencies
-if [ -d ".build/debug/PackageFrameworks" ]; then
+if [ -d ".build/release/PackageFrameworks" ]; then
     mkdir -p "$APP_DIR/Frameworks"
-    cp -R .build/debug/PackageFrameworks/* "$APP_DIR/Frameworks/" 2>/dev/null || true
+    cp -R .build/release/PackageFrameworks/* "$APP_DIR/Frameworks/" 2>/dev/null || true
 fi
 
 # Sign with stable Apple identity (or fallback to ad-hoc)
