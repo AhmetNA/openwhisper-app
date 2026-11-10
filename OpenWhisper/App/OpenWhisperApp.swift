@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 import UserNotifications
 
 enum OpenWhisperNotification {
@@ -35,18 +36,36 @@ private let owLogDateFormatter: DateFormatter = {
 /// in the app's log were mistaken for real use while diagnosing wake-word failures.
 private let owLogPath = NSClassFromString("XCTestCase") != nil ? "/tmp/openwhisper-tests.log" : "/tmp/openwhisper.log"
 
-func owLog(_ msg: String) {
-    VoiceEventLog.shared.appendToCurrent(msg)
-    let timestamp = owLogDateFormatter.string(from: Date())
-    let line = "[\(timestamp)] \(msg)\n"
-    let path = owLogPath
+/// Everything logged while the Mac plays audio (and for 15 s after it stops, so a session's
+/// outcome is kept) also goes here: wake, echo cancellation and voice-profile lines of sessions
+/// over music, kept across restarts for tuning. Follows the `[MediaActivity]` lines themselves.
+private let owPlaybackLogPath = NSClassFromString("XCTestCase") != nil ? nil
+    : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/OpenWhisper/muzik-oturumlari.log").path
+private let owPlaybackLogUntil = OSAllocatedUnfairLock<Date?>(initialState: nil)
+
+private func owAppend(_ line: String, to path: String) {
     if let fh = FileHandle(forWritingAtPath: path) {
         fh.seekToEndOfFile()
         if let data = line.data(using: .utf8) { fh.write(data) }
         fh.closeFile()
     } else {
+        try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: path, contents: line.data(using: .utf8))
     }
+}
+
+func owLog(_ msg: String) {
+    VoiceEventLog.shared.appendToCurrent(msg)
+    let now = Date()
+    let line = "[\(owLogDateFormatter.string(from: now))] \(msg)\n"
+    owAppend(line, to: owLogPath)
+    guard let playbackPath = owPlaybackLogPath else { return }
+    let duringPlayback = owPlaybackLogUntil.withLock { until -> Bool in
+        if msg.hasPrefix("[MediaActivity] Audio playing") { until = .distantFuture }
+        else if msg.hasPrefix("[MediaActivity] Audio stopped") { until = now.addingTimeInterval(15) }
+        return until.map { now <= $0 } ?? false
+    }
+    if duringPlayback { owAppend(line, to: playbackPath) }
 }
 
 @main
