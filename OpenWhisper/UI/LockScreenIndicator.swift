@@ -44,7 +44,7 @@ final class LockScreenIndicatorController {
         let busy = withObservationTracking {
             guard let appState else { return false }
             return appState.lockScreenIndicatorEnabled
-                && (appState.recordingState != .idle || appState.jarvisActivity != .none || appState.flowBarMessage != nil)
+                && (appState.shownRecordingState != .idle || appState.jarvisActivity != .none || appState.flowBarMessage != nil)
         } onChange: { [weak self] in
             Task { @MainActor in self?.trackDisplayHold() }
         }
@@ -146,9 +146,9 @@ struct LockScreenIndicatorView: View {
     @Namespace private var coreSpace
     @State private var wakes = 0
 
-    private var listening: Bool { appState.recordingState == .recording }
+    private var listening: Bool { appState.shownRecordingState == .recording }
     /// Listening, thinking or speaking: the large core stays on screen for all three.
-    private var busy: Bool { appState.recordingState != .idle || appState.jarvisActivity != .none }
+    private var busy: Bool { appState.shownRecordingState != .idle || appState.jarvisActivity != .none }
     /// 0 in silence, rising to 1 as the voice gets louder.
     private var voice: Double {
         guard listening, appState.recordingHeardSpeech else { return 0 }
@@ -185,7 +185,7 @@ struct LockScreenIndicatorView: View {
                 } else {
                     VStack(spacing: 18) {
                         HStack(spacing: 18) {
-                            JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.recordingState != .idle
+                            JarvisCore(color: statusColor, active: appState.wakeWordListening || appState.shownRecordingState != .idle
                                                                     || appState.jarvisActivity != .none)
                                 .matchedGeometryEffect(id: "core", in: coreSpace)
                                 .frame(width: 52, height: 52)
@@ -229,7 +229,7 @@ struct LockScreenIndicatorView: View {
     }
 
     private var statusText: String {
-        if appState.recordingState == .transcribing || appState.jarvisActivity == .thinking { return "DÜŞÜNÜYOR" }
+        if appState.shownRecordingState == .transcribing || appState.jarvisActivity == .thinking { return "DÜŞÜNÜYOR" }
         if appState.jarvisActivity == .speaking { return "KONUŞUYOR" }
         return appState.wakeWordListening ? "UYANIK" : "UYKUDA"
     }

@@ -233,7 +233,7 @@ struct MenuBarContentView: View {
 
     private var statusText: String {
         if appState.modelLoading { return "Model yükleniyor" }
-        switch appState.recordingState {
+        switch appState.shownRecordingState {
         case .recording: return "Kaydediliyor"
         case .transcribing: return "İşleniyor"
         case .idle:
@@ -246,7 +246,7 @@ struct MenuBarContentView: View {
 
     private var statusColor: Color {
         if appState.modelLoading { return .orange }
-        switch appState.recordingState {
+        switch appState.shownRecordingState {
         case .recording: return .red
         case .transcribing: return .orange
         case .idle:

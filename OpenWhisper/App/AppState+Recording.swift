@@ -20,6 +20,9 @@ private struct BatchGate {
 extension AppState {
     func startRecording() {
         recordingPreviewTask?.cancel()
+        let hiddenRequested = nextWakeSessionHidden
+        nextWakeSessionHidden = false
+        wakeSessionHidden = false
         guard prepareForNewRecording() else { return }
 
         let armVoiceAutoStop = armVoiceAutoStopForNextRecording
@@ -32,6 +35,10 @@ extension AppState {
             hotkey?.externalCancelHandsFree()
             return
         }
+        let startsHidden = hiddenRequested && recordingTrigger == .wakeWord
+        // The voice matched before the recording began: it starts shown, with the chime it skipped.
+        if startsHidden && pendingWakeSpeakerVerified { WakeChime.play() }
+        wakeSessionHidden = startsHidden && !pendingWakeSpeakerVerified
         let commandFollowUp = recordingTrigger == .followUp ? pendingCommandFollowUp : nil
         pendingCommandFollowUp = nil
         let claudeRecap = recordingTrigger == .followUp ? pendingClaudeMessage : nil
@@ -538,7 +545,12 @@ extension AppState {
         if wakeProbation != nil {
             owLog(String(format: "[WakeProbation] Media playing and the voice not matched yet: nothing paused, %.0f s for your voice", WakeProbation.window))
         }
-        if pausesMedia {
+        // A hidden session leaves the Mac's playback alone until it is shown. Buds and external
+        // mics still pause at once: their recording can't have the music in it.
+        hiddenWakeMediaHold = nil
+        if pausesMedia && wakeSessionHidden && recordingMic == .mac {
+            hiddenWakeMediaHold = wakeProbation != nil
+        } else if pausesMedia {
             recordingMedia.begin(immediately: recordingMic != .mac, sparingYouTube: recordingTrigger == .wakeWord,
                                  holdingPause: wakeProbation != nil)
         }
@@ -1302,7 +1314,7 @@ extension AppState {
         armVoiceAutoStopForNextRecording = true
         hotkey.externalStartHandsFree(trigger: trigger)
         // A short ping so the user hears that "Hey Jarvis" was caught and it's listening.
-        if trigger == .wakeWord { WakeChime.play() }
+        if trigger == .wakeWord, !nextWakeSessionHidden { WakeChime.play() }
         // Load the model while the user is still speaking; after an idle night Ollama has
         // unloaded it and the cold load alone outlasts a command's wait.
         // With the chat on the cloud, commands are parsed there too and Gemma isn't needed.
@@ -1542,6 +1554,7 @@ extension AppState {
             guard self.lateWakeVoiceMatches >= Self.lateWakeVoiceMatchesNeeded else { return }
             self.lateWakeVoiceProfile = nil
             session.wakeSpeakerVerified = true
+            self.revealWakeSession("your voice after the wake word")
             if session.wakeUnconfirmed {
                 session.wakeUnconfirmed = false
                 owLog("[LateWakeVoice] Your voice after the wake word — the session stays open, for commands only")
@@ -1555,9 +1568,24 @@ extension AppState {
     static let lateWakeVoiceCheckInterval: TimeInterval = 1
     static let lateWakeVoiceMatchesNeeded = 2
 
+    /// A hidden weak wake turned out to be a call (the user's voice, or Whisper heard the word):
+    /// the bar, the chime and the media handling it put off start now.
+    func revealWakeSession(_ why: String) {
+        guard wakeSessionHidden else { return }
+        wakeSessionHidden = false
+        owLog("[WakeWord] Hidden session shown — \(why)")
+        guard recordingState == .recording else { return }
+        WakeChime.play()
+        if let hold = hiddenWakeMediaHold {
+            hiddenWakeMediaHold = nil
+            recordingMedia.begin(sparingYouTube: true, holdingPause: hold && wakeProbation != nil)
+        }
+    }
+
     /// The user's voice confirmed a wake on probation: the held pause runs now.
     func confirmWakeProbation(_ why: String) {
         guard wakeProbation != nil else { return }
+        revealWakeSession("your voice")
         wakeProbation = nil
         // A weak wake also needs the word: the user talking to someone isn't a call.
         if weakWakeWordPending {
@@ -1628,7 +1656,7 @@ extension AppState {
         guard !recordingInputReady, nextTranscriptionID == sessionID, recordingState == .recording else { return }
         recordingInputReady = true
         // Heard in the buds: speak now, without looking at the bar.
-        WakeChime.play()
+        if !wakeSessionHidden { WakeChime.play() }
         let now = CACurrentMediaTime()
         // Over Jarvis's reply the window starts when he is done, not when the mic is live.
         if !commandFollowUpAwaitingReplyEnd, let detector = voiceEndpointDetector {

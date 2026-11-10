@@ -49,6 +49,15 @@ final class AppState {
         case idle, recording, transcribing
     }
 
+    /// A weak "Jarvis" nothing has confirmed yet: the session records from the first word, but
+    /// no bar, chime, lit display or volume change gives it away (`revealWakeSession`). Music
+    /// alone woke it 6 times in 30 min, each visible for 2–5 s (11 Nov 2026).
+    var wakeSessionHidden = false {
+        didSet { if oldValue != wakeSessionHidden { syncFlowBarVisibility() } }
+    }
+    /// What the bar, the menu bar and the lock screen show: a hidden session looks idle.
+    var shownRecordingState: RecordingState { wakeSessionHidden ? .idle : recordingState }
+
     var recordingState: RecordingState = .idle {
         didSet {
             guard oldValue != recordingState else { return }
@@ -56,6 +65,7 @@ final class AppState {
                 caretPenDuration = recordingDuration
             }
             if recordingState != .recording { recordingHeardSpeech = false }
+            if recordingState == .idle { wakeSessionHidden = false }
             syncFlowBarVisibility()
             updateWakeWordListener()
         }
@@ -664,6 +674,10 @@ final class AppState {
     @ObservationIgnored var weakWakeWordPending = false
     /// The voice was confirmed while `weakWakeWordPending`: the word decides the held pause.
     @ObservationIgnored var heldPauseAwaitsWord = false
+    /// Set by a weak direct wake for the recording it is about to start (`wakeSessionHidden`).
+    @ObservationIgnored var nextWakeSessionHidden = false
+    /// The media handling a hidden session put off, and whether its pause was to be held.
+    @ObservationIgnored var hiddenWakeMediaHold: Bool?
     @ObservationIgnored var lastWakeProbationCheck: TimeInterval = 0
     /// A wake-word session whose "Jarvis" didn't match the voice: the profile its later speech is
     /// scored against (`checkLateWakeVoice`). Nil once matched or when there's nothing to check.
@@ -724,7 +738,7 @@ final class AppState {
 
     /// SF Symbol for the menu bar; nil shows the Jarvis logo.
     var menuBarIcon: String? {
-        switch recordingState {
+        switch shownRecordingState {
         case .idle: systemAudioEnabled ? "speaker.wave.2.fill" : wakeWordBlocked ? "mic.badge.xmark" : nil
         case .recording: "waveform"
         case .transcribing: "waveform.path.ecg"
@@ -732,7 +746,7 @@ final class AppState {
     }
 
     var menuBarIconColor: Color {
-        switch recordingState {
+        switch shownRecordingState {
         case .idle: systemAudioIsRecording ? .red : wakeWordBlocked ? .orange : .white
         case .recording: .red
         case .transcribing: .orange

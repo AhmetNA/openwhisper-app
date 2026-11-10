@@ -24,12 +24,12 @@ struct FlowBarView: View {
                     if appState.targetSpeakerAppendOfferActive {
                         rejectedRecordingOfferContent(message: message)
 
-                        if appState.recordingState == .recording {
+                        if appState.shownRecordingState == .recording {
                             Divider()
                                 .frame(height: 14)
                                 .opacity(0.3)
                             recordingContent
-                        } else if appState.recordingState == .transcribing {
+                        } else if appState.shownRecordingState == .transcribing {
                             Divider()
                                 .frame(height: 14)
                                 .opacity(0.3)
@@ -44,7 +44,7 @@ struct FlowBarView: View {
                             .frame(minHeight: 26)
                     }
                 } else {
-                    switch appState.recordingState {
+                    switch appState.shownRecordingState {
                     case .idle:
                         if appState.jarvisActivity == .speaking { jarvisContent } else if appState.microphoneFlowNotice == nil { idleContent }
                     case .recording:
@@ -91,7 +91,7 @@ struct FlowBarView: View {
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
         .animation(.easeInOut(duration: 0.25), value: appState.microphoneFlowNotice)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
-        .animation(.easeInOut(duration: 0.25), value: appState.recordingState)
+        .animation(.easeInOut(duration: 0.25), value: appState.shownRecordingState)
         .animation(.easeInOut(duration: 0.15), value: appState.recordingInputReady)
         .animation(.easeInOut(duration: 0.25), value: appState.jarvisActivity)
         .animation(.easeInOut(duration: 0.25), value: appState.systemAudioIsRecording)

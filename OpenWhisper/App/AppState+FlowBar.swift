@@ -22,13 +22,13 @@ extension AppState {
         flowBarController?.fieldRect = caretFieldRect
         flowBarController?.caretRect = systemAudioEnabled ? nil : caretPenRect
         // Wait briefly for the destination before the first display, avoiding a bottom-to-caret jump.
-        if caretLookupPending, flowBarEnabled, !systemAudioEnabled, recordingState != .idle {
+        if caretLookupPending, flowBarEnabled, !systemAudioEnabled, shownRecordingState != .idle {
             caretPenController?.hide()
             flowBarController?.hide()
             return
         }
         // A dictation being processed is drawn at its caret instead, when the app said where.
-        if recordingState == .transcribing, let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
+        if shownRecordingState == .transcribing, let caretPenRect, flowBarEnabled, !systemAudioEnabled, flowBarMessage == nil, microphoneFlowNotice == nil,
            jarvisActivity == .none, !targetSpeakerAppendOfferActive,
            caretPenController?.show(at: caretPenRect, duration: caretPenDuration, field: caretFieldRect) == true {
             flowBarController?.hide()
@@ -45,7 +45,7 @@ extension AppState {
             flowBarController?.hide()
             return
         }
-        if recordingState == .idle && flowBarMessage == nil && microphoneFlowNotice == nil && jarvisActivity == .none {
+        if shownRecordingState == .idle && flowBarMessage == nil && microphoneFlowNotice == nil && jarvisActivity == .none {
             flowBarController?.hide()
         } else {
             flowBarController?.show()
