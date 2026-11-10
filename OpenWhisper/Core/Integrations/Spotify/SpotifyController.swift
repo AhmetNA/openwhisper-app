@@ -154,7 +154,12 @@ final class SpotifyController: @unchecked Sendable {
     /// shows it playing. Otherwise the Liked Songs page is at least opened in the background.
     func playLikedSongs() async -> SpotifyActionResult {
         let wasRunning = isSpotifyRunning
-        if !wasRunning { await launchInBackground() }
+        let started = Date()
+        func ms() -> Int { Int(Date().timeIntervalSince(started) * 1000) }
+        if !wasRunning {
+            await launchInBackground()
+            owLog("[SpotifyController] Spotify was closed; launched in \(ms()) ms")
+        }
         if webAPIConnected {
             do {
                 let shuffle = Self.likedSongsShuffle
@@ -164,6 +169,7 @@ final class SpotifyController: @unchecked Sendable {
                 async let randomStart = likedSongsStart(shuffle: shuffle)
                 let context = SpotifyWebAPI.likedSongsContextURI(userID: try await userID)
                 let deviceID = try await availableDevice
+                owLog("[SpotifyController] Device ready at \(ms()) ms")
                 let before = await currentPlayer
                 // Setting it again could drop the user's Smart Shuffle.
                 if before?.shuffle != shuffle {
@@ -177,7 +183,7 @@ final class SpotifyController: @unchecked Sendable {
                 let start = await randomStart
                 try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
                 if await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
-                    owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "")")
+                    owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "") at \(ms()) ms")
                     return .success(L("beğenilen şarkılar çalıyor", "playing your liked songs"))
                 }
                 owLog("[SpotifyController] Liked songs accepted but Spotify is not playing them")

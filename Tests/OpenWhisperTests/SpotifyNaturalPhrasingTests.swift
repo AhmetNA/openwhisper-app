@@ -62,6 +62,7 @@ final class SpotifyNaturalPhrasingTests: XCTestCase {
         XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi biraz kısar mısın?"), .adjustVolume(-10))
         XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi azalt"), .adjustVolume(-20))
         XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi aç"), .adjustVolume(20))
+        XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi biraz erttir."), .adjustVolume(10))
         XCTAssertEqual(SpotifyManager.directVolumeIntent("Sesi baya yükselt"), .adjustVolume(30))
         // Complaints, numbers, the speaker's own voice and negations keep the usual path.
         XCTAssertNil(SpotifyManager.directVolumeIntent("Ses çok yüksek"))

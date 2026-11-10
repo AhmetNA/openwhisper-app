@@ -749,8 +749,10 @@ final class SpotifyManager: @unchecked Sendable {
               mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized))) else { return nil }
         let down = !cueSet.isDisjoint(with: quieterWords.subtracting(["yukseldi"]))
             || cues.contains { word in ["azalt", "dusur", "indir"].contains { word.hasPrefix($0) } }
+        // Whisper hears "arttır" as "erttir" (6 Nov 2026: "Sesi biraz erttir" went to chat and
+        // was asked back after ~11 s); next to a volume noun it can only be "arttır".
         let up = !cueSet.isDisjoint(with: openWords)
-            || cues.contains { word in ["yukselt", "artir", "arttir"].contains { word.hasPrefix($0) } }
+            || cues.contains { word in ["yukselt", "artir", "arttir", "ertir", "erttir"].contains { word.hasPrefix($0) } }
         guard up != down else { return nil }
         return .adjustVolume(up ? volumeStep(in: text) : -volumeStep(in: text))
     }

@@ -52,12 +52,28 @@ enum ClaudeSessionNavigator {
         guard let button = await sidebarElement(app, where: {
             description($0) == "New session" || (role($0) == kAXButtonRole && title($0) == "New")
         }) else {
-            owLog("[Agent] Claude: no \"New session\" button found")
-            return false
+            // Right after a launch the web content isn't in the AX tree yet (Developer modu,
+            // 10 Nov 2026: no button within 2.5 s), but the native menu is: File › New Session.
+            guard let item = newSessionMenuItem(app) else {
+                owLog("[Agent] Claude: no \"New session\" button or menu item found")
+                return false
+            }
+            owLog("[Agent] Claude: sidebar not ready; using the New Session menu item")
+            rowTitlesBeforeNew = []
+            press(item)
+            return await waitForNewSession(app, before: before, timeout: 8)
         }
         rowTitlesBeforeNew = await sidebarRowTitles(app)
         press(button)
         return await waitForNewSession(app, before: before)
+    }
+
+    /// The menu bar's "New Session" item, which exists as soon as the app is up.
+    private static func newSessionMenuItem(_ app: NSRunningApplication) -> AXUIElement? {
+        guard let bar = attribute(appElement(app), kAXMenuBarAttribute) else { return nil }
+        return find(in: bar as! AXUIElement, maxDepth: 4, where: {
+            role($0) == kAXMenuItemRole && title($0) == "New Session"
+        })
     }
 
     /// Opens a new Code session in `folder` through Claude's own link (the one its Dock menu
@@ -98,8 +114,8 @@ enum ClaudeSessionNavigator {
 
     /// The composer is reused across sessions, so wait for the title to change (or the
     /// field to be empty) before handing it to the paste path.
-    private static func waitForNewSession(_ app: NSRunningApplication, before: String?) async -> Bool {
-        let deadline = Date().addingTimeInterval(3)
+    private static func waitForNewSession(_ app: NSRunningApplication, before: String?, timeout: TimeInterval = 3) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
             if let prompt = promptField(app), (value(prompt) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

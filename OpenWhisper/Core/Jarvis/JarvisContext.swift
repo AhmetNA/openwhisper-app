@@ -43,6 +43,14 @@ struct JarvisContext: Equatable, Sendable {
         return lines
     }
 
+    /// "ne çalıyor?", "bu şarkı kimin?", "sıradaki parça ne?": only then is Spotify worth sending.
+    static func asksAboutMusic(_ text: String) -> Bool {
+        let lower = text.lowercased(with: Locale(identifier: "tr_TR"))
+        let cues = ["şarkı", "müzik", "spotify", "albüm", "sanatçı", "parça", "çalıyor", "çalan", "çalsa",
+                    "dinliyor", "dinledi", "sıradaki", "playlist", "çalma liste"]
+        return cues.contains { lower.contains($0) }
+    }
+
     /// Longest the chat waits for the slow sources (Spotify's AppleScript), so the first
     /// spoken sentence isn't held back.
     static let timeout: Duration = .milliseconds(350)

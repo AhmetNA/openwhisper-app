@@ -153,8 +153,13 @@ extension AppState {
         jarvisActivity = .thinking
         defer { jarvisActivity = .none }
         let prefetched = await takePrefetchedJarvisContext()
-        let context: JarvisContext
+        var context: JarvisContext
         if let prefetched { context = prefetched } else { context = await JarvisContext.gather() }
+        // Spotify goes to the model only when the question is about music (user, 10 Nov 2026).
+        if !JarvisContext.asksAboutMusic(text) {
+            context.nowPlaying = nil
+            context.upNext = []
+        }
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
             to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
