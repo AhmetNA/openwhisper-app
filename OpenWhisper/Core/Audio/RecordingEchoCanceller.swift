@@ -23,7 +23,14 @@ final class EchoCancelledStream {
         canceller = EchoCanceller(engine: engine)
         canceller.log = log
         if EchoCancellationSettings.recordingSuppressesResidual { canceller.residualGate = ResidualEchoGate() }
+        if EchoCancellationSettings.recordingDumpsAudio {
+            dump = EchoDebugWriter(names: ["mic", "reference"], prefix: "rec")
+            if let dir = dump?.directory { log("[AEC] Dumping recording audio to \(dir.path)") }
+        }
     }
+
+    /// The paired inputs of this recording, for offline tuning (`recordingEchoDump`).
+    private var dump: EchoDebugWriter?
 
     var resyncs: Int { aligner.resyncs }
     private var warm = false
@@ -80,6 +87,7 @@ final class EchoCancelledStream {
             return emit(release() + mic)
         }
         guard let pair = aligner.appendMic(mic, startIndex: hostIndex) else { return [] }
+        dump?.write([pair.mic, pair.reference])
         let cleaned = canceller.process(mic: pair.mic, reference: pair.reference)
         blockStats += canceller.takeBlockStats()
         return emit(cleaned)
@@ -87,7 +95,9 @@ final class EchoCancelledStream {
 
     /// End of the recording: everything still held, unchanged.
     func finish() -> [Float] {
-        emit(release())
+        dump?.close()
+        dump = nil
+        return emit(release())
     }
 
     /// Canceller remainder first: it was released by the aligner before what the aligner holds.

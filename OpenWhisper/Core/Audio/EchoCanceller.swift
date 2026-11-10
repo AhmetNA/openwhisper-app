@@ -20,6 +20,12 @@ enum EchoCancellationSettings {
     static var dumpsAudio: Bool {
         UserDefaults.standard.bool(forKey: "wakeWordEchoDump")
     }
+    /// The same pairs for each dictation / wake-session recording (`EchoCancelledStream`), in a
+    /// `rec-…` folder next to the listener's. Only the part paired with the reference is written.
+    /// `defaults write com.openwhisper.app recordingEchoDump -bool YES`
+    static var recordingDumpsAudio: Bool {
+        UserDefaults.standard.bool(forKey: "recordingEchoDump")
+    }
     /// The same cancellation on dictation / wake-session recordings (`RecordingEchoCanceller`),
     /// so the flow bar and Whisper get the cleaned mic. Off until measured on real recordings.
     /// `defaults write com.openwhisper.app recordingEchoCancellation -bool YES`
@@ -690,10 +696,10 @@ final class EchoDebugWriter {
     private static let maxFrames = 16_000 * 300
     let directory: URL
 
-    init?(names: [String]) {
+    init?(names: [String], prefix: String = "aec") {
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/OpenWhisper/aec-\(stamp)")
+            .appendingPathComponent("Library/Logs/OpenWhisper/\(prefix)-\(stamp)")
         self.directory = directory
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
