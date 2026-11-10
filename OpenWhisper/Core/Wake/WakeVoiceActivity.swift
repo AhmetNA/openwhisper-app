@@ -12,7 +12,7 @@ import os
 ///
 /// Fails open: while the model is loading, has failed, or has not answered for `staleSeconds`,
 /// `voice(at:)` returns nil and the gate falls back to energy alone. A deaf Jarvis is worse
-/// than a few wasted embeddings.
+/// than a few wasted model runs.
 final class WakeVoiceActivity: @unchecked Sendable {
     /// Speech probability counted as voice. Low on purpose: a false "speech" costs a little CPU,
     /// a false "no speech" loses a wake. Override: `defaults write com.openwhisper.app wakeWordVadThreshold 0.5`

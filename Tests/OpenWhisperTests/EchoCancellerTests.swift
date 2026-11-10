@@ -183,7 +183,7 @@ final class EchoCancellerTests: XCTestCase {
         var echo = roomEcho(ref, delay: 900, gain: 1)
         let voiceRMS = (energy(wake[...]) / Float(wake.count)).squareRoot()
         let echoRMS = (energy(echo[lead...]) / Float(echo.count - lead)).squareRoot()
-        // Music 12 dB over the voice: without cancelling, the word scores ~0.05.
+        // Music 12 dB over the voice: openWakeWord scored the word ~0.05 here without cancelling; LiveKit ~0.6.
         echo = echo.map { $0 * voiceRMS / echoRMS * pow(10, 12 / 20) }
 
         var mic = echo
@@ -199,8 +199,10 @@ final class EchoCancellerTests: XCTestCase {
         let fixed = try peak(cleaned)
         print(String(format: "Wake peak (%@) — clean %.2f, music %.2f, music + AEC %.2f",
                      engine.rawValue, clean, noisy, fixed))
-        XCTAssertGreaterThan(fixed, noisy + 0.2)
-        XCTAssertGreaterThan(fixed, 0.5)
+        // The LiveKit model already scores the word under this music about as high as clean, so
+        // the canceller only has to leave it intact.
+        XCTAssertGreaterThan(fixed, clean - 0.1)
+        XCTAssertGreaterThan(fixed, WakeWordListener.threshold)
     }
 
     /// Talking over the music for seconds must not wreck the filter for the next call.
@@ -327,7 +329,8 @@ final class EchoCancellerTests: XCTestCase {
         print(String(format: "Echo-only stretch: linear removes %.1f dB, with gate %.1f dB; wake over it %.2f",
                      micDB - linearDB, micDB - gatedDB, wakeScore))
         XCTAssertGreaterThan(micDB - gatedDB, micDB - linearDB + 10)
-        XCTAssertGreaterThan(wakeScore, 0.5)
+        // This path feeds Whisper, not the wake model; the score only shows the voice survived.
+        XCTAssertGreaterThan(wakeScore, WakeWordListener.candidateThreshold)
     }
 
     // MARK: Wake word helpers

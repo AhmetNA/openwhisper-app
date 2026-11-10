@@ -192,7 +192,7 @@ responsible for model format, quantization, downloads, and its own local runtime
 ## Jarvis voice assistant (optional)
 
 Say **"Hey Jarvis"** (or press the Jarvis key set in **Settings › Jarvis**) and speak a command.
-The wake word runs locally with openWakeWord; weak detections are double-checked with Whisper.
+The wake word runs locally with LiveKit's open wake word model (Apache 2.0); weak detections are double-checked with Whisper.
 Commands that are not recognised are answered as a short chat through Ollama.
 
 Examples (Turkish is the primary language):

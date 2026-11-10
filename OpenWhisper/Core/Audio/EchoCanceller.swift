@@ -8,7 +8,7 @@ import Foundation
 /// Voice processing (VPIO) would do this too, but it ducks the music and drops the input to
 /// silence for seconds at a time (see `WakeWordListener`); this canceller never changes the
 /// output and never mutes the input. Linear only: no residual-echo suppression, whose
-/// artifacts could cost openWakeWord more score than the echo it removes.
+/// artifacts could cost the wake model more score than the echo it removes.
 ///
 /// Toggle: `defaults write com.openwhisper.app wakeWordEchoCancellation -bool NO`
 enum EchoCancellationSettings {

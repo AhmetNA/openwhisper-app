@@ -2,11 +2,11 @@ import XCTest
 import FluidAudio
 @testable import OpenWhisper
 
-/// Parity with the Python openWakeWord reference: the fixtures and their per-block scores were
-/// produced by openwakeword 0.6.0 (onnx) feeding the same WAVs in 1280-sample chunks.
+/// Parity with LiveKit's Python runtime: the per-block scores were produced by livekit-wakeword
+/// v2.1.1's `hey_jarvis.onnx` (state warmed on 2 s of silence) feeding the same WAVs in
+/// 1280-sample chunks.
 final class WakeWordDetectorTests: XCTestCase {
-    /// The first ~2.4 s depend on the random feature seed both implementations start from.
-    private let settledBlock = 32
+    private let settledBlock = 0
 
     private func fixture(_ name: String, _ ext: String) throws -> URL {
         try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: ext, subdirectory: "Fixtures"))
@@ -51,7 +51,7 @@ final class WakeWordDetectorTests: XCTestCase {
         for i in settledBlock..<min(ours.count, theirs.count) {
             XCTAssertEqual(ours[i], theirs[i], accuracy: 0.02, "block \(i)")
         }
-        XCTAssertGreaterThan(ours.max() ?? 0, 0.9)
+        XCTAssertGreaterThan(ours.max() ?? 0, WakeWordListener.threshold)
     }
 
     func testNegativeMatchesReferenceAndStaysLow() throws {
@@ -92,27 +92,28 @@ final class WakeWordDetectorTests: XCTestCase {
             let plain = try scores(of: audio)
             let gated = try scores(of: audio, gate: WakeWordActivityGate())
             XCTAssertEqual(plain.count, gated.count)
-            XCTAssertEqual(gated.max() ?? 0, plain.max() ?? 0, accuracy: 0.001, "attenuation \(attenuation) dB")
-            // Every block the gate let through must score exactly as without the gate.
+            // After the long quiet lead the model restarts from silence on the last 3 s, so the
+            // scores are close to, not exactly, the ungated ones.
+            XCTAssertEqual(gated.max() ?? 0, plain.max() ?? 0, accuracy: 0.05, "attenuation \(attenuation) dB")
             for i in plain.indices where gated[i] > 0 {
-                XCTAssertEqual(gated[i], plain[i], accuracy: 0.001, "block \(i)")
+                XCTAssertEqual(gated[i], plain[i], accuracy: 0.1, "block \(i)")
             }
         }
     }
 
     func testGateStillDetectsModeratelyQuietSpeech() throws {
         let audio = try realistic("wake_positive", attenuationDB: 20)
-        XCTAssertGreaterThan(try scores(of: audio, gate: WakeWordActivityGate()).max() ?? 0, 0.5)
+        XCTAssertGreaterThan(try scores(of: audio, gate: WakeWordActivityGate()).max() ?? 0, WakeWordListener.threshold)
     }
 
-    func testGateSkipsMostEmbeddingsInQuietRoom() throws {
+    func testGateSkipsMostModelRunsInQuietRoom() throws {
         let modelDir = try XCTUnwrap(WakeWordDetector.bundledModelDirectory())
         let detector = try WakeWordDetector(modelDirectory: modelDir)
         detector.gate = WakeWordActivityGate()
         let quiet = (0..<(16000 * 10)).map { _ in Float(Int.random(in: -60...60)) }
         let scores = try detector.process(quiet)
         XCTAssertEqual(scores.max() ?? 1, 0)
-        XCTAssertLessThan(detector.embeddingCount, detector.blockCount / 10)
+        XCTAssertLessThan(detector.modelRuns, detector.blockCount / 10)
     }
 
     func testGateFloorOnlyFallsWhileMediaPlays() {
@@ -205,7 +206,7 @@ final class WakeWordDetectorTests: XCTestCase {
 
     /// Runs the detector with the gate fed Silero's verdict the way the listener does: a chunk's
     /// verdict becomes known only after the chunk ends plus ~50 ms of inference, then is held.
-    private func vadGatedRun(_ audio: [Float]) async throws -> (maxScore: Float, embeddingShare: Double, speechChunks: Int) {
+    private func vadGatedRun(_ audio: [Float]) async throws -> (maxScore: Float, runShare: Double, speechChunks: Int) {
         let vad = try await VadManager(config: VadConfig(defaultThreshold: WakeVoiceActivity.threshold))
         let lifted = audio.map { min(max($0 / 32767 * 4, -1), 1) }   // listener gain ×4, int16 → -1…1
         let probabilities = try await vad.process(lifted).map(\.probability)
@@ -225,7 +226,7 @@ final class WakeWordDetectorTests: XCTestCase {
             maxScore = max(maxScore, try detector.process(Array(audio[start..<end])).max() ?? 0)
             start = end
         }
-        return (maxScore, Double(detector.embeddingCount) / Double(max(detector.blockCount, 1)), speechKnownAt.count)
+        return (maxScore, Double(detector.modelRuns) / Double(max(detector.blockCount, 1)), speechKnownAt.count)
     }
 
     func testSileroGateStillWakesOnRealJarvis() async throws {
@@ -253,11 +254,11 @@ final class WakeWordDetectorTests: XCTestCase {
         let energyDetector = try WakeWordDetector(modelDirectory: try XCTUnwrap(WakeWordDetector.bundledModelDirectory()))
         energyDetector.gate = WakeWordActivityGate()
         _ = try energyDetector.process(audio)
-        let energyShare = Double(energyDetector.embeddingCount) / Double(energyDetector.blockCount)
+        let energyShare = Double(energyDetector.modelRuns) / Double(energyDetector.blockCount)
 
         let run = try await vadGatedRun(audio)
-        print(String(format: "[vad-test] typing: embeddings energy-only %.0f%%, with VAD %.0f%%, speech chunks %d", energyShare * 100, run.embeddingShare * 100, run.speechChunks))
+        print(String(format: "[vad-test] typing: model runs energy-only %.0f%%, with VAD %.0f%%, speech chunks %d", energyShare * 100, run.runShare * 100, run.speechChunks))
         XCTAssertGreaterThan(energyShare, 0.5, "the clicks should open the energy-only gate")
-        XCTAssertLessThan(run.embeddingShare, 0.15, "energy-only share was \(energyShare)")
+        XCTAssertLessThan(run.runShare, 0.15, "energy-only share was \(energyShare)")
     }
 }

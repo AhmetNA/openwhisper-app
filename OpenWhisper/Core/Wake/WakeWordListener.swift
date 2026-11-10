@@ -1,10 +1,10 @@
 import AVFoundation
 import os
 
-/// Listens for "(Hey) Jarvis" with the bundled openWakeWord model.
+/// Listens for "Hey Jarvis" with the bundled LiveKit wake model (`WakeWordDetector`).
 ///
-/// Power: the embedding model is ~90% of the cost, so `WakeWordActivityGate` skips it while the
-/// room is quiet or the sound is not speech (`WakeVoiceActivity`; scores stay exact, see `WakeWordDetector`), and inference runs at utility QoS
+/// Power: `WakeWordActivityGate` skips the model while the room is quiet or the sound is not
+/// speech (`WakeVoiceActivity`; skipped audio is run when the gate reopens), and inference runs at utility QoS
 /// so it lands on the efficiency cores. Listens on the mic picked in Settings, else the built-in
 /// one; never on a Bluetooth headset's mic, as holding it open would switch it to call-quality audio.
 ///
@@ -12,29 +12,29 @@ import os
 /// (VPIO) ducked the music and dropped the input to digital silence for 2–7 s at a time, while
 /// the raw mic scored 8 of 9 spoken "Jarvis" at or above 0.3.
 final class WakeWordListener {
-    /// Scores at or above this wake directly. Lower than openWakeWord's usual 0.5: in real use
-    /// under music, spoken "Jarvis" scored 0.35–0.86 while non-speech stretches stayed at
-    /// 0.00–0.10 (one 0.26). Real triggers on 25 Sep 2026 ran 0.27–0.48, and 10 s windows peaked
-    /// at 0.13–0.23 where calls were likely missed; those now go through `onCandidate`.
+    /// Scores at or above this wake directly. Set for the LiveKit model on 10 Nov 2026: 2.5 h of
+    /// Turkish radio woke it 0.8 times an hour at 0.29 and never above 0.34; 6 min of the user's
+    /// own talk peaked at 0.06. The user's calls ran 0.6–0.96, a call under noise down to 0.2;
+    /// those go through `onCandidate`.
     /// Override: `defaults write com.openwhisper.app wakeWordThreshold 0.3`
     static var threshold: Float {
         let stored = UserDefaults.standard.float(forKey: "wakeWordThreshold")
-        return stored > 0 ? stored : 0.25
+        return stored > 0 ? stored : 0.3
     }
     /// Direct detections below this start the session at once but are double-checked by
-    /// Whisper in parallel (`WakeWordVerifier.heardWakeWord`). On 25 Sep 2026 false wakes scored
-    /// 0.25 and 0.44 (background talk), while real calls ran 0.25–0.98.
+    /// Whisper in parallel (`WakeWordVerifier.heardWakeWord`). On recorded false triggers only
+    /// ~5% of the LiveKit model's scores reached 0.6.
     /// Override: `defaults write com.openwhisper.app wakeWordConfirmedScore 0.6`
     static var confirmedScore: Float {
         let stored = UserDefaults.standard.float(forKey: "wakeWordConfirmedScore")
-        return stored > 0 ? stored : 0.5
+        return stored > 0 ? stored : 0.6
     }
     /// Scores from here up to `threshold` are only candidates: the surrounding audio is handed to
     /// `onCandidate` for Whisper + LLM confirmation (`WakeWordVerifier`).
     /// Override: `defaults write com.openwhisper.app wakeWordCandidateThreshold 0.15`
     static var candidateThreshold: Float {
         let stored = UserDefaults.standard.float(forKey: "wakeWordCandidateThreshold")
-        return stored > 0 ? stored : 0.12
+        return stored > 0 ? stored : 0.15
     }
     /// Audio kept before a candidate (the word itself) and collected after it (what follows:
     /// a pause or a command when calling, more lyrics when singing).
@@ -74,7 +74,7 @@ final class WakeWordListener {
     private var lastWake = Date.distantPast
     private var peakSinceLog: Float = 0
     private var lastPeakLog = Date()
-    private var embeddingsAtLog = 0
+    private var runsAtLog = 0
     private var blocksAtLog = 0
     private var levelsSinceLog: [Float] = []
     private var mediaPlaying = false
@@ -634,7 +634,7 @@ final class WakeWordListener {
     }
 
     private func score(_ raw: [Float]) {
-        // openWakeWord expects int16-scale values.
+        // The detector takes int16-scale values.
         let scale = 32767 * Self.inputGain
         let samples = raw.map { min(max($0 * scale, -32768), 32767) }
         recentAudio.append(contentsOf: raw)
@@ -738,19 +738,19 @@ final class WakeWordListener {
             DispatchQueue.main.async { [weak self] in self?.onCandidate?(audio, pending.peak) }
         }
         // Tuning aid: the highest score in each 30 s stretch, how many blocks actually ran the
-        // embedding model (the power cost; backfill included) and how the echo canceller did.
+        // model (the power cost; replays included) and how the echo canceller did.
         if Date().timeIntervalSince(lastPeakLog) >= 30 {
             let blocks = detector.blockCount - blocksAtLog
-            let embeddings = detector.embeddingCount - embeddingsAtLog
+            let runs = detector.modelRuns - runsAtLog
             let median = levelsSinceLog.isEmpty ? Float.nan : levelsSinceLog.sorted()[levelsSinceLog.count / 2]
             let media = !mediaPlaying ? "none" : (detector.gate?.mediaPlaying == true ? "audible" : "silent")
             let vad = voiceActivity?.takeSummary(at: ProcessInfo.processInfo.systemUptime) ?? "off"
-            owLog(String(format: "[WakeWord] peak score last 30s: %.2f, embeddings %d/%d blocks, level median %.0f dB, floor %.0f dB, media %@, vad %@",
-                         peakSinceLog, embeddings, blocks, median, detector.gate?.floor ?? .nan, media, vad)
+            owLog(String(format: "[WakeWord] peak score last 30s: %.2f, model runs %d/%d blocks, level median %.0f dB, floor %.0f dB, media %@, vad %@",
+                         peakSinceLog, runs, blocks, median, detector.gate?.floor ?? .nan, media, vad)
                   + aecHeartbeat())
             levelsSinceLog.removeAll(keepingCapacity: true)
             blocksAtLog = detector.blockCount
-            embeddingsAtLog = detector.embeddingCount
+            runsAtLog = detector.modelRuns
             peakSinceLog = 0
             lastPeakLog = Date()
         }
