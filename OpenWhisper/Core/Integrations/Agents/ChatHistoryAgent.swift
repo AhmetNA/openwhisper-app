@@ -35,10 +35,12 @@ enum ChatHistoryAgent {
         lowered(query).split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 3 }
     }
 
-    /// How a word is written in a transcript: "güvenliği", "Güvenliği", "GÜVENLİĞİ".
-    static func forms(_ word: String) -> [String] {
+    /// How a word is written in a transcript: "güvenliği", "Güvenliği", "GÜVENLİĞİ", and as
+    /// the query wrote it ("MailAgent"), since the Claude transcripts are matched byte for byte.
+    static func forms(_ word: String, in query: String = "") -> [String] {
         let low = lowered(word)
-        return Array(Set([low, low.prefix(1).uppercased(with: tr) + low.dropFirst(), low.uppercased(with: tr)]))
+        let asWritten = query.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { lowered($0) == low }
+        return Array(Set([low, low.prefix(1).uppercased(with: tr) + low.dropFirst(), low.uppercased(with: tr)] + asWritten))
     }
 
     // MARK: - Claude Code
@@ -109,13 +111,23 @@ enum ChatHistoryAgent {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/thread_history_1.sqlite")
     }
 
+    /// Read-only. When Codex has closed the database and removed its -wal and -shm files, a
+    /// read-only connection can't recreate them and every query fails ("unable to open
+    /// database file"); with no -wal nothing is pending, so the file is then read as immutable.
     static func open(_ url: URL) -> OpaquePointer? {
         var handle: OpaquePointer?
-        guard sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db = handle else {
+        if sqlite3_open_v2(url.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db = handle {
+            sqlite3_busy_timeout(db, 500)
+            if sqlite3_exec(db, "SELECT 1 FROM sqlite_master LIMIT 1", nil, nil, nil) == SQLITE_OK { return db }
+        }
+        sqlite3_close(handle)
+        handle = nil
+        guard !FileManager.default.fileExists(atPath: url.path + "-wal"),
+              let uri = URL(string: "file://" + (url.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? url.path) + "?immutable=1"),
+              sqlite3_open_v2(uri.absoluteString, &handle, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK, let db = handle else {
             sqlite3_close(handle)
             return nil
         }
-        sqlite3_busy_timeout(db, 500)
         return db
     }
 
@@ -198,18 +210,26 @@ enum ChatHistoryAgent {
 
     /// Chats about `query`: every word in the title or the conversation, newest first.
     static func search(_ query: String, app: AgentApp?) -> [(chat: Chat, snippet: String)] {
-        let words = words(query)
-        guard let longest = words.max(by: { $0.count < $1.count }) else { return [] }
-        let forms = forms(longest)
+        // Longest first: the rarest word leaves the fewest files for the next.
+        let words = words(query).sorted { $0.count > $1.count }
+        guard !words.isEmpty else { return [] }
+        // Every word narrows before the newest are taken, or a common one ("mail") fills the
+        // list with recent chats and the older one asked about is never looked at.
         var candidates: [Chat] = []
         if app != .claudeCode {
             let threads = codexThreads()
-            let ids = codexThreadIDs(containing: forms)
-                .union(threads.filter { words.allSatisfy(lowered($0.value.title).contains) }.keys)
-            candidates += ids.compactMap { threads[$0] }
+            var ids: Set<String>?
+            for word in words where ids?.isEmpty != true {
+                let found = codexThreadIDs(containing: forms(word, in: query))
+                ids = ids.map { $0.intersection(found) } ?? found
+            }
+            let titled = threads.filter { words.allSatisfy(lowered($0.value.title).contains) }.keys
+            candidates += (ids ?? []).union(titled).compactMap { threads[$0] }
         }
         if app != .codex {
-            candidates += files(containing: forms, in: claudePaths()).map { path in
+            var paths = claudePaths()
+            for word in words where !paths.isEmpty { paths = files(containing: forms(word, in: query), in: paths) }
+            candidates += paths.map { path in
                 let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date ?? .distantPast
                 return Chat(app: .claudeCode, title: "", date: date, source: .claude(path: path))
             }

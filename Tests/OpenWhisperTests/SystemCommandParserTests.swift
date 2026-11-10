@@ -233,6 +233,12 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertNil(ChatHistoryAgent.codexMessage(type: "userMessage", json: #"{"content":[{"type":"text","text":"<environment_context>x"}]}"#))
         XCTAssertEqual(ChatHistoryAgent.words("Mail ajanı, İş"), ["mail", "ajanı"])
         XCTAssertEqual(Set(ChatHistoryAgent.forms("güvenliği")), ["güvenliği", "Güvenliği", "GÜVENLİĞİ"])
+        // A code word is found as the query wrote it.
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("chat-history-\(UUID().uuidString).jsonl")
+        try? "{\"text\":\"MailAgent iki araç\"}".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertEqual(ChatHistoryAgent.files(containing: ChatHistoryAgent.forms("mailagent", in: "MailAgent"), in: [file.path]), [file.path])
+        XCTAssertEqual(ChatHistoryAgent.files(containing: ChatHistoryAgent.forms("mailagent"), in: [file.path]), [])
         let excerpt = ChatHistoryAgent.excerpt(parsed.messages, app: .claudeCode, words: ["ajan"])
         XCTAssertEqual(excerpt, "Sen: Mail ajanı nasıl çalışıyor?\nClaude: MailAgent iki araç kullanıyor.")
     }
