@@ -53,6 +53,9 @@ enum SystemCommand: Equatable, Sendable {
     case mailAttachment(String)
     /// "Hafize İrem'le mailde ne konuşmuştuk": the whole request, for `MailAgent`.
     case mailConversation(String)
+    /// "Claude'la mail ajanı hakkında ne konuşmuştuk", "Codex'te AVESIS işinde ne yapmıştık":
+    /// the whole request, for `ChatHistoryAgent`.
+    case agentChatHistory(String)
     /// WhatsApp Desktop's chats, read-only (`WhatsAppController`). "WhatsApp'ta okunmamış var
     /// mı", "okunmamış mesajları oku": the chats with unread messages and what they say.
     case whatsAppUnread
@@ -199,6 +202,9 @@ enum SystemCommandParser {
         // First, and with a longer limit: shortcut names are free text ("Wi-Fi ile Sabah Özeti")
         // that would otherwise read as a Wi-Fi or app command.
         if let shortcut = parseShortcut(cleaned, shortcuts: shortcuts) { return shortcut }
+        // Before mail and WhatsApp: "Claude'la mail ajanı hakkında ne konuşmuştuk" is no mail
+        // and Claude no contact.
+        if isAgentChatHistoryRequest(cleaned) { return .agentChatHistory(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         // Before WhatsApp's "Dilay'la ne konuştuk": the mail is named.
         if isMailConversationRequest(cleaned) { return .mailConversation(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
         // A topic question runs long ("Dilay'la en son ne zaman kombi hakkında konuşmuştuk").
@@ -302,6 +308,15 @@ enum SystemCommandParser {
         return matches(text, #"(?:konuş|yazış|mailleş)\S*(?: mu| mıydı| muyduk)?$|\bne (?:demiş|yazmış|dedi|yazdı|istemiş|istedi|diyor)$|\bözetle\S*(?: m[ıiuü]s[ıiuü]n)?$"#)
             // "Bu maili özetle" is the mail on screen, "son mail ne diyor" the newest: no person.
             && !matches(text, #"^(?:bu|şu|son)(?: gelen)? (?:\#(mail)|maide)"#)
+    }
+
+    /// "Claude'la mail ajanı hakkında ne konuşmuştuk", "Codex'te AVESIS işinde ne yapmıştık",
+    /// "ChatGPT'ye vize takvimini sormuştum": a past chat with a coding agent, by its topic.
+    /// "Claude'da ne yaptık" (the last session's recap) is `AgentCommandParser`'s and comes first.
+    static func isAgentChatHistoryRequest(_ text: String) -> Bool {
+        guard text.split(separator: " ").count <= 16,
+              matches(text, #"\b(?:claude|cloud|klod|codex|kodeks|chat ?gpt|çet ?gpt)"#) else { return false }
+        return matches(text, #"(?:konuşmuştuk|konuştuk|konuşmuştum|konuştum|bahsetmiştik|bahsettik|bahsetmiştim|bahsettim|yazışmıştık|yazıştık|sormuştum|sordum|ne yapmıştık|ne yaptık|ne demişti|ne dedi|ne söylemişti|ne söyledi)(?: m[ıiuü](?:yd[ıiuü]k?|s[ıiuü]n)?)?$"#)
     }
 
     /// "Ali'ye gönderdiğim eki bul", "ekte yolladığım dosyayı aç", "Ayşe'ye attığım PDF'i

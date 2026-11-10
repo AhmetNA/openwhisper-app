@@ -206,8 +206,8 @@ enum MailAgent {
         }.joined(separator: "\n\n")
     }
 
-    /// One whole answer: its text and tool calls.
-    private static func complete(_ client: CloudChatClient, body: [String: Any]) async throws -> [String: Any] {
+    /// One whole answer: its text and tool calls. `ChatHistoryAgent` uses it too.
+    static func complete(_ client: CloudChatClient, body: [String: Any]) async throws -> [String: Any] {
         let (data, response) = try await URLSession.shared.data(for: client.request(path: "chat/completions", body: body, timeout: 20))
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard status == 200 else {

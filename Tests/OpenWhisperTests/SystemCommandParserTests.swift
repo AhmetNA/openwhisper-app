@@ -201,6 +201,42 @@ final class SystemCommandParserTests: XCTestCase {
         XCTAssertFalse(SystemCommandParser.isMailConversationRequest("hocam mailde konuştuğumuz konuyla ilgili ek bir sorum olacaktı"))
     }
 
+    func testAgentChatHistory() {
+        for text in ["Claude'la mail ajanı hakkında ne konuşmuştuk?", "Codex'te AVESIS işinde ne yapmıştık",
+                     "ChatGPT'ye vize takvimini sormuştum", "Cloud ile WhatsApp özeti hakkında konuştuk mu?",
+                     "Claude'la Siri hakkında ne konuşmuştuk"] {
+            XCTAssertEqual(SystemCommandParser.parse(text, installedApps: apps), .agentChatHistory(text), text)
+        }
+        // Still people, mail and the agents' own commands.
+        XCTAssertNotEqual(SystemCommandParser.parse("Dilay'la en son ne konuştuk", installedApps: apps), .agentChatHistory("Dilay'la en son ne konuştuk"))
+        XCTAssertFalse(SystemCommandParser.isAgentChatHistoryRequest("hafize irem'le mail ile ne konuşmuştuk"))
+        XCTAssertFalse(SystemCommandParser.isAgentChatHistoryRequest("claude'a yaz bunu düzelt"))
+        XCTAssertFalse(SystemCommandParser.isAgentChatHistoryRequest("claude'u aç"))
+    }
+
+    func testChatHistoryTranscripts() {
+        let claude = """
+        {"type":"user","message":{"role":"user","content":"Mail ajanı nasıl çalışıyor?"}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"MailAgent iki araç kullanıyor."},{"type":"tool_use","name":"Bash"}]}}
+        {"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"çıktı"}]}}
+        {"type":"user","message":{"role":"user","content":"<system-reminder>gizli</system-reminder>"}}
+        {"type":"custom-title","customTitle":"Mail ajanı"}
+        """
+        let parsed = ChatHistoryAgent.parse(claude)
+        XCTAssertEqual(parsed.title, "Mail ajanı")
+        XCTAssertEqual(parsed.messages, [.init(fromUser: true, text: "Mail ajanı nasıl çalışıyor?"),
+                                         .init(fromUser: false, text: "MailAgent iki araç kullanıyor.")])
+        XCTAssertEqual(ChatHistoryAgent.codexMessage(type: "userMessage", json: #"{"type":"userMessage","content":[{"type":"text","text":"AVESIS dokümanlarını indir"}]}"#),
+                       .init(fromUser: true, text: "AVESIS dokümanlarını indir"))
+        XCTAssertEqual(ChatHistoryAgent.codexMessage(type: "agentMessage", json: #"{"type":"agentMessage","text":"İndirdim."}"#),
+                       .init(fromUser: false, text: "İndirdim."))
+        XCTAssertNil(ChatHistoryAgent.codexMessage(type: "userMessage", json: #"{"content":[{"type":"text","text":"<environment_context>x"}]}"#))
+        XCTAssertEqual(ChatHistoryAgent.words("Mail ajanı, İş"), ["mail", "ajanı"])
+        XCTAssertEqual(Set(ChatHistoryAgent.forms("güvenliği")), ["güvenliği", "Güvenliği", "GÜVENLİĞİ"])
+        let excerpt = ChatHistoryAgent.excerpt(parsed.messages, app: .claudeCode, words: ["ajan"])
+        XCTAssertEqual(excerpt, "Sen: Mail ajanı nasıl çalışıyor?\nClaude: MailAgent iki araç kullanıyor.")
+    }
+
     func testConversationNewestFirstOnce() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let reply = "in\u{1F}a@x\u{1F}-300\u{1F}Ayşe <ayse@example.com>\u{1F}Konu\u{1F}Merhaba.\n> eski\u{1E}"

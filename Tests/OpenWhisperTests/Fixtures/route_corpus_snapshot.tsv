@@ -219,3 +219,8 @@ keys	Alarm sesi çok yüksek	none
 voice	Mustafa'ya gönderdiğim eki bul.	system:mailAttachment("Mustafa\'ya gönderdiğim eki bul.")
 voice	Ayşe'ye ekte yolladığım dosyayı açar mısın?	system:mailAttachment("Ayşe\'ye ekte yolladığım dosyayı açar mısın?")
 voice	Hafize İrem'le mail ile ne konuşmuştuk?	system:mailConversation("Hafize İrem\'le mail ile ne konuşmuştuk?")
+voice	Claude'la mail ajanı hakkında ne konuşmuştuk?	system:agentChatHistory("Claude\'la mail ajanı hakkında ne konuşmuştuk?")
+voice	Codex'te AVESIS işinde ne yapmıştık	system:agentChatHistory("Codex\'te AVESIS işinde ne yapmıştık")
+voice	ChatGPT'ye vize takvimini sormuştum	system:agentChatHistory("ChatGPT\'ye vize takvimini sormuştum")
+voice	Claude ile dün WhatsApp özeti hakkında ne konuşmuştuk	system:agentChatHistory("Claude ile dün WhatsApp özeti hakkında ne konuşmuştuk")
+voice	Claude'da ne yaptık	claude-recap

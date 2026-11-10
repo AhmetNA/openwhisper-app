@@ -151,7 +151,10 @@ enum VoiceRouter {
             if let test = VoiceTestCommand.parse(trimmed, active: facts.voiceTestActive) { return .voiceTest(test) }
             if let meta = english ? EnglishChatCommands.meta(in: trimmed) : JarvisReply.meta(in: trimmed) { return .meta(meta) }
             if let memory = UserMemoryCommand.parse(trimmed) { return .memory(memory) }
-            if let query = TimeQuery.parse(trimmed) { return .pastConversation(query) }
+            // "Claude ile dün … ne konuşmuştuk" is the Claude chat, not Jarvis's own.
+            let agentChat = SystemCommandParser.isAgentChatHistoryRequest(
+                trimmed.lowercased(with: Locale(identifier: "tr_TR")).trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.whitespaces)))
+            if !agentChat, let query = TimeQuery.parse(trimmed) { return .pastConversation(query) }
             // A destructive reminder action is always two-step: while a confirmation is
             // pending, the answer goes to it before any command rule.
             if facts.pendingDeletion { return .deletionConfirmation }
