@@ -29,7 +29,7 @@ def load() -> None:
     try:
         import ptts
         started = time.monotonic()
-        ptts.set_num_threads(2)
+        ptts.set_num_threads(1)
         state["tts"] = ptts.TTS(str(Path(__file__).resolve().parent / "model"),
                                 lang="en", device="cpu", quant="q8", voice="default")
         synthesize("Ready.")
