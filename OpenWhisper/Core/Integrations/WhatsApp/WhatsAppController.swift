@@ -76,9 +76,9 @@ enum WhatsAppController {
     }
 
     /// "Dilay'la en son ne konuştuk": today's messages of that chat (or, with none today, the
-    /// last exchange) summed up by the local model, so private messages stay on the Mac. The
-    /// more there are, the shorter the summary is asked to be. Without the model, the last
-    /// few messages are read instead.
+    /// last exchange) summed up by the cloud model (the local one without it). The more there
+    /// are, the shorter the summary is asked to be. Without any model, the last few messages
+    /// are read instead.
     static func conversation(with name: String) async -> String {
         let contacts = await matchingContacts(name)
         let found = await Task.detached(priority: .userInitiated) { () -> Result<(WhatsAppStore.Chat, [WhatsAppStore.Message])?, Error> in
@@ -117,7 +117,7 @@ enum WhatsAppController {
     }
 
     /// "En son ne zaman kombi hakkında konuştuk": the newest message with the topic's words
-    /// (or, failing that, words the local model relates to it: "petek", "doğalgaz"), and the
+    /// (or, failing that, words the model relates to it: "petek", "doğalgaz"), and the
     /// talk around it summed up with when and with whom. Only text and file names are searched.
     static func search(topic: String, person: String?) async -> String {
         let contacts = person == nil ? [] : await matchingContacts(person!)
@@ -174,7 +174,7 @@ enum WhatsAppController {
         return "\(head) — \(transcript.suffix(3).map(shortened).joined(separator: " · "))\(more)"
     }
 
-    /// Up to five more words a message about `topic` may use, from the local model, folded
+    /// Up to five more words a message about `topic` may use, from the model, folded
     /// ("kombi" → "petek", "dogalgaz", "isitma"). Empty without the model.
     static func relatedWords(_ topic: String) async -> [String] {
         let prompt = """
@@ -182,9 +182,25 @@ enum WhatsAppController {
             en fazla 5 Türkçe kelime kökü yaz (konunun kendisi hariç), virgülle ayır. Kısa ve konuya özgü olsun; \
             ev, iş, bugün, tamam gibi genel kelimeler yazma. Sadece kelimeleri yaz.
             """
-        let request = LLMRequest(model: LLM.selectedModel, prompt: prompt, timeout: 15, temperature: 0.2, maxTokens: 40)
-        guard let reply = try? await LLM.default.generate(request) else { return [] }
+        guard let reply = try? await generate(prompt, timeout: 15, maxTokens: 40) else { return [] }
         return parseRelatedWords(reply)
+    }
+
+    /// The cloud model when one is set up in Settings, else (or when it fails) the local one.
+    private static func generate(_ prompt: String, timeout: TimeInterval, maxTokens: Int) async throws -> String {
+        if let (cloud, model) = CloudLLM.client() {
+            do {
+                var text = ""
+                let request = LLMChatRequest(model: model, messages: [["role": "user", "content": prompt]],
+                                             timeout: timeout, temperature: 0.2, maxTokens: maxTokens)
+                for try await piece in cloud.streamChat(request) { text += piece }
+                return text
+            } catch {
+                owLog("[WhatsApp] cloud model failed: \(ChatFallback.describe(error)); using the local model")
+            }
+        }
+        let request = LLMRequest(model: LLM.selectedModel, prompt: prompt, timeout: timeout, temperature: 0.2, maxTokens: maxTokens)
+        return try await LLM.default.generate(request)
     }
 
     static func parseRelatedWords(_ reply: String) -> [String] {
@@ -233,10 +249,9 @@ enum WhatsAppController {
             Yazışma:
             \(lines.joined(separator: "\n"))
             """
-        let request = LLMRequest(model: LLM.selectedModel, prompt: prompt, timeout: 45, temperature: 0.2, maxTokens: 200)
         do {
             let started = Date()
-            let reply = try await LLM.default.generate(request)
+            let reply = try await generate(prompt, timeout: 45, maxTokens: 200)
             let summary = reply
                 .replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
