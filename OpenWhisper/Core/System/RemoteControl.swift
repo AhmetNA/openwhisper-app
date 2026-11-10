@@ -12,24 +12,26 @@ import IOKit.pwr_mgt
 @MainActor
 @Observable
 final class RemoteControl {
-    /// On battery below this the Mac is let sleep again, so a forgotten switch can't drain it.
+    /// With "on battery too" on: below this the Mac is let sleep again, so a forgotten switch can't drain it.
     static let minimumBatteryPercent = 20
     static var unlockAnswer: String { L("Kilidi sesle açamam; Apple Watch ile ya da şifrenizle açabilirsiniz",
                                         "I can't unlock by voice; use your Apple Watch or your password") }
     static var lockedAnswer: String { L("Mac kilitli; bunu kilidi açınca yapabilirim", "The Mac is locked; I can do that once it's unlocked") }
 
-    /// Whether the assertion is held now; false while switched off or on low battery.
+    /// Whether the assertion is held now; false while switched off, or on battery unless allowed there.
     private(set) var isHoldingAwake = false
-    /// Switched on, but on battery below `minimumBatteryPercent`: waits for power (Settings shows it).
+    /// Switched on, but on battery (or below `minimumBatteryPercent` when allowed on battery): waits for power (Settings shows it).
     private(set) var waitingForPower = false
     /// Called when `isHoldingAwake` changes.
     var onChange: (() -> Void)?
     private var wanted = false
+    private var allowedOnBattery = false
     private var assertionID: IOPMAssertionID = 0
     private var powerTimer: Timer?
 
-    func setEnabled(_ enabled: Bool) {
+    func setEnabled(_ enabled: Bool, onBattery: Bool) {
         wanted = enabled
+        allowedOnBattery = onBattery
         powerTimer?.invalidate()
         powerTimer = nil
         if enabled {
@@ -43,12 +45,12 @@ final class RemoteControl {
 
     private func refresh() {
         let battery = Self.batteryPercentOnBattery()
-        let lowBattery = battery.map { $0 < Self.minimumBatteryPercent } ?? false
-        let hold = wanted && !lowBattery
-        if waitingForPower != (wanted && lowBattery) {
-            waitingForPower = wanted && lowBattery
+        let blockedOnBattery = battery.map { !allowedOnBattery || $0 < Self.minimumBatteryPercent } ?? false
+        let hold = wanted && !blockedOnBattery
+        if waitingForPower != (wanted && blockedOnBattery) {
+            waitingForPower = wanted && blockedOnBattery
             if waitingForPower, !isHoldingAwake, let battery {
-                owLog("[RemoteControl] On battery at \(battery)% (below \(Self.minimumBatteryPercent)%): not holding the Mac awake until on power")
+                owLog("[RemoteControl] On battery at \(battery)%: not holding the Mac awake until on power")
             }
         }
         guard hold != isHoldingAwake else { return }
@@ -69,7 +71,7 @@ final class RemoteControl {
             assertionID = 0
             isHoldingAwake = false
             if let battery, wanted {
-                owLog("[RemoteControl] On battery at \(battery)% (below \(Self.minimumBatteryPercent)%): released, the Mac may sleep; held again on power")
+                owLog("[RemoteControl] On battery at \(battery)%: released, the Mac may sleep; held again on power")
             } else {
                 owLog("[RemoteControl] Switched off: released, the Mac may sleep")
             }

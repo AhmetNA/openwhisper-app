@@ -539,6 +539,13 @@ final class AppState {
             updateRemoteControl()
         }
     }
+    /// Settings › Jarvis: remote control holds the Mac awake on battery too (off: only on power).
+    var remoteControlOnBattery = UserDefaults.standard.bool(forKey: "remoteControlOnBattery") {
+        didSet {
+            UserDefaults.standard.set(remoteControlOnBattery, forKey: "remoteControlOnBattery")
+            updateRemoteControl()
+        }
+    }
     @ObservationIgnored let remoteControl = RemoteControl()
     /// `updateDisplayAsleepWork` has slowed the display-only work down.
     @ObservationIgnored var displayAsleepWorkReduced = false

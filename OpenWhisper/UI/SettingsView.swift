@@ -862,13 +862,24 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
+                if appState.remoteControlEnabled && appState.wakeWordEnabled {
+                    Toggle("Pildeyken de uyanık tut", isOn: Binding(get: { appState.remoteControlOnBattery },
+                                                                     set: { appState.remoteControlOnBattery = $0 }))
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                }
                 if appState.remoteControl.waitingForPower {
-                    Label("Pil %\(RemoteControl.minimumBatteryPercent)'nin altında: şarja takınca Mac'i uyanık tutar.", systemImage: "battery.25percent")
+                    Label(appState.remoteControlOnBattery
+                          ? "Pil %\(RemoteControl.minimumBatteryPercent)'nin altında: şarja takınca Mac'i uyanık tutar."
+                          : "Pilde çalışıyor: şarja takınca Mac'i uyanık tutar.",
+                          systemImage: "battery.25percent")
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir.")
+                Text(appState.remoteControlOnBattery
+                     ? "Ekran kapalıyken de “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır. Pilde %\(RemoteControl.minimumBatteryPercent)'nin altında Mac yine uyuyabilir."
+                     : "Şarjdayken ekran kapalı olsa da “Jarvis”i dinler ve Mac'i uykuya geçirmez. “Ekranı aç” deyince ekran açılır.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
