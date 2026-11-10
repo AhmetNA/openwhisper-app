@@ -178,7 +178,8 @@ struct RecordedConversation: @unchecked Sendable {
         defer { sqlite3_close(db) }
         sqlite3_busy_timeout(db, 100)
         var statement: OpaquePointer?
-        let sql = "SELECT id, COALESCE(NULLIF(name, ''), title), title FROM threads WHERE archived = 0 AND source NOT LIKE '{%' AND COALESCE(thread_source, '') IN ('user', '')"
+        // Attached side threads carry their parent's name; counting them makes the parent's title ambiguous.
+        let sql = "SELECT id, COALESCE(NULLIF(name, ''), title), title FROM threads WHERE archived = 0 AND source NOT LIKE '{%' AND COALESCE(thread_source, '') IN ('user', '') AND COALESCE(attached_thread_parent_id, '') = ''"
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(statement) }
         var sessions: [(id: String, title: String)] = []
