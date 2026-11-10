@@ -856,10 +856,16 @@ final class TargetSpeakerFilter: @unchecked Sendable {
         return stored > 0 && stored <= 1 ? Float(stored) : TargetSpeakerFilterConfiguration.uncertainSimilarityFloor
     }
 
+    /// `overPlayback`: the Mac's speakers were heard during this recording. What they leave in
+    /// the mic pulls the user's own windows into the uncertain band (0.54 / 0.43 / 0.41 / 0.40
+    /// for one command over a song, 11 Nov 2026) and breaks their likeness to the strong window,
+    /// so a voice run with a strong window keeps its uncertain windows without the continuity
+    /// bridge. The song alone scored 0.09–0.18, far below the uncertain floor.
     func filter(
         samples: [Float],
         profile: TargetSpeakerProfile?,
         enabled: Bool,
+        overPlayback: Bool = false,
         tuning: TargetSpeakerTuning = .resolved()
     ) async -> TargetSpeakerFilterResult {
         let startTime = Date()
@@ -940,7 +946,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
             var confirmationCandidate: TargetSpeakerConfirmationCandidate?
 
             if hasAbsoluteStrongWindow {
-                let absolute = Self.absoluteClassification(scoredRuns, tuning: tuning)
+                let absolute = Self.absoluteClassification(scoredRuns, overPlayback: overPlayback, tuning: tuning)
                 acceptedUtterances = absolute.accepted
                 hadUncertainWindow = absolute.hadUncertain
                 hadUnresolvedUncertainWindow = absolute.hadUnresolved
@@ -1068,6 +1074,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
 
     private static func absoluteClassification(
         _ scoredRuns: [(index: Int, windows: [ScoredWindow])],
+        overPlayback: Bool,
         tuning: TargetSpeakerTuning
     ) -> (accepted: [SampleRange], hadUncertain: Bool, hadUnresolved: Bool, hadStrongReject: Bool) {
         var accepted: [SampleRange] = []
@@ -1086,7 +1093,7 @@ final class TargetSpeakerFilter: @unchecked Sendable {
                     accepted.append(window.range)
                 case .uncertain:
                     hadUncertain = true
-                    if Self.canPromoteUncertainWindow(
+                    if (overPlayback && !strongWindows.isEmpty) || Self.canPromoteUncertainWindow(
                         window,
                         strongWindows: strongWindows,
                         tuning: tuning

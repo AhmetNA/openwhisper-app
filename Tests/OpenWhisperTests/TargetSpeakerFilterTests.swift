@@ -89,6 +89,34 @@ final class TargetSpeakerFilterTests: XCTestCase {
         XCTAssertGreaterThan(result.samples[31_000], 0, "a continuous moderate-score window must not be cut")
     }
 
+    func testUncertainWindowsUnlikeTheStrongOneAreKeptOnlyOverPlayback() async throws {
+        let samples = Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        let uncertain = vector(withCosine: 0.43)
+        for (overPlayback, decision) in [(false, TargetSpeakerFilterDecision.ambiguous), (true, .accepted)] {
+            let model = MockTargetSpeakerModel(embeddings: [unitVector(), uncertain, uncertain], frameCount: 12)
+            let result = await TargetSpeakerFilter(model: model).filter(
+                samples: samples,
+                profile: try makeProfile(),
+                enabled: true,
+                overPlayback: overPlayback
+            )
+            XCTAssertEqual(result.decision, decision, "overPlayback=\(overPlayback)")
+        }
+    }
+
+    func testOnlyUncertainWindowsOverPlaybackStayUnaccepted() async throws {
+        let samples = Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples)
+        let uncertain = vector(withCosine: 0.43)
+        let model = MockTargetSpeakerModel(embeddings: [uncertain, uncertain, uncertain], frameCount: 12)
+        let result = await TargetSpeakerFilter(model: model).filter(
+            samples: samples,
+            profile: try makeProfile(),
+            enabled: true,
+            overPlayback: true
+        )
+        XCTAssertEqual(result.acceptedSampleCount, 0)
+    }
+
     func testOnlyUncertainWindowsRemainAmbiguousInsteadOfBeingAutoAccepted() async throws {
         let samples = Array(repeating: Float(0.2), count: 12 * TargetSpeakerFilterConfiguration.vadFrameSamples)
         let model = MockTargetSpeakerModel(

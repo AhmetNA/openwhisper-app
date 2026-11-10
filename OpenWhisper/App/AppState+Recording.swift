@@ -939,7 +939,8 @@ extension AppState {
         let result = await targetSpeakerFilter.filter(
             samples: segment.samples,
             profile: session.targetSpeakerProfile,
-            enabled: true
+            enabled: true,
+            overPlayback: session.speakersPlayed
         )
         // The filter's own verdict, before the wake-verified override below.
         WakeClipLog.shared.update(session.wakeClipID) {

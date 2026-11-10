@@ -17,6 +17,8 @@ final class RawMicSpeakerBenchmarkTests: XCTestCase {
             throw XCTSkip("No \(mic) profile")
         }
         let filter = TargetSpeakerFilter(model: FluidAudioTargetSpeakerModel())
+        // BENCH_RAWMIC_PLAYBACK=1: score as a recording the speakers were heard in.
+        let overPlayback = ProcessInfo.processInfo.environment["BENCH_RAWMIC_PLAYBACK"] == "1"
         let files = try FileManager.default.contentsOfDirectory(atPath: dir)
             .filter { $0.hasSuffix(".caf") && !$0.contains("partial") }
             .sorted()
@@ -29,7 +31,7 @@ final class RawMicSpeakerBenchmarkTests: XCTestCase {
             ]
             for (variant, samples) in variants {
                 owLog("[RawMicBench] \(name) \(variant)")
-                let result = await filter.filter(samples: samples, profile: profile, enabled: true)
+                let result = await filter.filter(samples: samples, profile: profile, enabled: true, overPlayback: overPlayback)
                 owLog("[RawMicBench] \(name) \(variant) decision=\(result.decision) accepted=\(result.acceptedSampleCount)/\(samples.count)")
             }
         }
