@@ -151,8 +151,6 @@ enum ClaudeSessionNavigator {
     /// The composer of a chat that was already on screen is mounted: focus it and wait only
     /// until AX reports that focus, instead of the fixed settle a freshly loaded one needs.
     static func focusShownComposer(_ app: NSRunningApplication) async -> Bool {
-        // The user may be typing in another field of this chat (a reply box): keep it.
-        if AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) != nil { return true }
         if let prompt = promptField(app) {
             focus(prompt)
             let deadline = Date().addingTimeInterval(0.4)

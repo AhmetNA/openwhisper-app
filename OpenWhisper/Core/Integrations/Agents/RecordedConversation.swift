@@ -122,6 +122,10 @@ struct RecordedConversation: @unchecked Sendable {
             catch { return false }
         }
         guard !app.isTerminated, isCurrent(in: app) else { return false }
+        // The chat never left the screen: the field the user is typing in (a reply box,
+        // an edit box) is the destination, in every app. Only a navigated chat needs its composer.
+        if !navigated, NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+           AXTextAccess.focusedEditableElement(matchingPID: app.processIdentifier) != nil { return true }
         let focused: Bool
         switch agent {
         case .codex, .chatGPT:
