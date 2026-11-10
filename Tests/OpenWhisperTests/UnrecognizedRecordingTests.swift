@@ -10,7 +10,7 @@ final class UnrecognizedRecordingTests: XCTestCase {
         await app.reportUnrecognizedRecording(session)
         XCTAssertNotNil(app.lastError)
         XCTAssertEqual(app.flowBarMessage, app.lastError)
-        XCTAssertTrue(app.flowBarMessage?.contains("metin çıkarılamadı") == true)
+        XCTAssertTrue(app.flowBarMessage?.contains("Anlayamadım") == true)
         app.dismissFlowBarMessage()
     }
 
