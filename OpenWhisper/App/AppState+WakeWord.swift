@@ -47,6 +47,31 @@ extension AppState {
             beginPendingWhisperWake(audio: audio, score: score, isDirect: true)
             return
         }
+        // Over the Mac's own audio a weak score is mostly the music: 6 such wakes in 30 min of
+        // Spotify opened the bar and woke the display before being dropped (11 Nov 2026). The
+        // voice is checked first there (~110 ms); without it the session opens only once Whisper
+        // hears the word.
+        if mediaPlaying, score < WakeWordListener.confirmedScore, targetSpeakerGuardsWakeWord,
+           wakeTargetSpeakerProfile != nil, hotkey?.isIdle == true {
+            let clipID = WakeClipLog.shared.begin(audio: audio, wakeScore: score, kind: "direct")
+            Task { [weak self] in
+                guard let self else { return }
+                guard await self.wakeSpeakerMatches(audio: audio, clipID: clipID, margin: Self.mediaWakeSpeakerMargin) else {
+                    owLog(String(format: "[WakeWord] Weak detection %.2f over media without your voice — opens only if Whisper hears the word", score))
+                    self.verifyWakeCandidate(audio: audio, peak: score, unmatchedClipID: clipID)
+                    return
+                }
+                owLog("[OpenWhisper] Voice session requested (wake word)")
+                self.pendingWakeSpeakerVerified = false
+                self.weakWakeWordPending = true
+                self.heldPauseAwaitsWord = false
+                self.adoptWakeClip(clipID)
+                self.startVoiceSession(trigger: .wakeWord)
+                self.markWakeSpeakerVerified()
+                self.confirmDirectWake(audio: audio, score: score, clipID: clipID)
+            }
+            return
+        }
         owLog("[OpenWhisper] Voice session requested (wake word)")
         pendingWakeSpeakerVerified = false
         weakWakeWordPending = score < WakeWordListener.confirmedScore
@@ -77,11 +102,16 @@ extension AppState {
     /// Opens the `WakeClipLog` record for a trigger about to start a session. A previous clip
     /// whose session never started (hotkey busy) is closed first.
     func beginWakeClip(audio: [Float], score: Float, kind: String) -> UUID? {
-        WakeClipLog.shared.finish(pendingWakeClipID, outcome: "not started")
         let id = WakeClipLog.shared.begin(audio: audio, wakeScore: score, kind: kind)
+        adoptWakeClip(id)
+        return id
+    }
+
+    /// Makes an open clip the one the session about to start reports into.
+    func adoptWakeClip(_ id: UUID?) {
+        WakeClipLog.shared.finish(pendingWakeClipID, outcome: "not started")
         pendingWakeClipID = hotkey?.isIdle == true ? id : nil
         if pendingWakeClipID == nil { WakeClipLog.shared.finish(id, outcome: "not started") }
-        return id
     }
 
     /// With the voice guard off but a profile enrolled, the wake clip is still scored for the log.
@@ -251,17 +281,23 @@ extension AppState {
 
     /// Grey-zone wake score: Whisper must hear "Jarvis" and the LLM must judge it a call rather
     /// than a song or talk about Jarvis (`WakeWordVerifier`). One check at a time.
-    func verifyWakeCandidate(audio: [Float], peak: Float) {
+    /// `unmatchedClipID`: a weak direct wake over media whose voice check already failed
+    /// (`handleDirectWake`); its clip is reused and the voice isn't scored again.
+    func verifyWakeCandidate(audio: [Float], peak: Float, unmatchedClipID: UUID? = nil) {
         guard wakeWordEnabled else { return }
         if whisperSuspendedForIdle || pendingWhisperWake != nil {
+            WakeClipLog.shared.finish(unmatchedClipID, outcome: "not started")
             beginPendingWhisperWake(audio: audio, score: peak)
             return
         }
         guard modelLoaded, !wakeCandidateVerifying, let transcriber = activeTranscriptionService,
-              let hotkey, hotkey.isIdle else { return }
+              let hotkey, hotkey.isIdle else {
+            WakeClipLog.shared.finish(unmatchedClipID, outcome: "not started")
+            return
+        }
         wakeCandidateVerifying = true
         // Not yet a session: opened directly, handed to one only if the candidate is accepted.
-        let clipID = WakeClipLog.shared.begin(audio: audio, wakeScore: peak, kind: "candidate")
+        let clipID = unmatchedClipID ?? WakeClipLog.shared.begin(audio: audio, wakeScore: peak, kind: "candidate")
         let mediaPlaying = self.mediaPlaying
         let ollama = ollamaAvailable
         let model = SpotifyManager.selectedOllamaModel
@@ -270,7 +306,8 @@ extension AppState {
             guard let self else { return }
             // A voice mismatch alone no longer drops the call (see `handleDirectWake`); Whisper
             // and the LLM below still have to hear a real "Jarvis".
-            let speakerMatched = self.targetSpeakerGuardsWakeWord ? await self.wakeSpeakerMatches(audio: audio, clipID: clipID) : false
+            let speakerMatched = self.targetSpeakerGuardsWakeWord && unmatchedClipID == nil
+                ? await self.wakeSpeakerMatches(audio: audio, clipID: clipID) : false
             if !self.targetSpeakerGuardsWakeWord { self.recordWakeSpeakerScoreOnly(audio: audio, clipID: clipID) }
             let verdict = await WakeWordVerifier.verify(
                 audio: audio, transcriber: transcriber, mediaPlaying: mediaPlaying,
@@ -283,9 +320,7 @@ extension AppState {
             case .accepted(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f accepted in %d ms — %@", peak, ms, why))
                 self.pendingWakeSpeakerVerified = speakerMatched
-                WakeClipLog.shared.finish(self.pendingWakeClipID, outcome: "not started")
-                self.pendingWakeClipID = self.hotkey?.isIdle == true ? clipID : nil
-                if self.pendingWakeClipID == nil { WakeClipLog.shared.finish(clipID, outcome: "not started") }
+                self.adoptWakeClip(clipID)
                 self.startVoiceSession(trigger: .wakeWord)
             case .rejected(let why):
                 owLog(String(format: "[WakeWord] Candidate %.2f rejected in %d ms — %@", peak, ms, why))
