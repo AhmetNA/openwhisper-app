@@ -127,10 +127,20 @@ final class SpotifyManager: @unchecked Sendable {
         }
     }
 
-    /// No quoting or negation word ("… diye", "istemiyorum").
+    /// No quoting or negation word ("… diye", "istemiyorum"). The words before "şarkısını" /
+    /// "parçasını" / "albümünü" are the name, so a title like "Bekle Dedi Gitti" is no quote.
     static func mentionVetoAllows(_ normalized: String) -> Bool {
-        mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
+        var words = intentWords(normalized)
+        if let marker = words.lastIndex(where: titleMarkerWords.contains) {
+            words.removeFirst(marker)
+        }
+        return mentionOrNegationWords.isDisjoint(with: Set(words))
     }
+
+    private static let titleMarkerWords: Set<String> = [
+        "şarkısını", "şarkısı", "sarkisini", "sarkisi", "parçasını", "parçası", "parcasini", "parcasi",
+        "albümünü", "albümü", "albumunu", "albumu"
+    ]
 
     private static let musicContextWords: Set<String> = [
         "müzik", "müziği", "müziğin", "müziğe", "muzik", "muzigi",
@@ -287,7 +297,7 @@ final class SpotifyManager: @unchecked Sendable {
         guard !words.isEmpty, spokenWordCount(normalized) <= maxCommandWordCount else { return nil }
 
         let wordSet = Set(words)
-        guard mentionOrNegationWords.isDisjoint(with: wordSet) else { return nil }
+        guard mentionVetoAllows(normalized) else { return nil }
 
         let hasSpotifyContext = words.contains(where: isSpotifyWord)
         // "çalma listesi" is only music as a pair; "listesini aç" alone is everyday prose.
@@ -426,7 +436,7 @@ final class SpotifyManager: @unchecked Sendable {
         let words = intentWords(normalized)
         guard !words.contains(where: { word in nonMusicPlayObjects.contains { word.hasPrefix($0) } }),
               pronouns.isDisjoint(with: words) else { return false }
-        return mentionOrNegationWords.isDisjoint(with: Set(words))
+        return mentionVetoAllows(normalized)
     }
 
     /// Whether the transcript itself supports what Ollama claims. The model's label alone
@@ -662,7 +672,7 @@ final class SpotifyManager: @unchecked Sendable {
     static func isNaturalCandidate(_ text: String) -> Bool {
         let normalized = normalize(text)
         guard spokenWordCount(normalized) <= maxNaturalWordCount,
-              mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized))) else { return false }
+              mentionVetoAllows(normalized) else { return false }
         let cues = cueWords(normalized)
         return !volumeNouns.isDisjoint(with: cues)
             || cues.contains { word in naturalTopicStems.contains { word.hasPrefix($0) } }
@@ -746,7 +756,7 @@ final class SpotifyManager: @unchecked Sendable {
         let cueSet = Set(cues)
         guard spokenWordCount(normalized) <= 6, !hasNumber(text),
               !volumeNouns.isDisjoint(with: cueSet),
-              mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized))) else { return nil }
+              mentionVetoAllows(normalized) else { return nil }
         let down = !cueSet.isDisjoint(with: quieterWords.subtracting(["yukseldi"]))
             || cues.contains { word in ["azalt", "dusur", "indir"].contains { word.hasPrefix($0) } }
         // Whisper hears "arttır" as "erttir" (6 Nov 2026: "Sesi biraz erttir" went to chat and
@@ -867,7 +877,7 @@ final class SpotifyManager: @unchecked Sendable {
         let normalized = normalize(text)
         // English needs more small words: "can you play Shape of You by Ed Sheeran on Spotify".
         return spokenWordCount(normalized) <= (CommandLanguage.isEnglish ? 14 : maxNaturalWordCount)
-            && mentionOrNegationWords.isDisjoint(with: Set(intentWords(normalized)))
+            && mentionVetoAllows(normalized)
             && mayHaveCommandEvidence(repairCommandVerbMishearing(repairPlayVerbMishearing(text)))
     }
 

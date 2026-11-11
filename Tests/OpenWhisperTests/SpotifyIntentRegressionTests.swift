@@ -26,6 +26,7 @@ final class SpotifyIntentRegressionTests: XCTestCase {
             "Müzik dinleyelim mi yoksa film mi",
             "Müzik çalar mısın diye sordu",
             "Alışveriş listesini aç",
+            "Tarkan'ın Şımarık şarkısını aç dedi",
         ]
 
         for transcript in ordinaryDictation {
@@ -60,6 +61,8 @@ final class SpotifyIntentRegressionTests: XCTestCase {
             "Spotify'da Tarkan'ın Karma albümünü aç",
             "Rock çalma listesini aç",
             "Spotify'ın sesini 20'ye düşür",
+            // 11 Nov 2026: "dedi" is part of the title, not a quote.
+            "Spotify'dan bekle dedi gitti şarkısını aç",
         ]
 
         for transcript in explicitCommands {

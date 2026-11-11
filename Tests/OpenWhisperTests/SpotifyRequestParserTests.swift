@@ -14,6 +14,11 @@ final class SpotifyRequestParserTests: XCTestCase {
         XCTAssertEqual(request.freeText, "tarkan şımarık")
     }
 
+    func testTitleWithDediIsSearched() {
+        let request = SpotifyRequestParser.requestFromRules("spotify'dan bekle dedi gitti şarkısını aç")
+        XCTAssertEqual(request.freeText, "bekle dedi gitti")
+    }
+
     func testMultiWordArtistBeforeGenitive() {
         let request = SpotifyRequestParser.requestFromRules("spotify'da müslüm gürses'in affet şarkısını aç")
         XCTAssertEqual(request.kind, .track)
