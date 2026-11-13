@@ -640,6 +640,12 @@ final class AppState {
     @ObservationIgnored var commandFollowUpOverReply = false
     /// That follow-up is recording while the reply plays: its window starts when the reply ends.
     @ObservationIgnored var commandFollowUpAwaitingReplyEnd = false
+    /// What the user has said so far in a command follow-up, shown on the flow bar.
+    var followUpLiveText: String?
+    /// Audio before this (Jarvis's own reply) is left out of `followUpLiveText`.
+    @ObservationIgnored var followUpLiveStart: CFTimeInterval = 0
+    @ObservationIgnored var followUpLiveLastCheck: CFTimeInterval = 0
+    @ObservationIgnored var followUpLiveInFlight = false
     /// Wake clip waiting for the session it started (handed over like `pendingWakeSpeakerVerified`).
     @ObservationIgnored var pendingWakeClipID: UUID?
     @ObservationIgnored var mediaActivityMonitor: SystemMediaActivityMonitor?

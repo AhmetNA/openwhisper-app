@@ -91,6 +91,39 @@ extension AppState {
         }
     }
 
+    /// After a command, show what the user is saying while the mic stays open, about once a
+    /// second, so a misheard word is visible before it runs.
+    func updateFollowUpLiveText() {
+        guard recordingState == .recording, recordingInputReady, modelLoaded,
+              !commandFollowUpAwaitingReplyEnd, !followUpLiveInFlight,
+              let session = activeTranscriptionSession, session.followsCommand, !session.isCancelled,
+              !session.doneCheckInFlight, let audioEngine,
+              let transcriber = activeTranscriptionService else { return }
+        let now = CACurrentMediaTime()
+        // Only once the user spoke, and again only while they go on.
+        guard now - followUpLiveLastCheck >= 1, session.doneLastSpeechTime > followUpLiveStart,
+              session.doneLastSpeechTime > followUpLiveLastCheck - 0.5 else { return }
+        let count = min(Int((now - followUpLiveStart) * 16_000), 30 * 16_000)
+        guard count >= 8_000 else { return }
+        let samples = audioEngine.recentSamples(count: count)
+        followUpLiveLastCheck = now
+        followUpLiveInFlight = true
+        let language = self.language
+        let bypass = session.bypassAudioProcessing
+        Task { [weak self] in
+            let text = try? await AudioSignalProcessor.$bypassProcessing.withValue(bypass) {
+                try await transcriber.previewTranscription(audioData: samples, language: language)
+            }
+            guard let self else { return }
+            self.followUpLiveInFlight = false
+            guard self.recordingState == .recording, self.activeTranscriptionSession === session,
+                  let text = (text ?? nil)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+            self.followUpLiveText = text
+            // Re-centers the bar on its new width.
+            self.syncFlowBarVisibility()
+        }
+    }
+
     /// While Jarvis still reads a YouTube list, "Barış Soydan'ı açabilir misin" is a request
     /// for one of it: the reading stops and the recording is processed now, instead of after
     /// the list and the follow-up window. Only a request that names a listed video, a place

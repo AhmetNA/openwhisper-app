@@ -18,6 +18,7 @@ extension AppState {
             caretPenSessionID = nil
             caretPenDuration = 0
             caretLookupPending = false
+            followUpLiveText = nil
         }
         flowBarController?.fieldRect = caretFieldRect
         flowBarController?.caretRect = systemAudioEnabled ? nil : caretPenRect

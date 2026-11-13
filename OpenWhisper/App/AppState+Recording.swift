@@ -47,6 +47,8 @@ extension AppState {
         let overReply = commandFollowUp != nil && commandFollowUpOverReply
         commandFollowUpOverReply = false
         commandFollowUpAwaitingReplyEnd = overReply
+        followUpLiveText = nil
+        followUpLiveStart = CACurrentMediaTime()
 
         // A previous session may still be transcribing. Only an already-active microphone
         // session blocks a new recording.
@@ -599,6 +601,7 @@ extension AppState {
                 self.checkLateWakeVoice()
                 self.checkSpokenDoneEndpoint()
                 self.checkCommandOverReply()
+                self.updateFollowUpLiveText()
             }
         }
     }
@@ -1680,6 +1683,8 @@ extension AppState {
         guard recordingState == .recording, activeTranscriptionSession?.followsCommand == true,
               let detector = voiceEndpointDetector else { return }
         let now = CACurrentMediaTime()
+        followUpLiveStart = now + Self.replyFollowUpEchoGuard
+        followUpLiveText = nil
         var config = detector.config
         config.noSpeechTimeout = screenModeActive ? screenModeWindow : Self.commandFollowUpWindow
         config.maxDuration = screenModeActive ? ScreenMode.maxDuration : Self.commandFollowUpMaxDuration

@@ -63,6 +63,17 @@ struct FlowBarView: View {
                     }
                 }
             }
+            if let heard = appState.followUpLiveText, appState.shownRecordingState != .idle {
+                Text(verbatim: heard)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(3)
+                    .truncationMode(.head)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 2)
+            }
             if let notice = appState.microphoneFlowNotice {
                 Label(loc(notice), systemImage: "mic.fill")
                     .font(.system(size: 12, weight: .medium))
@@ -90,6 +101,7 @@ struct FlowBarView: View {
         .clipShape(RoundedRectangle(cornerRadius: 17))
         .animation(.easeInOut(duration: 0.25), value: appState.targetSpeakerAppendOfferActive)
         .animation(.easeInOut(duration: 0.25), value: appState.microphoneFlowNotice)
+        .animation(.easeInOut(duration: 0.2), value: appState.followUpLiveText)
         .animation(.easeInOut(duration: 0.25), value: appState.flowBarMessage)
         .animation(.easeInOut(duration: 0.25), value: appState.shownRecordingState)
         .animation(.easeInOut(duration: 0.15), value: appState.recordingInputReady)
