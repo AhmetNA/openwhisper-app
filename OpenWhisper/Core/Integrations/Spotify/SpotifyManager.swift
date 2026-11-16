@@ -144,6 +144,7 @@ final class SpotifyManager: @unchecked Sendable {
 
     private static let musicContextWords: Set<String> = [
         "müzik", "müziği", "müziğin", "müziğe", "muzik", "muzigi",
+        "müzikler", "müzikleri", "müziklerini", "muzikler", "muzikleri",
         "şarkı", "şarkıyı", "şarkıya", "şarkının", "şarkısını", "şarkılar", "şarkıları",
         "sarki", "sarkiyi", "sarkiya", "sarkisini", "sarkilar", "sarkilari",
         "parça", "parçayı", "parçaya", "parçasını", "parçalar", "parçaları",

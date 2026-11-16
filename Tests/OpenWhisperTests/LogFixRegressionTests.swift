@@ -26,6 +26,17 @@ final class LogFixRegressionTests: XCTestCase {
         )
     }
 
+    func testPluralMusicNounIsAPlayCommand() {
+        // 16 Nov 2026: SetFit was unsure, the cloud timed out, and "müzikleri" wasn't a music
+        // noun, so nothing played.
+        guard case .search? = SpotifyManager.explicitIntent(in: "Piyano müzikleri aç.") else {
+            return XCTFail("expected a search")
+        }
+        guard case .search? = SpotifyManager.decide(
+            rules: SpotifyManager.explicitIntent(in: "Piyano müzikleri aç."), parse: nil, text: "Piyano müzikleri aç."
+        ) else { return XCTFail("expected a search without the LLM") }
+    }
+
     func testMaxVolumePhrasingNeedsAVolumeNoun() {
         XCTAssertNil(command("Listeyi sona getir", Parse(intent: .volume)))
         XCTAssertNil(command("Son seviyeye çıkar", Parse(intent: .volume)))
