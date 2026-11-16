@@ -222,11 +222,21 @@ enum ChatFallback {
     static let searchDeadline: TimeInterval = 5
 
     /// `onFallback` gets the reason ("1500 ms without an answer", "HTTP 503") before Ollama starts.
+    /// While the cloud is down (`CloudHealth`) Ollama answers right away and the cloud is only
+    /// asked in the background, to see whether it is back.
     static func stream(primary: @escaping @Sendable () -> AsyncThrowingStream<String, Error>,
                        fallback: @escaping @Sendable () -> AsyncThrowingStream<String, Error>,
                        deadline: TimeInterval = deadline,
                        onFallback: @escaping @Sendable (String) -> Void) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
+        if CloudHealth.isDown {
+            CloudHealth.probe(deadline: deadline) {
+                for try await piece in primary() where !piece.isEmpty { return true }
+                return false
+            }
+            onFallback("cloud down")
+            return fallback()
+        }
+        return AsyncThrowingStream { continuation in
             let gate = Gate()
             let runFallback: @Sendable (String) -> Task<Void, Never> = { reason in
                 Task {
@@ -251,7 +261,8 @@ enum ChatFallback {
                         continuation.finish()
                     }
                 } catch {
-                    if gate.claimFallback() {
+                    if !Task.isCancelled, gate.claimFallback() {
+                        CloudHealth.markDown(describe(error))
                         gate.hold(runFallback(describe(error)))
                     } else if gate.owner == .primary {
                         continuation.finish(throwing: error)
@@ -262,6 +273,7 @@ enum ChatFallback {
                 try? await Task.sleep(for: .seconds(deadline))
                 guard !Task.isCancelled, gate.claimFallback() else { return }
                 primaryTask.cancel()
+                CloudHealth.markDown("\(Int(deadline * 1000)) ms without an answer")
                 gate.hold(runFallback("\(Int(deadline * 1000)) ms without an answer"))
             }
             continuation.onTermination = { _ in
@@ -324,6 +336,11 @@ extension ChatFallback {
     static func firstUsable<T: Sendable>(tag: String, deadline: TimeInterval = commandDeadline,
                                          cloud: @escaping @Sendable () async throws -> T?,
                                          local: @escaping @Sendable () async throws -> T?) async throws -> T? {
+        if CloudHealth.isDown {
+            CloudHealth.probe(deadline: deadline) { try await cloud() != nil }
+            owLog("[\(tag)] Cloud down, using the local model")
+            return try await local()
+        }
         let reason: String
         do {
             let answer = try await withThrowingTaskGroup(of: T?.self) { group in
@@ -339,13 +356,52 @@ extension ChatFallback {
             reason = "no usable answer"
         } catch is DeadlineError {
             reason = "\(Int(deadline * 1000)) ms without an answer"
+            CloudHealth.markDown(reason)
         } catch {
             try Task.checkCancellation()
             reason = describe(error)
+            CloudHealth.markDown(reason)
         }
         try Task.checkCancellation()
         owLog("[\(tag)] Cloud: \(reason), falling back to the local model")
         return try await local()
+    }
+}
+
+/// Whether the cloud is down. Set when a request falls back because the cloud failed or was
+/// slow; from then on every request goes to the local model at once, and the cloud gets the
+/// same request in the background only to tell when it answers within the deadline again.
+enum CloudHealth {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var down = false
+
+    static var isDown: Bool { lock.withLock { down } }
+
+    static func markDown(_ reason: String) {
+        let changed = lock.withLock { () -> Bool in defer { down = true }; return !down }
+        if changed { owLog("[CloudHealth] Cloud down (\(reason)); local model until it answers again") }
+    }
+
+    static func markUp(_ reason: String) {
+        let changed = lock.withLock { () -> Bool in defer { down = false }; return down }
+        if changed { owLog("[CloudHealth] Cloud back (\(reason)); requests go to the cloud again") }
+    }
+
+    /// Asks the cloud in the background; an answer within `deadline` marks it up again.
+    static func probe(deadline: TimeInterval, _ ask: @escaping @Sendable () async throws -> Bool) {
+        Task.detached {
+            let started = Date()
+            let answered = try? await withThrowingTaskGroup(of: Bool.self) { group in
+                group.addTask { try await ask() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(deadline))
+                    return false
+                }
+                defer { group.cancelAll() }
+                return try await group.next() ?? false
+            }
+            if answered == true { markUp("answered in \(Int(Date().timeIntervalSince(started) * 1000)) ms") }
+        }
     }
 }
 

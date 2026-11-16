@@ -2,6 +2,16 @@ import XCTest
 @testable import OpenWhisper
 
 final class CloudChatClientTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        CloudHealth.markUp("test")
+    }
+
+    override func tearDown() {
+        CloudHealth.markUp("test")
+        super.tearDown()
+    }
+
     // MARK: - Wire format
 
     func testChatBodyStreamsWithThinkingOff() {
@@ -183,6 +193,37 @@ final class CloudChatClientTests: XCTestCase {
         let empty: String? = try await ChatFallback.firstUsable(tag: "Test", deadline: 5,
                                                                 cloud: { nil }, local: { "yerel" })
         XCTAssertEqual(empty, "yerel")
+    }
+
+    /// After a fallback the local model answers at once; the cloud is asked in the background
+    /// and, once it answers in time, gets the requests again.
+    func testDownCloudStaysLocalUntilAProbeAnswers() async throws {
+        _ = try await ChatFallback.firstUsable(tag: "Test", deadline: 5,
+                                               cloud: { throw LLMError.http(503) }, local: { "yerel" })
+        XCTAssertTrue(CloudHealth.isDown)
+        let started = Date()
+        let whileDown = try await ChatFallback.firstUsable(tag: "Test", deadline: 1,
+                                                           cloud: { "bulut" }, local: { "yerel" })
+        XCTAssertEqual(whileDown, "yerel")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        for _ in 0..<50 where CloudHealth.isDown { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertFalse(CloudHealth.isDown)
+        let back = try await ChatFallback.firstUsable(tag: "Test", deadline: 1,
+                                                      cloud: { "bulut" }, local: { "yerel" })
+        XCTAssertEqual(back, "bulut")
+    }
+
+    func testSlowProbeKeepsTheCloudDown() async throws {
+        CloudHealth.markDown("test")
+        let reasons = Reasons()
+        let result = await collect(ChatFallback.stream(
+            primary: Self.neverAnswers,
+            fallback: { Self.pieces(["yerel"]) },
+            deadline: 0.1, onFallback: reasons.add))
+        XCTAssertEqual(result.text, "yerel")
+        XCTAssertEqual(reasons.all, ["cloud down"])
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(CloudHealth.isDown)
     }
 
     func testChatBodyCanLeaveThinkingFieldsOut() {
