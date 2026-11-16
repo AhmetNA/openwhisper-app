@@ -450,7 +450,7 @@ enum SpotifyRequestParser {
     }
 
     /// The same parse from the cloud model, used instead of Ollama while Jarvis's chat is on the
-    /// cloud, so Gemma isn't loaded for a command. No JSON schema here (not every
+    /// cloud (`client` is a `FallbackChat`, so a slow or failing cloud hands over to Ollama). No JSON schema here (not every
     /// OpenAI-compatible server takes one): the prompt's examples set the shape, and the JSON
     /// object is cut out of whatever comes back. Nil on any failure; callers fall back to rules.
     static func queryCloud(transcript: String, client: any ChatStreaming, model: String,

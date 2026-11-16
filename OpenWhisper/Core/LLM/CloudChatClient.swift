@@ -307,6 +307,77 @@ enum ChatFallback {
     }
 }
 
+extension ChatFallback {
+    /// Commands and agents on the cloud: the local model takes over when the cloud errors or
+    /// hasn't answered within this time.
+    static let commandDeadline: TimeInterval = 2.5
+
+    /// Ollama behind its OpenAI-compatible endpoint, for callers that send a whole chat body
+    /// (tools, images) the way they send it to the cloud.
+    static let localOpenAI = CloudChatClient(baseURL: URL(string: "http://localhost:11434/v1")!,
+                                             apiKey: "ollama", thinkingOff: true)
+
+    private struct DeadlineError: Error {}
+
+    /// `cloud`'s answer, or `local`'s when the cloud throws, returns nil, or takes longer than
+    /// `deadline` in all. `tag` names the caller in the log.
+    static func firstUsable<T: Sendable>(tag: String, deadline: TimeInterval = commandDeadline,
+                                         cloud: @escaping @Sendable () async throws -> T?,
+                                         local: @escaping @Sendable () async throws -> T?) async throws -> T? {
+        let reason: String
+        do {
+            let answer = try await withThrowingTaskGroup(of: T?.self) { group in
+                group.addTask { try await cloud() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(deadline))
+                    throw DeadlineError()
+                }
+                defer { group.cancelAll() }
+                return try await group.next() ?? nil
+            }
+            if let answer { return answer }
+            reason = "no usable answer"
+        } catch is DeadlineError {
+            reason = "\(Int(deadline * 1000)) ms without an answer"
+        } catch {
+            try Task.checkCancellation()
+            reason = describe(error)
+        }
+        try Task.checkCancellation()
+        owLog("[\(tag)] Cloud: \(reason), falling back to the local model")
+        return try await local()
+    }
+}
+
+/// The cloud model for one command, with Ollama's `localModel` taking over when the cloud sends
+/// nothing within `ChatFallback.commandDeadline` or fails (`ChatFallback.stream`).
+struct FallbackChat: ChatStreaming {
+    let cloud: any ChatStreaming
+    let cloudModel: String
+    var local: any ChatStreaming = OllamaClient()
+    var localModel: String = LLM.selectedModel
+    let tag: String
+
+    /// Nil when no cloud model is set up.
+    static func command(_ tag: String) -> FallbackChat? {
+        guard let (client, model) = CloudLLM.client() else { return nil }
+        return FallbackChat(cloud: client, cloudModel: model, tag: tag)
+    }
+
+    func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
+        var cloudRequest = request
+        cloudRequest.model = cloudModel
+        var localRequest = request
+        localRequest.model = localModel
+        let (cloud, local, tag, cloudModel, localModel) = (cloud, local, tag, cloudModel, localModel)
+        let (primaryRequest, fallbackRequest) = (cloudRequest, localRequest)
+        return ChatFallback.stream(primary: { cloud.streamChat(primaryRequest) },
+                                   fallback: { local.streamChat(fallbackRequest) },
+                                   deadline: ChatFallback.commandDeadline,
+                                   onFallback: { owLog("[\(tag)] Cloud \(cloudModel): \($0), falling back to \(localModel)") })
+    }
+}
+
 /// What Settings checks before a model answers Jarvis: one tiny chat, timed to its first word.
 enum CloudModelCheck {
     enum Outcome: Equatable {

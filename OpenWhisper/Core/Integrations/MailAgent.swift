@@ -101,12 +101,13 @@ enum MailAgent {
             ["role": "user", "content": request],
         ]
         var state = State()
+        var onLocal = false
         for step in 1...maxSteps {
             var body = CloudChatClient.completionBody(model: model, messages: messages, maxTokens: 300, thinkingOff: client.thinkingOff)
             if step < maxSteps { body["tools"] = tools(for: job) }
             let message: [String: Any]
             do {
-                message = try await complete(client, body: body)
+                message = try await Self.step(client, body: body, onLocal: &onLocal, tag: "MailAgent")
             } catch {
                 owLog("[MailAgent] Step \(step) failed: \(ChatFallback.describe(error))")
                 return L("Maillere şu an bakamadım", "Couldn't look through the mail right now")
@@ -207,6 +208,32 @@ enum MailAgent {
     }
 
     /// One whole answer: its text and tool calls. `ChatHistoryAgent` uses it too.
+    /// One step's reply, and whether the local model gave it.
+    struct StepReply: @unchecked Sendable {
+        let message: [String: Any]
+        let local: Bool
+    }
+
+    /// One step on the cloud; when the cloud fails or is slow (`ChatFallback.commandDeadline`),
+    /// on the local model, which then answers the remaining steps too (`onLocal`).
+    static func step(_ client: CloudChatClient, body: [String: Any], onLocal: inout Bool, tag: String) async throws -> [String: Any] {
+        var localBody = body
+        localBody["model"] = LLM.selectedModel
+        // Without it Gemma thinks first and sends no content.
+        localBody["reasoning_effort"] = "none"
+        nonisolated(unsafe) let (cloudBody, ollamaBody) = (body, localBody)
+        let local: @Sendable () async throws -> StepReply? = {
+            StepReply(message: try await complete(ChatFallback.localOpenAI, body: ollamaBody), local: true)
+        }
+        let reply = onLocal ? try await local()
+            : try await ChatFallback.firstUsable(tag: tag, cloud: {
+                StepReply(message: try await complete(client, body: cloudBody), local: false)
+            }, local: local)
+        guard let reply else { throw LLMError.malformed }
+        if reply.local { onLocal = true }
+        return reply.message
+    }
+
     static func complete(_ client: CloudChatClient, body: [String: Any]) async throws -> [String: Any] {
         let (data, response) = try await URLSession.shared.data(for: client.request(path: "chat/completions", body: body, timeout: 20))
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1

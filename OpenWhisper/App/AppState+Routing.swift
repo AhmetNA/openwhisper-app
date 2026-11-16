@@ -2333,10 +2333,10 @@ extension AppState {
             }
             // Sounds like a command no rule caught: let the model rephrase it, and run
             // it only if a rule then recognises the rephrased sentence.
-            let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
+            let cloud = ChatBackend.selected == .cloud ? FallbackChat.command("CommandRewriter") : nil
             if route == .chat, cloud != nil || self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
                let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
-                                                             cloud: cloud.map { ($0.0, $0.model) }) {
+                                                             cloud: cloud.map { ($0, $0.cloudModel) }) {
                 if let command = CommandRewriter.safeCommand(rewritten, context: commandContext(run)) {
                     session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
                     owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")

@@ -533,31 +533,34 @@ enum ScreenActions {
             """
         }
         let started = Date()
-        var yFirst = false
-        let answer: String?
-        let backend: String
+        // Each answer keeps the box format its model was asked for.
+        struct Answer: Sendable { let text: String; let yFirst: Bool; let backend: String }
+        let localPrompt = prompt(#"{"box_2d": [y1, x1, y2, x2]}"#)
+        let local: @Sendable () async throws -> Answer? = {
+            let text = try await LLM.default.generate(LLMRequest(model: LLM.selectedModel, prompt: localPrompt, timeout: 15,
+                                                                 temperature: 0, maxTokens: 40, images: [jpeg]))
+            return Answer(text: text, yFirst: true, backend: LLM.selectedModel)
+        }
+        let answer: Answer?
         if ChatBackend.selected == .cloud, let (client, _) = CloudLLM.client() {
             // A vision model from the server's list when there is one; the chat model may see no images.
             let model = ScreenQuestion.cloudVisionModel
-            backend = model
             let content: [[String: Any]] = [
                 ["type": "text", "text": prompt(#"{"bbox_2d": [x1, y1, x2, y2]}"#)],
                 ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(jpeg)"]],
             ]
-            do {
-                answer = try await client.complete(model: model, messages: [["role": "user", "content": content]],
-                                                   timeout: 10, maxTokens: 40)
-            } catch {
-                owLog("[Screen] Vision model failed: \(ChatFallback.describe(error))")
-                answer = nil
-            }
+            nonisolated(unsafe) let messages: [[String: Any]] = [["role": "user", "content": content]]
+            // A slow or failing cloud hands over to the local model (`ChatFallback.commandDeadline`).
+            answer = try? await ChatFallback.firstUsable(tag: "Screen", cloud: {
+                let text = try await client.complete(model: model, messages: messages, timeout: 10, maxTokens: 40)
+                return Answer(text: text, yFirst: false, backend: model)
+            }, local: local)
         } else {
-            backend = LLM.selectedModel
-            yFirst = true
-            answer = try? await LLM.default.generate(LLMRequest(model: LLM.selectedModel, prompt: prompt(#"{"box_2d": [y1, x1, y2, x2]}"#), timeout: 15,
-                                                                temperature: 0, maxTokens: 40, images: [jpeg]))
+            answer = try? await local()
         }
-        let reply = answer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let backend = answer?.backend ?? "none"
+        let yFirst = answer?.yFirst ?? false
+        let reply = answer?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         owLog("[Screen] Vision model (\(backend)) answered '\(reply.prefix(80))' in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
         guard let point = parseVisionPoint(reply, yFirst: yFirst) else { return nil }
         return CGPoint(x: frame.minX + point.x / 1000 * frame.width, y: frame.minY + point.y / 1000 * frame.height)
@@ -635,7 +638,7 @@ enum ScreenActions {
 
     static func modelPick(_ text: String, elements: [ScreenElement]) async -> Int? {
         let started = Date()
-        // Cloud selected: the local model isn't woken for this; if the cloud fails, nothing is picked.
+        // Cloud selected: the local model takes over when the cloud fails or is slow.
         let reply: String?
         if ChatBackend.selected == .cloud {
             reply = await cloudPick(prompt(for: text, elements: elements))
@@ -654,8 +657,8 @@ enum ScreenActions {
     }
 
     private static func cloudPick(_ prompt: String) async -> String? {
-        guard let (client, model) = CloudLLM.client() else { return nil }
-        let request = LLMChatRequest(model: model, messages: [["role": "user", "content": prompt]],
+        guard let client = FallbackChat.command("Screen") else { return nil }
+        let request = LLMChatRequest(model: client.cloudModel, messages: [["role": "user", "content": prompt]],
                                      timeout: 8, temperature: 0, maxTokens: 8)
         do {
             var answer = ""

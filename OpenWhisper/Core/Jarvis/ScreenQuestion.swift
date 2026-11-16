@@ -301,8 +301,13 @@ enum ScreenQuestion {
     }
 
     static func textAnswer(_ prompt: String, model: String, maxTokens: Int = 240) async throws -> String {
-        if ChatBackend.selected == .cloud, let (client, cloudModel) = CloudLLM.client() {
-            return try await client.complete(model: cloudModel, messages: [["role": "user", "content": prompt]], timeout: 25, maxTokens: maxTokens)
+        if ChatBackend.selected == .cloud, var client = FallbackChat.command("ScreenQuestion") {
+            // Streamed, so the cloud has `ChatFallback.commandDeadline` to start, not to finish.
+            client.localModel = model
+            var text = ""
+            for try await piece in client.streamChat(LLMChatRequest(model: client.cloudModel, messages: [["role": "user", "content": prompt]],
+                                                                    timeout: 25, temperature: 0, maxTokens: maxTokens)) { text += piece }
+            return text
         }
         return try await LLM.default.generate(LLMRequest(model: model, prompt: prompt, timeout: 25, temperature: 0, maxTokens: maxTokens))
     }
@@ -318,22 +323,24 @@ enum ScreenQuestion {
     }
 
     static func visualAnswer(jpeg: String, prompt: String) async -> String? {
-        if ChatBackend.selected == .cloud {
-            guard let (client, _) = CloudLLM.client() else { return nil }
-            do { return try await client.complete(model: cloudVisionModel, messages: [["role": "user", "content": [
-                ["type": "text", "text": prompt],
-                ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(jpeg)"]]
-            ]]], timeout: 30, maxTokens: 300)
-            } catch {
-                owLog("[ScreenQuestion] Cloud vision failed: \(ChatFallback.describe(error))")
-                return nil
+        let local: @Sendable () async -> String? = {
+            for model in [localVisionModel, fallbackVisionModel] {
+                if Task.isCancelled { return nil }
+                let answer = try? await LLM.default.generate(LLMRequest(model: model, prompt: prompt, timeout: 25, temperature: 0, maxTokens: 300, images: [jpeg]))
+                if let answer, !answer.isEmpty, (!prompt.contains("\"product\"") || identity(answer) != nil) { return answer }
             }
+            return nil
         }
-        for model in [localVisionModel, fallbackVisionModel] {
-            if Task.isCancelled { return nil }
-            let answer = try? await LLM.default.generate(LLMRequest(model: model, prompt: prompt, timeout: 25, temperature: 0, maxTokens: 300, images: [jpeg]))
-            if let answer, !answer.isEmpty, (!prompt.contains("\"product\"") || identity(answer) != nil) { return answer }
-        }
-        return nil
+        guard ChatBackend.selected == .cloud else { return await local() }
+        guard let (client, _) = CloudLLM.client() else { return nil }
+        nonisolated(unsafe) let messages: [[String: Any]] = [["role": "user", "content": [
+            ["type": "text", "text": prompt],
+            ["type": "image_url", "image_url": ["url": "data:image/jpeg;base64,\(jpeg)"]]
+        ]]]
+        // A slow or failing cloud hands over to the local model (`ChatFallback.commandDeadline`).
+        return try? await ChatFallback.firstUsable(tag: "ScreenQuestion", cloud: {
+            try await client.complete(model: cloudVisionModel, messages: messages, timeout: 30, maxTokens: 300)
+        }, local: local)
     }
+
 }

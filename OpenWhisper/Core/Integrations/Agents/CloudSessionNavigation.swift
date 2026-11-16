@@ -316,8 +316,19 @@ enum CloudSessionNavigation {
             let backend = cloud.map { "cloud \($0.model)" } ?? "ollama \(LLM.selectedModel)"
             do {
                 let started = Date()
-                let decided = try await modelDecision(text, agent: agent, candidates: candidates, currentID: currentID,
-                                                      cloud: cloud.map { ($0.0, $0.model) }, localModel: LLM.selectedModel)
+                let local: @Sendable () async throws -> Decision? = {
+                    try await modelDecision(text, agent: agent, candidates: candidates, currentID: currentID,
+                                            cloud: nil, localModel: LLM.selectedModel)
+                }
+                // A slow or failing cloud hands over to the local model (`ChatFallback.commandDeadline`).
+                let decided = if let (client, model) = cloud {
+                    try await ChatFallback.firstUsable(tag: "CloudSessionNavigation", cloud: {
+                        try await modelDecision(text, agent: agent, candidates: candidates, currentID: currentID,
+                                                cloud: (client, model), localModel: LLM.selectedModel)
+                    }, local: local)
+                } else {
+                    try await local()
+                }
                 owLog("[CloudSessionNavigation] \(candidates.count) chats loaded in \(loadMs) ms, \(backend) decision \(Int(Date().timeIntervalSince(started) * 1000)) ms")
                 guard let decided else {
                     return L("Hangi sohbeti açacağımı netleştiremedim; konusunu biraz daha açık söyler misin?", "I couldn't tell which chat to open; could you name its topic more clearly?")

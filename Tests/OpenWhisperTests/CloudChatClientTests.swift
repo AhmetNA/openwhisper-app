@@ -158,6 +158,33 @@ final class CloudChatClientTests: XCTestCase {
         XCTAssertEqual(reasons.all, [])
     }
 
+    // MARK: Whole answers (`firstUsable`)
+
+    func testFastCloudAnswerIsKept() async throws {
+        let answer = try await ChatFallback.firstUsable(tag: "Test", deadline: 1,
+                                                        cloud: { "bulut" }, local: { "yerel" })
+        XCTAssertEqual(answer, "bulut")
+    }
+
+    func testSlowCloudFallsBackAtTheDeadline() async throws {
+        let started = Date()
+        let answer = try await ChatFallback.firstUsable(tag: "Test", deadline: 0.1, cloud: {
+            try await Task.sleep(for: .seconds(30))
+            return "bulut"
+        }, local: { "yerel" })
+        XCTAssertEqual(answer, "yerel")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    func testFailingOrEmptyCloudFallsBack() async throws {
+        let failed = try await ChatFallback.firstUsable(tag: "Test", deadline: 5,
+                                                        cloud: { throw LLMError.http(503) }, local: { "yerel" })
+        XCTAssertEqual(failed, "yerel")
+        let empty: String? = try await ChatFallback.firstUsable(tag: "Test", deadline: 5,
+                                                                cloud: { nil }, local: { "yerel" })
+        XCTAssertEqual(empty, "yerel")
+    }
+
     func testChatBodyCanLeaveThinkingFieldsOut() {
         let request = LLMChatRequest(model: "m", messages: [], timeout: 10, temperature: 0.6, maxTokens: 110)
         let body = CloudChatClient.chatBody(request, thinkingOff: false)

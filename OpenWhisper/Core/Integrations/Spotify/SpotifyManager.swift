@@ -923,9 +923,9 @@ final class SpotifyManager: @unchecked Sendable {
             decisionCache.store(rules, for: transcript)
             return true
         }
-        // With Jarvis's chat on the cloud, the cloud model parses instead of Ollama, so Gemma
-        // stays unloaded unless the cloud fails; then Ollama, else the rules and SetFit decide alone.
-        let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
+        // With Jarvis's chat on the cloud, the cloud model parses instead of Ollama; Ollama takes
+        // over when the cloud fails or is slow (`FallbackChat`).
+        let cloud = ChatBackend.selected == .cloud ? FallbackChat.command("SpotifyParser") : nil
         let llmAvailable = ollamaAvailable || cloud != nil
         // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down. Its
         // heads learned Turkish, and a confident wrong answer would cancel the LLM.
@@ -946,19 +946,11 @@ final class SpotifyManager: @unchecked Sendable {
         // one Ollama round trip, not SetFit + Ollama. A confident SetFit answer cancels it.
         // A voice session warms the model when it starts, but a cold load still takes
         // several seconds; dictation keeps the short timeout so pasting isn't held up.
-        // The cloud has no cold load, so it keeps the short timeout too.
+        // With the cloud, Gemma isn't warmed, so its fallback gets the long timeout too.
         let model = selectedOllamaModel
-        let timeout: TimeInterval = commandMode && cloud == nil ? 15 : 3
-        let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let (client, cloudModel) = cloud {
-            Task {
-                if let parse = await SpotifyRequestParser.queryCloud(transcript: text, client: client, model: cloudModel, timeout: timeout) {
-                    return parse
-                }
-                // Like Jarvis's chat (`ChatFallback`): the local model takes over when the cloud fails.
-                guard ollamaAvailable, !Task.isCancelled else { return nil }
-                owLog("[Spotify] Cloud gave no parse, falling back to Ollama (\(model))")
-                return await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: commandMode ? 15 : 3)
-            }
+        let timeout: TimeInterval = commandMode ? 15 : 3
+        let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let cloud {
+            Task { await SpotifyRequestParser.queryCloud(transcript: text, client: cloud, model: cloud.cloudModel, timeout: timeout) }
         } else if ollamaAvailable {
             Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: timeout) }
         } else {

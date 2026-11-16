@@ -186,12 +186,12 @@ enum WhatsAppController {
         return parseRelatedWords(reply)
     }
 
-    /// The cloud model when one is set up in Settings, else (or when it fails) the local one.
+    /// The cloud model when one is set up in Settings, else (or when it fails or is slow) the local one.
     private static func generate(_ prompt: String, timeout: TimeInterval, maxTokens: Int) async throws -> String {
-        if let (cloud, model) = CloudLLM.client() {
+        if let cloud = FallbackChat.command("WhatsApp") {
             do {
                 var text = ""
-                let request = LLMChatRequest(model: model, messages: [["role": "user", "content": prompt]],
+                let request = LLMChatRequest(model: cloud.cloudModel, messages: [["role": "user", "content": prompt]],
                                              timeout: timeout, temperature: 0.2, maxTokens: maxTokens)
                 for try await piece in cloud.streamChat(request) { text += piece }
                 return text

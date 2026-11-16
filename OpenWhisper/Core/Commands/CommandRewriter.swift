@@ -17,8 +17,8 @@ enum CommandRewriter {
     }
 
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,
-    /// is unreachable or slow. With `cloud` set (Jarvis's chat is on the cloud) only the cloud
-    /// model is asked, so Gemma isn't loaded for a rewrite.
+    /// is unreachable or slow. With `cloud` set (Jarvis's chat is on the cloud) the cloud model is
+    /// asked first (a `FallbackChat` hands a slow or failing cloud over to Ollama).
     static func rewrite(_ text: String, model: String, timeout: TimeInterval = 4,
                         client: any LLMClient = LLM.default,
                         cloud: (client: any ChatStreaming, model: String)? = nil) async -> String? {

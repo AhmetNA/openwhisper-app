@@ -347,12 +347,13 @@ enum ChatHistoryAgent {
             ["role": "user", "content": request],
         ]
         var state = State()
+        var onLocal = false
         for step in 1...maxSteps {
             var body = CloudChatClient.completionBody(model: model, messages: messages, maxTokens: 300, thinkingOff: client.thinkingOff)
             if step < maxSteps { body["tools"] = tools }
             let message: [String: Any]
             do {
-                message = try await MailAgent.complete(client, body: body)
+                message = try await MailAgent.step(client, body: body, onLocal: &onLocal, tag: "ChatHistory")
             } catch {
                 owLog("[ChatHistory] Step \(step) failed: \(ChatFallback.describe(error))")
                 return L("Sohbetlere şu an bakamadım", "Couldn't look through the chats right now")
