@@ -924,7 +924,7 @@ final class SpotifyManager: @unchecked Sendable {
             return true
         }
         // With Jarvis's chat on the cloud, the cloud model parses instead of Ollama, so Gemma
-        // stays unloaded; if it fails, the rules and SetFit decide alone.
+        // stays unloaded unless the cloud fails; then Ollama, else the rules and SetFit decide alone.
         let cloud = ChatBackend.selected == .cloud ? CloudLLM.client() : nil
         let llmAvailable = ollamaAvailable || cloud != nil
         // SetFit (Settings › Karar motoru) can read the intent even when Ollama is down. Its
@@ -950,7 +950,15 @@ final class SpotifyManager: @unchecked Sendable {
         let model = selectedOllamaModel
         let timeout: TimeInterval = commandMode && cloud == nil ? 15 : 3
         let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let (client, cloudModel) = cloud {
-            Task { await SpotifyRequestParser.queryCloud(transcript: text, client: client, model: cloudModel, timeout: timeout) }
+            Task {
+                if let parse = await SpotifyRequestParser.queryCloud(transcript: text, client: client, model: cloudModel, timeout: timeout) {
+                    return parse
+                }
+                // Like Jarvis's chat (`ChatFallback`): the local model takes over when the cloud fails.
+                guard ollamaAvailable, !Task.isCancelled else { return nil }
+                owLog("[Spotify] Cloud gave no parse, falling back to Ollama (\(model))")
+                return await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: commandMode ? 15 : 3)
+            }
         } else if ollamaAvailable {
             Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: timeout) }
         } else {
