@@ -221,6 +221,8 @@ enum MailAgent {
         localBody["model"] = LLM.selectedModel
         // Without it Gemma thinks first and sends no content.
         localBody["reasoning_effort"] = "none"
+        // Like the native Ollama calls: stays loaded for 30 min after the last use, then unloads.
+        localBody["keep_alive"] = LLMCleanup.keepAlive
         nonisolated(unsafe) let (cloudBody, ollamaBody) = (body, localBody)
         let local: @Sendable () async throws -> StepReply? = {
             StepReply(message: try await complete(ChatFallback.localOpenAI, body: ollamaBody), local: true)
