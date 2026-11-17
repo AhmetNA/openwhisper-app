@@ -1857,16 +1857,24 @@ extension AppState {
             return true
         }
         var byModel = false
+        // The menu model is asked alongside the on-screen pick, not after it; its answer
+        // is used only when nothing on screen was picked.
+        mark = CACurrentMediaTime()
+        let menuModel: Task<ScreenElement?, Never>? = found == nil && (saysClick || screenModeStep || MenuCommands.isShort(trimmed))
+            ? Task { await MenuCommands.modelMatch(trimmed, in: menuItems) } : nil
         if found == nil, !elements.isEmpty {
             let (pick, picked) = await pickElement(trimmed, elements: elements, saysClick: saysClick, stepParts: &stepParts)
             found = pick.map { elements[$0] }
             byModel = picked
         }
-        if found == nil, saysClick || screenModeStep || MenuCommands.isShort(trimmed) {
-            mark = CACurrentMediaTime()
-            found = await MenuCommands.modelMatch(trimmed, in: menuItems)
-            byModel = found != nil
-            stepParts.append(("menü modeli", CACurrentMediaTime() - mark))
+        if let menuModel {
+            if found == nil {
+                found = await menuModel.value
+                byModel = found != nil
+                stepParts.append(("menü modeli", CACurrentMediaTime() - mark))
+            } else {
+                menuModel.cancel()
+            }
         }
         guard let target = found else { return await pressByText(run, app: app, saysClick: saysClick, screenModeStep: screenModeStep, stepStarted: stepStarted, stepParts: stepParts) }
         session.latency.finishDecision(route: "ekran eylemi")
