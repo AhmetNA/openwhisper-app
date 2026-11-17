@@ -21,6 +21,17 @@ final class ReminderManagerSchemaTests: XCTestCase {
         )
     }
 
+    func testParsesMisheardReminderWordInDeletion() {
+        XCTAssertEqual(
+            ReminderManager.deletionRequest("Çay hatırlatacağıyı sil"),
+            .init(query: "Çay", deleteAll: false)
+        )
+        XCTAssertEqual(
+            ReminderManager.deletionRequest("Toplantı hazırlatıcısını sil"),
+            .init(query: "Toplantı", deleteAll: false)
+        )
+    }
+
     func testParsesExplicitDeleteAllWithoutWipingOnBareDelete() {
         XCTAssertEqual(
             ReminderManager.deletionRequest("Tüm hatırlatıcıları sil"),

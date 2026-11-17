@@ -170,7 +170,8 @@ final class ReminderManager {
         let lowered = trimmed.lowercased(with: locale)
         guard lowered.utf16.count == trimmed.utf16.count else { return nil }
 
-        let reminderWord = #"(?:hatırlatıcı|anımsatıcı|reminder)\p{L}*"#
+        // Whisper also writes "hatırlatıcıyı" as "hatırlatacağıyı" / "hazırlatıcısını".
+        let reminderWord = #"(?:hatırlatıcı|hatırlatacağ|hazırlatıcı|anımsatıcı|reminder)\p{L}*"#
         let deletionVerb = #"(?:sil|kaldır|iptal\s+et)\p{L}*"#
         // "siler misin", "silebilir misin lütfen" are still explicit deletion commands.
         let politeTail = #"(?:\s+(?:m[iıuü]s[iıuü]n(?:\p{L}*)|lütfen))*"#

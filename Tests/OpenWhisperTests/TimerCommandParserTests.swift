@@ -137,6 +137,12 @@ final class ReminderDurationTests: XCTestCase {
         XCTAssertEqual(minutes("20 saat sonra çayı hatırlat"), 30)
         XCTAssertEqual(TurkishDateParser.parse("Yarım saat sonra çayı hatırlat", now: now)?.task, "Çayı")
     }
+
+    func testPartOfDayIsNotPartOfTheReminderTitle() {
+        XCTAssertEqual(TurkishDateParser.parse("Yarın sabaha çay için hatırlatıcı kur", now: now)?.task, "Çay için")
+        XCTAssertEqual(TurkishDateParser.parse("Bana yarın akşam ilacımı hatırlat", now: now)?.task, "İlacımı")
+        XCTAssertEqual(TurkishDateParser.parse("Yarın kahvaltıyı hatırlat", now: now)?.task, "Kahvaltıyı")
+    }
 }
 
 final class TimerReplyTests: XCTestCase {

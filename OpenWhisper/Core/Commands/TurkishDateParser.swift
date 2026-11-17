@@ -272,6 +272,10 @@ enum TurkishDateParser {
 
         // --- 4. Whatever's left after stripping the time/date expression + trigger words = task ---
         var task = stripTriggers(working)
+        // "Yarın sabaha çay için…": the part of the day left in front of the task is time, not title.
+        task = task.replacingOccurrences(
+            of: #"^\s*(?:öğleden sonra|sabahleyin|akşamüstü|sabah|akşam|öğlen|öğle|gece)(?:ya|ye|a|e)?\b"#,
+            with: "", options: .regularExpression)
         task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         while task.contains("  ") { task = task.replacingOccurrences(of: "  ", with: " ") }
         task = task.trimmingCharacters(in: CharacterSet(charactersIn: ".,:;!? "))
