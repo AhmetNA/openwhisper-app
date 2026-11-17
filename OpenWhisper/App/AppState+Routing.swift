@@ -2486,6 +2486,10 @@ extension AppState {
             owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule")
             return false
         }
+        guard !CommandRewriter.inventsPayload(command, rewritten: rewritten, original: trimmed) else {
+            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' invents what the user never said")
+            return false
+        }
         session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
         owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
         await runCommands(run, [MultiCommandSplitter.Step(text: rewritten, command: command)], output: "yeniden yorumlanan komut")

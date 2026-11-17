@@ -91,6 +91,33 @@ enum CommandRewriter {
         }
     }
 
+    /// A search, address or song the user never said ("jarvana karşı en iyi pick ne" →
+    /// "Google'da kedi ara", copied from the examples): a rewrite may fix a misheard verb, but
+    /// what to look for or play has to come from the user's own words.
+    static func inventsPayload(_ command: VoiceCommand, rewritten: String, original: String) -> Bool {
+        let locale = Locale(identifier: "tr_TR")
+        let payload: String
+        switch command {
+        case .system(.browser(.search(_, let query))), .system(.browser(.youtubeTitle(let query))),
+             .system(.browser(.open(let query))):
+            payload = query
+        case .spotify:
+            let lower = rewritten.lowercased(with: locale).trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            guard lower.hasSuffix(" çal") else { return false }
+            payload = String(lower.dropLast(4))
+        default:
+            return false
+        }
+        func words(_ text: String) -> [String] {
+            text.lowercased(with: locale).components(separatedBy: CharacterSet.letters.inverted).filter { $0.count >= 3 }
+        }
+        let said = words(original)
+        let wanted = words(payload)
+        return !wanted.isEmpty && !wanted.contains { word in
+            said.contains { word.hasPrefix($0.prefix(4)) || $0.hasPrefix(word.prefix(4)) }
+        }
+    }
+
     /// The rewrite as a system command, unless it is one that shouldn't come from a guess
     /// (quitting apps, sleeping, locking, marking mail read, mail replies, calendar entries, shortcuts).
     static func safeSystemCommand(_ rewritten: String, installedApps: [String]) -> SystemCommand? {
