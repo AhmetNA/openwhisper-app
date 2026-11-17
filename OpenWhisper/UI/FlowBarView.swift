@@ -20,7 +20,8 @@ struct FlowBarView: View {
                 if appState.showsSystemAudioBar {
                     systemAudioContent
                 } else if let message = appState.flowBarMessage,
-                          appState.jarvisActivity != .speaking || appState.targetSpeakerAppendOfferActive {
+                          appState.jarvisActivity != .speaking || appState.targetSpeakerAppendOfferActive
+                            || appState.screenTaskRunning {
                     if appState.targetSpeakerAppendOfferActive {
                         rejectedRecordingOfferContent(message: message)
 

@@ -154,6 +154,7 @@ extension AppState {
             }
         }
         hotkey?.onScreenModeExit = { [weak self] in self?.exitScreenModeByKey() }
+        hotkey?.onScreenTaskStop = { [weak self] in self?.stopScreenTask() }
         hotkey?.jarvisKey = jarvisHotkey
         hotkey?.typedRequestKey = typedRequestHotkey
         hotkey?.onTypedRequestKey = { [weak self] in

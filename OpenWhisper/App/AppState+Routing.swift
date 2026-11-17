@@ -608,6 +608,13 @@ extension AppState {
                 let pressed = ScreenActions.perform(pending.target)
                 self.showFlowBarMessage(pressed ? "“\(pending.target.label)” ✓" : L("Basılamadı", "Couldn't press it"), durationMs: 1500)
                 if !pressed { await self.speakReply(self.jarvisReply.failure(L("Basamadım", "I couldn't press it"))) }
+                // A multi-step task asked it: go on from here.
+                if pressed, let task = pending.task, let (client, model) = CloudLLM.client() {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    await runScreenTask(run, goal: task.goal, history: task.history + [ScreenTask.pressed(pending.target)],
+                                        client: client, model: model)
+                    return true
+                }
                 if pressed, session.isVoiceCommand {
                     self.noteScreenModeAction()
                     run.commandFollowUp = .some(nil)
@@ -1649,6 +1656,67 @@ extension AppState {
         self.startVoiceSession(trigger: .confirmation)
     }
 
+    /// A goal of several steps on screen (`ScreenTask`): each step is said aloud, Esc stops it
+    /// before the next action. A risky step is asked like a single press; on "evet" the task
+    /// goes on from `history`.
+    @MainActor private func runScreenTask(_ run: FinishRun, goal: String, history: [String] = [],
+                                          client: CloudChatClient, model: String) async {
+        let session = run.session
+        session.latency.finishDecision(route: "çok adımlı ekran eylemi")
+        owLog("[Route] screen task: '\(goal)'\(history.isEmpty ? "" : " (step \(history.count + 1))")")
+        self.lastTranscription = run.text
+        self.lastCommandUndo = []
+        let escHint = L("Esc iptal eder", "Esc cancels")
+        self.showFlowBarMessage("\(L("Ekrana bakıyorum…", "Looking at the screen…")) · \(escHint)", durationMs: 30000)
+        self.screenTaskCancelled = false
+        self.screenTaskRunning = true
+        hotkey?.screenTaskEscape = true
+        let outcome = await ScreenTask.run(
+            goal: goal, history: history, client: client, model: model,
+            isCancelled: { self.screenTaskCancelled },
+            progress: { step in
+                self.showFlowBarMessage("\(step) · \(escHint)", durationMs: 30000)
+                await self.speakReply(step)
+            },
+            type: { text, app in
+                await withCheckedContinuation { continuation in
+                    guard let injector = self.textInjector else { return continuation.resume(returning: false) }
+                    injector.pasteTextResult(text, targetApp: app, context: nil) { outcome in
+                        if case .clipboardOnly = outcome { continuation.resume(returning: false) } else { continuation.resume(returning: true) }
+                    }
+                }
+            })
+        self.screenTaskRunning = false
+        hotkey?.screenTaskEscape = false
+        switch outcome {
+        case .done:
+            self.showFlowBarMessage(L("Tamamlandı ✓", "Done ✓"), durationMs: 1500)
+            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.ack()) }
+        case .failed(let reason):
+            owLog("[ScreenTask] Stopped: \(reason)")
+            self.showFlowBarMessage(reason, durationMs: 4000)
+            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(reason)) }
+        case .cancelled:
+            owLog("[ScreenTask] Stopped by the user")
+            self.showFlowBarMessage(L("İptal edildi", "Cancelled"), durationMs: 1500)
+        case .confirm(let target, let app, let history):
+            self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), (goal, history))
+            let prompt = L("“\(target.label)” \(target.kindDative) basayım mı?", "Shall I press “\(target.label)”?")
+            let heard = await self.speakReply(prompt)
+            askFollowUp(run, prompt, heard: heard)
+        }
+    }
+
+    /// Esc during a multi-step screen task: it stops before its next action, and a step being
+    /// said is cut short.
+    func stopScreenTask() {
+        guard screenTaskRunning, !screenTaskCancelled else { return }
+        owLog("[ScreenTask] Stop requested (Esc)")
+        screenTaskCancelled = true
+        JarvisVoice.shared.stop()
+        showFlowBarMessage(L("İptal ediliyor…", "Cancelling…"), durationMs: 8000)
+    }
+
     /// "Kaydet", "izin ver", "sağ üstteki çarpıya bas": something in the front window,
     /// named as the user would to a friend. Not in a text field, unless clicking is said
     /// outright (there "tamam" is dictation), and never from a mic left open after a
@@ -1668,7 +1736,11 @@ extension AppState {
         // report it unknown); a Jarvis session only stays out of a known text field.
         let outsideTextField = session.isVoiceCommand ? session.routingFocus != .editable : session.routingFocus == .notEditable
         if !outsideTextField, !ScreenActions.saysClick(trimmed) { return false }
-        guard ScreenActions.worthLooking(trimmed) else { return false }
+        // "Analizleri indir", "Ayarlar'da bildirimleri kapat": several presses by the cloud
+        // model (`ScreenTask`). Jarvis only, not from screen mode's open mic.
+        let taskCloud = session.isVoiceCommand && !screenModeStep && ChatBackend.selected == .cloud
+            && ScreenTask.isGoal(trimmed) ? CloudLLM.client() : nil
+        guard ScreenActions.worthLooking(trimmed) || taskCloud != nil else { return false }
         let stepStarted = CACurrentMediaTime()
         var stepParts: [(String, TimeInterval)] = []
         // "Mikrofona bas" again, or "tekrar bas": the button pressed last, though pressing
@@ -1692,6 +1764,11 @@ extension AppState {
         let menuItems = onScreenByName ? [] : MenuCommands.items(of: app)
         var found = MenuCommands.exactMatch(trimmed, in: menuItems)
         stepParts.append(("menü okuma", CACurrentMediaTime() - mark))
+        // A goal whose name isn't on screen as it is: the task finds its own way there.
+        if found == nil, !onScreenByName, let (client, model) = taskCloud {
+            await runScreenTask(run, goal: trimmed, client: client, model: model)
+            return true
+        }
         var byModel = false
         if found == nil, !elements.isEmpty {
             let (pick, picked) = await pickElement(trimmed, elements: elements, saysClick: saysClick, stepParts: &stepParts)
@@ -1711,7 +1788,7 @@ extension AppState {
         self.lastCommandUndo = []
         // "… bas" already is the go-ahead; only a bare name ("Gönder") is asked about.
         if ScreenActions.isRisky(target.label), !saysClick {
-            self.pendingScreenPress = (target, app, Date().addingTimeInterval(30))
+            self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), nil)
             let prompt = L("“\(target.label)” \(target.kindDative) basayım mı?", "Shall I press “\(target.label)”?")
             let heard = await self.speakReply(prompt)
             askFollowUp(run, prompt, heard: heard)

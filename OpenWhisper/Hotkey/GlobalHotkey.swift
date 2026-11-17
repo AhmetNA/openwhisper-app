@@ -52,6 +52,9 @@ final class GlobalHotkey {
     /// Screen mode is on: Fn or Esc ends it. Esc is then kept from the app; Fn starts no dictation.
     var screenModeKeys = false
     var onScreenModeExit: (() -> Void)?
+    /// A multi-step screen task is running: Esc stops it and is kept from the app.
+    var screenTaskEscape = false
+    var onScreenTaskStop: (() -> Void)?
     private var typedRequestModifierArmed = false
 
     /// NX_SYSDEFINED — has no case in Swift's CGEventType.
@@ -440,6 +443,10 @@ final class GlobalHotkey {
                 return Unmanaged.passUnretained(event)
             }
 
+            if keyCode == 53, type == .keyDown, me.screenTaskEscape {
+                DispatchQueue.main.async { me.onScreenTaskStop?() }
+                return nil
+            }
             if keyCode == 53, type == .keyDown, me.screenModeKeys {
                 DispatchQueue.main.async { me.onScreenModeExit?() }
                 return nil
