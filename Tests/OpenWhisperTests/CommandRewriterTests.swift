@@ -21,4 +21,16 @@ final class CommandRewriterTests: XCTestCase {
         XCTAssertNil(CommandRewriter.safeSystemCommand("Bilgisayarı uyut", installedApps: apps))
         XCTAssertNil(CommandRewriter.safeSystemCommand("YOK", installedApps: apps))
     }
+
+    func testMisheardVolumeTrustsTheModelsDirection() async {
+        let up = SpotifyRequestParser.OllamaParse(intent: .volumeUp)
+        let down = SpotifyRequestParser.OllamaParse(intent: .volumeDown)
+        XCTAssertNotNil(SpotifyManager.decide(rules: nil, parse: up, text: "sesi artr", commandMode: true))
+        XCTAssertNotNil(SpotifyManager.decide(rules: nil, parse: down, text: "sesi azlt", commandMode: true))
+        XCTAssertNil(SpotifyManager.decide(rules: nil, parse: up, text: "sesi kıs", commandMode: true))
+        XCTAssertNil(SpotifyManager.decide(rules: nil, parse: up, text: "bugün hava güzel", commandMode: true))
+        // A rewrite to a volume command reaches the Spotify path without any model.
+        let rewritten = await SpotifyManager.isSpotifyCommand("Sesi artır", commandMode: true)
+        XCTAssertTrue(rewritten)
+    }
 }

@@ -2469,7 +2469,12 @@ extension AppState {
         guard cloud != nil || self.ollamaAvailable, anyShape || CommandRewriter.looksLikeCommand(trimmed),
               let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
                                                             cloud: cloud.map { ($0, $0.cloudModel) }) else { return false }
-        guard let command = CommandRewriter.safeCommand(rewritten, context: commandContext(run)) else {
+        var command = CommandRewriter.safeCommand(rewritten, context: commandContext(run))
+        // Volume and "Tarkan çal" aren't in the rule table; the Spotify path reads them.
+        if command == nil, await SpotifyManager.isSpotifyCommand(rewritten, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
+            command = .spotify(rewritten)
+        }
+        guard let command else {
             owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule")
             return false
         }

@@ -477,10 +477,14 @@ final class SpotifyManager: @unchecked Sendable {
             return !wordSet.isDisjoint(with: ["önceki", "onceki", "previous", "prev"])
         case .volume:
             return volumeTarget(in: text) != nil
+        // A voice command naming the volume ("sesi artr"): the model's direction is trusted
+        // even when the verb was misheard.
         case .volumeUp:
             return relativeVolumeCueDirection(in: text, up: true)
+                || (natural && !volumeNouns.isDisjoint(with: cueWords(normalized)) && !relativeVolumeCueDirection(in: text, up: false))
         case .volumeDown:
             return relativeVolumeCueDirection(in: text, up: false)
+                || (natural && !volumeNouns.isDisjoint(with: cueWords(normalized)) && !relativeVolumeCueDirection(in: text, up: true))
         case .current:
             return ["ne çalıyor", "hangi şarkı çalıyor", "hangi parça çalıyor", "çalan şarkı ne", "çalan parça ne"]
                 .contains { normalized.contains($0) }
