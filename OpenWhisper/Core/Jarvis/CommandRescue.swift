@@ -58,6 +58,33 @@ enum CommandRescue {
         }
     }
 
+    /// The cloud wrote a rewritten command, and a page's text may have steered it: only a
+    /// plain Mac, timer or Spotify action may run. Nothing that types, sends, drafts, quits an
+    /// app or touches the clipboard.
+    static func isSafe(_ command: VoiceCommand) -> Bool {
+        switch command {
+        case .timer, .spotify: return true
+        case .agent: return false
+        case .system(let system):
+            switch system {
+            case .clipboard, .mailReplyDraft, .mailMarkAllRead, .quitApp, .forceQuitApp: return false
+            default: return true
+            }
+        }
+    }
+
+    /// The commands a rewritten request may run; nil when its route is anything else
+    /// (dictation, chat, an agent, a confirmation) or any step is unsafe.
+    static func safeCommands(_ route: VoiceRouter.Route) -> [VoiceCommand]? {
+        let commands: [VoiceCommand]
+        switch route {
+        case .command(let command): commands = [command]
+        case .commands(let steps): commands = steps.map(\.command)
+        default: return nil
+        }
+        return !commands.isEmpty && commands.allSatisfy(isSafe) ? commands : nil
+    }
+
     static func ask(request: String, failure: String, app: NSRunningApplication?,
                     client: CloudChatClient, model: String) async -> Plan {
         let labels = await MainActor.run { () -> [String] in

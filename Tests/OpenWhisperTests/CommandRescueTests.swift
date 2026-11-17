@@ -24,6 +24,21 @@ final class CommandRescueTests: XCTestCase {
         XCTAssertEqual(CommandRescue.parse("bilmiyorum", request: "x"), .impossible)
     }
 
+    func testOnlyPlainCommandsRunFromARewrite() {
+        XCTAssertNotNil(CommandRescue.safeCommands(.command(.spotify("Tarkan çal"))))
+        XCTAssertNotNil(CommandRescue.safeCommands(.command(.system(.wifi(on: true)))))
+        XCTAssertNil(CommandRescue.safeCommands(.command(.system(.quitApp("Safari")))))
+        XCTAssertNil(CommandRescue.safeCommands(.command(.system(.mailReplyDraft("tamam")))))
+        XCTAssertNil(CommandRescue.safeCommands(.chat("merhaba")))
+        XCTAssertNil(CommandRescue.safeCommands(.typed("merhaba")))
+        XCTAssertNil(CommandRescue.safeCommands(.screenPressConfirmation))
+        // One unsafe step spoils the list.
+        XCTAssertNil(CommandRescue.safeCommands(.commands([
+            .init(text: "wifi aç", command: .system(.wifi(on: true))),
+            .init(text: "Safari'yi kapat", command: .system(.quitApp("Safari"))),
+        ])))
+    }
+
     func testPromptMarksScreenTextAsData() {
         let prompt = CommandRescue.prompt(request: "analizleri indir", failure: "Bulamadım", app: "Safari", labels: ["Export", "Usage"])
         XCTAssertTrue(prompt.contains("- Export"))

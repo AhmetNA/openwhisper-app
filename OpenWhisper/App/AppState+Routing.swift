@@ -356,19 +356,7 @@ extension AppState {
         // The rules decide where the transcript goes (`VoiceRouter`, in their order); this
         // runs the decision.
         if let pending = self.pendingScreenPress, pending.expiresAt <= Date() { self.pendingScreenPress = nil }
-        var facts = VoiceRouter.Facts(
-            isVoiceCommand: session.isVoiceCommand,
-            acceptsCommands: session.acceptsCommands,
-            focus: session.routingFocus,
-            hasTargetApp: session.targetApp != nil,
-            targetBundleID: session.targetApp?.bundleIdentifier,
-            pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
-            pendingWhatsAppSend: self.whatsAppSender.hasPending,
-            pendingScreenPress: self.pendingScreenPress != nil,
-            voiceTestActive: self.voiceTest.isActive,
-            commandAmongPlayback: session.heardOnlyOverPlayback,
-            lastDictation: self.editableDictation(in: session.targetApp),
-            commandContext: { self.commandContext(run) })
+        var facts = routingFacts(run)
         if await handleBeforeRouting(run, facts: facts) { return }
         var route = session.sendsToRecappedSession.map {
             .agent(AgentDictation(target: $0, body: trimmed, send: true, session: .last))
@@ -405,6 +393,23 @@ extension AppState {
         }
 
         await executeRoute(run, route)
+    }
+
+    private func routingFacts(_ run: FinishRun) -> VoiceRouter.Facts {
+        let session = run.session
+        return VoiceRouter.Facts(
+            isVoiceCommand: session.isVoiceCommand,
+            acceptsCommands: session.acceptsCommands,
+            focus: session.routingFocus,
+            hasTargetApp: session.targetApp != nil,
+            targetBundleID: session.targetApp?.bundleIdentifier,
+            pendingDeletion: self.reminderManager?.hasPendingDeletion ?? false,
+            pendingWhatsAppSend: self.whatsAppSender.hasPending,
+            pendingScreenPress: self.pendingScreenPress != nil,
+            voiceTestActive: self.voiceTest.isActive,
+            commandAmongPlayback: session.heardOnlyOverPlayback,
+            lastDictation: self.editableDictation(in: session.targetApp),
+            commandContext: { self.commandContext(run) })
     }
 
     private func executeRoute(_ run: FinishRun, _ route: VoiceRouter.Route) async {
@@ -613,7 +618,7 @@ extension AppState {
                 // A multi-step task asked it: go on from here.
                 if pressed, let task = pending.task, let (client, model) = CloudLLM.client() {
                     try? await Task.sleep(nanoseconds: 600_000_000)
-                    await runScreenTask(run, goal: task.goal, history: task.history + [ScreenTask.pressed(pending.target)],
+                    await runScreenTask(run, goal: task.goal, spoken: task.spoken, history: task.history + [ScreenTask.pressed(pending.target)],
                                         client: client, model: model)
                     return true
                 }
@@ -1702,17 +1707,21 @@ extension AppState {
         case .done:
             self.showFlowBarMessage(L("Tamamlandı ✓", "Done ✓"), durationMs: 1500)
             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.ack()) }
+        case .notFound(let reason):
+            // Nothing was done yet: another way can't repeat a step.
+            owLog("[ScreenTask] Found no way: \(reason)")
+            if await rescue(run, failure: reason) { return }
+            self.showFlowBarMessage(reason, durationMs: 4000)
+            if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(reason)) }
         case .failed(let reason):
             owLog("[ScreenTask] Stopped: \(reason)")
-            // An unreachable cloud won't answer a rescue either.
-            if reason != "Bulut modeline ulaşamadım", await rescue(run, failure: reason) { return }
             self.showFlowBarMessage(reason, durationMs: 4000)
             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(reason)) }
         case .cancelled:
             owLog("[ScreenTask] Stopped by the user")
             self.showFlowBarMessage(L("İptal edildi", "Cancelled"), durationMs: 1500)
         case .confirm(let target, let app, let history):
-            self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), (goal, history))
+            self.pendingScreenPress = (target, app, Date().addingTimeInterval(30), (goal, spoken, history))
             let prompt = L("“\(target.label)” \(target.kindDative) basayım mı?", "Shall I press “\(target.label)”?")
             let heard = await self.speakReply(prompt)
             askFollowUp(run, prompt, heard: heard)
@@ -1744,8 +1753,10 @@ extension AppState {
         hotkey?.screenTaskEscape = true
         let app = NSWorkspace.shared.frontmostApplication
         let asking = Task { await CommandRescue.ask(request: request, failure: failure, app: app, client: client, model: model) }
+        self.rescueAsking = asking
         await self.speakReply(L("Bir yolunu arıyorum.", "Let me find a way."))
         let plan = await asking.value
+        self.rescueAsking = nil
         self.screenTaskRunning = false
         hotkey?.screenTaskEscape = false
         if self.screenTaskCancelled {
@@ -1758,10 +1769,18 @@ extension AppState {
             owLog("[Rescue] On screen: '\(goal)'")
             await runScreenTask(run, goal: goal, spoken: request, client: client, model: model)
         case .command(let command):
+            // Only a plain command runs; anything that would type, send or answer a question
+            // the user didn't is dropped (`CommandRescue.safeCommands`).
+            let route = VoiceRouter.route(command, facts: routingFacts(run))
+            guard ScreenMode.fieldTypeRequest(command) == nil, CommandRescue.safeCommands(route) != nil else {
+                owLog("[Rescue] Rewritten command '\(command)' is not a plain command; not run")
+                self.dismissFlowBarMessage()
+                return false
+            }
             owLog("[Rescue] As a command: '\(command)'")
             run.text = command
             run.trimmed = command
-            await routeTranscript(run)
+            await executeRoute(run, route)
         case .explain(let answer):
             owLog("[Rescue] Explained")
             self.lastTranscription = run.text
@@ -1780,6 +1799,7 @@ extension AppState {
         guard screenTaskRunning, !screenTaskCancelled else { return }
         owLog("[ScreenTask] Stop requested (Esc)")
         screenTaskCancelled = true
+        rescueAsking?.cancel()
         JarvisVoice.shared.stop()
         showFlowBarMessage(L("İptal ediliyor…", "Cancelling…"), durationMs: 8000)
     }

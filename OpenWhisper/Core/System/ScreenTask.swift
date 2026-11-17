@@ -21,6 +21,8 @@ enum ScreenTask {
     enum Outcome {
         case done
         case failed(String)
+        /// No step was done and the model found no way: another way may still be tried.
+        case notFound(String)
         case cancelled
         /// A risky element the model picked: asked before pressing; `history` resumes the loop.
         case confirm(ScreenElement, NSRunningApplication, history: [String])
@@ -235,15 +237,15 @@ enum ScreenTask {
             }
             switch action {
             case .done:
-                return history.isEmpty ? .failed("Yapacak bir şey bulamadım") : .done
+                return history.isEmpty ? .notFound("Yapacak bir şey bulamadım") : .done
             case .fail:
                 // Not on the list: an icon, a canvas, a page that hides its buttons. Look at it.
                 owLog("[ScreenTask] Step \(step): nothing on the list, screenshot")
                 switch await visionStep(goal: goal, history: Array(history.suffix(4)), app: app, client: client) {
                 case .done:
-                    return history.isEmpty ? .failed("Yapacak bir şey bulamadım") : .done
+                    return history.isEmpty ? .notFound("Yapacak bir şey bulamadım") : .done
                 case .none:
-                    return .failed(history.isEmpty ? "Bunu ekranda bulamadım" : "\(step). adımda takıldım")
+                    return history.isEmpty ? .notFound("Bunu ekranda bulamadım") : .failed("\(step). adımda takıldım")
                 case .click(let point):
                     guard !isCancelled() else { return .cancelled }
                     await progress("Ekranda bulduğum yere basıyorum")

@@ -721,10 +721,12 @@ final class AppState {
     /// A risky on-screen button named without "bas", waiting for a spoken yes ("Gönder'e basayım mı?").
     /// `task` is set when a multi-step screen task asked it, and goes on after the press.
     @ObservationIgnored var pendingScreenPress: (target: ScreenElement, app: NSRunningApplication, expiresAt: Date,
-                                                 task: (goal: String, history: [String])?)?
+                                                 task: (goal: String, spoken: String?, history: [String])?)?
     /// A multi-step screen task is running (`ScreenTask`): Esc stops it, the flow bar says so.
     var screenTaskRunning = false
     @ObservationIgnored var screenTaskCancelled = false
+    /// The cloud being asked for another way (`CommandRescue`); Esc cancels it.
+    @ObservationIgnored var rescueAsking: Task<CommandRescue.Plan, Never>?
     /// Screen mode (`ScreenMode`): after a press the mic stays open for the next step.
     var screenModeActive = false
     @ObservationIgnored var screenModeLastAction = Date.distantPast
