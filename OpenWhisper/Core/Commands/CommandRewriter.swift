@@ -21,6 +21,14 @@ enum CommandRewriter {
         }
     }
 
+    /// A word that may be Claude as Whisper hears it ("cloud", "klod", "clad", "klaude"); only
+    /// the model can tell from the sentence whether the app was meant.
+    static func mentionsClaude(_ text: String) -> Bool {
+        let folded = text.lowercased(with: Locale(identifier: "tr_TR"))
+        let stems = "claud|cloud|clod|clot|clad|klod|klot|klaud|kloud|klad|klat|kılod|kılot|kılad|cılad|cılat|kulod|culud"
+        return folded.range(of: "(?:^|[^\\p{L}])(?:\(stems))", options: .regularExpression) != nil
+    }
+
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,
     /// is unreachable or slow. With `cloud` set (Jarvis's chat is on the cloud) the cloud model is
     /// asked first (a `FallbackChat` hands a slow or failing cloud over to Ollama).
@@ -71,6 +79,11 @@ enum CommandRewriter {
         Şarkıyı durdur / Müziği devam ettir / Sonraki şarkı / Önceki şarkı / Tarkan çal / Beğendiğim şarkıları çal
         Videoyu durdur / Videoyu tam ekran yap / Videoyu 10 saniye ileri al
         Yeni sekme aç / Sayfayı yenile / Google'da kedi ara / Bu sayfayı özetle
+        Claude'a geç / Claude'da son sohbeti özetle / Codex'te son sohbeti özetle / Biten sohbete geç / \
+        Claude'da yeni sohbet aç / Claude'da vergi sohbetine geç
+        "cloud", "klod", "clad", "klaude", "kılod" gibi kelimeler çoğu zaman Claude uygulamasının yanlış \
+        duyulmuş halidir; cümleden hangisi kastedildiğini çıkar ("claude da en son ne görüştük" = \
+        "Claude'da son sohbeti özetle"). Gerçekten bulut ya da iCloud kastediliyorsa Claude yazma.
         Kullanıcı: \(text)
         Komut:
         """

@@ -43,4 +43,20 @@ final class CommandRewriterTests: XCTestCase {
         let rewritten = await SpotifyManager.isSpotifyCommand("Sesi artır", commandMode: true)
         XCTAssertTrue(rewritten)
     }
+
+    func testClaudeLikeWordsGoToTheModelAndItsExamplesRoute() {
+        for text in ["claude da en son ne görüştük", "Cloud'da son sohbet", "klod a geç", "clad ne yaptı", "Klaude'daki işi özetle"] {
+            XCTAssertTrue(CommandRewriter.mentionsClaude(text), text)
+        }
+        for text in ["iCloud yedeği", "bugün hava güzel", "kalorifer"] {
+            XCTAssertFalse(CommandRewriter.mentionsClaude(text), text)
+        }
+        // The prompt's Claude examples must be ones the rules know.
+        XCTAssertEqual(AgentCommandParser.sessionSummaryTarget("Claude'da son sohbeti özetle"), .claudeCode)
+        XCTAssertEqual(AgentCommandParser.sessionSummaryTarget("Codex'te son sohbeti özetle"), .codex)
+        XCTAssertNotNil(AgentCommandParser.finishedChatRequest("Biten sohbete geç"))
+        XCTAssertTrue(CloudSessionNavigation.isRequest("Claude'da vergi sohbetine geç"))
+        XCTAssertTrue(CloudSessionNavigation.isRequest("Claude'da yeni sohbet aç"))
+    }
 }
+

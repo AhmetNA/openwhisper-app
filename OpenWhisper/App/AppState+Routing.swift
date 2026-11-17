@@ -2477,6 +2477,7 @@ extension AppState {
         guard cloud != nil || self.ollamaAvailable, anyShape || CommandRewriter.looksLikeCommand(trimmed),
               let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
                                                             cloud: cloud.map { ($0, $0.cloudModel) }) else { return false }
+        if CommandRewriter.mentionsClaude(trimmed), await runRewrittenAgentRequest(run, rewritten) { return true }
         var command = CommandRewriter.safeCommand(rewritten, context: commandContext(run))
         // Volume and "Tarkan çal" aren't in the rule table; the Spotify path reads them.
         if command == nil, await SpotifyManager.isSpotifyCommand(rewritten, ollamaAvailable: self.ollamaAvailable, commandMode: true) {
@@ -2493,6 +2494,34 @@ extension AppState {
         session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
         owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
         await runCommands(run, [MultiCommandSplitter.Step(text: rewritten, command: command)], output: "yeniden yorumlanan komut")
+        return true
+    }
+
+    /// "Claude da en son ne görüştük" → "Claude'da son sohbeti özetle": a misheard Claude
+    /// request the model rewrote. Only recaps and switching chats; nothing is sent from a guess.
+    @MainActor private func runRewrittenAgentRequest(_ run: FinishRun, _ rewritten: String) async -> Bool {
+        let session = run.session
+        let route = VoiceRouter.route(rewritten, facts: routingFacts(run))
+        switch route {
+        case .agentSessionRecap, .finishedAgentChat:
+            owLog("[Route] llm-rewrite '\(run.trimmed)' → '\(rewritten)' → agent request")
+            session.latency.finishDecision(route: "LLM ile yeniden yorumlanan Claude isteği")
+            run.text = rewritten
+            run.trimmed = rewritten
+            await executeRoute(run, route)
+            return true
+        default:
+            break
+        }
+        guard CloudSessionNavigation.isRequest(rewritten),
+              let reply = await CloudSessionNavigation.handle(rewritten, front: session.targetApp) else { return false }
+        owLog("[Route] llm-rewrite '\(run.trimmed)' → '\(rewritten)' → chat navigation")
+        session.latency.finishDecision(route: "sohbet geçişi")
+        self.lastTranscription = run.text
+        if reply == CloudSessionNavigation.newChatOpened || reply == CloudSessionNavigation.switchedChat {
+            run.conversationContinuationApp = NSWorkspace.shared.frontmostApplication
+        }
+        await say(run, reply, durationMs: 5000)
         return true
     }
 
@@ -2539,7 +2568,9 @@ extension AppState {
                 return
             }
             // Short sentences are always shown to the model: a misheard command may not look like one.
-            if route == .chat, await runRewrittenCommand(run, anyShape: trimmed.split(separator: " ").count <= 10) { return }
+            // So is any sentence with a Claude-like word: Whisper hears Claude as "cloud", "klod", "clad".
+            if route == .chat, await runRewrittenCommand(run, anyShape: trimmed.split(separator: " ").count <= 10
+                                                         || CommandRewriter.mentionsClaude(trimmed)) { return }
             if route == .chat {
                 session.latency.finishDecision(route: "Jarvis sohbet")
                 await chat(run, trimmed, detail: "Jarvis sohbet")
