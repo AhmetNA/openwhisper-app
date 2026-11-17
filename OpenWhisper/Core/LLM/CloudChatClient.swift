@@ -204,7 +204,13 @@ struct CloudChatClient: ChatStreaming {
                         into continuation: AsyncThrowingStream<String, Error>.Continuation) async throws -> ToolCall {
         let (bytes, response) = try await URLSession.shared.bytes(for: request(path: "chat/completions", body: body, timeout: timeout))
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard status == 200 else { throw LLMError.http(status) }
+        guard status == 200 else {
+            // A 400 says which field the server refused: keep it.
+            var reason = ""
+            for try await line in bytes.lines { reason += line; if reason.count > 300 { break } }
+            owLog("[Chat] HTTP \(status): \(reason.prefix(300))")
+            throw LLMError.http(status)
+        }
         var call = ToolCall()
         lines: for try await line in bytes.lines {
             switch Self.parse(line: line) {
