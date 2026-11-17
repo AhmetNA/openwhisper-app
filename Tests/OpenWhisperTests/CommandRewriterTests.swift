@@ -48,7 +48,7 @@ final class CommandRewriterTests: XCTestCase {
         for text in ["claude da en son ne görüştük", "Cloud'da son sohbet", "klod a geç", "clad ne yaptı", "Klaude'daki işi özetle"] {
             XCTAssertTrue(CommandRewriter.mentionsClaude(text), text)
         }
-        for text in ["iCloud yedeği", "bugün hava güzel", "kalorifer"] {
+        for text in ["iCloud yedeği", "iCloud Drive dolu", "bulut depolama ne işe yarar", "bugün hava güzel", "kalorifer"] {
             XCTAssertFalse(CommandRewriter.mentionsClaude(text), text)
         }
         // The prompt's Claude examples must be ones the rules know.
@@ -57,6 +57,43 @@ final class CommandRewriterTests: XCTestCase {
         XCTAssertNotNil(AgentCommandParser.finishedChatRequest("Biten sohbete geç"))
         XCTAssertTrue(CloudSessionNavigation.isRequest("Claude'da vergi sohbetine geç"))
         XCTAssertTrue(CloudSessionNavigation.isRequest("Claude'da yeni sohbet aç"))
+        // The rules read the shared spelling list too: "clad" is Claude there as well.
+        XCTAssertEqual(AgentCommandParser.sessionSummaryTarget("Clad'da son sohbeti özetle"), .claudeCode)
+    }
+
+    func testModelDecidesBetweenClaudeAndCloud() async {
+        let model = RewriterModelFake()
+        model.answer = "Claude'da son sohbeti özetle"
+        let claude = await CommandRewriter.rewrite("cloud da en son ne görüştük", model: "m", client: model)
+        XCTAssertEqual(claude, "Claude'da son sohbeti özetle")
+        XCTAssertEqual(AgentCommandParser.sessionSummaryTarget(claude ?? ""), .claudeCode)
+
+        model.answer = "YOK"
+        let cloud = await CommandRewriter.rewrite("cloud modeli neden yavaş", model: "m", client: model)
+        XCTAssertNil(cloud)
+
+        // The cloud model answers the same way when Jarvis's chat is on the cloud.
+        model.answer = "Claude'a geç\nbaşka satır"
+        let viaCloud = await CommandRewriter.rewrite("klod a geç", model: "m", client: model, cloud: (model, "c"))
+        XCTAssertEqual(viaCloud, "Claude'a geç")
+    }
+
+    func testPromptShowsBothSidesOfCloud() {
+        let prompt = CommandRewriter.prompt(for: "x")
+        XCTAssertTrue(prompt.contains("\"claude da en son ne görüştük\" = \"Claude'da son sohbeti özetle\""))
+        XCTAssertTrue(prompt.contains("\"cloud modeli neden yavaş\" = YOK"))
+        XCTAssertTrue(prompt.contains("\"iCloud yedeği dolmuş\" = YOK"))
     }
 }
 
+private final class RewriterModelFake: LLMClient, ChatStreaming, @unchecked Sendable {
+    var answer = ""
+    func generate(_ request: LLMRequest) async throws -> String { answer.components(separatedBy: "\n")[0] }
+    func chat(_ request: LLMChatRequest) async throws -> String { answer }
+    func streamChat(_ request: LLMChatRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { $0.yield(answer); $0.finish() }
+    }
+    func installedModels(timeout: TimeInterval) async throws -> [String] { [] }
+    func load(model: String, timeout: TimeInterval) async throws {}
+    func unload(model: String, timeout: TimeInterval) async throws {}
+}

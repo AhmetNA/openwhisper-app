@@ -25,8 +25,7 @@ enum CommandRewriter {
     /// the model can tell from the sentence whether the app was meant.
     static func mentionsClaude(_ text: String) -> Bool {
         let folded = text.lowercased(with: Locale(identifier: "tr_TR"))
-        let stems = "claud|cloud|clod|clot|clad|klod|klot|klaud|kloud|klad|klat|kılod|kılot|kılad|cılad|cılat|kulod|culud"
-        return folded.range(of: "(?:^|[^\\p{L}])(?:\(stems))", options: .regularExpression) != nil
+        return folded.range(of: "(?:^|[^\\p{L}])(?:\(AgentCommandParser.claudeSpellings))", options: .regularExpression) != nil
     }
 
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,
@@ -83,7 +82,8 @@ enum CommandRewriter {
         Claude'da yeni sohbet aç / Claude'da vergi sohbetine geç
         "cloud", "klod", "clad", "klaude", "kılod" gibi kelimeler çoğu zaman Claude uygulamasının yanlış \
         duyulmuş halidir; cümleden hangisi kastedildiğini çıkar ("claude da en son ne görüştük" = \
-        "Claude'da son sohbeti özetle"). Gerçekten bulut ya da iCloud kastediliyorsa Claude yazma.
+        "Claude'da son sohbeti özetle"). Gerçekten bulut ya da iCloud kastediliyorsa Claude yazma \
+        ("cloud modeli neden yavaş" = YOK, "iCloud yedeği dolmuş" = YOK).
         Kullanıcı: \(text)
         Komut:
         """
