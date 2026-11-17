@@ -46,6 +46,7 @@ HERE = Path(__file__).resolve().parent
 # summary`, `[Speakers] own … @ -35 dBFS`). Louder clips would clip after the listener's ×4 gain.
 TARGET_SPEECH_DBFS = -36.0
 # A session is over when its latency summary is logged; replies may still be playing after it.
+WOKE = re.compile(r"Voice session requested \(wake word\)|\[WakeWord\] Candidate [\d.]+ accepted")
 SESSION_DONE = re.compile(r"\[Latency\] Kritik süre|\[WakeWord\] Weak detection .* rejected|discarding session")
 
 
@@ -160,7 +161,9 @@ def run_scenario(sc: dict, args) -> tuple[bool, str, str]:
             break
         missing = [e.pattern for e in expects if not e.search(log)]
         # Only the session our clip woke counts: a Fn dictation finishing meanwhile must not.
-        woke = log.find("Voice session requested (wake word)")
+        # A weak wake confirmed by the LLM starts its session without that line.
+        woke_match = WOKE.search(log)
+        woke = woke_match.start() if woke_match else -1
         if woke >= 0 and SESSION_DONE.search(log, woke) and done_at is None:
             done_at = time.time()
         if not missing and done_at is not None:
