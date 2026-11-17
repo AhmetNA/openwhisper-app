@@ -233,6 +233,15 @@ final class CloudChatClientTests: XCTestCase {
         XCTAssertNil(body["reasoning_effort"])
     }
 
+    func testOpenAIBodyUsesCompletionTokensAndDropsStrictFields() {
+        var body = CloudChatClient.chatBody(LLMChatRequest(model: "m", messages: [], timeout: 10, temperature: 0, maxTokens: 16))
+        CloudChatClient.openAIBody(&body)
+        XCTAssertNil(body["max_tokens"])
+        XCTAssertEqual(body["max_completion_tokens"] as? Int, 1000)
+        XCTAssertNil(body["temperature"])
+        XCTAssertNil(body["chat_template_kwargs"])
+    }
+
     // MARK: - Model list
 
     func testModelIDsNeedTheOpenAIShape() {

@@ -116,10 +116,20 @@ struct CloudChatClient: ChatStreaming {
         return lower != "auto" && !nonChat.contains { lower.contains($0) }
     }
 
+    /// OpenAI's reasoning models answer 400 to `max_tokens`, to a `temperature` other than 1 and
+    /// to `chat_template_kwargs`. Their token cap also covers the reasoning, so a small one
+    /// would leave no visible answer.
+    static func openAIBody(_ body: inout [String: Any]) {
+        if let limit = body.removeValue(forKey: "max_tokens") as? Int { body["max_completion_tokens"] = max(limit, 1000) }
+        body["temperature"] = nil
+        body["chat_template_kwargs"] = nil
+    }
+
     func request(path: String, body: [String: Any]?, timeout: TimeInterval) throws -> URLRequest {
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent(path), timeoutInterval: timeout)
         urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        if let body {
+        if var body {
+            if baseURL.host == "api.openai.com" { Self.openAIBody(&body) }
             urlRequest.httpMethod = "POST"
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
