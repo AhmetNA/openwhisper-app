@@ -1595,14 +1595,20 @@ extension AppState {
 
     /// Says a command's reply; the follow-up window (`commandFollowUp`) opens as the
     /// voice starts and lasts until 2 s after it. Without a voice the defer opens it.
-    /// Over music or a video the reply is only shown: the voice would talk over it (user,
-    /// 17 Nov 2026). `shownOnScreen`: the command's status is already on the Flow bar.
+    /// Over music or a video a canned confirmation ("Tamam", "Gönderdim") is only shown: the voice would talk over it
+    /// (user, 17 Nov 2026). A reply that answers something ("Saat 20:13", "Pil yüzde 46")
+    /// pauses the media like a chat answer and is spoken; `settleMedia` resumes it.
+    /// `shownOnScreen`: the command's status is already on the Flow bar.
     @MainActor private func speakAfterCommand(_ run: FinishRun, _ reply: String?, shownOnScreen: Bool = false) async {
         let session = run.session
         if session.mediaWasPlaying, let reply, !reply.isEmpty {
-            owLog("[Voice] Reply shown, not spoken (media playing): '\(reply)'")
-            if !shownOnScreen { self.showFlowBarMessage(reply, durationMs: min(max(reply.count * 60, 2500), 6000)) }
-            return
+            if JarvisReply.category(of: reply) != "diger" || !self.voiceRepliesEnabled {
+                owLog("[Voice] Reply shown, not spoken (media playing): '\(reply)'")
+                if !shownOnScreen { self.showFlowBarMessage(reply, durationMs: min(max(reply.count * 60, 2500), 6000)) }
+                return
+            }
+            owLog("[Voice] Media playing; pausing it for the answer: '\(reply)'")
+            self.recordingMedia.begin(immediately: true)
         }
         await self.speakReply(reply) {
             guard let commandFollowUp = run.commandFollowUp, !run.followUpOpenedOverReply else { return }
