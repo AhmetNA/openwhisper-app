@@ -58,6 +58,8 @@ extension AppState {
         session.trigger = .typed
         session.isVoiceCommand = true
         session.wakeSpeakerVerified = true
+        // Over music an ack stays on the Flow bar and an answer pauses it (`replyOverMedia`).
+        session.mediaWasPlaying = mediaPlaying
         session.segmentTexts = [trimmed]
         session.allSegmentTexts = [trimmed]
         pendingTranscriptionCount += 1

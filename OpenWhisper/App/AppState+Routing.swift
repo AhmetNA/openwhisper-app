@@ -1601,15 +1601,7 @@ extension AppState {
     /// `shownOnScreen`: the command's status is already on the Flow bar.
     @MainActor private func speakAfterCommand(_ run: FinishRun, _ reply: String?, shownOnScreen: Bool = false) async {
         let session = run.session
-        if session.mediaWasPlaying, let reply, !reply.isEmpty {
-            if JarvisReply.category(of: reply) != "diger" || !self.voiceRepliesEnabled {
-                owLog("[Voice] Reply shown, not spoken (media playing): '\(reply)'")
-                if !shownOnScreen { self.showFlowBarMessage(reply, durationMs: min(max(reply.count * 60, 2500), 6000)) }
-                return
-            }
-            owLog("[Voice] Media playing; pausing it for the answer: '\(reply)'")
-            self.recordingMedia.begin(immediately: true)
-        }
+        if let reply, !replyOverMedia(session, reply, shownOnScreen: shownOnScreen) { return }
         await self.speakReply(reply) {
             guard let commandFollowUp = run.commandFollowUp, !run.followUpOpenedOverReply else { return }
             run.followUpOpenedOverReply = self.listenAfterCommand(domain: commandFollowUp, after: session, overReply: true)
@@ -1646,7 +1638,25 @@ extension AppState {
 
     /// Speaks `reply`, or shows it when the voice can't be heard.
     @MainActor private func say(_ run: FinishRun, _ reply: String, durationMs: Int) async {
+        guard replyOverMedia(run.session, reply) else { return }
         if !(await self.speakReply(reply)) { self.showFlowBarMessage(reply, durationMs: durationMs) }
+    }
+
+    /// Music or a video was playing when the request came: a canned confirmation ("Tamam",
+    /// "Gönderdim") is only shown, so the voice doesn't talk over it; an answer pauses the
+    /// media and is spoken, and `settleMedia` resumes it (user, 17 Nov 2026).
+    /// false = shown, don't speak.
+    @MainActor private func replyOverMedia(_ session: RecordingTranscriptionSession, _ reply: String,
+                                           shownOnScreen: Bool = false) -> Bool {
+        guard session.mediaWasPlaying, !reply.isEmpty else { return true }
+        if !["diger", "hal"].contains(JarvisReply.category(of: reply)) || !self.voiceRepliesEnabled {
+            owLog("[Voice] Reply shown, not spoken (media playing): '\(reply)'")
+            if !shownOnScreen { self.showFlowBarMessage(reply, durationMs: min(max(reply.count * 60, 2500), 6000)) }
+            return false
+        }
+        owLog("[Voice] Media playing; pausing it for the answer: '\(reply)'")
+        self.recordingMedia.begin(immediately: true)
+        return true
     }
 
     /// Says a WhatsApp status; a read-back draft then listens for "evet" / "hayır".
