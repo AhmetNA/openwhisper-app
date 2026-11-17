@@ -20,6 +20,9 @@ struct JarvisContext: Equatable, Sendable {
     var timers: [String] = []
     /// Today's remaining events, "15:30 Toplantı"; nil when the calendar can't be read.
     var upcomingEvents: [String]?
+    /// Set only for a calendar question (`asksAboutCalendar`): the week's events and the
+    /// reminders due in it, with their notes, so the model picks out what was asked.
+    var calendar: [String]?
 
     var isEmpty: Bool {
         frontApp == nil && windowTitle == nil && selectedText == nil && appDetails.isEmpty
@@ -36,7 +39,12 @@ struct JarvisContext: Equatable, Sendable {
         if let nowPlaying { lines.append("Spotify: \(nowPlaying)") }
         if !upNext.isEmpty { lines.append("Spotify'da sıradaki: \(upNext.joined(separator: "; "))") }
         if !timers.isEmpty { lines.append("Kurulu alarm / zamanlayıcı: \(timers.joined(separator: "; "))") }
-        if let upcomingEvents {
+        if let calendar {
+            lines.append(calendar.isEmpty ? "Takvimde bugünden itibaren 7 gün içinde etkinlik ve hatırlatıcı yok"
+                         : "Takvim (bugünden itibaren 7 gün). Soru takvimle ilgiliyse yalnız sorulanı bir iki kısa cümleyle söyle, listeyi okuma. "
+                           + "Başlıkta veya notta yazan tarih/saat, kaydın kendi saatinden farklıysa asıl zaman odur: "
+                           + calendar.joined(separator: " ;; "))
+        } else if let upcomingEvents {
             lines.append(upcomingEvents.isEmpty ? "Bugün kalan takvim etkinliği yok"
                          : "Bugün kalan takvim etkinlikleri: \(upcomingEvents.joined(separator: "; "))")
         }
@@ -48,6 +56,16 @@ struct JarvisContext: Equatable, Sendable {
         let lower = text.lowercased(with: Locale(identifier: "tr_TR"))
         let cues = ["şarkı", "müzik", "spotify", "albüm", "sanatçı", "parça", "çalıyor", "çalan", "çalsa",
                     "dinliyor", "dinledi", "sıradaki", "playlist", "çalma liste"]
+        return cues.contains { lower.contains($0) }
+    }
+
+    /// "sınavım saat kaçta?", "bugün neyim var?", "yarın toplantı var mı?": the whole week's
+    /// calendar goes to the model.
+    static func asksAboutCalendar(_ text: String) -> Bool {
+        let lower = text.lowercased(with: Locale(identifier: "tr_TR"))
+        let cues = ["takvim", "etkinli", "toplantı", "randevu", "sınav", "vize", "final", "ders", "ödev", "teslim",
+                    "program", "ajanda", "hatırlatıcı", "anımsatıcı", "neyim var", "neyimiz var", "neler var",
+                    "kaçta", "bugün", "yarın", "hafta", "calendar", "meeting", "exam", "schedule", "agenda", "today", "tomorrow"]
         return cues.contains { lower.contains($0) }
     }
 
@@ -103,6 +121,51 @@ struct JarvisContext: Equatable, Sendable {
             .sorted { $0.startDate < $1.startDate }
             .prefix(3)
             .map { "\(clock($0.startDate)) \($0.title ?? "Etkinlik")" }
+    }
+
+    /// From the start of today through 7 days: events (all-day ones too) with place and note,
+    /// then incomplete reminders due by then (overdue ones included). nil without access;
+    /// never prompts from inside a chat.
+    static func calendarDetails(now: Date = Date()) async -> [String]? {
+        let canEvents = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        let canReminders = EKEventStore.authorizationStatus(for: .reminder) == .fullAccess
+        guard canEvents || canReminders else { return nil }
+        let store = EKEventStore()
+        let start = Calendar.current.startOfDay(for: now)
+        let end = Calendar.current.date(byAdding: .day, value: 7, to: start) ?? now
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "tr_TR")
+        day.dateFormat = "d MMMM EEEE"
+        func note(_ text: String?) -> String {
+            let flat = (text ?? "").split(whereSeparator: \.isNewline).joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            return flat.isEmpty ? "" : " | not: " + String(flat.prefix(300))
+        }
+        var lines: [String] = []
+        if canEvents {
+            let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+            for event in store.events(matching: predicate).sorted(by: { $0.startDate < $1.startDate }).prefix(30) {
+                let when = event.isAllDay ? "\(day.string(from: event.startDate)) tüm gün"
+                    : "\(day.string(from: event.startDate)) \(clock(event.startDate))–\(clock(event.endDate))"
+                let place = (event.location ?? "").isEmpty ? "" : " | yer: \(event.location!)"
+                lines.append("Etkinlik: \(when) \(event.title ?? "Etkinlik")\(place)\(note(event.notes))")
+            }
+        }
+        if canReminders {
+            let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: end, calendars: nil)
+            let reminders: [EKReminder] = await withCheckedContinuation { continuation in
+                store.fetchReminders(matching: predicate) { continuation.resume(returning: $0 ?? []) }
+            }
+            for reminder in reminders.prefix(20) {
+                let due = reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) }
+                let when = due.map { date in
+                    date < start ? "gecikmiş (\(day.string(from: date)))"
+                        : reminder.dueDateComponents?.hour != nil ? "\(day.string(from: date)) \(clock(date))" : day.string(from: date)
+                } ?? "tarihsiz"
+                lines.append("Hatırlatıcı: \(when) \(reminder.title ?? "Hatırlatıcı")\(note(reminder.notes))")
+            }
+        }
+        return lines
     }
 
     private static var spotifyRunning: Bool {

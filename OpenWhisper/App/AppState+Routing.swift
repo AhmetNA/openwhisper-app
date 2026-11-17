@@ -1536,6 +1536,14 @@ extension AppState {
             steps = expanded.steps
             scene = (name, expanded.unknown)
         }
+        // "Bugün neyim var", "başka sınavım var mı": the chat model reads the week's calendar
+        // and answers just what was asked, instead of the counts headline.
+        if steps.count == 1, case .system(.briefing) = steps[0].command, session.isVoiceCommand,
+           self.ollamaAvailable || JarvisChat.cloudReady {
+            owLog("[Route] briefing → chat with the calendar")
+            await chat(run, run.trimmed, detail: "takvim sorusu")
+            return
+        }
         var startsReading = false
         // After "Safari'ye geç", later steps belong to the app switched to: Spotify gives
         // focus back to this app if a cold launch stole it.

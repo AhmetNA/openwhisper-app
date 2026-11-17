@@ -160,6 +160,9 @@ extension AppState {
             context.nowPlaying = nil
             context.upNext = []
         }
+        if JarvisContext.asksAboutCalendar(text) {
+            context.calendar = await JarvisContext.calendarDetails()
+        }
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
             to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
