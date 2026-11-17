@@ -2458,13 +2458,15 @@ extension AppState {
     // non-editable means chat. The LLM is otherwise only a fallback when Accessibility
     // could not determine the focus. Fn dictation is always typed, except on the lock
     // screen: nothing is dictated there, so every trigger gets the Jarvis answer.
-    /// Sounds like a command no rule caught: the model (the cloud when Jarvis's chat is on it)
-    /// rephrases it, and it runs only if a rule then recognises the rephrased sentence.
-    @MainActor private func runRewrittenCommand(_ run: FinishRun) async -> Bool {
+    /// A command no rule caught, maybe misheard: the model (the cloud when Jarvis's chat is on
+    /// it) writes the command the user most likely meant, and it runs only if a rule then
+    /// recognises that sentence. `anyShape`: the model judges it even when it doesn't end like
+    /// a command (a short sentence said to Jarvis).
+    @MainActor private func runRewrittenCommand(_ run: FinishRun, anyShape: Bool = false) async -> Bool {
         let session = run.session
         let trimmed = run.trimmed
         let cloud = ChatBackend.selected == .cloud ? FallbackChat.command("CommandRewriter") : nil
-        guard cloud != nil || self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
+        guard cloud != nil || self.ollamaAvailable, anyShape || CommandRewriter.looksLikeCommand(trimmed),
               let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
                                                             cloud: cloud.map { ($0, $0.cloudModel) }) else { return false }
         guard let command = CommandRewriter.safeCommand(rewritten, context: commandContext(run)) else {
@@ -2519,7 +2521,8 @@ extension AppState {
                 session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
                 return
             }
-            if route == .chat, await runRewrittenCommand(run) { return }
+            // Short sentences are always shown to the model: a misheard command may not look like one.
+            if route == .chat, await runRewrittenCommand(run, anyShape: trimmed.split(separator: " ").count <= 10) { return }
             if route == .chat {
                 session.latency.finishDecision(route: "Jarvis sohbet")
                 await chat(run, trimmed, detail: "Jarvis sohbet")

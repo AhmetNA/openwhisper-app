@@ -53,9 +53,13 @@ enum CommandRewriter {
 
     static func prompt(for text: String) -> String {
         """
-        Bir sesli asistanın komut tanıyıcısısın. Kullanıcının cümlesini, aşağıdaki örneklerdekine benzer \
-        tek bir kısa Türkçe komut cümlesine çevir. Cümle bir bilgisayar komutu değilse ya da emin değilsen \
-        yalnızca YOK yaz. Açıklama yazma, yalnızca komutu yaz.
+        Bir sesli asistanın komut tanıyıcısısın. Kullanıcının cümlesi konuşmadan yazıya çevrildi; \
+        kelimeler yanlış duyulmuş ya da eksik olabilir (ör. "parlaklığı kız" = "Ekran parlaklığını azalt", \
+        "şarkıy durdur" = "Şarkıyı durdur", "safariy aş" = "Safari'yi aç", "sesi biraz kısık yap" = "Sesi kıs"). \
+        Kullanıcının büyük olasılıkla istediği bilgisayar komutunu aşağıdaki örneklerdekine benzer tek bir \
+        kısa Türkçe komut cümlesi olarak yaz; makul bir komut okunabiliyorsa onu yaz. Cümle sohbet, bilgi \
+        sorusu ya da dikte ise, yani bilgisayardan bir iş istemiyorsa yalnızca YOK yaz. Açıklama yazma, \
+        yalnızca komutu yaz.
         Örnek komutlar:
         Sesi kıs / Sesi aç / Sesi yüzde 30 yap / Sesi kapat
         Ekran parlaklığını artır / Ekran parlaklığını azalt
