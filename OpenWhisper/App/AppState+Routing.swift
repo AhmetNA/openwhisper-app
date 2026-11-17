@@ -1583,7 +1583,7 @@ extension AppState {
         if run.conversationContinuationApp == nil, scene == nil, !startsReading, !ran.isEmpty, !ran.contains(where: \.endsSession) {
             run.commandFollowUp = .some(ran.reversed().lazy.compactMap(CommandFollowUp.domain(of:)).first)
         }
-        if session.isVoiceCommand { await speakAfterCommand(run, self.jarvisReply.combined(replies)) }
+        if session.isVoiceCommand { await speakAfterCommand(run, self.jarvisReply.combined(replies), shownOnScreen: !summary.isEmpty) }
         if startsReading {
             if self.voiceRepliesEnabled {
                 ArticleReader.shared.start { [weak self] speaking in self?.jarvisActivity = speaking ? .speaking : .none }
@@ -1595,8 +1595,15 @@ extension AppState {
 
     /// Says a command's reply; the follow-up window (`commandFollowUp`) opens as the
     /// voice starts and lasts until 2 s after it. Without a voice the defer opens it.
-    @MainActor private func speakAfterCommand(_ run: FinishRun, _ reply: String?) async {
+    /// Over music or a video the reply is only shown: the voice would talk over it (user,
+    /// 17 Nov 2026). `shownOnScreen`: the command's status is already on the Flow bar.
+    @MainActor private func speakAfterCommand(_ run: FinishRun, _ reply: String?, shownOnScreen: Bool = false) async {
         let session = run.session
+        if session.mediaWasPlaying, let reply, !reply.isEmpty {
+            owLog("[Voice] Reply shown, not spoken (media playing): '\(reply)'")
+            if !shownOnScreen { self.showFlowBarMessage(reply, durationMs: min(max(reply.count * 60, 2500), 6000)) }
+            return
+        }
         await self.speakReply(reply) {
             guard let commandFollowUp = run.commandFollowUp, !run.followUpOpenedOverReply else { return }
             run.followUpOpenedOverReply = self.listenAfterCommand(domain: commandFollowUp, after: session, overReply: true)
@@ -1610,6 +1617,12 @@ extension AppState {
         let text = run.text
         self.lastTranscription = text
         let actionStartedAt = session.latency.timestamp()
+        // A question asked over music: the music pauses for the answer and plays again after
+        // it (`settleMedia`). Commands leave it playing (`speakAfterCommand`).
+        if session.isVoiceCommand, session.mediaWasPlaying, self.voiceRepliesEnabled {
+            owLog("[Chat] Media playing; pausing it for the answer")
+            self.recordingMedia.begin(immediately: true)
+        }
         var answer = await self.chatReply(to: chatText, recalled: recalled, deferUnrecognized: canRescue(run))
         session.latency.record(.action, since: actionStartedAt, detail: detail)
         session.latency.markOutput("Jarvis cevabı")
