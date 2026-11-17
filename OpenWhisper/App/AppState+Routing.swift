@@ -2458,11 +2458,34 @@ extension AppState {
     // non-editable means chat. The LLM is otherwise only a fallback when Accessibility
     // could not determine the focus. Fn dictation is always typed, except on the lock
     // screen: nothing is dictated there, so every trigger gets the Jarvis answer.
+    /// Sounds like a command no rule caught: the model (the cloud when Jarvis's chat is on it)
+    /// rephrases it, and it runs only if a rule then recognises the rephrased sentence.
+    @MainActor private func runRewrittenCommand(_ run: FinishRun) async -> Bool {
+        let session = run.session
+        let trimmed = run.trimmed
+        let cloud = ChatBackend.selected == .cloud ? FallbackChat.command("CommandRewriter") : nil
+        guard cloud != nil || self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
+              let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
+                                                            cloud: cloud.map { ($0, $0.cloudModel) }) else { return false }
+        guard let command = CommandRewriter.safeCommand(rewritten, context: commandContext(run)) else {
+            owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule")
+            return false
+        }
+        session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
+        owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
+        await runCommands(run, [MultiCommandSplitter.Step(text: rewritten, command: command)], output: "yeniden yorumlanan komut")
+        return true
+    }
+
     @MainActor private func dictateOrChat(_ run: FinishRun) async {
         let session = run.session
         let trimmed = run.trimmed
         // After a command only a command is taken (see the follow-up check below).
         if session.takesOnlyCommands {
+            // A misheard command right after a command ("ekran parlaklığını kız"): the model
+            // may still read it as one. Never for words heard only over playback.
+            if session.followsCommand, !session.wakeWordUnheard, !session.heardOnlyOverPlayback,
+               await runRewrittenCommand(run) { return }
             owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
             session.latency.finishDecision(route: "komut sonrası, komut değil")
             dismissFlowBarMessage()
@@ -2496,20 +2519,7 @@ extension AppState {
                 session.latency.finishDecision(route: "kilit ekranı, anlamsız metin")
                 return
             }
-            // Sounds like a command no rule caught: let the model rephrase it, and run
-            // it only if a rule then recognises the rephrased sentence.
-            let cloud = ChatBackend.selected == .cloud ? FallbackChat.command("CommandRewriter") : nil
-            if route == .chat, cloud != nil || self.ollamaAvailable, CommandRewriter.looksLikeCommand(trimmed),
-               let rewritten = await CommandRewriter.rewrite(trimmed, model: self.ollamaModel,
-                                                             cloud: cloud.map { ($0, $0.cloudModel) }) {
-                if let command = CommandRewriter.safeCommand(rewritten, context: commandContext(run)) {
-                    session.latency.finishDecision(route: "LLM ile yeniden yorumlanan komut")
-                    owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' → \(command)")
-                    await runCommands(run, [MultiCommandSplitter.Step(text: rewritten, command: command)], output: "yeniden yorumlanan komut")
-                    return
-                }
-                owLog("[Route] llm-rewrite '\(trimmed)' → '\(rewritten)' recognised by no rule; chatting")
-            }
+            if route == .chat, await runRewrittenCommand(run) { return }
             if route == .chat {
                 session.latency.finishDecision(route: "Jarvis sohbet")
                 await chat(run, trimmed, detail: "Jarvis sohbet")

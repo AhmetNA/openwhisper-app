@@ -13,7 +13,12 @@ enum CommandRewriter {
         guard !folded.isEmpty, folded.split(separator: " ").count <= 14 else { return false }
         let verbs = "aç|kapat|kıs|azalt|yükselt|arttır|artır|çal|oynat|durdur|başlat|geç|kur|ayarla|göster|getir|söyle|oku|yap|et|ver|al|koy|gönder|bul|ara|atla|değiştir|indir|kaldır|sustur|aktif\\s+et|ekle"
         let pattern = "(?:^|\\s)\\S*(?:\(verbs))(?:ır|ir|ur|ür|ar|er|abilir|ebilir)?(?:\\s*m[ıiuü]s[ıiuü]n(?:[ıiuü]z)?)?(?:\\s+lütfen)?(?:\\s+bakalım)?$"
-        return folded.range(of: pattern, options: .regularExpression) != nil
+        if folded.range(of: pattern, options: .regularExpression) != nil { return true }
+        // A misheard verb ("parlaklığı kız", "şarkıyı durdr"): the last word is one letter off.
+        guard let last = folded.split(separator: " ").last.map(String.init), last.count >= 3 else { return false }
+        return verbs.split(separator: "|").contains { verb in
+            verb.count >= 3 && !verb.contains("\\") && CorrectionEngine.levenshtein(last, String(verb)) == 1
+        }
     }
 
     /// Asks the model for one canonical command sentence; nil when it says it isn't one,

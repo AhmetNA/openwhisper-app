@@ -6,7 +6,11 @@ final class CommandRewriterTests: XCTestCase {
         XCTAssertTrue(CommandRewriter.looksLikeCommand("Ortalık çok karanlık, ekranı biraz aç bakalım"))
         XCTAssertTrue(CommandRewriter.looksLikeCommand("Şu müziği bir durdurur musun"))
         XCTAssertTrue(CommandRewriter.looksLikeCommand("Biraz sessizlik lütfen, sesi kısabilir misin?"))
+        XCTAssertTrue(CommandRewriter.looksLikeCommand("Parlaklığı kız"))
+        XCTAssertTrue(CommandRewriter.looksLikeCommand("Şarkıyı durdr"))
         XCTAssertFalse(CommandRewriter.looksLikeCommand("Kara delikler nasıl oluşur?"))
+        XCTAssertFalse(CommandRewriter.looksLikeCommand("Sağ ol"))
+        XCTAssertFalse(CommandRewriter.looksLikeCommand("Of course"))
         XCTAssertFalse(CommandRewriter.looksLikeCommand("Bugün hava çok güzel"))
     }
 
