@@ -15,6 +15,8 @@ final class JarvisChat {
     private var history: [[String: String]] = []
     /// The last finished reply, for showing it when it couldn't be spoken.
     private(set) var lastReply: String?
+    /// The "komut olarak anlayamadım" held back by `reply(…, deferUnrecognized: true)`.
+    var deferredUnrecognizedReply: String?
     private var lastTurn = Date.distantPast
 
     /// The last reply while the conversation is still remembered, so a short follow-up
@@ -31,8 +33,12 @@ final class JarvisChat {
     /// `recalled` is the journal of the past time the user asks about (`JarvisJournal`); empty
     /// for every other question, so the prompt stays short.
     /// `model` is the Ollama model, used alone or when the cloud model fails.
-    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = []) -> AsyncStream<String> {
+    /// `deferUnrecognized`: a "komut olarak anlayamadım" is not said but kept in
+    /// `deferredUnrecognizedReply`, so the cloud can first look for another way (`CommandRescue`).
+    func reply(to text: String, model: String, language: ReplyLanguage = .turkish, context: [String] = [], userFacts: [String] = [], recalled: [String] = [],
+               deferUnrecognized: Bool = false) -> AsyncStream<String> {
         if Date().timeIntervalSince(lastTurn) > Self.memory { history.removeAll() }
+        deferredUnrecognizedReply = nil
         // Both backends can use Exa; local orchestration also supports models without tools.
         let conversation = { (canSearch: Bool) in
             [["role": "system", "content": Self.systemPrompt(now: Date(), language: language, context: context, userFacts: userFacts, recalled: recalled,
@@ -85,6 +91,10 @@ final class JarvisChat {
                         if Self.unrecognizedCommandReplies.contains(sentence) || Self.notUnderstoodReplies.contains(sentence) {
                             // Said once is enough; drop the model's follow-up sentences.
                             saidNotUnderstood = true
+                        }
+                        if deferUnrecognized, Self.unrecognizedCommandReplies.contains(sentence) {
+                            self.deferredUnrecognizedReply = sentence
+                            continue
                         }
                         if firstSentenceMs == nil { firstSentenceMs = Int(Date().timeIntervalSince(started) * 1000) }
                         full += (full.isEmpty ? "" : " ") + sentence

@@ -35,6 +35,8 @@ private final class FinishRun {
     var holdMediaForFollowUp = false
     // Same for a chat answer that asks something back (see `listenForReplyAnswer`).
     var holdMediaForReplyAnswer = false
+    /// The cloud was already asked for another way (`CommandRescue`): a failure now is final.
+    var isRescue = false
 
     init(session: RecordingTranscriptionSession) {
         self.session = session
@@ -689,6 +691,7 @@ extension AppState {
             guard await ScreenActions.focusField(named: request.field, in: app) else {
                 session.latency.finishDecision(route: "alana yazma, alan bulunamadı")
                 self.logScreenStep(session, "alan bulunamadı", startedAt: started, [("alan arama", CACurrentMediaTime() - started)])
+                if await rescue(run, failure: L("“\(request.field)” alanını bulamadım", "I couldn't find the “\(request.field)” field")) { return true }
                 await say(run, self.jarvisReply.failure(L("“\(request.field)” alanını bulamadım", "I couldn't find the “\(request.field)” field")), durationMs: 3000)
                 return true
             }
@@ -1602,9 +1605,16 @@ extension AppState {
         let text = run.text
         self.lastTranscription = text
         let actionStartedAt = session.latency.timestamp()
-        let answer = await self.chatReply(to: chatText, recalled: recalled)
+        var answer = await self.chatReply(to: chatText, recalled: recalled, deferUnrecognized: canRescue(run))
         session.latency.record(.action, since: actionStartedAt, detail: detail)
         session.latency.markOutput("Jarvis cevabı")
+        // No router knew the command: the cloud looks for another way before Jarvis asks again.
+        if let unrecognized = JarvisChat.shared.deferredUnrecognizedReply {
+            JarvisChat.shared.deferredUnrecognizedReply = nil
+            if await rescue(run, failure: unrecognized) { return }
+            answer = (unrecognized, await self.speakReply(unrecognized))
+            if !answer.heard { self.showFlowBarMessage(unrecognized, durationMs: 4000) }
+        }
         if self.listenForReplyAnswer(answer.text, heard: answer.heard, after: session) {
             run.holdMediaForReplyAnswer = true
         }
@@ -1659,7 +1669,7 @@ extension AppState {
     /// A goal of several steps on screen (`ScreenTask`): each step is said aloud, Esc stops it
     /// before the next action. A risky step is asked like a single press; on "evet" the task
     /// goes on from `history`.
-    @MainActor private func runScreenTask(_ run: FinishRun, goal: String, history: [String] = [],
+    @MainActor private func runScreenTask(_ run: FinishRun, goal: String, spoken: String? = nil, history: [String] = [],
                                           client: CloudChatClient, model: String) async {
         let session = run.session
         session.latency.finishDecision(route: "çok adımlı ekran eylemi")
@@ -1672,7 +1682,7 @@ extension AppState {
         self.screenTaskRunning = true
         hotkey?.screenTaskEscape = true
         let outcome = await ScreenTask.run(
-            goal: goal, history: history, client: client, model: model,
+            goal: goal, spoken: spoken, history: history, client: client, model: model,
             isCancelled: { self.screenTaskCancelled },
             progress: { step in
                 self.showFlowBarMessage("\(step) · \(escHint)", durationMs: 30000)
@@ -1694,6 +1704,8 @@ extension AppState {
             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.ack()) }
         case .failed(let reason):
             owLog("[ScreenTask] Stopped: \(reason)")
+            // An unreachable cloud won't answer a rescue either.
+            if reason != "Bulut modeline ulaşamadım", await rescue(run, failure: reason) { return }
             self.showFlowBarMessage(reason, durationMs: 4000)
             if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(reason)) }
         case .cancelled:
@@ -1705,6 +1717,61 @@ extension AppState {
             let heard = await self.speakReply(prompt)
             askFollowUp(run, prompt, heard: heard)
         }
+    }
+
+    /// Whether a failed Jarvis command may ask the cloud for another way: a spoken Jarvis
+    /// command (never Fn dictation or what was heard over playing media), the cloud selected
+    /// and set up, and not already a rescue.
+    @MainActor private func canRescue(_ run: FinishRun) -> Bool {
+        let session = run.session
+        return !run.isRescue && session.isVoiceCommand && session.trigger != .typed && !session.heardOnlyOverPlayback
+            && ChatBackend.selected == .cloud && CloudLLM.client() != nil
+            && !screenTaskRunning && !RemoteControl.screenIsLocked
+    }
+
+    /// Jarvis couldn't do or find what was asked (`failure` is what it would say): the cloud is
+    /// asked once for another way (`CommandRescue`) and that is done. False when there is none
+    /// or it can't be asked; the caller then says its failure.
+    @MainActor private func rescue(_ run: FinishRun, failure: String) async -> Bool {
+        guard canRescue(run), let (client, model) = CloudLLM.client() else { return false }
+        run.isRescue = true
+        let request = run.trimmed
+        owLog("[Rescue] '\(request)' failed ('\(failure)'); asking the cloud")
+        let escHint = L("Esc iptal eder", "Esc cancels")
+        self.showFlowBarMessage("\(L("Bir yolunu arıyorum…", "Looking for a way…")) · \(escHint)", durationMs: 30000)
+        self.screenTaskCancelled = false
+        self.screenTaskRunning = true
+        hotkey?.screenTaskEscape = true
+        let app = NSWorkspace.shared.frontmostApplication
+        let asking = Task { await CommandRescue.ask(request: request, failure: failure, app: app, client: client, model: model) }
+        await self.speakReply(L("Bir yolunu arıyorum.", "Let me find a way."))
+        let plan = await asking.value
+        self.screenTaskRunning = false
+        hotkey?.screenTaskEscape = false
+        if self.screenTaskCancelled {
+            owLog("[Rescue] Stopped by the user")
+            self.showFlowBarMessage(L("İptal edildi", "Cancelled"), durationMs: 1500)
+            return true
+        }
+        switch plan {
+        case .screen(let goal):
+            owLog("[Rescue] On screen: '\(goal)'")
+            await runScreenTask(run, goal: goal, spoken: request, client: client, model: model)
+        case .command(let command):
+            owLog("[Rescue] As a command: '\(command)'")
+            run.text = command
+            run.trimmed = command
+            await routeTranscript(run)
+        case .explain(let answer):
+            owLog("[Rescue] Explained")
+            self.lastTranscription = run.text
+            await say(run, answer, durationMs: 8000)
+        case .impossible:
+            owLog("[Rescue] No way found")
+            self.dismissFlowBarMessage()
+            return false
+        }
+        return true
     }
 
     /// Esc during a multi-step screen task: it stops before its next action, and a step being
@@ -2242,6 +2309,7 @@ extension AppState {
         session.latency.finishDecision(route: "ekran eylemi, bulunamadı")
         self.logScreenStep(session, "bulunamadı", startedAt: stepStarted, stepParts)
         self.lastTranscription = text
+        if await rescue(run, failure: L("Ekranda “\(name)” bulamadım", "I couldn't find “\(name)” on screen")) { return true }
         self.showFlowBarMessage(L("Ekranda “\(name)” bulamadım", "I couldn't find “\(name)” on screen"), durationMs: 4000)
         if session.isVoiceCommand { await self.speakReply(self.jarvisReply.failure(L("Bulamadım", "I couldn't find it"))) }
         return true

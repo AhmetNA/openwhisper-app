@@ -189,7 +189,9 @@ enum ScreenTask {
     // MARK: - The loop
 
     @MainActor
-    static func run(goal: String, history: [String] = [], client: CloudChatClient, model: String,
+    /// `spoken` is what the user said: only its words are ever typed (the goal may be the
+    /// cloud's rewording of it, `CommandRescue`).
+    static func run(goal: String, spoken: String? = nil, history: [String] = [], client: CloudChatClient, model: String,
                     isCancelled: () -> Bool,
                     progress: (String) async -> Void,
                     type: (String, NSRunningApplication) async -> Bool) async -> Outcome {
@@ -265,7 +267,7 @@ enum ScreenTask {
                 guard target.isTextField, ScreenReader.string(target.element, kAXSubroleAttribute) != "AXSecureTextField" else {
                     return .failed("Oraya yazamam")
                 }
-                guard isSaid(text, in: goal) else {
+                guard isSaid(text, in: spoken ?? goal) else {
                     owLog("[ScreenTask] Text to type was not said; not typed")
                     return .failed("Ne yazacağımı çıkaramadım")
                 }

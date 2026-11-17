@@ -143,7 +143,7 @@ extension AppState {
     /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
     @discardableResult
     /// `recalled` is set for "geçen hafta ne demiştim?"; such a question is not journaled itself.
-    func chatReply(to text: String, recalled: [String] = []) async -> (text: String?, heard: Bool) {
+    func chatReply(to text: String, recalled: [String] = [], deferUnrecognized: Bool = false) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable || JarvisChat.cloudReady else {
             owLog("[Chat] Neither Ollama nor the cloud model available")
             showFlowBarMessage(L("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum", "Ollama is off and no cloud model is set, I can't chat"))
@@ -163,7 +163,7 @@ extension AppState {
         owLog("[Chat] Context: \(context.promptLines.joined(separator: " | "))")
         let sentences = JarvisChat.shared.reply(
             to: text, model: ollamaModel, language: JarvisVoice.shared.replyLanguage, context: context.promptLines,
-            userFacts: UserMemory.shared.promptLines, recalled: recalled
+            userFacts: UserMemory.shared.promptLines, recalled: recalled, deferUnrecognized: deferUnrecognized
         )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
