@@ -99,6 +99,12 @@ extension AppState {
               let session = activeTranscriptionSession, session.followsCommand, !session.isCancelled,
               !session.doneCheckInFlight, let audioEngine,
               let transcriber = activeTranscriptionService else { return }
+        // Music or a video on the Mac reaches the mic: Whisper turns it into "7 7 7 8 8" or
+        // "Hello" (18 Nov 2026, after "çal"). The preview can't tell it from the user, so none.
+        if mediaPlaying {
+            if followUpLiveText != nil { followUpLiveText = nil; syncFlowBarVisibility() }
+            return
+        }
         let now = CACurrentMediaTime()
         // Only once the user spoke, and again only while they go on.
         guard now - followUpLiveLastCheck >= 1, session.doneLastSpeechTime > followUpLiveStart,
@@ -116,8 +122,10 @@ extension AppState {
             }
             guard let self else { return }
             self.followUpLiveInFlight = false
-            guard self.recordingState == .recording, self.activeTranscriptionSession === session,
-                  let text = (text ?? nil)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return }
+            // "..." and "-" are what Whisper writes for noise: not words to show.
+            guard self.recordingState == .recording, self.activeTranscriptionSession === session, !self.mediaPlaying,
+                  let text = (text ?? nil)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  text.contains(where: \.isLetter) else { return }
             self.followUpLiveText = text
             // Re-centers the bar on its new width.
             self.syncFlowBarVisibility()
