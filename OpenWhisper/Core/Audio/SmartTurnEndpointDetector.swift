@@ -29,13 +29,13 @@ final class SmartTurnEndpointDetector: @unchecked Sendable {
         /// Confidence-aware debounce after the actual speech end. A borderline endpoint gets
         /// more time for a thinking pause to resume. Smart Turn rates even a short command
         /// ("devmodu aç") ~0.97 complete, so 1.2 s cut users off mid-thought; 2 s leaves room.
-        /// At ≥0.97, use one second; keep the longer thinking allowances for lower scores.
+        /// At ≥0.97, use one second; lower scores wait two seconds at most.
         /// The minimum listening window still protects a wake word followed by a pause.
         var certainSilence: TimeInterval = 1
         var veryHighConfidenceSilence: TimeInterval = 2
-        var highConfidenceSilence: TimeInterval = 2.5
-        var lowConfidenceSilence: TimeInterval = 3
-        var incompleteSilenceTimeout: TimeInterval = 4
+        var highConfidenceSilence: TimeInterval = 2
+        var lowConfidenceSilence: TimeInterval = 2
+        var incompleteSilenceTimeout: TimeInterval = 2
         /// No endpoint stop before this much audio since the session began: a wake word
         /// followed by a short pause must not end the session before the command is spoken.
         var minimumListenDuration: TimeInterval = 4

@@ -32,30 +32,30 @@ final class SmartTurnEndpointDetectorTests: XCTestCase {
         ), .stop(probability: 0.95))
     }
 
-    func testBorderlineCompletionScoreGetsMoreThinkingTime() {
+    func testLowerCompletionScoresWaitAtMostTwoSeconds() {
         let config = SmartTurnEndpointDetector.Config()
 
         XCTAssertEqual(
             SmartTurnEndpointDetector.requiredSilence(for: 0.8, config: config),
-            2.5
+            2.0
         )
         XCTAssertEqual(
             SmartTurnEndpointDetector.requiredSilence(for: 0.6, config: config),
-            3.0
+            2.0
         )
     }
 
-    func testIncompleteTurnUsesLongerSafetyTimeout() {
+    func testIncompleteTurnStopsAfterTwoSeconds() {
         let config = SmartTurnEndpointDetector.Config()
 
         XCTAssertNil(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.2,
-            silenceDuration: 3.99,
+            silenceDuration: 1.99,
             config: config
         ))
         XCTAssertEqual(SmartTurnEndpointDetector.endpointDecision(
             probability: 0.2,
-            silenceDuration: 4.0,
+            silenceDuration: 2.0,
             config: config
         ), .stopAfterIncompleteTimeout)
     }

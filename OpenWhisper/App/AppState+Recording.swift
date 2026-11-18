@@ -418,9 +418,9 @@ extension AppState {
         let ignoredLeadingSeconds: TimeInterval = deferredWake ? 0 : mediaPlaying ? 0.8 : isReplyFollowUp ? Self.replyFollowUpEchoGuard : 0
         recordingIgnoredLeadingSeconds = ignoredLeadingSeconds
         var endpointFallbackConfig: VoiceEndpointDetector.Config = recordingInputIsBluetooth ? .closeTalk : .init()
-        // Smart Turn normally answers at the first real endpoint. Three seconds is its documented
-        // incomplete-turn safety limit and also keeps a model failure bounded.
-        if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 3 }
+        // Smart Turn normally answers at the first real endpoint. Two seconds matches its longest
+        // silence wait and also keeps a model failure bounded.
+        if useSmartTurnEndpoint { endpointFallbackConfig.silenceToStop = 2 }
         if isDeletionConfirmation {
             // Jarvis has just finished asking for confirmation: wait up to five seconds for
             // speech, then close automatically. Once speech begins, leave enough room for a
