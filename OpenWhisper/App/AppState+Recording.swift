@@ -1231,6 +1231,17 @@ extension AppState {
                 owLog("[OpenWhisper] Batch \(segmentNumber) gate kept every voice run; reusing the first decode")
                 return WhisperTranscriber.deduplicateRepetitivePhrases(in: heard)
             }
+            if session.trigger != .confirmation, segment.overlapSampleCount == 0,
+               filtered.decision == .accepted, let timed = timedTranscription,
+               TargetSpeakerDiarizationResult.allWordsInAcceptedRanges(timed.words, ranges: filtered.acceptedSampleRanges) {
+                // The mask dropped only voice no word came from (a short noise run): the timed
+                // words are the masked decode's speech, so a second decode only costs ~0.45 s.
+                let kept = TargetSpeakerDiarizationResult.render(words: timed.words)
+                if !kept.isEmpty {
+                    owLog("[OpenWhisper] Batch \(segmentNumber) every word is in accepted audio; reusing the timed decode")
+                    return WhisperTranscriber.deduplicateRepetitivePhrases(in: kept)
+                }
+            }
             if session.trigger == .confirmation, !heard.isEmpty {
                 // A one-word answer is too short for diarization; masking its gaps turns
                 // "Onaylıyorum" into noise. Keep the full decode of the accepted voice.

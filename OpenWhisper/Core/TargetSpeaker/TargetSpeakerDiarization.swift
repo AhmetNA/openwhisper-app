@@ -142,6 +142,22 @@ struct TargetSpeakerDiarizationResult: Sendable, Equatable {
     var acceptedWordCount: Int { words.count }
 
     /// Joins Whisper word tokens back into text, keeping punctuation attached.
+    /// True when every word lies in audio the segment gate accepted, by the same overlap
+    /// rule `diarizeAndFilter` uses. Then the mask removed none of the decoded speech, so the
+    /// words can be kept without decoding the masked audio again. No words → false.
+    static func allWordsInAcceptedRanges(
+        _ words: [WhisperTimedWord],
+        ranges: [TargetSpeakerAcceptedRange]
+    ) -> Bool {
+        guard !words.isEmpty else { return false }
+        let rate = Double(TargetSpeakerDiarizationConfiguration.sampleRate)
+        return words.allSatisfy { word in
+            let start = max(0, Double(word.start))
+            let end = max(start, Double(word.end))
+            return ranges.contains { Double($0.end) / rate > start && Double($0.start) / rate < end }
+        }
+    }
+
     static func render(words: [WhisperTimedWord]) -> String {
         let punctuationWithoutLeadingSpace: Set<Character> = [
             ",", ".", "!", "?", ":", ";", "%", ")", "]", "}", "…"
