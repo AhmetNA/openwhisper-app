@@ -132,6 +132,21 @@ final class JarvisVoiceTests: XCTestCase {
         }
     }
 
+    func testThinkingFillerIsCachedAndUnaddressed() {
+        var reply = JarvisReply(rng: SystemRandomNumberGenerator())
+        reply.addressChance = 1
+        let fillers = JarvisReply.phrases.first { $0.category == "dusunme" }!.variants
+        var last = ""
+        for _ in 0..<20 {
+            let said = reply.thinking()
+            XCTAssertTrue(fillers.contains(said), said)
+            XCTAssertNotEqual(said, last)
+            XCTAssertTrue(JarvisVoice.isCacheable(said))
+            XCTAssertTrue(JarvisVoice.cachePath(text: said, identity: "pocket|alba").contains("/dusunme/"))
+            last = said
+        }
+    }
+
     func testSpellsOutTimes() {
         XCTAssertEqual(JarvisVoice.spokenForm("Saat 14:05, patron."), "Saat on dört sıfır beş, patron.")
         XCTAssertEqual(JarvisVoice.spokenForm("Saat 14:00"), "Saat on dört")

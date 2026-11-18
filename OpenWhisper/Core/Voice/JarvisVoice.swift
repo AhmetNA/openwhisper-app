@@ -259,8 +259,11 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
     /// stopped. `onStart` runs when the first sentence starts playing, `onSentence` with its
     /// position each time one does. False when nothing was heard (voice not ready, stopped
     /// before the first sentence).
+    /// `lead` ("Bakıyorum.") plays first, only when its clip is already cached, while the
+    /// sentences are still being written; the first one follows it without cutting it off.
+    /// It doesn't count as heard and isn't a position for `onSentence`.
     @discardableResult
-    func speak(sentences: AsyncStream<String>, onStart: () -> Void = {}, onSentence: (Int) -> Void = { _ in }) async -> Bool {
+    func speak(sentences: AsyncStream<String>, lead: String? = nil, onStart: () -> Void = {}, onSentence: (Int) -> Void = { _ in }) async -> Bool {
         stop()
         let myGeneration = generation
         let started = Date()
@@ -275,11 +278,25 @@ final class JarvisVoice: NSObject, AVAudioPlayerDelegate {
             clipsContinuation.finish()
         }
         sentenceProducer = producer
+        var calledOnStart = false
+        if let lead {
+            if let data = cachedAudio(for: lead, identity: provider.cacheIdentity) {
+                guard await play(data, text: lead, started: started, generation: myGeneration, onStart: {
+                    calledOnStart = true
+                    onStart()
+                }) else {
+                    producer.cancel()
+                    return false
+                }
+            } else {
+                owLog("[Voice] Filler not cached yet, skipped: '\(lead)'")
+            }
+        }
         var first = true
         for await (position, sentence, data) in clips {
-            let isFirst = first
             guard await play(data, text: sentence, started: started, generation: myGeneration, onStart: {
-                if isFirst { onStart() }
+                if !calledOnStart { onStart() }
+                calledOnStart = true
                 onSentence(position)
             }) else { break }
             first = false

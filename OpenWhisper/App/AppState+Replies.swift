@@ -143,7 +143,8 @@ extension AppState {
     /// Returns the answer (nil when a new recording cut it off) and whether it was heard.
     @discardableResult
     /// `recalled` is set for "geçen hafta ne demiştim?"; such a question is not journaled itself.
-    func chatReply(to text: String, recalled: [String] = [], deferUnrecognized: Bool = false) async -> (text: String?, heard: Bool) {
+    /// `filler`: a spoken request; a cached "Bakıyorum." fills the wait for the cloud model.
+    func chatReply(to text: String, recalled: [String] = [], deferUnrecognized: Bool = false, filler: Bool = false) async -> (text: String?, heard: Bool) {
         guard ollamaAvailable || JarvisChat.cloudReady else {
             owLog("[Chat] Neither Ollama nor the cloud model available")
             showFlowBarMessage(L("Ollama kapalı ve bulut modeli ayarlı değil, sohbet edemiyorum", "Ollama is off and no cloud model is set, I can't chat"))
@@ -170,7 +171,9 @@ extension AppState {
         )
         var heard = false
         if voiceRepliesEnabled, recordingState != .recording {
-            heard = await JarvisVoice.shared.speak(sentences: sentences) { [weak self] in self?.jarvisActivity = .speaking }
+            // The cloud's first sentence takes ~0.9 s; a cached "Bakıyorum." fills that wait.
+            let lead = filler && JarvisChat.cloudReady ? jarvisReply.thinking() : nil
+            heard = await JarvisVoice.shared.speak(sentences: sentences, lead: lead) { [weak self] in self?.jarvisActivity = .speaking }
         } else {
             for await _ in sentences {}
         }

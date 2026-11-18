@@ -48,6 +48,9 @@ enum ReplyTranslator {
         "Her zamanki gibi tetikteyim": "Alert as always",
         "Sistemler sorunsuz çalışıyor, teşekkürler": "All systems running smoothly, thank you",
         "Sesle uyandırmayı kapattım": "Voice wake-up is off",
+        "Bakıyorum": "Let me check",
+        "Bir saniye": "One moment",
+        "Hemen bakıyorum": "Checking now",
     ]
 
     /// The ack or fixed phrase in English, with "patron"/"efendim"/"sör" as "sir"; nil for any other

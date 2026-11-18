@@ -1629,7 +1629,8 @@ extension AppState {
             owLog("[Chat] Media playing; pausing it for the answer")
             self.recordingMedia.begin(immediately: true)
         }
-        var answer = await self.chatReply(to: chatText, recalled: recalled, deferUnrecognized: canRescue(run))
+        var answer = await self.chatReply(to: chatText, recalled: recalled, deferUnrecognized: canRescue(run),
+                                          filler: session.isVoiceCommand && session.trigger != .typed)
         session.latency.record(.action, since: actionStartedAt, detail: detail)
         session.latency.markOutput("Jarvis cevabı")
         // No router knew the command: the cloud looks for another way before Jarvis asks again.

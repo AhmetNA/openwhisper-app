@@ -34,6 +34,7 @@ struct JarvisReply {
         ("hal", ["Gayet iyiyim, sizin için buradayım.", "Her zamanki gibi tetikteyim.",
                  "Sistemler sorunsuz çalışıyor, teşekkürler."]),
         ("ayar", ["Sesle uyandırmayı kapattım."]),
+        ("dusunme", ["Bakıyorum.", "Bir saniye.", "Hemen bakıyorum."]),
     ]
     /// Every phrase outside `acks`.
     static let fixedPhrases = phrases.filter { $0.category != "onay" }.flatMap(\.variants)
@@ -239,6 +240,12 @@ struct JarvisReply {
 
     mutating func ack() -> String {
         addressing(pick("onay"))
+    }
+
+    /// Said from the cache while the cloud model writes its answer ("Bakıyorum."), so the
+    /// wait isn't silent. Never addressed: it's a filler, not a reply.
+    mutating func thinking() -> String {
+        pick("dusunme")
     }
 
     /// A random variant of a `phrases` category, never the one it gave last time.
