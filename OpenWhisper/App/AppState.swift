@@ -631,7 +631,6 @@ final class AppState {
     @ObservationIgnored var commandFollowUpChain = 0
     /// After a command, how long the mic waits for a fix ("sonrakine geç").
     nonisolated static let commandFollowUpWindow: TimeInterval = 2
-    nonisolated static let maxCommandFollowUps = 3
     /// A weak wake rejected by Whisper still keeps its session open this long before closing.
     nonisolated static let minimumRejectedWakeOpen: TimeInterval = 1
     /// Longest a command follow-up recording may run once something was heard.

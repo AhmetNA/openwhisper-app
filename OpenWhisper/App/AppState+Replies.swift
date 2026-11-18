@@ -275,18 +275,14 @@ extension AppState {
             owLog("[FollowUp] Bluetooth input; opening the mic after the reply instead")
             return false
         }
-        // Screen mode has no limit on steps: it ends on a closer or `ScreenMode.silence`.
+        // No limit: every command that ran keeps the mic open; a window with no command ends it.
         let chain = session.followsCommand && !screenModeActive ? commandFollowUpChain + 1 : 1
-        guard chain <= Self.maxCommandFollowUps else {
-            owLog("[FollowUp] \(Self.maxCommandFollowUps) command follow-ups in a row; not listening again")
-            return false
-        }
         commandFollowUpChain = chain
         // The user who just gave the command is the one fixing it.
         pendingWakeSpeakerVerified = session.wakeSpeakerVerified
         pendingCommandFollowUp = .some(domain)
         commandFollowUpOverReply = overReply
-        owLog("[FollowUp] Command done (\(domain?.rawValue ?? "no domain"), \(chain)/\(Self.maxCommandFollowUps)); opening the mic\(overReply ? " as the reply starts" : "")")
+        owLog("[FollowUp] Command done (\(domain?.rawValue ?? "no domain"), #\(chain)); opening the mic\(overReply ? " as the reply starts" : "")")
         // The recording starts a moment later (`startRecording` consumes both flags).
         startVoiceSession(trigger: .followUp)
         return hotkey?.isIdle == false
