@@ -154,6 +154,12 @@ final class RecordingMediaController {
         }
     }
 
+    /// This recording paused Spotify and still holds it: a "durdur" command then finds it
+    /// paused, though for the user it was playing.
+    var holdsPausedSpotify: Bool {
+        queue.sync { receipts.contains { $0.playerID.contains("Spotify") || $0.playerID.contains("com.spotify.client") } }
+    }
+
     /// Shutdown/tests only. Never used on the microphone's realtime thread.
     func waitUntilIdle() { queue.sync {} }
 }

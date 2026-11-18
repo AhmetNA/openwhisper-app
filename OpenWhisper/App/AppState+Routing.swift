@@ -2304,7 +2304,11 @@ extension AppState {
         let speaksResult = SpotifyManager.speaksResult(afterCommand: request)
         let speaksFailure = SpotifyManager.speaksFailure(afterCommand: request)
         let handled = await SpotifyManager.shared.handleCommand(text: request, targetApp: stepTargetApp)
-        let message = SpotifyManager.shared.takeResultMessage(for: request)
+        var message = SpotifyManager.shared.takeResultMessage(for: request)
+        // The recording paused the music before the command ran; it stays paused, so it was stopped.
+        if message == SpotifyController.pauseMessage("alreadyPaused"), recordingMedia.holdsPausedSpotify {
+            message = SpotifyController.pauseMessage("paused")
+        }
         owLog("[Result] Spotify command \(handled ? "handled" : "not applied"): '\(request)'")
         if handled, !resumes { run.resumeMediaAfterCommand = false }
         if handled { ArticleReader.shared.forget() }
