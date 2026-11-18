@@ -47,6 +47,7 @@ extension AppState {
         let overReply = commandFollowUp != nil && commandFollowUpOverReply
         commandFollowUpOverReply = false
         commandFollowUpAwaitingReplyEnd = overReply
+        commandFollowUpAfterReply = false
         followUpLiveText = nil
         followUpLiveStart = CACurrentMediaTime()
 
@@ -1424,7 +1425,17 @@ extension AppState {
             stopRecording()
         case .cancelNoSpeech:
             hotkey?.externalCancelHandsFree()
-            discardActiveRecording(reason: "voice trigger, no speech")
+            // Over the reply the window's level detector seeds its floor at the reply's end: a
+            // fix said right as Jarvis finishes becomes that floor and never counts as speech
+            // (18 Nov 2026: "sesi biraz daha kıs" dropped). Loud sound after the reply means
+            // the user spoke; the follow-up still takes only the user's commands from it.
+            if commandFollowUpAfterReply, let session = activeTranscriptionSession,
+               session.followsCommand, session.doneLastSpeechTime > followUpLiveStart {
+                owLog("[FollowUp] Sound after the reply though no speech onset; processing it")
+                stopRecording()
+            } else {
+                discardActiveRecording(reason: "voice trigger, no speech")
+            }
         case .continueRecording:
             break
         }
@@ -1685,7 +1696,8 @@ extension AppState {
     }
 
     /// Jarvis finished the reply a command follow-up opened over: the window for a fix
-    /// ("sonrakine geç") starts now. Speech that began during the reply and runs on is kept.
+    /// ("sonrakine geç") starts now. Speech that began during the reply and runs on is kept
+    /// (the recording is processed if sound followed the reply, see `.cancelNoSpeech`).
     func commandFollowUpReplyEnded() {
         // A recording not started yet opens as an ordinary window, counted from its start.
         commandFollowUpOverReply = false
@@ -1693,6 +1705,7 @@ extension AppState {
         commandFollowUpAwaitingReplyEnd = false
         guard recordingState == .recording, activeTranscriptionSession?.followsCommand == true,
               let detector = voiceEndpointDetector else { return }
+        commandFollowUpAfterReply = true
         let now = CACurrentMediaTime()
         followUpLiveStart = now + Self.replyFollowUpEchoGuard
         followUpLiveText = nil

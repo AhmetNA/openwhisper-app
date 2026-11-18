@@ -640,6 +640,8 @@ final class AppState {
     @ObservationIgnored var commandFollowUpOverReply = false
     /// That follow-up is recording while the reply plays: its window starts when the reply ends.
     @ObservationIgnored var commandFollowUpAwaitingReplyEnd = false
+    /// The over-reply follow-up's reply has ended: its window is running.
+    @ObservationIgnored var commandFollowUpAfterReply = false
     /// What the user has said so far in a command follow-up, shown on the flow bar.
     var followUpLiveText: String?
     /// Audio before this (Jarvis's own reply) is left out of `followUpLiveText`.
