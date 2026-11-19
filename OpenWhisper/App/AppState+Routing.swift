@@ -718,6 +718,25 @@ extension AppState {
         return false
     }
 
+    /// A commands-only session heard something that isn't a command. When the user called Jarvis
+    /// and Whisper only missed the word (19 Nov 2026: 53 s of their own talk dropped silently),
+    /// what they said is copied, never lost. Words heard only over playback stay dropped.
+    @MainActor private func dropNonCommand(_ run: FinishRun) {
+        let session = run.session
+        let trimmed = run.trimmed
+        if session.wakeWordUnheard, !session.heardOnlyOverPlayback, !trimmed.isEmpty {
+            owLog("[FollowUp] Wake word not heard, not a command; copied to the clipboard: '\(trimmed)'")
+            session.latency.finishDecision(route: "uyanma doğrulanmadı, panoya kopyalandı")
+            self.lastTranscription = run.text
+            self.textInjector?.copyToClipboard(trimmed)
+            showFlowBarMessage(L("Komut değildi, panoya kopyalandı", "Not a command, copied to the clipboard"), durationMs: 4500)
+            return
+        }
+        owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
+        session.latency.finishDecision(route: "komut sonrası, komut değil")
+        dismissFlowBarMessage()
+    }
+
     private func handleCommandOnlySession(_ run: FinishRun, route: inout VoiceRouter.Route) async -> Bool {
         let session = run.session
         let text = run.text
@@ -765,9 +784,7 @@ extension AppState {
                     // "Kapatma butonuna bas" right after a command: said outright, so it counts.
                     if await screenAction(run) { return true }
                 }
-                owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
-                session.latency.finishDecision(route: "komut sonrası, komut değil")
-                dismissFlowBarMessage()
+                dropNonCommand(run)
                 return true
             }
         }
@@ -2576,9 +2593,7 @@ extension AppState {
             // may still read it as one. Never for words heard only over playback.
             if session.followsCommand, !session.wakeWordUnheard, !session.heardOnlyOverPlayback,
                await runRewrittenCommand(run) { return }
-            owLog("[FollowUp] No command after the command; ignored: '\(trimmed)'")
-            session.latency.finishDecision(route: "komut sonrası, komut değil")
-            dismissFlowBarMessage()
+            dropNonCommand(run)
             return
         }
         let front = session.targetApp?.bundleIdentifier
