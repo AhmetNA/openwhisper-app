@@ -228,6 +228,41 @@ final class SpotifyManager: @unchecked Sendable {
         return result
     }
 
+    /// "Sakin bişeyler açar mısın", "hareketli şarkılar çal": a mood word, a vague object and a
+    /// play verb, with nothing else but filler, mean a mood playlist whatever the decision model
+    /// says. The installed model read "Sakin bişeyler açar mısın?" as not music at 0.91, and a
+    /// confident answer also skips the LLM (20 Nov 2026). Without the play verb ("sakin bir
+    /// şeyler yaz") or with another noun ("eğlenceli bir oyun aç") it is not music.
+    static func moodPlaylistIntent(_ text: String) -> ExplicitSpotifyIntent? {
+        guard !CommandLanguage.isEnglish else { return nil }
+        let normalized = normalize(text)
+        let words = canonicalizeVerbs(intentWords(normalized))
+        guard !words.isEmpty, spokenWordCount(normalized) <= 8 else { return nil }
+        let set = Set(words)
+        let moods = words.filter(moodWords.contains)
+        guard !moods.isEmpty, !moodPlayVerbs.isDisjoint(with: set), !moodObjects.isDisjoint(with: set),
+              words.allSatisfy({ moodWords.contains($0) || moodObjects.contains($0) || moodPlayVerbs.contains($0)
+                  || moodFillers.contains($0) || isSpotifyWord($0) || questionParticles.contains($0) })
+        else { return nil }
+        let title = moods.joined(separator: " ")
+        return .search(SpotifySearchRequest(kind: .playlist, title: title, artist: "", freeText: title))
+    }
+
+    private static let moodWords: Set<String> = [
+        "hareketli", "sakin", "eğlenceli", "eglenceli", "klasik", "neşeli", "neseli", "romantik",
+        "enerjik", "hüzünlü", "huzunlu", "rahatlatıcı", "rahatlatici", "chill", "yavaş", "yavas",
+        "hızlı", "hizli", "duygusal", "dinlendirici", "keyifli", "coşkulu", "coskulu", "hareketlı"
+    ]
+    private static let moodObjects: Set<String> = [
+        "şey", "şeyler", "bişey", "bişeyler", "birşey", "birşeyler", "sey", "seyler", "bisey", "biseyler",
+        "şarkı", "şarkılar", "şarkıları", "sarkilar", "parça", "parçalar", "parcalar", "müzik", "müzikler", "muzik"
+    ]
+    /// Canonical forms after `canonicalizeVerbs` ("açar mısın" → aç, "koy" → çal, "dinleyelim" → dinlet).
+    private static let moodPlayVerbs: Set<String> = ["aç", "çal", "dinlet", "oynat"]
+    private static let moodFillers: Set<String> = [
+        "bir", "biraz", "daha", "bana", "lütfen", "hadi", "jarvis", "hey", "bakalım", "şöyle", "şimdi"
+    ]
+
     /// Spoken words, with "çalar mısın"-style verb + particle pairs counted once.
     private static func spokenWordCount(_ normalized: String) -> Int {
         let spoken = normalized.split(whereSeparator: { $0.isWhitespace })
@@ -916,6 +951,11 @@ final class SpotifyManager: @unchecked Sendable {
     static func isSpotifyCommand(_ transcript: String, ollamaAvailable: Bool = false, commandMode: Bool = false) async -> Bool {
         let heard = repairPlayVerbMishearing(repairVolumeMishearing(transcript))
         let text = commandMode ? commandModeText(heard) : heard
+        if commandMode, let mood = moodPlaylistIntent(text) {
+            owLog("[Spotify] Mood rule: '\(text)' → \(mood)")
+            decisionCache.store(mood, for: transcript)
+            return true
+        }
         var rules = explicitIntent(in: text)
         // Only a Jarvis session: with the dictation keys "konuyu sıraya ekle" is text to type.
         if rules == nil, commandMode { rules = directVolumeIntent(text) }

@@ -24,6 +24,30 @@ final class SpotifyVoiceCommandTests: XCTestCase {
         }
     }
 
+    func testMoodRuleMakesAPlaylistSearchWithoutAModel() {
+        let cases = [
+            "Sakin bişeyler açar mısın?": "sakin", "Hareketli bişeyler açar mısın?": "hareketli",
+            "Eğlenceli bişeyler açar mısın?": "eğlenceli", "Klasik bir şeyler çal.": "klasik",
+            "Biraz neşeli şarkılar koy.": "neşeli", "Daha sakin bir şeyler açabilir misin lütfen?": "sakin",
+            "Hareketli bir şeyler dinleyelim.": "hareketli", "Romantik bir şeyler açsana.": "romantik"
+        ]
+        for (text, mood) in cases {
+            guard case .search(let request)? = SpotifyManager.moodPlaylistIntent(text) else {
+                XCTFail("expected a mood playlist for '\(text)'"); continue
+            }
+            XCTAssertEqual(request.kind, .playlist, text)
+            XCTAssertEqual(request.title, mood, text)
+        }
+    }
+
+    func testMoodRuleLeavesLookAlikesAlone() {
+        for text in ["Sakin bir şeyler yazar mısın?", "Eğlenceli bir şeyler anlat.", "Eğlenceli bir oyun açar mısın?",
+                     "Hareketli bir video açar mısın?", "Canım tatlı bir şeyler istiyor.", "Sakin bişeyler.",
+                     "Eğlenceli bir şeyler yapalım bu akşam.", "Romantik bir film açar mısın?", "Sakin ol."] {
+            XCTAssertNil(SpotifyManager.moodPlaylistIntent(text), text)
+        }
+    }
+
     func testDictationKeepsTheStrictGate() {
         XCTAssertNil(decide("Eğlenceli bir şeyler çal.", moodParse, commandMode: false))
         XCTAssertNil(decide("Eğlenceli bir şeyler çalk.", moodParse, commandMode: false))
