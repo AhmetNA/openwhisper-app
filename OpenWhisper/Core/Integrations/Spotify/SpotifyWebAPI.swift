@@ -212,6 +212,8 @@ actor SpotifyWebAPI {
         let artist: String
         /// Set for tracks from search, so playback can continue through the album.
         var albumURI: String? = nil
+        /// Number of tracks, for playlists from search (a random start must stay below it).
+        var trackCount: Int? = nil
     }
 
     /// The playing item from `/v1/me/player`, reduced to what voice commands need.
@@ -254,6 +256,7 @@ actor SpotifyWebAPI {
         let name: String
         let artist: String
         let albumURI: String?
+        let trackCount: Int?
     }
 
     // MARK: - OAuth configuration
@@ -361,6 +364,20 @@ actor SpotifyWebAPI {
         return TrackResult(uri: first.uri, name: first.name, artist: first.artist, albumURI: first.albumURI)
     }
 
+    /// The top `limit` results of one catalog type, in Spotify's order. Used for mood
+    /// playlists, where the first hit alone would play the same list every time.
+    func searchItems(query: String, type: SearchType, limit: Int) async throws -> [TrackResult] {
+        let token: String
+        if let userToken = await validUserAccessToken() {
+            token = userToken
+        } else {
+            token = try await validClientCredentialsToken()
+        }
+        return try await performSearch(query: query, type: type, token: token, limit: limit).map {
+            TrackResult(uri: $0.uri, name: $0.name, artist: $0.artist, albumURI: $0.albumURI, trackCount: $0.trackCount)
+        }
+    }
+
     // MARK: - Public API — Playback (Web API player endpoints)
 
     /// Starts playback of `uris` (max 100, per Spotify's limit) via `PUT
@@ -388,11 +405,14 @@ actor SpotifyWebAPI {
     }
 
     /// Plays an album, artist or playlist as a real context, so playback continues through
-    /// it afterwards. `offsetURI` starts at a given track inside an album/playlist.
-    func startPlayback(contextURI: String, offsetURI: String? = nil, deviceID: String?) async throws {
+    /// it afterwards. `offsetURI` (or `offsetPosition`, 0-based) starts at a given track
+    /// inside an album/playlist.
+    func startPlayback(contextURI: String, offsetURI: String? = nil, offsetPosition: Int? = nil, deviceID: String?) async throws {
         var body: [String: Any] = ["context_uri": contextURI]
         if let offsetURI {
             body["offset"] = ["uri": offsetURI]
+        } else if let offsetPosition {
+            body["offset"] = ["position": offsetPosition]
         }
         _ = try await sendPlayerRequest(method: "PUT", path: "play", deviceID: deviceID, jsonBody: body)
     }
@@ -1117,7 +1137,9 @@ actor SpotifyWebAPI {
             let owner = (item["owner"] as? [String: Any])?["display_name"] as? String
             let subtitle = (artists?.first?["name"] as? String) ?? owner ?? ""
             let albumURI = (item["album"] as? [String: Any])?["uri"] as? String
-            return SearchItem(id: id, uri: uri, name: name, artist: subtitle, albumURI: albumURI)
+            let tracks = (item["tracks"] ?? item["items"]) as? [String: Any]
+            return SearchItem(id: id, uri: uri, name: name, artist: subtitle, albumURI: albumURI,
+                              trackCount: tracks?["total"] as? Int)
         }
 
         guard !items.isEmpty else { throw SpotifyAPIError.noResults }

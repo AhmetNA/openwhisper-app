@@ -27,6 +27,28 @@ final class SpotifyControllerTests: XCTestCase {
         XCTAssertNil(results.artist)
         XCTAssertEqual(results.track?.name, "Track")
     }
+    func testMoodPlaylistPickSkipsRecentAndKeepsExactName() {
+        let lists = (1...4).map { SpotifyWebAPI.TrackResult(uri: "spotify:playlist:p\($0)", name: "Sakin \($0)", artist: "") }
+        for _ in 0..<50 {
+            let pick = SpotifyController.pickPlaylist(lists, title: "sakin", recent: ["spotify:playlist:p1", "spotify:playlist:p2", "spotify:playlist:p3"])
+            XCTAssertEqual(pick?.uri, "spotify:playlist:p4")
+        }
+        let allRecent = SpotifyController.pickPlaylist(lists, title: "sakin", recent: lists.map(\.uri))
+        XCTAssertNotNil(allRecent)
+        let picks = Set((0..<50).compactMap { _ in SpotifyController.pickPlaylist(lists, title: "sakin", recent: [])?.uri })
+        XCTAssertGreaterThan(picks.count, 1)
+        let exact = SpotifyController.pickPlaylist(lists, title: "Sakin 3", recent: ["spotify:playlist:p3"])
+        XCTAssertEqual(exact?.uri, "spotify:playlist:p3")
+        XCTAssertNil(SpotifyController.pickPlaylist([], title: "sakin", recent: []))
+    }
+
+    func testRememberedPlaylistsKeepNewestFive() {
+        var recent: [String] = []
+        for i in 1...7 { recent = SpotifyController.rememberedPlaylists(adding: "p\(i)", to: recent) }
+        XCTAssertEqual(recent, ["p7", "p6", "p5", "p4", "p3"])
+        XCTAssertEqual(SpotifyController.rememberedPlaylists(adding: "p5", to: recent), ["p5", "p7", "p6", "p4", "p3"])
+    }
+
     func testPauseReportsStateInsteadOfAnImmediateAck() {
         XCTAssertEqual(SpotifyController.pauseMessage("alreadyPaused"), "Müzik zaten duraklatılmış")
         XCTAssertEqual(SpotifyController.pauseMessage("paused"), "Müzik durduruldu")

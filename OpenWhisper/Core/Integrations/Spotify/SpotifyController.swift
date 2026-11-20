@@ -399,7 +399,9 @@ final class SpotifyController: @unchecked Sendable {
         }
 
         var type = request.catalogType
-        var item = request.kind == .freeText ? prefetchedTrack : await firstSearchHit(queries: queries, type: type)
+        var item = request.kind == .freeText ? prefetchedTrack
+            : type == .playlist ? await variedPlaylistHit(queries: queries, title: request.title)
+            : await firstSearchHit(queries: queries, type: type)
         if item == nil, type != .track, !request.freeText.isEmpty {
             type = .track
             item = await firstSearchHit(queries: [request.freeText], type: .track)
@@ -418,8 +420,9 @@ final class SpotifyController: @unchecked Sendable {
             return await playLikedSongs()
         }
 
-        let result = type == .track ? await playTrack(item) : await playContext(item, type: type)
+        let result = type == .track ? await playTrack(item) : await playContext(item, type: type, shuffled: type == .playlist)
         if result.succeeded {
+            if type == .playlist { Self.rememberPlaylist(item.uri) }
             return result
         }
         return openInSpotify(
@@ -435,6 +438,49 @@ final class SpotifyController: @unchecked Sendable {
         async let artistResult = artist()
         async let trackResult = track()
         return await (artistResult, trackResult)
+    }
+
+    /// "Sakin bir şeyler aç" searches the playlist catalog for "sakin". Spotify's first hit
+    /// is the same every time, so pick at random among the top ones, skipping the lists
+    /// played recently. A result named exactly like the request ("Türkçe Pop listesi") wins.
+    private func variedPlaylistHit(queries: [String], title: String) async -> SpotifyWebAPI.TrackResult? {
+        for query in queries {
+            do {
+                let items = try await SpotifyWebAPI.shared.searchItems(query: query, type: .playlist, limit: 10)
+                guard let item = Self.pickPlaylist(items, title: title, recent: Self.recentPlaylists) else { continue }
+                owLog("[SpotifyController] playlist '\(query)' → \(Self.label(for: item)) (of \(items.count))")
+                return item
+            } catch SpotifyWebAPI.SpotifyAPIError.noResults {
+                owLog("[SpotifyController] No playlist results for '\(query)'")
+            } catch {
+                owLog("[SpotifyController] playlist search failed: \(error)")
+                return nil
+            }
+        }
+        return nil
+    }
+
+    static let recentPlaylistsKey = "spotifyRecentMoodPlaylists"
+    static var recentPlaylists: [String] {
+        UserDefaults.standard.stringArray(forKey: recentPlaylistsKey) ?? []
+    }
+
+    static func rememberPlaylist(_ uri: String) {
+        UserDefaults.standard.set(rememberedPlaylists(adding: uri, to: recentPlaylists), forKey: recentPlaylistsKey)
+    }
+
+    /// The last five played, newest first.
+    static func rememberedPlaylists(adding uri: String, to recent: [String]) -> [String] {
+        Array(([uri] + recent.filter { $0 != uri }).prefix(5))
+    }
+
+    static func pickPlaylist(_ items: [SpotifyWebAPI.TrackResult], title: String, recent: [String]) -> SpotifyWebAPI.TrackResult? {
+        let wanted = SpotifyRequestParser.foldedWords(title)
+        if !wanted.isEmpty, let exact = items.first(where: { SpotifyRequestParser.foldedWords($0.name) == wanted }) {
+            return exact
+        }
+        let fresh = items.filter { !recent.contains($0.uri) }
+        return (fresh.isEmpty ? items : fresh).randomElement()
     }
 
     /// First result across `queries`. Stops early on errors other than "no results":
@@ -516,7 +562,9 @@ final class SpotifyController: @unchecked Sendable {
     }
 
     /// Plays an artist, album or playlist as a context, so Spotify keeps going through it.
-    func playContext(_ item: SpotifyWebAPI.TrackResult, type: SpotifyWebAPI.SearchType) async -> SpotifyActionResult {
+    /// `shuffled` (mood playlists) turns shuffle on and starts at a random track, so the
+    /// same list doesn't open on the same song.
+    func playContext(_ item: SpotifyWebAPI.TrackResult, type: SpotifyWebAPI.SearchType, shuffled: Bool = false) async -> SpotifyActionResult {
         guard Self.isValidContextURI(item.uri) else {
             return .failure(L("Geçersiz Spotify adresi", "Invalid Spotify address"))
         }
@@ -529,8 +577,17 @@ final class SpotifyController: @unchecked Sendable {
         return await perform(
             "Çalma",
             web: {
-                try await self.withDeviceFallback {
-                    try await SpotifyWebAPI.shared.startPlayback(contextURI: item.uri, deviceID: $0)
+                try await self.withDeviceFallback { deviceID in
+                    var start: Int?
+                    if shuffled {
+                        do {
+                            try await SpotifyWebAPI.shared.setShuffle(true, deviceID: deviceID)
+                        } catch {
+                            owLog("[SpotifyController] Playlist shuffle not set: \(error)")
+                        }
+                        if let count = item.trackCount, count > 1 { start = Int.random(in: 0..<count) }
+                    }
+                    try await SpotifyWebAPI.shared.startPlayback(contextURI: item.uri, offsetPosition: start, deviceID: deviceID)
                 }
                 return message
             },
