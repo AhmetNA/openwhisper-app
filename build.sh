@@ -137,6 +137,13 @@ if [ -x "$PHONON_DEST/.venv/bin/python" ]; then
     echo "==> Updated Phonon server in $PHONON_DEST"
 fi
 
+# Optional offline Turkish Supertonic 3 voice.
+SUPERTONIC_DEST="$HOME/Library/Application Support/OpenWhisper/tts-supertonic"
+if [ -x "$SUPERTONIC_DEST/.venv/bin/python" ]; then
+    cp servers/tts_supertonic_server/server.py "$SUPERTONIC_DEST/"
+    echo "==> Updated Supertonic server in $SUPERTONIC_DEST"
+fi
+
 # Alternative speech model (Settings › Konuşma modeli › Qwen3-ASR): keep the installed server
 # script in sync. The venv and the model come from servers/asr_server/setup.sh (once).
 ASR_DEST="$HOME/Library/Application Support/OpenWhisper/asr"

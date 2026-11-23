@@ -67,7 +67,7 @@ final class SpeechSynthesisProviderTests: XCTestCase {
     }
 
     func testRegistryListsBothProvidersWithGeminiModels() {
-        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "phonon", "local", "ema", "ahenk", "gemini"])
+        XCTAssertEqual(SpeechProviders.all.map(\.id), ["pocket", "piper", "phonon", "local", "ema", "ahenk", "supertonic", "gemini"])
         XCTAssertEqual(SpeechProviders.descriptor(for: "gemini").models.map(\.id),
                        ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"])
         XCTAssertFalse(SpeechProviders.descriptor(for: "local").needsAPIKey)
@@ -126,6 +126,19 @@ final class SpeechSynthesisProviderTests: XCTestCase {
         XCTAssertNotEqual(LocalAhenkCepProvider.shared.cacheIdentity, LocalEMALightningProvider.shared.cacheIdentity)
         let ports = LocalModelServer.allPorts()
         XCTAssertTrue(ports.contains(LocalAhenkCepProvider.port))
+        XCTAssertEqual(ports.count, Set(ports).count)
+    }
+
+    @MainActor
+    func testSupertonicSelectionPersistsAndUsesAnIsolatedServer() {
+        store.providerID = "supertonic"
+        let reopened = SpeechSettingsStore(defaults: UserDefaults(suiteName: suiteName)!, secrets: secrets)
+        XCTAssertEqual(reopened.providerID, "supertonic")
+        XCTAssertTrue(reopened.makeProvider() === LocalSupertonicProvider.shared)
+        XCTAssertEqual(LocalSupertonicProvider.shared.replyLanguage, .turkish)
+        XCTAssertNotEqual(LocalSupertonicProvider.shared.cacheIdentity, LocalAhenkCepProvider.shared.cacheIdentity)
+        let ports = LocalModelServer.allPorts()
+        XCTAssertTrue(ports.contains(LocalSupertonicProvider.port))
         XCTAssertEqual(ports.count, Set(ports).count)
     }
 
