@@ -454,95 +454,99 @@ final class ReminderManager {
         UserDefaults.standard.string(forKey: "ollamaModel") ?? LLMCleanup.defaultModel
     }
 
-    /// Constrains Ollama to the two fields the parser accepts. Plain `"json"` mode only
-    /// guarantees syntactically valid JSON; a schema also prevents renamed/missing fields and
-    /// non-string values from reaching the defensive fallback parser below.
+    /// The model only copies the spoken numbers and day; Swift does all the arithmetic
+    /// (see `llmFireDate`). A small model asked for a datetime answered "now" for
+    /// "6 dakika sonra", and asked for minutes it turned 7 dakika into 420.
+    static let llmDays = ["", "today", "tomorrow", "day_after_tomorrow",
+                          "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
     static let ollamaResponseSchema: [String: Any] = [
         "type": "object",
         "properties": [
             "task": ["type": "string"],
-            "datetime": ["type": "string"]
+            "minutes": ["type": "number"],
+            "hours": ["type": "number"],
+            "day": ["type": "string", "enum": llmDays],
+            "time": ["type": "string"]
         ],
-        "required": ["task", "datetime"],
+        "required": ["task", "minutes", "hours", "day", "time"],
         "additionalProperties": false
     ]
 
-    /// Ask Ollama to parse task description and target fireDate from voice text
+    /// The fire date from the model's fields: an offset ("X dakika/saat sonra") wins;
+    /// otherwise `day` at `time` ("HH:MM", 09:00 when empty). Nil when nothing is usable
+    /// or the result isn't in the future, so a misread never fires at once.
+    nonisolated static func llmFireDate(minutes: Double, hours: Double, day: String, time: String,
+                                        now: Date, calendar cal: Calendar = .current) -> Date? {
+        let offset = minutes * 60 + hours * 3600
+        if offset > 0 { return now.addingTimeInterval(offset) }
+        let weekdays = ["sunday": 1, "monday": 2, "tuesday": 3, "wednesday": 4, "thursday": 5, "friday": 6, "saturday": 7]
+        let daysAhead: Int
+        switch day {
+        case "", "today": daysAhead = 0
+        case "tomorrow": daysAhead = 1
+        case "day_after_tomorrow": daysAhead = 2
+        default:
+            guard let target = weekdays[day] else { return nil }
+            let diff = (target - cal.component(.weekday, from: now) + 7) % 7
+            daysAhead = diff == 0 ? 7 : diff
+        }
+        guard let base = cal.date(byAdding: .day, value: daysAhead, to: now) else { return nil }
+        var hour = 9, minute = 0
+        let parts = time.trimmingCharacters(in: .whitespaces).split(separator: ":")
+        if !parts.isEmpty {
+            guard let h = Int(parts[0]), (0...23).contains(h) else { return nil }
+            hour = h
+            minute = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        }
+        var comps = cal.dateComponents([.year, .month, .day], from: base)
+        comps.hour = hour
+        comps.minute = minute
+        guard let date = cal.date(from: comps), date > now else { return nil }
+        return date
+    }
+
+    /// Ask Ollama for the task and the spoken time; the date is computed here.
     private func parseWithOllama(text: String) async -> ParsedReminder? {
-
-        let now = Date()
-        let cal = Calendar.current
-        let tomorrow = cal.date(byAdding: .day, value: 1, to: now) ?? now
-
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        df.timeZone = TimeZone.current
-        let currentTime = df.string(from: now)
-
-        let dateOnlyFormatter = DateFormatter()
-        dateOnlyFormatter.dateFormat = "yyyy-MM-dd"
-        dateOnlyFormatter.timeZone = TimeZone.current
-        let currentDateStr = dateOnlyFormatter.string(from: now)
-        let tomorrowDateStr = dateOnlyFormatter.string(from: tomorrow)
-
-        let weekdayFormatter = DateFormatter()
-        weekdayFormatter.dateFormat = "EEEE"
-        weekdayFormatter.locale = Locale(identifier: "tr_TR")
-        let currentWeekday = weekdayFormatter.string(from: now)
-
         let prompt = """
-            Extract the task description and scheduled date/time from this voice reminder command.
-            Current reference date & time: \(currentTime) (\(currentWeekday))
-            Today's date: \(currentDateStr)
-            Tomorrow's date: \(tomorrowDateStr)
+            Read this voice reminder command. Do NOT calculate anything; copy the numbers as spoken.
 
-            TURKISH & ENGLISH TIME PARSING RULES:
-            - "bugün" = today (\(currentDateStr))
-            - "yarın" = tomorrow (\(tomorrowDateStr))
-            - Expressions like "yarın 17 ye", "yarın 17'ye", "yarın saat 17", "yarın 17:00" = tomorrow at 17:00:00 (\(tomorrowDateStr)T17:00:00)
-            - Expressions like "bugün 18'de", "bugün 18 e" = today at 18:00:00 (\(currentDateStr)T18:00:00)
-            - Specific dates like "17 Temmuz", "15 Ağustos" = use that specific date and current/next year.
-            - "X dakika sonra" / "X saat sonra" = add X minutes/hours to reference time \(currentTime).
-            - If the command does NOT mention a specific time of day, default the time to 09:00:00.
-
-            CRITICAL TASK EXTRACTION RULES:
-            - The "task" field MUST BE IN THE EXACT ORIGINAL LANGUAGE (Turkish if spoken in Turkish).
-            - The "task" field MUST contain ONLY the action to be done (e.g. "Telefonu yıka", "Raporu gönder").
-            - REMOVE all trigger words ("hatırlatıcı", "bana hatırlat", "hatırlatıcı kur", "remind me to", etc.) AND REMOVE all time/date expressions ("yarın 17 ye", "bugün 18'de", "10 dakika sonra", etc.).
+            Fields:
+            - "task": only the thing to do, in the original language, without trigger words ("hatırlatıcı", "hatırlat", "oluştur", "kur", "remind me") and without time words. "" if nothing is left.
+            - "minutes": the number before "dakika" in "X dakika sonra / sonrası / içinde / geçince", else 0. "7 dakika" -> 7.
+            - "hours": the number before "saat" in "X saat sonra", else 0. "yarım saat" -> 0.5.
+            - "day": "today", "tomorrow" (yarın), "day_after_tomorrow" (öbür gün), a weekday in English (perşembe -> "thursday"), or "".
+            - "time": a clock time "HH:MM" 24-hour ("17'ye" -> "17:00", "akşam 8" -> "20:00", "öğlen 12" -> "12:00"), or "".
 
             EXAMPLES:
-            - Input: "hatırlatıcı yarın 17 ye telefonu yıka"
-              -> {"task": "Telefonu yıka", "datetime": "\(tomorrowDateStr)T17:00:00"}
-            - Input: "hatırlatıcı bugün 18 de markete git"
-              -> {"task": "Markete git", "datetime": "\(currentDateStr)T18:00:00"}
-            - Input: "bana 10 dakika sonra kahve içmeyi hatırlat"
-              -> {"task": "Kahve iç", "datetime": "..."}
+            - "6 dakika sonrası için hatırlatıcı oluştur" -> {"task": "", "minutes": 6, "hours": 0, "day": "", "time": ""}
+            - "bana 2 saat sonra kahve içmeyi hatırlat" -> {"task": "Kahve iç", "minutes": 0, "hours": 2, "day": "", "time": ""}
+            - "hatırlatıcı yarın 17 ye telefonu yıka" -> {"task": "Telefonu yıka", "minutes": 0, "hours": 0, "day": "tomorrow", "time": "17:00"}
+            - "cuma akşam 8de markete git" -> {"task": "Markete git", "minutes": 0, "hours": 0, "day": "friday", "time": "20:00"}
 
-            Return ONLY a valid JSON object: {"task": "...", "datetime": "YYYY-MM-DDTHH:MM:SS"}.
             Voice command: "\(text)"
             """
 
-        // The JSON schema makes Ollama constrain both the syntax and the required fields.
         let request = LLMRequest(model: selectedOllamaModel, prompt: prompt, timeout: 15,
                                  temperature: 0.1, maxTokens: 150, schema: Self.ollamaResponseSchema)
 
         do {
             let responseText = try await LLM.default.generate(request)
-
             owLog("[Reminders] Ollama response: \(responseText)")
 
-            guard let parsed = Self.extractJSONObject(from: responseText),
-                  let task = parsed["task"],
-                  let datetimeStr = parsed["datetime"] else {
-                owLog("[Reminders] Could not extract task/datetime from Ollama response")
+            guard let parsed = Self.extractJSONObject(from: responseText) else {
+                owLog("[Reminders] Could not read Ollama response")
                 return nil
             }
-
-            guard let fireDate = parseDateString(datetimeStr) else {
-                owLog("[Reminders] Failed to parse date: \(datetimeStr)")
+            let minutes = Double(parsed["minutes"] ?? "") ?? 0
+            let hours = Double(parsed["hours"] ?? "") ?? 0
+            let day = parsed["day"] ?? "", time = parsed["time"] ?? ""
+            guard let fireDate = Self.llmFireDate(minutes: minutes, hours: hours, day: day, time: time, now: Date()) else {
+                owLog("[Reminders] Ollama gave no future time (minutes \(minutes), hours \(hours), day '\(day)', time '\(time)') — not scheduling")
                 return nil
             }
-
+            var task = (parsed["task"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if task.isEmpty { task = "Hatırlatma" }
             return ParsedReminder(task: task, fireDate: fireDate)
         } catch let LLMError.http(status) {
             owLog("[Reminders] Ollama HTTP error: \(status)")
@@ -586,26 +590,6 @@ final class ReminderManager {
             }
         }
         return result
-    }
-
-    private func parseDateString(_ datetimeStr: String) -> Date? {
-        let clean = datetimeStr.trimmingCharacters(in: .whitespacesAndNewlines)
-        let formats = [
-            "yyyy-MM-dd'T'HH:mm:ss",
-            "yyyy-MM-dd'T'HH:mm",
-            "yyyy-MM-dd HH:mm:ss",
-            "yyyy-MM-dd HH:mm"
-        ]
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.timeZone = TimeZone.current
-        for fmt in formats {
-            df.dateFormat = fmt
-            if let date = df.date(from: clean) {
-                return date
-            }
-        }
-        return nil
     }
 
     // MARK: - Notification Scheduling

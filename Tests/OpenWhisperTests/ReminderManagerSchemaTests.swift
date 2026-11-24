@@ -117,14 +117,33 @@ final class ReminderManagerSchemaTests: XCTestCase {
         XCTAssertNil(ReminderManager.setFitConfirmation(label: "unclear", confident: true, text: "Hangisi?"))
     }
 
-    func testOllamaResponseSchemaRequiresTaskAndDatetimeStrings() throws {
+    func testOllamaResponseSchemaAsksForSpokenTimeNotADate() throws {
         let schema = ReminderManager.ollamaResponseSchema
         XCTAssertTrue(JSONSerialization.isValidJSONObject(schema))
-        XCTAssertEqual(Set(schema["required"] as? [String] ?? []), Set(["task", "datetime"]))
+        XCTAssertEqual(Set(schema["required"] as? [String] ?? []), Set(["task", "minutes", "hours", "day", "time"]))
         XCTAssertEqual(schema["additionalProperties"] as? Bool, false)
+    }
 
-        let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-        XCTAssertEqual((properties["task"] as? [String: Any])?["type"] as? String, "string")
-        XCTAssertEqual((properties["datetime"] as? [String: Any])?["type"] as? String, "string")
+    func testLLMFireDateIsComputedInSwiftAndNeverInThePast() throws {
+        let cal = Calendar.current
+        // Tuesday 24 November 2026, 20:57.
+        let now = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 24, hour: 20, minute: 57)))
+        func date(_ m: Double, _ h: Double, _ d: String, _ t: String) -> Date? {
+            ReminderManager.llmFireDate(minutes: m, hours: h, day: d, time: t, now: now, calendar: cal)
+        }
+        func at(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date? {
+            cal.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))
+        }
+        XCTAssertEqual(date(6, 0, "", ""), now.addingTimeInterval(360))
+        XCTAssertEqual(date(0, 0.5, "", ""), now.addingTimeInterval(1800))
+        XCTAssertEqual(date(0, 0, "tomorrow", "17:00"), at(25, 17))
+        XCTAssertEqual(date(0, 0, "", "21:30"), at(24, 21, 30))
+        XCTAssertEqual(date(0, 0, "thursday", "12:00"), at(26, 12))
+        XCTAssertEqual(date(0, 0, "tuesday", ""), at(1, 9).flatMap { cal.date(byAdding: .month, value: 1, to: $0) })
+        // The old failure: "now" (or earlier) is refused instead of firing at once.
+        XCTAssertNil(date(0, 0, "", "20:57"))
+        XCTAssertNil(date(0, 0, "today", "06:00"))
+        XCTAssertNil(date(0, 0, "", ""))
+        XCTAssertNil(date(0, 0, "", "25:00"))
     }
 }
