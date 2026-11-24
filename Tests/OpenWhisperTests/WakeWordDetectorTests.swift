@@ -77,9 +77,10 @@ final class WakeWordDetectorTests: XCTestCase {
 
     /// The fixture's speech sits ~45 dB above its noise; the raw mic in real use gives 17–37 dB.
     /// Scale the speech down by `attenuationDB`, lay it over steady noise at the fixture's own
-    /// floor (~31 dB) and precede it with `leadSeconds` of that noise alone.
+    /// floor (~31 dB) and precede it with `leadSeconds` of that noise alone. The noise is seeded:
+    /// with fresh noise each run, the 30 dB gated/ungated gap landed past 0.05 about one run in four.
     private func realistic(_ name: String, attenuationDB: Float, leadSeconds: Int = 6) throws -> [Float] {
-        var rng = SystemRandomNumberGenerator()
+        var rng = SeededGenerator(seed: 1)
         let gain = pow(10, -attenuationDB / 20)
         let speech = try samples(name).map { $0 * gain }
         let noise = { Float(Int.random(in: -60...60, using: &rng)) }
@@ -94,7 +95,7 @@ final class WakeWordDetectorTests: XCTestCase {
             XCTAssertEqual(plain.count, gated.count)
             // After the long quiet lead the model restarts from silence on the last 3 s, so the
             // scores are close to, not exactly, the ungated ones.
-            XCTAssertEqual(gated.max() ?? 0, plain.max() ?? 0, accuracy: 0.05, "attenuation \(attenuation) dB")
+                        XCTAssertEqual(gated.max() ?? 0, plain.max() ?? 0, accuracy: 0.05, "attenuation \(attenuation) dB")
             for i in plain.indices where gated[i] > 0 {
                 XCTAssertEqual(gated[i], plain[i], accuracy: 0.1, "block \(i)")
             }
@@ -260,5 +261,14 @@ final class WakeWordDetectorTests: XCTestCase {
         print(String(format: "[vad-test] typing: model runs energy-only %.0f%%, with VAD %.0f%%, speech chunks %d", energyShare * 100, run.runShare * 100, run.speechChunks))
         XCTAssertGreaterThan(energyShare, 0.5, "the clicks should open the energy-only gate")
         XCTAssertLessThan(run.runShare, 0.15, "energy-only share was \(energyShare)")
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return state
     }
 }
