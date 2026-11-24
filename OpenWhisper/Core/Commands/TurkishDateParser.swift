@@ -56,6 +56,8 @@ enum TurkishDateParser {
         "add a reminder",
         "set a reminder",
         "set reminder",
+        "hatırlatıcı oluşturur",
+        "hatırlatıcı oluştur",
         "hatırlatıcı kur",
         "hatırlatıcı ekle",
         "bana unutturma",
@@ -168,9 +170,12 @@ enum TurkishDateParser {
 
         // --- 1. Exact offsets: "10 dakika sonra", "yarım saat sonra", "bir buçuk saat sonra",
         // "2 saat 15 dakika sonra" (override everything else) ---
-        if let m = SpokenDuration.first(in: working, suffix: "\\s+sonra\\b") {
+        // "6 dakika sonra / sonrası / sonrasına / sonrasında / sonrası için".
+        if let m = SpokenDuration.first(in: working, suffix: "\\s+sonra(?:s[ıi](?:n[ae]|nda)?)?(?:\\s+i[çc]in)?\\b") {
             exactDate = now.addingTimeInterval(TimeInterval(m.seconds))
             working.removeSubrange(m.range)
+            // "Bugün saat 6 dakika sonrasına": the offset is the time; "bugün" and "saat" are leftovers.
+            working = working.replacingOccurrences(of: #"\b(?:bug[üu]n|saat)\b"#, with: " ", options: .regularExpression)
         }
 
         // --- 2. Day-level expressions (only if no exact minute/hour offset already matched) ---
@@ -279,6 +284,8 @@ enum TurkishDateParser {
         task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         while task.contains("  ") { task = task.replacingOccurrences(of: "  ", with: " ") }
         task = task.trimmingCharacters(in: CharacterSet(charactersIn: ".,:;!? "))
+        // "6 dakika sonra hatırlatıcı oluştur" names only the time: remind with a generic title.
+        if task.isEmpty, exactDate != nil { task = "hatırlatma" }
         guard !task.isEmpty else { return nil }
 
         return ParsedResult(task: trUpperFirst(task), fireDate: resultDate)
