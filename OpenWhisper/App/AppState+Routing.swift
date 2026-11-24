@@ -2626,7 +2626,14 @@ extension AppState {
             }
             // Short sentences are always shown to the model: a misheard command may not look like one.
             // So is any sentence with a Claude-like word: Whisper hears Claude as "cloud", "klod", "clad".
-            if route == .chat, await runRewrittenCommand(run, anyShape: trimmed.split(separator: " ").count <= 10
+            // SetFit's command_domain: a confident "not a command" skips that round trip, a confident
+            // "another command" shows any sentence to the model.
+            let domain = route == .chat && !CommandLanguage.isEnglish
+                ? await SetFitDecider.decide(.commandDomain, text: trimmed) : nil
+            let domainSaysChat = domain?.confident == true && domain?.label == "hicbiri"
+            let domainSaysCommand = domain?.confident == true && domain?.label == "baska_komut"
+            if route == .chat, !domainSaysChat || CommandRewriter.mentionsClaude(trimmed),
+               await runRewrittenCommand(run, anyShape: domainSaysCommand || trimmed.split(separator: " ").count <= 10
                                                          || CommandRewriter.mentionsClaude(trimmed)) { return }
             if route == .chat {
                 session.latency.finishDecision(route: "Jarvis sohbet")

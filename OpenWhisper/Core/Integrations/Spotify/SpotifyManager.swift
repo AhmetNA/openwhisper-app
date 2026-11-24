@@ -980,11 +980,22 @@ final class SpotifyManager: @unchecked Sendable {
         // Cheapest checks first: the word test, then the playback query (which never
         // launches Spotify), and only then Ollama.
         let natural = rules == nil && modelAvailable && isNaturalCandidate(text)
+        // SetFit's command_domain: a confident "not music" skips the LLM round trip; a confident
+        // "music" lets a sentence without the usual words ("bir derdim var aç") reach the parser.
+        var domainSpotify = false
+        if rules == nil, setFit, let domain = await SetFitDecider.decide(.commandDomain, text: text), domain.confident {
+            guard domain.label == "spotify" else {
+                owLog("[Spotify] command_domain → \(domain.label); no music parse")
+                return false
+            }
+            domainSpotify = llmAvailable
+        }
         var spotifyPlaying = false
         if natural {
             spotifyPlaying = await SpotifyController.shared.isPlayingLocally()
         }
-        guard rules != nil || command || promotion || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
+        guard rules != nil || command || promotion || domainSpotify
+                || (natural && (spotifyPlaying || mentionsVolume(text))) else { return false }
 
         // Ollama starts at the same time as SetFit, so a search or an unsure SetFit answer costs
         // one Ollama round trip, not SetFit + Ollama. A confident SetFit answer cancels it.

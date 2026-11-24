@@ -42,6 +42,9 @@ final class SetFitDecider {
         case reminderConfirm = "reminder_confirm"
         /// add_event / query_events / none. Only add_event is acted on (`calendarEventRequest`).
         case calendarIntent = "calendar_intent"
+        /// spotify / reminder / calendar / baska_komut / hicbiri for a sentence the rules left.
+        /// Only skips or allows a model round trip; it never runs a command by itself.
+        case commandDomain = "command_domain"
 
         /// Below this, the answer is ignored and Ollama decides. Measured on the dev set
         /// (27 Sep 2026): spotify at 0.9 was 96% right while answering 75% of the texts.
@@ -53,6 +56,8 @@ final class SetFitDecider {
             case .reminderConfirm: return 0.9
             // No Ollama behind it: below this the sentence is dictated or chatted as before.
             case .calendarIntent: return 0.9
+            // Cross-validated on 867 real sentences (25 Nov 2026): 96% right while answering 36%.
+            case .commandDomain: return 0.9
             }
         }
     }
