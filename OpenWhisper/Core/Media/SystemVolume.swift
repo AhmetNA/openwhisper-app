@@ -15,6 +15,11 @@ enum SystemVolume {
     }
 
     static func adjust(by delta: Int) -> SpotifyActionResult {
+        // "Bayağı / çok kıs" halves the current level (100 → 50, 80 → 40, 30 → 15),
+        // so a loud volume drops a lot and a quiet one only a little.
+        if delta <= -30 {
+            return apply { current in Float(percent(current / 2)) / 100 }
+        }
         let step = max(-maxStep, min(maxStep, delta))
         return apply { current in Float(clamped(percent(current) + step)) / 100 }
     }

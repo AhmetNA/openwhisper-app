@@ -933,7 +933,7 @@ final class SpotifyManager: @unchecked Sendable {
         return intents.contains { hasEvidence(for: SpotifyRequestParser.OllamaParse(intent: $0), in: text, natural: true) }
     }
 
-    /// 10 for "biraz", 30 for "çok", 20 otherwise.
+    /// 10 for "biraz", 30 for "çok", 20 otherwise. A -30 halves the level instead (see `SystemVolume.adjust`).
     static func volumeStep(in text: String) -> Int {
         let cues = Set(cueWords(normalize(text)))
         if !cues.isDisjoint(with: smallAmountWords) { return 10 }
