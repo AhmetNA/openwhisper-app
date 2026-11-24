@@ -145,8 +145,11 @@ final class RemoteControl {
     }
 
     /// The login window covers the session: nothing can be typed into apps or seen on screen.
+    /// Always false under XCTest, so tests that route a transcript don't depend on whether
+    /// the Mac running them happens to be locked.
     static var screenIsLocked: Bool {
-        (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
+        if NSClassFromString("XCTestCase") != nil { return false }
+        return (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
     }
 
     /// Routes that type into an app or need it in front.
