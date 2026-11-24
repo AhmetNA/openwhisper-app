@@ -36,6 +36,17 @@ final class WakeWordListener {
         let stored = UserDefaults.standard.float(forKey: "wakeWordCandidateThreshold")
         return stored > 0 ? stored : 0.15
     }
+    /// External mic (no echo cancellation) while the Mac plays to the room: the speakers reach the
+    /// mic unfiltered and woke it by themselves, so both bars rise to these.
+    /// Override: `defaults write com.openwhisper.app wakeWordExternalMediaThreshold 0.5`
+    static var externalMediaThreshold: Float {
+        let stored = UserDefaults.standard.float(forKey: "wakeWordExternalMediaThreshold")
+        return max(stored > 0 ? stored : 0.5, threshold)
+    }
+    static var externalMediaCandidateThreshold: Float {
+        let stored = UserDefaults.standard.float(forKey: "wakeWordExternalMediaCandidateThreshold")
+        return max(stored > 0 ? stored : 0.3, candidateThreshold)
+    }
     /// Audio kept before a candidate (the word itself) and collected after it (what follows:
     /// a pause or a command when calling, more lyrics when singing).
     private static let preRollSamples = 16000 * 2
@@ -676,7 +687,9 @@ final class WakeWordListener {
             owLog("[WakeWord] Inference failed: \(error)")
             return
         }
-        let threshold = Self.threshold
+        let raised = captureIsExternal && mediaAudible
+        let threshold = raised ? Self.externalMediaThreshold : Self.threshold
+        let candidateThreshold = raised ? Self.externalMediaCandidateThreshold : Self.candidateThreshold
         if !scores.isEmpty { levelsSinceLog.append(detector.lastLevelDB) }
         for s in scores {
             peakSinceLog = max(peakSinceLog, s)
@@ -716,7 +729,7 @@ final class WakeWordListener {
             } else if pendingCandidate != nil {
                 let peak = pendingCandidate?.peak ?? 0
                 pendingCandidate?.peak = max(peak, s)
-            } else if s >= Self.candidateThreshold, onCandidate != nil,
+            } else if s >= candidateThreshold, onCandidate != nil,
                       now.timeIntervalSince(lastWake) > cooldown, now.timeIntervalSince(lastCandidate) > cooldown {
                 let end = scoredEndHostIndex.map { AVAudioTime.hostTime(forSeconds: Double($0) / Double(EchoCanceller.sampleRate)) } ?? mach_absolute_time()
                 let padding = AVAudioTime.hostTime(forSeconds: 0.08 + Double(EchoCanceller.lookahead) / Double(EchoCanceller.sampleRate))
