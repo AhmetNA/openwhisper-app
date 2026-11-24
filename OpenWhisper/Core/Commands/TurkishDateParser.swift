@@ -160,6 +160,16 @@ enum TurkishDateParser {
 
     /// Returns nil when no recognizable relative-date expression is found — caller should
     /// fall back to the LLM in that case. `now`/`calendar` are injectable for testing.
+    /// A 12-hour reading moved to the afternoon by the part of day said with it:
+    /// "akşam 8" → 20, "öğlen 2" → 14, "gece 11" → 23; "sabah 9" and "gece 2" stay.
+    private static func hour(_ hour: Int, partOfDay text: String) -> Int {
+        guard hour < 12 else { return hour }
+        if firstMatch("\\b(?:akşam|aksam|öğleden\\s+sonra|ogleden\\s+sonra)", in: text) != nil { return hour + 12 }
+        if firstMatch("\\bgece", in: text) != nil { return hour >= 6 ? hour + 12 : hour }
+        if firstMatch("\\b(?:öğle|ogle)", in: text) != nil { return hour < 6 ? hour + 12 : hour }
+        return hour
+    }
+
     static func parse(_ text: String, now: Date = Date(), calendar: Calendar = .current) -> ParsedResult? {
         let cal = calendar
         let lower = SpokenDuration.repairMishearing(trLower(text))
@@ -170,8 +180,9 @@ enum TurkishDateParser {
 
         // --- 1. Exact offsets: "10 dakika sonra", "yarım saat sonra", "bir buçuk saat sonra",
         // "2 saat 15 dakika sonra" (override everything else) ---
-        // "6 dakika sonra / sonrası / sonrasına / sonrasında / sonrası için".
-        if let m = SpokenDuration.first(in: working, suffix: "\\s+sonra(?:s[ıi](?:n[ae]|nda)?)?(?:\\s+i[çc]in)?\\b") {
+        // "6 dakika sonra / sonrası / sonrasına / sonrasında / sonrası için / içinde / geçince",
+        // "6 dakikanın ardından".
+        if let m = SpokenDuration.first(in: working, suffix: "\\s+(?:sonra(?:s[ıi](?:n[ae]|nda)?)?(?:\\s+i[çc]in)?|i[çc]inde|ge[çc]ince|ard[ıi]ndan)\\b") {
             exactDate = now.addingTimeInterval(TimeInterval(m.seconds))
             working.removeSubrange(m.range)
             // "Bugün saat 6 dakika sonrasına": the offset is the time; "bugün" and "saat" are leftovers.
@@ -238,15 +249,13 @@ enum TurkishDateParser {
 
         // --- 3. Explicit time-of-day, applied on top of a day-level date if present ---
         var explicitTime: (hour: Int, minute: Int)?
-        if let m = firstMatch("\\bsaat\\s+(\\d{1,2})(?:[:.](\\d{2}))?\\s*'?(?:ye|ya|de|da|te|ta|e|a)?\\b", in: working) {
+        // "saat 17", "17'de", "17:30'da", "9 buçukta".
+        let clock = "(\\d{1,2})(?:[:.](\\d{2})|\\s+(bu[çc]u[kğ]))?"
+        if let m = firstMatch("\\bsaat\\s+\(clock)\\s*'?(?:ye|ya|de|da|te|ta|e|a)?\\b", in: working)
+            ?? firstMatch("\\b\(clock)\\s*'?(?:ye|ya|de|da|te|ta|e|a)\\b", in: working) {
             let hour = Int(m.groups[0] ?? "") ?? defaultHour
-            let minute = Int(m.groups[1] ?? "0") ?? 0
-            explicitTime = (hour, minute)
-            working.removeSubrange(m.range)
-        } else if let m = firstMatch("\\b(\\d{1,2})(?:[:.](\\d{2}))?\\s*'?(?:ye|ya|de|da|te|ta|e|a)\\b", in: working) {
-            let hour = Int(m.groups[0] ?? "") ?? defaultHour
-            let minute = Int(m.groups[1] ?? "0") ?? 0
-            explicitTime = (hour, minute)
+            let minute = m.groups[2] != nil ? 30 : Int(m.groups[1] ?? "0") ?? 0
+            explicitTime = (Self.hour(hour, partOfDay: lower), minute)
             working.removeSubrange(m.range)
         }
 

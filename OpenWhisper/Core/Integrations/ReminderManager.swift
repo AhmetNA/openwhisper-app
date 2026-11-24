@@ -506,48 +506,72 @@ final class ReminderManager {
         return date
     }
 
-    /// Ask Ollama for the task and the spoken time; the date is computed here.
-    private func parseWithOllama(text: String) async -> ParsedReminder? {
+    /// The Ollama request for `text`: the task and the spoken time, no date arithmetic.
+    nonisolated static func ollamaRequest(text: String, model: String) -> LLMRequest {
         let prompt = """
             Read this voice reminder command. Do NOT calculate anything; copy the numbers as spoken.
 
             Fields:
             - "task": only the thing to do, in the original language, without trigger words ("hatırlatıcı", "hatırlat", "oluştur", "kur", "remind me") and without time words. "" if nothing is left.
             - "minutes": the number before "dakika" in "X dakika sonra / sonrası / içinde / geçince", else 0. "7 dakika" -> 7.
-            - "hours": the number before "saat" in "X saat sonra", else 0. "yarım saat" -> 0.5.
+            - "hours": the number before "saat" in "X saat sonra / içinde / geçince", else 0. "yarım saat" -> 0.5, "çeyrek saat" -> 0.25.
             - "day": "today", "tomorrow" (yarın), "day_after_tomorrow" (öbür gün), a weekday in English (perşembe -> "thursday"), or "".
             - "time": a clock time "HH:MM" 24-hour ("17'ye" -> "17:00", "akşam 8" -> "20:00", "öğlen 12" -> "12:00"), or "".
 
             EXAMPLES:
             - "6 dakika sonrası için hatırlatıcı oluştur" -> {"task": "", "minutes": 6, "hours": 0, "day": "", "time": ""}
             - "bana 2 saat sonra kahve içmeyi hatırlat" -> {"task": "Kahve iç", "minutes": 0, "hours": 2, "day": "", "time": ""}
+            - "yarım saat içinde annemi aramayı hatırlat" -> {"task": "Annemi ara", "minutes": 0, "hours": 0.5, "day": "", "time": ""}
             - "hatırlatıcı yarın 17 ye telefonu yıka" -> {"task": "Telefonu yıka", "minutes": 0, "hours": 0, "day": "tomorrow", "time": "17:00"}
             - "cuma akşam 8de markete git" -> {"task": "Markete git", "minutes": 0, "hours": 0, "day": "friday", "time": "20:00"}
 
             Voice command: "\(text)"
             """
+        return LLMRequest(model: model, prompt: prompt, timeout: 15,
+                          temperature: 0.1, maxTokens: 150, schema: ollamaResponseSchema)
+    }
 
-        let request = LLMRequest(model: selectedOllamaModel, prompt: prompt, timeout: 15,
-                                 temperature: 0.1, maxTokens: 150, schema: Self.ollamaResponseSchema)
+    /// The task and fire date in an Ollama answer, or nil when it names no future time.
+    /// The model only decides what kind of time was said; where `spoken` holds a length
+    /// ("yarım saat", "7 dakika") its number is read here, since the small model misreads
+    /// them (yarım saat → 0.5 minutes). A clock time wins over an offset said with it.
+    nonisolated static func reminder(fromOllama response: String, spoken: String, now: Date,
+                                     calendar: Calendar = .current) -> (task: String, fireDate: Date)? {
+        guard let parsed = extractJSONObject(from: response) else {
+            owLog("[Reminders] Could not read Ollama response")
+            return nil
+        }
+        let day = parsed["day"] ?? ""
+        var time = parsed["time"] ?? ""
+        var minutes = Double(parsed["minutes"] ?? "") ?? 0
+        var hours = Double(parsed["hours"] ?? "") ?? 0
+        let length = SpokenDuration.first(in: spoken.lowercased(with: Locale(identifier: "tr_TR")))
+        if minutes + hours > 0, let length, ["", "today"].contains(day) {
+            // "Bugün saat 6 dakika sonra": a said length is the offset, even if "saat 6" also became a clock time.
+            minutes = Double(length.seconds) / 60; hours = 0; time = ""
+        } else if !time.isEmpty || !["", "today"].contains(day) {
+            // "Perşembe öğlen 12" read as 12 hours too: no length was said, so the clock wins.
+            minutes = 0; hours = 0
+        } else if minutes.rounded() != minutes {
+            owLog("[Reminders] Ollama gave \(minutes) minutes — not scheduling")
+            return nil
+        }
+        guard let fireDate = llmFireDate(minutes: minutes, hours: hours, day: day, time: time,
+                                         now: now, calendar: calendar) else {
+            owLog("[Reminders] Ollama gave no future time (minutes \(minutes), hours \(hours), day '\(day)', time '\(time)') — not scheduling")
+            return nil
+        }
+        let task = (parsed["task"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (task.isEmpty ? "Hatırlatma" : task, fireDate)
+    }
 
+    /// Ask Ollama for the task and the spoken time; the date is computed here.
+    private func parseWithOllama(text: String) async -> ParsedReminder? {
         do {
-            let responseText = try await LLM.default.generate(request)
+            let responseText = try await LLM.default.generate(Self.ollamaRequest(text: text, model: selectedOllamaModel))
             owLog("[Reminders] Ollama response: \(responseText)")
-
-            guard let parsed = Self.extractJSONObject(from: responseText) else {
-                owLog("[Reminders] Could not read Ollama response")
-                return nil
-            }
-            let minutes = Double(parsed["minutes"] ?? "") ?? 0
-            let hours = Double(parsed["hours"] ?? "") ?? 0
-            let day = parsed["day"] ?? "", time = parsed["time"] ?? ""
-            guard let fireDate = Self.llmFireDate(minutes: minutes, hours: hours, day: day, time: time, now: Date()) else {
-                owLog("[Reminders] Ollama gave no future time (minutes \(minutes), hours \(hours), day '\(day)', time '\(time)') — not scheduling")
-                return nil
-            }
-            var task = (parsed["task"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if task.isEmpty { task = "Hatırlatma" }
-            return ParsedReminder(task: task, fireDate: fireDate)
+            guard let parsed = Self.reminder(fromOllama: responseText, spoken: text, now: Date()) else { return nil }
+            return ParsedReminder(task: parsed.task, fireDate: parsed.fireDate)
         } catch let LLMError.http(status) {
             owLog("[Reminders] Ollama HTTP error: \(status)")
             return nil
@@ -563,7 +587,7 @@ final class ReminderManager {
     /// return nil instead of just coercing the value to a string. Also strips any stray
     /// `<think>...</think>` block and markdown code fences some models still emit even with
     /// "think": false / "format": "json" set on the request.
-    private static func extractJSONObject(from text: String) -> [String: String]? {
+    nonisolated private static func extractJSONObject(from text: String) -> [String: String]? {
         var cleaned = text
         if let thinkRange = cleaned.range(of: "<think>"), let thinkEnd = cleaned.range(of: "</think>") {
             cleaned.removeSubrange(thinkRange.lowerBound..<thinkEnd.upperBound)
