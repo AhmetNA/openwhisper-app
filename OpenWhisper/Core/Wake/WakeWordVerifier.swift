@@ -54,8 +54,10 @@ enum WakeWordVerifier {
 
     /// What Whisper repeatedly wrote for the user's real calls, each followed by a command in the
     /// wake clips (Oct–Nov 2026): "H. R. S.", "He's yours", "Hey Charles", "Ecaviz", "Necaviz",
-    /// "Tecaviz". Only as the whole clip: as words in a sentence they mean something else.
-    private static let wholeClipMishearings: Set<String> = ["hrs", "haiours", "haijharlas", "ajavis", "najavis", "tajavis"]
+    /// "Tecaviz", and "Jairus" without the "hey" (22 Nov, voice 0.38 at wake 0.31, dropped). Only
+    /// as the whole clip: as words in a sentence they mean something else.
+    private static let wholeClipMishearings: Set<String> = ["hrs", "haiours", "haijharlas", "ajavis", "najavis", "tajavis",
+                                                            "jairus"]
 
     private static func isWakeWord(_ word: String) -> Bool {
         // "Servis", "Harvey"… sit one edit away; a real call always starts with a j-like sound.

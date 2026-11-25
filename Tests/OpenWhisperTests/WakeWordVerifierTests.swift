@@ -63,10 +63,10 @@ final class WakeWordVerifierTests: XCTestCase {
     }
 
     func testRepeatedMishearingsCountOnlyAsTheWholeClip() {
-        for clip in ["H. R. S.", "HRS", "He's yours.", "Hey Charles", "Ecaviz.", "Necaviz", "Tecaviz."] {
+        for clip in ["H. R. S.", "HRS", "He's yours.", "Hey Charles", "Ecaviz.", "Necaviz", "Tecaviz.", "Jairus"] {
             XCTAssertTrue(WakeWordVerifier.containsWakeWord(clip), clip)
         }
-        for talk in ["He's yours now", "Tecaviz davası başladı", "Hey, galiba.", "Evet.", "Bu.", ""] {
+        for talk in ["He's yours now", "Tecaviz davası başladı", "Jairus kızını iyileştirdi", "Hey, galiba.", "Evet.", "Bu.", ""] {
             XCTAssertFalse(WakeWordVerifier.containsWakeWord(talk), talk)
         }
     }
