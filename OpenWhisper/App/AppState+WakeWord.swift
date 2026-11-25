@@ -67,7 +67,7 @@ extension AppState {
             guard let self else { return }
             // Over music a voice just under the threshold counts: Whisper often can't hear the
             // word there either (0.399 against 0.40 and "Ece abis", 28 Oct 2026, the call dropped).
-            let margin: Float = self.mediaPlaying ? Self.mediaWakeSpeakerMargin : 0
+            let margin = Self.directWakeSpeakerMargin(score: score, mediaPlaying: self.mediaPlaying)
             if await self.wakeSpeakerMatches(audio: audio, clipID: clipID, margin: margin) {
                 self.markWakeSpeakerVerified()
                 if score < WakeWordListener.confirmedScore { self.confirmDirectWake(audio: audio, score: score, clipID: clipID) }
@@ -221,6 +221,21 @@ extension AppState {
     /// How far under `TargetSpeakerFilter.wakeThreshold` a direct wake's voice may score while
     /// media plays (`handleDirectWake`).
     static let mediaWakeSpeakerMargin: Float = 0.02
+
+    /// A clear wake word (≥ 0.40) needs less voice evidence: the user's calls that dropped scored
+    /// 0.31–0.39 over music while Whisper misheard the word ("Evet.", "İngilizce"). On 314
+    /// labeled clips (18–25 Nov 2026) voice ≥ 0.30 at wake ≥ 0.40 kept 7 of those 10 and let 2
+    /// others through (docs/WAKE-SPEAKER-PLANI.md).
+    static let clearWakeScore: Float = 0.40
+    static let clearWakeSpeakerThreshold: Float = 0.30
+
+    /// How far under `TargetSpeakerFilter.wakeThreshold` a direct wake's voice may score.
+    static func directWakeSpeakerMargin(score: Float, mediaPlaying: Bool,
+                                        threshold: Float = TargetSpeakerFilter.wakeThreshold) -> Float {
+        let media: Float = mediaPlaying ? mediaWakeSpeakerMargin : 0
+        guard score >= clearWakeScore else { return media }
+        return max(media, threshold - clearWakeSpeakerThreshold)
+    }
 
     /// Whether the wake clip sounds like the enrolled user; true when the check is off. A model
     /// error lets the wake through: a failed download must not silence "Jarvis" altogether.
