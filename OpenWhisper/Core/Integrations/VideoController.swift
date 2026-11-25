@@ -76,10 +76,13 @@ enum VideoController {
 
     /// Picks the video in this page: the one the recording paused (`data-jarvis-paused`, see
     /// `ScriptedMediaPlayers.safari`), else a playing one, else the largest loaded one, so a
-    /// small hover preview or ad loses to the main player. No double quotes: the snippet goes
+    /// small hover preview or ad loses to the main player. Muted looping or short (< 120 px)
+    /// videos are banner ads: on film sites the film sits in a cross-origin iframe this script
+    /// can't reach, and "durdur" paused a 7 s ad while the film went on. Without a real video
+    /// the page reports none and Now Playing takes over. No double quotes: the snippet goes
     /// inside `do JavaScript "…"`.
     private static let pickVideo = """
-        var vs=Array.prototype.slice.call(document.querySelectorAll('video'));\
+        var vs=Array.prototype.slice.call(document.querySelectorAll('video')).filter(function(m){return !(m.muted&&m.loop)&&m.clientHeight>=120});\
         var v=vs.filter(function(m){return m.dataset.jarvisPaused})[0]\
         ||vs.filter(function(m){return !m.paused&&!m.ended})[0]\
         ||vs.filter(function(m){return m.duration>0}).sort(function(a,b){return b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight})[0];\
@@ -89,7 +92,7 @@ enum VideoController {
     /// 3 = the recording paused a video here, 2 = one is playing, 1 = one is loaded.
     private static let probe = """
         (function(){var s=0;document.querySelectorAll('video').forEach(function(m){\
-        if(m.dataset.jarvisPaused)s=3;else if(!m.paused&&!m.ended&&m.duration>0)s=Math.max(s,2);\
+        if((m.muted&&m.loop)||m.clientHeight<120)return;if(m.dataset.jarvisPaused)s=3;else if(!m.paused&&!m.ended&&m.duration>0)s=Math.max(s,2);\
         else if(m.duration>0)s=Math.max(s,1)});return s})()
         """
 
@@ -230,7 +233,7 @@ enum VideoController {
     /// Play/pause for whatever else holds Now Playing (Chrome, Stremio, IINA, Safari without
     /// the JavaScript setting). Spotify is left alone: "müziği durdur" is its command.
     private static func mediaRemoteFallback(_ action: VideoAction) -> String? {
-        guard action.changesPlayback else { return nil }
+        if !action.changesPlayback { return nowPlayingSeek(action) }
         let bridge = SystemNowPlayingBridge()
         let players = bridge.snapshots().filter { !$0.playerID.contains(":\(SpotifyController.spotifyBundleID):") }
         if action == .pause {
@@ -244,6 +247,67 @@ enum VideoController {
         guard let paused = players.first, bridge.send(.play, to: paused) else { return nil }
         return self.playing
     }
+
+    /// Seek and "kaç dakika kaldı" for a video Safari's JavaScript can't reach (a film in a
+    /// cross-origin iframe), through the Now Playing session WebKit keeps for it. Only when the
+    /// system's selected Now Playing player is not Spotify: MediaRemote commands go to that
+    /// player whatever path they name, and "20 saniye geri al" must never rewind a song.
+    private static func nowPlayingSeek(_ action: VideoAction) -> String? {
+        let mode: String
+        switch action {
+        case .seekBy(let seconds): mode = "by:\(seconds)"
+        case .seekTo(let seconds): mode = "to:\(seconds)"
+        case .restart: mode = "to:0"
+        case .remaining: mode = "read"
+        default: return nil
+        }
+        let result = OSAScriptRunner.run(["-l", "JavaScript", "-e", nowPlayingSeekSource, mode, SpotifyController.spotifyBundleID])
+        owLog("[Video] Now Playing \(mode) → \(result ?? "script failed")")
+        switch result {
+        case "range": return outOfRange
+        case let value? where value.contains("|"): return status(for: action, result: value)
+        default: return nil
+        }
+    }
+
+    /// Prints "position|duration" (position after the seek), "range" or "none". The live
+    /// position is ElapsedTime advanced by the time since its Timestamp at PlaybackRate: the
+    /// stored ElapsedTime is only refreshed on state changes. Command 24 = change position.
+    static let nowPlayingSeekSource = #"""
+    ObjC.import('Foundation');
+    function run(argv) {
+        let c = null;
+        try {
+            $.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework').load;
+            const k = n => $.NSClassFromString(n);
+            c = k('MRNowPlayingController').alloc.initWithDestination(
+                k('MRDestination').alloc.initWithPlayerPath(k('MRNowPlayingRequest').localNowPlayingPlayerPath));
+            c.beginLoadingUpdates;
+            let response = null, info = null;
+            for (let i = 0; i < 8 && !info; i++) {
+                delay(0.1);
+                response = c.response;
+                try { info = ObjC.deepUnwrap(response._mostRelevantItem.nowPlayingInfo); } catch (_) {}
+            }
+            if (!info || ObjC.unwrap(response.playerPath.client.bundleIdentifier) === argv[1]) return 'none';
+            const p = 'kMRMediaRemoteNowPlayingInfo';
+            const duration = Number(info[p + 'Duration']) || 0;
+            let position = Number(info[p + 'ElapsedTime']) || 0;
+            const stamp = info[p + 'Timestamp'];
+            if (stamp) position += Math.max(0, (Date.now() - new Date(stamp).getTime()) / 1000) * (Number(info[p + 'PlaybackRate']) || 0);
+            if (argv[0] === 'read') return position + '|' + duration;
+            const amount = Number(argv[0].slice(3));
+            let target = argv[0].startsWith('to:') ? amount : position + amount;
+            if (argv[0].startsWith('to:') && duration > 0 && target >= duration) return 'range';
+            target = Math.max(0, duration > 0 ? Math.min(duration - 1, target) : target);
+            const options = $.NSDictionary.dictionaryWithObjectForKey($.NSNumber.numberWithDouble(target), 'kMRMediaRemoteOptionPlaybackPosition');
+            c.sendCommandOptionsCompletion(24, options, null);
+            delay(0.05);
+            return target + '|' + duration;
+        } catch (_) { return 'none'; }
+        finally { if (c) { try { c.endLoadingUpdates; } catch (_) {} } }
+    }
+    """#
 
     private static var playing: String { L("Video oynatılıyor", "Video playing") }
     private static var paused: String { L("Video durduruldu", "Video paused") }
