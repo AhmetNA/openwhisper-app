@@ -34,6 +34,16 @@ final class VideoScriptCompileTests: XCTestCase {
         XCTAssertEqual(try compile(SpotifyController.pauseScript), "")
     }
 
+    func testSafariRecordingPauseScriptsCompile() throws {
+        for (index, player) in [ScriptedMediaPlayers.safari, ScriptedMediaPlayers.safariSparingYouTube].enumerated() {
+            XCTAssertEqual(try compile(player.pauseSource), "")
+            XCTAssertEqual(try compile(player.resumeSource), "")
+            if let dir = ProcessInfo.processInfo.environment["OW_DUMP_DIR"] {
+                try player.pauseSource.write(toFile: dir + "/pause-\(index).applescript", atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
     func testFullscreenScriptCompiles() throws {
         XCTAssertEqual(try compile(VideoController.fullscreenScript), "")
     }

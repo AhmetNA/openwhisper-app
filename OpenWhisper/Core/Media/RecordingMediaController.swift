@@ -176,6 +176,9 @@ enum ScriptedPauseResult: Equatable {
     /// Not running, or its script failed (e.g. permission): leave it to MediaRemote.
     case unavailable
     case notPlaying
+    /// Its script ran but reached nothing playing. Whatever the app plays out of the script's
+    /// reach (a film in a cross-origin iframe in Safari) is left to MediaRemote.
+    case nothingReached
     /// Paused; the token identifies what to resume (a track ID, a file path…).
     case paused(token: String)
 }
@@ -231,6 +234,8 @@ struct NowPlayingTransport: RecordingMediaTransport {
                 continue
             case .notPlaying:
                 covered.formUnion(player.coveredBundleIDs)
+            case .nothingReached:
+                covered.subtract(player.coveredBundleIDs)
             case .paused(let token):
                 covered.formUnion(player.coveredBundleIDs)
                 owLog("[RecordingMedia] Paused \(player.name)")

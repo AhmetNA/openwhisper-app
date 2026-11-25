@@ -276,16 +276,26 @@ enum ScriptedMediaPlayers {
     /// false wake never stops the video. Same name, so its receipts resume through `safari`.
     static let safariSparingYouTube = safariPlayer(sparingYouTube: true)
 
+    /// Muted looping or short (< 120 px) videos are banner ads, never paused: on film sites the
+    /// film plays in a cross-origin iframe the script can't reach, and pausing the ads made
+    /// Safari look handled, so the film played on through the recording. Reaching nothing,
+    /// the script answers "" and Safari goes to MediaRemote (`ScriptedPauseResult.nothingReached`).
+    /// A spared YouTube video answers "spared": MediaRemote must leave Safari alone then.
+    /// Each tab returns paused×2 + spared(0/1) so one number carries both.
     private static func safariPlayer(sparingYouTube: Bool) -> AppleScriptMediaPlayer {
-        let skip = sparingYouTube ? "if(location.hostname.split('.').slice(-2).join('.')==='youtube.com')return n;" : ""
+        let playing = "function(m){return !m.paused&&!m.ended&&(m.tagName==='AUDIO'||!(m.muted&&m.loop)&&m.clientHeight>=120)}"
+        let skip = sparingYouTube
+            ? "if(location.hostname.split('.').slice(-2).join('.')==='youtube.com')return ms.some(p)?1:0;" : ""
         return AppleScriptMediaPlayer(
             name: "Safari",
             bundleID: "com.apple.Safari",
             coveredBundleIDs: ["com.apple.Safari", "com.apple.WebKit.GPU"],
+            emptyMeansNothingReached: true,
             pauseSource: tabsScript(javaScript: """
-                (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused});\(skip)\
-                document.querySelectorAll('video,audio').forEach(function(m){if(!m.paused&&!m.ended){m.dataset.jarvisPaused='1';m.pause();n++}});return n})()
-                """, result: "tabs"),
+                (function(){var n=0,p=\(playing);document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused});\
+                var ms=Array.prototype.slice.call(document.querySelectorAll('video,audio'));\(skip)\
+                ms.forEach(function(m){if(p(m)){m.dataset.jarvisPaused='1';m.pause();n++}});return n*2})()
+                """, result: "tabs", spared: "spared"),
             resumeSource: tabsScript(javaScript: """
                 (function(){var n=0;document.querySelectorAll('[data-jarvis-paused]').forEach(function(m){delete m.dataset.jarvisPaused;\
                 if(m.paused){m.play();n++}});return n})()
@@ -296,14 +306,21 @@ enum ScriptedMediaPlayers {
     /// Runs `javaScript` in every Safari tab and sums the counts it returns. A tab that can't
     /// run it is skipped, except for error 8 (JavaScript from Apple Events is off), which
     /// fails the whole script.
-    private static func tabsScript(javaScript: String, result: String, otherwise: String = "") -> String {
-        """
+    /// With `spared`, each tab returns count×2 + flag and a set flag answers `spared` when
+    /// nothing was counted.
+    private static func tabsScript(javaScript: String, result: String, otherwise: String = "", spared: String? = nil) -> String {
+        let add = spared == nil
+            ? "set total to total + r"
+            : "set total to total + (r div 2)\n                        if (r mod 2) is 1 then set flagged to true"
+        return """
         tell application id "com.apple.Safari"
             set total to 0
+            set flagged to false
             repeat with w in windows
                 repeat with t in tabs of w
                     try
-                        set total to total + (do JavaScript "\(javaScript)" in t)
+                        set r to (do JavaScript "\(javaScript)" in t) as integer
+                        \(add)
                     on error errText number errNum
                         if errNum is 8 then error errText number errNum
                     end try
@@ -311,6 +328,7 @@ enum ScriptedMediaPlayers {
             end repeat
         end tell
         if total > 0 then return "\(result)"
+        if flagged then return "\(spared ?? otherwise)"
         return "\(otherwise)"
         """
     }
@@ -323,11 +341,16 @@ struct AppleScriptMediaPlayer: ScriptedMediaPlayer {
     var coveredBundleIDs: Set<String>
     let pauseSource: String
     let resumeSource: String
+    /// Safari: "" means its script reached nothing playing (not that nothing plays), and
+    /// "spared" means a video was left playing on purpose.
+    var emptyMeansNothingReached = false
 
-    init(name: String, bundleID: String, coveredBundleIDs: Set<String>? = nil, pauseSource: String, resumeSource: String) {
+    init(name: String, bundleID: String, coveredBundleIDs: Set<String>? = nil, emptyMeansNothingReached: Bool = false,
+         pauseSource: String, resumeSource: String) {
         self.name = name
         self.bundleID = bundleID
         self.coveredBundleIDs = coveredBundleIDs ?? [bundleID]
+        self.emptyMeansNothingReached = emptyMeansNothingReached
         self.pauseSource = pauseSource
         self.resumeSource = resumeSource
     }
@@ -338,6 +361,10 @@ struct AppleScriptMediaPlayer: ScriptedMediaPlayer {
             Self.failures.record(name)
             owLog("[RecordingMedia] \(name) script unavailable; falling back to Now Playing (retry in \(Int(ScriptFailureCache.retryAfter / 60)) min)")
             return .unavailable
+        }
+        if emptyMeansNothingReached {
+            if token.isEmpty { return .nothingReached }
+            if token == "spared" { return .notPlaying }
         }
         return token.isEmpty ? .notPlaying : .paused(token: token)
     }
