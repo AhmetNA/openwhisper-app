@@ -24,6 +24,9 @@ final class LLMCleanup: Sendable {
     /// separately; `isModelInstalled` guards against picking one that isn't.
     static let supportedModels: [(tag: String, label: String)] = [
         ("gemma4:e2b-it-qat", "⭐ Önerilen (Gemma 4 E2B)"),
+        // The Spotify fine-tune (SpotifyRequestParser.parserModel). Picking it keeps one Gemma in
+        // memory: on the app's reminder prompt and plain questions it answered like the base model.
+        (SpotifyRequestParser.parserModel, "🎵 Jarvis Gemma 4 E2B (ince ayarlı)"),
         ("gemma4:e4b-it-qat", "🎯 Daha isabetli (Gemma 4 E4B)"),
         ("qwen3.5:4b", "🧠 Dikkatli (Qwen 3.5 4B)"),
         // Candidates from the 2026-09-30 model survey, not yet measured on the Turkish eval

@@ -10,9 +10,9 @@ final class SpotifyDecisionTests: XCTestCase {
         SpotifyManager.decide(rules: SpotifyManager.explicitIntent(in: text), parse: parse, text: text)
     }
 
-    /// Byte for byte what command_parser/train_local.py trained the Qwen parser on.
-    func testQwenPromptMatchesTraining() {
-        XCTAssertEqual(SpotifyRequestParser.qwenPrompt(#"Tarkan'ın "Şımarık" şarkısı / aç"#),
+    /// Byte for byte what command_parser/train_local.py trained the Spotify parser on.
+    func testParserPromptMatchesTraining() {
+        XCTAssertEqual(SpotifyRequestParser.parserPrompt(#"Tarkan'ın "Şımarık" şarkısı / aç"#),
                        #"Spotify komutunu JSON'a çevir."# + "\n" + #"Cümle: "Tarkan'ın \"Şımarık\" şarkısı / aç""#)
     }
 

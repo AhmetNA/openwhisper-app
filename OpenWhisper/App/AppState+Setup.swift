@@ -346,7 +346,7 @@ extension AppState {
         ollamaAvailable = await LLMCleanup.checkAvailability()
         let model = ollamaModel
         cleanupAvailable = ollamaAvailable ? await LLMCleanup.isModelInstalled(model) : false
-        await SpotifyManager.refreshQwenInstalled()
+        await SpotifyManager.refreshParserInstalled()
         if cleanupAvailable && llmCleanupEnabled {
             Task.detached(priority: .utility) { await LLMCleanup.warmUp(model: model) }
         }
