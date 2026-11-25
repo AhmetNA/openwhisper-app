@@ -1337,6 +1337,9 @@ extension AppState {
             let model = SpotifyManager.selectedOllamaModel
             Task.detached { await LLMCleanup.warmUp(model: model) }
         }
+        if ollamaAvailable && SpotifyManager.qwenInstalled {
+            Task.detached { await LLMCleanup.warmUp(model: SpotifyRequestParser.qwenModel) }
+        }
         JarvisVoice.shared.warmUp()
     }
 

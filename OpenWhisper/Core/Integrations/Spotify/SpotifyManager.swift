@@ -1002,16 +1002,20 @@ final class SpotifyManager: @unchecked Sendable {
         // A voice session warms the model when it starts, but a cold load still takes
         // several seconds; dictation keeps the short timeout so pasting isn't held up.
         // With the cloud, Gemma isn't warmed, so its fallback gets the long timeout too.
-        let model = selectedOllamaModel
+        // The fine-tuned Qwen parses locally in ~0.1 s, also while the chat is on the cloud.
+        let qwen = ollamaAvailable && Self.qwenInstalled
+        let model = qwen ? SpotifyRequestParser.qwenModel : selectedOllamaModel
         let timeout: TimeInterval = commandMode ? 15 : 3
-        let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if let cloud {
+        let llm: Task<SpotifyRequestParser.OllamaParse?, Never>? = if qwen {
+            Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: timeout) }
+        } else if let cloud {
             Task { await SpotifyRequestParser.queryCloud(transcript: text, client: cloud, model: cloud.cloudModel, timeout: timeout) }
         } else if ollamaAvailable {
             Task { await SpotifyRequestParser.queryOllama(transcript: text, model: model, timeout: timeout) }
         } else {
             nil
         }
-        let llmName = cloud == nil ? "Ollama" : "Cloud"
+        let llmName = qwen ? "Qwen" : cloud == nil ? "Ollama" : "Cloud"
         var parse = setFit ? await setFitParse(text, ollamaAvailable: llmAvailable) : nil
         if parse != nil {
             llm?.cancel()
@@ -1075,6 +1079,14 @@ final class SpotifyManager: @unchecked Sendable {
     }
 
     private static let decisionCache = DecisionCache()
+
+    private static let qwenInstalledFlag = OSAllocatedUnfairLock(initialState: false)
+    /// Whether the fine-tuned Spotify parser (`SpotifyRequestParser.qwenModel`) is in Ollama.
+    static var qwenInstalled: Bool { qwenInstalledFlag.withLock { $0 } }
+    static func refreshQwenInstalled() async {
+        let installed = await LLMCleanup.isModelInstalled(SpotifyRequestParser.qwenModel)
+        qwenInstalledFlag.withLock { $0 = installed }
+    }
 
     /// Whether media paused for a voice command may play again once `text` was handled.
     /// Playback commands decide what plays next ("durdur" keeps it paused, "X çal" starts

@@ -423,11 +423,25 @@ enum SpotifyRequestParser {
             """
     }
 
+    /// Qwen3.5-0.8B fine-tuned on this parse alone (`command_parser/`, imported into Ollama under
+    /// this name). Used for every Spotify parse once installed, also while the chat is on the cloud.
+    static let qwenModel = "jarvis-spotify-qwen"
+
+    /// The short prompt the fine-tune was trained on; must match `command_parser/train_local.py`.
+    static func qwenPrompt(_ transcript: String) -> String {
+        // Python's json.dumps(ensure_ascii=False) leaves "/" alone.
+        let quoted = (try? String(data: JSONSerialization.data(withJSONObject: [transcript], options: .withoutEscapingSlashes),
+                                  encoding: .utf8))
+            .map { String($0.dropFirst().dropLast()) } ?? "\"\(transcript)\""
+        return "Spotify komutunu JSON'a çevir.\nCümle: \(quoted)"
+    }
+
     /// One structured-output call (Ollama `format` = JSON schema). Returns nil on any
     /// failure — timeout, model missing, malformed output — so callers fall back to rules.
     static func queryOllama(transcript: String, model: String, timeout: TimeInterval = 3,
                             client: any LLMClient = LLM.default) async -> OllamaParse? {
-        let request = LLMRequest(model: model, prompt: ollamaPrompt(transcript), timeout: timeout,
+        let prompt = model == qwenModel ? qwenPrompt(transcript) : ollamaPrompt(transcript)
+        let request = LLMRequest(model: model, prompt: prompt, timeout: timeout,
                                  temperature: 0.0, maxTokens: 100, schema: ollamaSchema)
         let start = Date()
         do {
