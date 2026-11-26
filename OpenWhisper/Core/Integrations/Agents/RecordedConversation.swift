@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import SQLite3
+import os
 
 /// An immutable recording destination. A composer AX reference alone is insufficient:
 /// Electron can reuse that very same element when the user changes conversations.
@@ -198,17 +199,36 @@ struct RecordedConversation: @unchecked Sendable {
         return sessions
     }
 
+    /// Parsed session files by path, kept until the file changes. Reading all ~800 files
+    /// (67 MB) took ~0.6 s on the main thread at every check, freezing the processing pen.
+    private static let claudeSessionCache = OSAllocatedUnfairLock(initialState: [String: (modified: Date, session: (id: String, title: String)?)]())
+
     private static func claudeSessions() -> [(id: String, title: String)] {
         guard let files = FileManager.default.enumerator(at: ClaudeProjectStore.sessionsDirectory,
-                                                        includingPropertiesForKeys: nil) else { return [] }
+                                                        includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        var cache = claudeSessionCache.withLock { $0 }
+        var seen = Set<String>()
         var sessions: [(id: String, title: String)] = []
         for case let url as URL in files where url.lastPathComponent.hasPrefix("local_") && url.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: url),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  json["isArchived"] as? Bool != true,
-                  let id = json["sessionId"] as? String, let title = json["title"] as? String else { continue }
-            sessions.append((id, title))
+            let path = url.path
+            seen.insert(path)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if let cached = cache[path], cached.modified == modified {
+                if let session = cached.session { sessions.append(session) }
+                continue
+            }
+            var session: (id: String, title: String)?
+            if let data = try? Data(contentsOf: url),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["isArchived"] as? Bool != true,
+               let id = json["sessionId"] as? String, let title = json["title"] as? String {
+                session = (id, title)
+            }
+            cache[path] = (modified, session)
+            if let session { sessions.append(session) }
         }
+        cache = cache.filter { seen.contains($0.key) }
+        claudeSessionCache.withLock { $0 = cache }
         return sessions
     }
 }
