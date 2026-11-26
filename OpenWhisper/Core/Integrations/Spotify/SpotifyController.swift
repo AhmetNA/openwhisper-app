@@ -205,7 +205,8 @@ final class SpotifyController: @unchecked Sendable {
         return (try? await SpotifyWebAPI.shared.fetchLikedTrackURIs(limit: 50))?.randomElement()
     }
 
-    /// Polls immediately, then at 500 ms intervals; never reports success from an HTTP ack alone.
+    /// Polls immediately, then every 150 ms; never reports success from an HTTP ack alone.
+    /// At 500 ms the second check landed ~0.8 s after the play request (27 Nov 2026).
     /// Returns how many checks it took, or nil when the deadline passed.
     private func waitForLikedSongs(context: String, before: SpotifyWebAPI.CurrentlyPlaying?, timeout: TimeInterval = 4) async -> Int? {
         let deadline = Date().addingTimeInterval(timeout)
@@ -217,7 +218,7 @@ final class SpotifyController: @unchecked Sendable {
                Self.likedSongsStarted(context: context, before: before, after: after) {
                 return checks
             }
-            do { try await Task.sleep(for: .milliseconds(500)) } catch { return nil }
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return nil }
         } while Date() < deadline
         return nil
     }
