@@ -95,6 +95,20 @@ final class WhisperTrailingOutroTests: XCTestCase {
         XCTAssertEqual(AudioSegmentation.removeTrailingOutros("Abone olun."), "Abone olun.")
     }
 
+    func testOutroAsFirstSentenceIsRemoved() {
+        XCTAssertEqual(AudioSegmentation.removeLeadingOutros("İzlediğiniz için teşekkür ederim. Bir 5 sn dikte istiyor benden."),
+                       "Bir 5 sn dikte istiyor benden.")
+        XCTAssertEqual(AudioSegmentation.removeLeadingOutros("İzlediğiniz için teşekkürler! Altyazı M.K. yarın geliyorum"),
+                       "Altyazı M.K. yarın geliyorum")
+    }
+
+    func testOutroAtTheStartWithoutSentenceEndIsKept() {
+        for text in ["izlediğiniz için teşekkürler diye bitir videoyu", "Abone olun. Kanal bu.",
+                     "abone ol butonuna bas", "İzlediğiniz için teşekkür ederim."] {
+            XCTAssertEqual(AudioSegmentation.removeLeadingOutros(text), text, text)
+        }
+    }
+
     func testOutroInTheMiddleOrStartIsKept() {
         for text in ["abone ol butonuna bas", "kanala abone olun demiştim ona",
                      "sesli komutuma abone ol abone ol abone ol yazmış ama sorunu bul ve çöz",

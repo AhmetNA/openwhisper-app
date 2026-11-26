@@ -152,8 +152,9 @@ struct AudioSegmentation {
     }
 
     /// Phrases Whisper invents on silence or noise: Turkish YouTube outros from its subtitle
-    /// training data. Matched against the entire transcript (`isKnownHallucination`) or its
-    /// very end (`removeTrailingOutros`), never at the start or in the middle of dictation.
+    /// training data. Matched against the entire transcript (`isKnownHallucination`), its
+    /// very end (`removeTrailingOutros`) or, as a whole sentence, its start
+    /// (`removeLeadingOutros`); never in the middle of dictation.
     private static let knownHallucinations: Set<String> = [
         "abone ol", "abone olun", "abone olmayi unutmayin", "kanalima abone olun",
         "izlediginiz icin tesekkurler", "izlediginiz icin tesekkur ederim",
@@ -195,6 +196,30 @@ struct AudioSegmentation {
         guard result.count < text.count else { return text }
         // Drop a dangling separator the outro followed ("var, abone olun" → "var").
         return result.trimmingCharacters(in: CharacterSet(charactersIn: " ,;:-–—"))
+    }
+
+    /// Strips a known outro said as its own first sentence ("İzlediğiniz için teşekkür ederim.
+    /// Bir 5 sn dikte…"): Whisper writes it over the silence before speech starts, and music
+    /// playing makes that likelier (27 Nov 2026). Only phrases of three or more words, ending
+    /// in . ! or ?, so "abone ol butonuna bas" and "Abone olun. …" stay.
+    static func removeLeadingOutros(_ text: String) -> String {
+        var words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        var removedAny = true
+        while removedAny {
+            removedAny = false
+            let keys = words.map { foldTurkish($0.trimmingCharacters(in: .punctuationCharacters.union(.symbols))) }
+            for phrase in knownHallucinations {
+                let phraseWords = phrase.split(separator: " ").map(String.init)
+                guard phraseWords.count >= 3, words.count > phraseWords.count,
+                      Array(keys.prefix(phraseWords.count)) == phraseWords,
+                      let end = words[phraseWords.count - 1].last, ".!?…".contains(end) else { continue }
+                words.removeFirst(phraseWords.count)
+                removedAny = true
+                break
+            }
+        }
+        let result = words.joined(separator: " ")
+        return result.count < text.count ? result : text
     }
 
     /// A Whisper decoding loop: a phrase of up to `maxLoopPhrase` words repeated back to back

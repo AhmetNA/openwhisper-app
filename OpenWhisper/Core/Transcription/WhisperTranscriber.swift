@@ -487,6 +487,11 @@ final class WhisperTranscriber: @unchecked Sendable {
         if result != text {
             owLog("[Whisper] Collapsed repetition loop: '\(text.prefix(80))…' → '\(result)'")
         }
+        let withoutLeading = AudioSegmentation.removeLeadingOutros(result)
+        if withoutLeading != result {
+            owLog("[Whisper] Removed hallucinated leading outro: '\(result)' → '\(withoutLeading)'")
+            result = withoutLeading
+        }
         let withoutOutro = AudioSegmentation.removeTrailingOutros(result)
         if withoutOutro != result {
             owLog("[Whisper] Removed hallucinated trailing outro: '\(result)' → '\(withoutOutro)'")
