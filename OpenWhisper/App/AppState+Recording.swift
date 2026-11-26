@@ -1278,16 +1278,23 @@ extension AppState {
         } else {
             samplesToTranscribe = TargetSpeakerSegmentFiltering.apply(segment, result: filtered).samples
         }
+        // The preview decoded the unmasked audio. When the mask removed only silence (every
+        // voice run kept), that audio holds the same speech: compare it with the original, or
+        // the zeroed gaps never match and a short command is decoded twice (~0.45 s, 27 Nov 2026).
+        let maskKeptAllVoice = !useOriginalAudio && filtered.decision == .accepted && filtered.acceptedAllVoice
+        let previewTarget = maskKeptAllVoice ? segment.samples : samplesToTranscribe
         if let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
-           let detector = session.previewEndpointDetector,
-           preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
-                           speechTime: session.doneLastSpeechTime, coverage: await detector.completedPreviewCoverage()),
-           let prepared = await preview.task.value,
-           !session.isCancelled,
-           preview.matches(samplesToTranscribe, language: language, modelID: transcriptionModel,
-                           speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
-            owLog("[SpeechPreview] Reused confident decode; final speaker-filtered audio matched")
-            return prepared
+           let detector = session.previewEndpointDetector {
+            let reason = preview.mismatch(previewTarget, language: language, modelID: transcriptionModel,
+                                          speechTime: session.doneLastSpeechTime,
+                                          coverage: await detector.completedPreviewCoverage())
+            if reason == nil, let prepared = await preview.task.value, !session.isCancelled,
+               preview.matches(previewTarget, language: language, modelID: transcriptionModel,
+                               speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
+                owLog("[SpeechPreview] Reused confident decode; final \(maskKeptAllVoice ? "audio (mask removed only silence)" : "speaker-filtered audio") matched")
+                return prepared
+            }
+            owLog("[SpeechPreview] Not reused: \(reason ?? "preview unusable or changed while waiting"); decoding again")
         }
         return try await transcriber.transcribe(
             audioData: samplesToTranscribe,
@@ -1475,8 +1482,18 @@ extension AppState {
                 self.ownVoiceStopGate = nil
                 return
             }
+            let speech = gate.speechDuration(endingAt: now)
             let verdict = gate.record(score: score, at: now)
             self.ownVoiceStopGate = gate
+            // Every check, so a wrong "not your voice" can be traced to its window: when it was,
+            // how loud, how much of it counted as speech and what the score made of it.
+            let rms = sqrt(samples.reduce(0) { $0 + $1 * $1 } / Float(max(samples.count, 1)))
+            let counted = speech < gate.minSpeechInWindow
+                ? String(format: "ignored, speech < %.1fs", gate.minSpeechInWindow)
+                : score >= gate.userThreshold ? "you" : score < gate.otherThreshold ? "not you" : "unsure"
+            owLog(String(format: "[OwnVoiceStop] window %.1f–%.1fs score %.3f speech %.1fs level %.1f dBFS%@ → %@",
+                         now - gate.startTime - OwnVoiceStopGate.windowDuration, now - gate.startTime, score, speech,
+                         VoiceEndpointDetector.dBFS(fromRMS: rms), self.mediaPlaying ? " media" : "", counted))
             WakeClipLog.shared.update(self.activeTranscriptionSession?.wakeClipID) { $0.ownVoiceScores.append(score) }
             guard verdict != .keep else { return }
             let outcome = switch verdict {

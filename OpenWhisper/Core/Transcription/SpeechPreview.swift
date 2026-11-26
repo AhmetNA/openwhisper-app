@@ -16,11 +16,24 @@ struct SpeechPreview: Sendable {
 
     func matches(_ finalSamples: [Float], language: String, modelID: String,
                  speechTime: TimeInterval, coverage: SpeechPreviewCoverage) -> Bool {
-        guard self.language == language, self.modelID == modelID, self.speechTime == speechTime,
-              !samples.isEmpty, finalSamples.count >= samples.count,
-              finalSamples.starts(with: samples),
-              coverage.processedSamples >= finalSamples.count,
-              coverage.lastSpeechSample <= samples.count else { return false }
-        return true
+        mismatch(finalSamples, language: language, modelID: modelID, speechTime: speechTime, coverage: coverage) == nil
+    }
+
+    /// Why the preview can't stand in for the final decode, or nil when it can.
+    func mismatch(_ finalSamples: [Float], language: String, modelID: String,
+                  speechTime: TimeInterval, coverage: SpeechPreviewCoverage) -> String? {
+        if self.language != language || self.modelID != modelID { return "language or model changed" }
+        if self.speechTime != speechTime { return "speech after the preview" }
+        if samples.isEmpty || finalSamples.count < samples.count {
+            return "final audio shorter (\(finalSamples.count) < \(samples.count) samples)"
+        }
+        if !finalSamples.starts(with: samples) { return "final audio differs from the previewed prefix" }
+        if coverage.processedSamples < finalSamples.count {
+            return "VAD hasn't classified the tail (\(coverage.processedSamples)/\(finalSamples.count))"
+        }
+        if coverage.lastSpeechSample > samples.count {
+            return "speech after the previewed audio (\(coverage.lastSpeechSample) > \(samples.count))"
+        }
+        return nil
     }
 }
