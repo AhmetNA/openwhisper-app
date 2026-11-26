@@ -1122,6 +1122,9 @@ extension AppState {
 
     /// Word-level decode that keeps only the target speaker's words. Returns nil when the
     /// batch has nothing safe to keep.
+    /// Up to this long, a wake command may skip diarization (see `transcribeDiarized`).
+    private static let shortCommandDiarizationSkipSamples = 8 * 16_000
+
     private func transcribeDiarized(
         _ segment: CompletedAudioSegment,
         filtered: TargetSpeakerFilterResult,
@@ -1133,6 +1136,22 @@ extension AppState {
     ) async throws -> String? {
         func noteSpeakers(_ update: (inout SpeakerBatchLog) -> Void) {
             noteSpeakerBatch(session, at: speakerLogIndex, update)
+        }
+        // A short voice command the gate accepted, whose every previewed word lies in the
+        // accepted audio: diarization only re-decoded it (~0.5 s) and then, over music, could
+        // not name the speaker and fell back to these same words (27 Nov 2026). Skip both.
+        if session.isVoiceCommand, session.trigger != .confirmation, filtered.decision == .accepted,
+           segment.samples.count <= Self.shortCommandDiarizationSkipSamples,
+           let preview = await reusablePreview(for: segment.samples, segment: segment, segmentNumber: segmentNumber,
+                                               session: session, what: "audio before diarization"),
+           !preview.words.isEmpty,
+           TargetSpeakerDiarizationResult.allWordsInAcceptedRanges(preview.words, ranges: filtered.acceptedSampleRanges) {
+            let kept = TargetSpeakerDiarizationResult.render(words: preview.words)
+            if !kept.isEmpty {
+                owLog("[OpenWhisper] Batch \(segmentNumber) short command, every previewed word in accepted audio; skipping diarization")
+                noteSpeakers { $0.notes.append("short command: diarization skipped, preview words all in accepted audio") }
+                return WhisperTranscriber.deduplicateRepetitivePhrases(in: kept)
+            }
         }
         var timedTranscription: TimedTranscriptionResult?
         // The speaker half of diarization needs only the audio: run it during the decode.
@@ -1261,6 +1280,25 @@ extension AppState {
         }
     }
 
+    /// The in-listen preview's decode, when it heard exactly this audio and nothing came after.
+    /// Logs why not otherwise, so a second decode can be traced.
+    private func reusablePreview(for target: [Float], segment: CompletedAudioSegment, segmentNumber: Int,
+                                 session: RecordingTranscriptionSession, what: String) async -> TimedTranscriptionResult? {
+        guard let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
+              let detector = session.previewEndpointDetector else { return nil }
+        let reason = preview.mismatch(target, language: language, modelID: transcriptionModel,
+                                      speechTime: session.doneLastSpeechTime,
+                                      coverage: await detector.completedPreviewCoverage())
+        if reason == nil, let prepared = await preview.task.value, !session.isCancelled,
+           preview.matches(target, language: language, modelID: transcriptionModel,
+                           speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
+            owLog("[SpeechPreview] Reused confident decode; final \(what) matched")
+            return prepared
+        }
+        owLog("[SpeechPreview] Not reused for \(what): \(reason ?? "preview unusable or changed while waiting")")
+        return nil
+    }
+
     /// Decode without diarization, reusing the speech preview when it heard the same audio.
     private func transcribeMasked(
         _ segment: CompletedAudioSegment,
@@ -1283,18 +1321,10 @@ extension AppState {
         // the zeroed gaps never match and a short command is decoded twice (~0.45 s, 27 Nov 2026).
         let maskKeptAllVoice = !useOriginalAudio && filtered.decision == .accepted && filtered.acceptedAllVoice
         let previewTarget = maskKeptAllVoice ? segment.samples : samplesToTranscribe
-        if let preview = session.speechPreview, segmentNumber == 1, segment.overlapSampleCount == 0,
-           let detector = session.previewEndpointDetector {
-            let reason = preview.mismatch(previewTarget, language: language, modelID: transcriptionModel,
-                                          speechTime: session.doneLastSpeechTime,
-                                          coverage: await detector.completedPreviewCoverage())
-            if reason == nil, let prepared = await preview.task.value, !session.isCancelled,
-               preview.matches(previewTarget, language: language, modelID: transcriptionModel,
-                               speechTime: session.doneLastSpeechTime, coverage: detector.previewCoverage) {
-                owLog("[SpeechPreview] Reused confident decode; final \(maskKeptAllVoice ? "audio (mask removed only silence)" : "speaker-filtered audio") matched")
-                return prepared
-            }
-            owLog("[SpeechPreview] Not reused: \(reason ?? "preview unusable or changed while waiting"); decoding again")
+        if let prepared = await reusablePreview(for: previewTarget, segment: segment, segmentNumber: segmentNumber,
+                                                session: session, what: maskKeptAllVoice
+                                                    ? "audio (mask removed only silence)" : "speaker-filtered audio") {
+            return prepared.text
         }
         return try await transcriber.transcribe(
             audioData: samplesToTranscribe,

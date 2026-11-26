@@ -12,7 +12,7 @@ struct SpeechPreview: Sendable {
     let language: String
     let modelID: String
     let speechTime: TimeInterval
-    let task: Task<String?, Never>
+    let task: Task<TimedTranscriptionResult?, Never>
 
     func matches(_ finalSamples: [Float], language: String, modelID: String,
                  speechTime: TimeInterval, coverage: SpeechPreviewCoverage) -> Bool {

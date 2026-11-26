@@ -34,14 +34,20 @@ extension AppState {
         let language = self.language
         let started = CACurrentMediaTime()
         let bypass = session.bypassAudioProcessing
-        let previewTask = Task<String?, Never> {
+        // The whole-recording preview may stand in for the final decode, so it carries word
+        // timings for the speaker-filtered path too.
+        let timed = whole != nil && endpoint != nil
+        let previewTask = Task<TimedTranscriptionResult?, Never> {
             do {
-                let text = try await AudioSignalProcessor.$bypassProcessing.withValue(bypass) {
-                    try await transcriber.previewTranscription(audioData: samples, language: language)
+                let result = try await AudioSignalProcessor.$bypassProcessing.withValue(bypass) {
+                    timed
+                        ? try await transcriber.previewTimedTranscription(audioData: samples, language: language)
+                        : try await transcriber.previewTranscription(audioData: samples, language: language)
+                            .map { TimedTranscriptionResult.textOnly($0) }
                 }
-                owLog(String(format: "[SpeechPreview] single pass %.0f ms, usable=%@", (CACurrentMediaTime() - started) * 1000,
-                             text == nil ? "false" : "true"))
-                return text
+                owLog(String(format: "[SpeechPreview] single pass %.0f ms, usable=%@%@", (CACurrentMediaTime() - started) * 1000,
+                             result == nil ? "false" : "true", timed ? ", \(result?.words.count ?? 0) timed words" : ""))
+                return result
             } catch {
                 owLog("[SpeechPreview] Optional decode failed: \(error)")
                 return nil
@@ -54,7 +60,7 @@ extension AppState {
         Task { [weak self] in
             defer { session.doneCheckInFlight = false }
             do {
-                guard let text = await previewTask.value else { return }
+                guard let text = await previewTask.value?.text else { return }
                 guard let self, self.recordingState == .recording,
                       self.activeTranscriptionSession === session, !session.isCancelled,
                       session.doneLastSpeechTime == speechTime else { return }

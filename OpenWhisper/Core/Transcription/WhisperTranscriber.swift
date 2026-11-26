@@ -42,6 +42,9 @@ struct TimedTranscriptionResult: Sendable, Equatable {
 protocol WhisperTranscriptionService: Sendable {
     /// Optional preview. Whisper overrides this with a single-pass, confidence-gated decode.
     func previewTranscription(audioData: [Float], language: String) async throws -> String?
+    /// The same preview with word timings, so a short command's final decode can be skipped
+    /// even when speaker filtering takes the timed path.
+    func previewTimedTranscription(audioData: [Float], language: String) async throws -> TimedTranscriptionResult?
     func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String
     /// Timed output is an additive requirement with a default implementation. Existing test
     /// fakes and integrations that only implement the long-standing String API therefore remain
@@ -67,6 +70,9 @@ extension WhisperTranscriptionService {
     func previewTranscription(audioData: [Float], language: String) async throws -> String? {
         let text = try await transcribe(audioData: audioData, language: language, overlapSampleCount: 0)
         return text.isEmpty ? nil : text
+    }
+    func previewTimedTranscription(audioData: [Float], language: String) async throws -> TimedTranscriptionResult? {
+        try await previewTranscription(audioData: audioData, language: language).map { .textOnly($0) }
     }
     func transcribeTimed(
         audioData: [Float],
@@ -176,6 +182,33 @@ final class WhisperTranscriber: @unchecked Sendable {
             try await self.transcribeExclusively(audioData: audioData, language: language, preview: true)
         }
         return text.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    func previewTimedTranscription(audioData: [Float], language: String) async throws -> TimedTranscriptionResult? {
+        let result = try await workGate.preview {
+            try await self.previewTimedExclusively(audioData: audioData, language: language)
+        }
+        return result ?? nil
+    }
+
+    /// Single pass with word timings; a weak decode is discarded like the text preview.
+    private func previewTimedExclusively(audioData: [Float], language: String) async throws -> TimedTranscriptionResult? {
+        guard let whisperKit else {
+            throw TranscriberError.modelNotLoaded
+        }
+        owLog("[Whisper] Timed preview samples=\(audioData.count) language=\(language)")
+        let pass = try await runDecode(
+            whisperKit: whisperKit,
+            audioData: audioData,
+            language: language,
+            promptTokens: nil,
+            wordTimestamps: true
+        )
+        if pass.needsRecovery { return nil }
+        let text = Self.cleanedTranscript(pass.text)
+        guard !text.isEmpty else { return nil }
+        let words = text == pass.text ? pass.words : Self.alignWords(pass.words, to: text)
+        return TimedTranscriptionResult(text: text, words: words)
     }
 
     private func transcribeExclusively(audioData: [Float], language: String, preview: Bool = false) async throws -> String {

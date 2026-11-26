@@ -64,6 +64,9 @@ extension WhisperKitTranscriptionProvider: TranscriptionModelProvider {
     func previewTranscription(audioData: [Float], language: String) async throws -> String? {
         try await transcriber.previewTranscription(audioData: audioData, language: language)
     }
+    func previewTimedTranscription(audioData: [Float], language: String) async throws -> TimedTranscriptionResult? {
+        try await transcriber.previewTimedTranscription(audioData: audioData, language: language)
+    }
     func transcribe(audioData: [Float], language: String, overlapSampleCount: Int) async throws -> String {
         try await transcriber.transcribe(
             audioData: audioData,

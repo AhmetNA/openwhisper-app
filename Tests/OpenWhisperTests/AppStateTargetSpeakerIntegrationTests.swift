@@ -19,7 +19,7 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         session.previewEndpointDetector = detector
         session.speechPreview = SpeechPreview(samples: Array(samples.prefix(4096)), language: app.language,
                                               modelID: app.transcriptionModel, speechTime: 0,
-                                              task: Task { "Sesi kıs" })
+                                              task: Task { .textOnly("Sesi kıs") })
         await app.transcribeStreamingSegment(.init(samples: samples, overlapSampleCount: 0), session: session)
         XCTAssertTrue(whisper.requests.isEmpty, "Do not decode the same command a second time")
         XCTAssertEqual(session.segmentTexts, ["Sesi kıs"])
@@ -36,7 +36,7 @@ final class AppStateTargetSpeakerIntegrationTests: XCTestCase {
         session.doneLastSpeechTime = 20
         session.speechPreview = SpeechPreview(samples: [0.1], language: app.language,
                                               modelID: app.transcriptionModel, speechTime: 10,
-                                              task: Task { "Eski komut" })
+                                              task: Task { .textOnly("Eski komut") })
         await app.transcribeStreamingSegment(.init(samples: [0.1, 0.2], overlapSampleCount: 0), session: session)
         XCTAssertEqual(whisper.requests.count, 1)
         XCTAssertEqual(session.segmentTexts, ["test transcript"])

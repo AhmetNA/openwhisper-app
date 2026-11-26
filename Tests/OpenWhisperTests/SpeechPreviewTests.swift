@@ -42,7 +42,7 @@ final class SpeechPreviewTests: XCTestCase {
         detector.finishForPreview(with: samples)
         let coverage = await detector.completedPreviewCoverage()
         let cached = SpeechPreview(samples: beforeStop, language: "tr", modelID: "turbo", speechTime: 10,
-                                   task: Task { preview })
+                                   task: Task { preview.map { .textOnly($0) } })
         let reusable = cached.matches(samples, language: "tr", modelID: "turbo", speechTime: 10,
                                       coverage: coverage)
         print("PREVIEW_REPLAY coldPreviewSeconds=\(previewSeconds) warmPreviewSeconds=\(warmSeconds) finalDecodeSeconds=\(finalSeconds) reusable=\(reusable) samples=\(samples.count) classified=\(detector.previewCoverage.processedSamples) vadBatch=\(VadManager.chunkSize)")
@@ -54,7 +54,7 @@ final class SpeechPreviewTests: XCTestCase {
     private func matches(_ samples: [Float], processed: Int, lastSpeech: Int = 3,
                          language: String = "tr", model: String = "turbo", speechTime: Double = 10) -> Bool {
         SpeechPreview(samples: prefix, language: "tr", modelID: "turbo", speechTime: 10,
-                      task: Task { "Sesi kıs" })
+                      task: Task { .textOnly("Sesi kıs") })
             .matches(samples, language: language, modelID: model, speechTime: speechTime,
                      coverage: .init(processedSamples: processed, lastSpeechSample: lastSpeech))
     }
