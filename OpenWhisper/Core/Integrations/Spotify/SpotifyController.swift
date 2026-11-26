@@ -171,6 +171,8 @@ final class SpotifyController: @unchecked Sendable {
                 let deviceID = try await availableDevice
                 owLog("[SpotifyController] Device ready at \(ms()) ms")
                 let before = await currentPlayer
+                // Step times, to see which call holds "başlat" up (1.2–1.5 s, 27 Nov 2026).
+                var steps = "player \(ms())"
                 // Setting it again could drop the user's Smart Shuffle.
                 if before?.shuffle != shuffle {
                     do {
@@ -178,12 +180,15 @@ final class SpotifyController: @unchecked Sendable {
                     } catch {
                         owLog("[SpotifyController] Liked songs shuffle \(shuffle) not set: \(error)")
                     }
+                    steps += ", shuffle set \(ms())"
                 }
                 // A shuffled context still opens on its first track; start somewhere random.
                 let start = await randomStart
+                steps += ", start track \(ms())"
                 try await SpotifyWebAPI.shared.startPlayback(contextURI: context, offsetURI: start, deviceID: deviceID)
-                if await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
-                    owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "") at \(ms()) ms")
+                steps += ", play request \(ms())"
+                if let polls = await waitForLikedSongs(context: context, before: before, timeout: wasRunning ? 4 : 10) {
+                    owLog("[SpotifyController] Playing liked songs\(shuffle ? ", shuffled" : "") at \(ms()) ms (\(steps), confirmed after \(polls) checks)")
                     return .success(L("beğenilen şarkılar çalıyor", "playing your liked songs"))
                 }
                 owLog("[SpotifyController] Liked songs accepted but Spotify is not playing them")
@@ -201,17 +206,20 @@ final class SpotifyController: @unchecked Sendable {
     }
 
     /// Polls immediately, then at 500 ms intervals; never reports success from an HTTP ack alone.
-    private func waitForLikedSongs(context: String, before: SpotifyWebAPI.CurrentlyPlaying?, timeout: TimeInterval = 4) async -> Bool {
+    /// Returns how many checks it took, or nil when the deadline passed.
+    private func waitForLikedSongs(context: String, before: SpotifyWebAPI.CurrentlyPlaying?, timeout: TimeInterval = 4) async -> Int? {
         let deadline = Date().addingTimeInterval(timeout)
+        var checks = 0
         repeat {
-            if Task.isCancelled { return false }
+            if Task.isCancelled { return nil }
+            checks += 1
             if let after = try? await SpotifyWebAPI.shared.fetchCurrentlyPlaying(),
                Self.likedSongsStarted(context: context, before: before, after: after) {
-                return true
+                return checks
             }
-            do { try await Task.sleep(for: .milliseconds(500)) } catch { return false }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return nil }
         } while Date() < deadline
-        return false
+        return nil
     }
 
     /// Whether the player moved to Liked Songs. With Smart Shuffle on, Spotify swaps the
